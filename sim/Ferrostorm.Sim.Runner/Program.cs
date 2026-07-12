@@ -1399,6 +1399,12 @@ int Determinism(ulong seed)
 
 int Golden(ulong seed)
 {
+    // Console.WriteLine uses Environment.NewLine (\r\n on Windows), which
+    // breaks a byte-for-byte diff against the LF-committed golden-hashes.txt
+    // even when every hash value is identical. Force LF so the comparison
+    // is platform-independent, matching the file this output is diffed
+    // against.
+    Console.Out.NewLine = "\n";
     foreach (var (name, run) in scenarios)
         Console.WriteLine($"{name} {seed} 0x{run(seed, null):X16}");
     return 0;
