@@ -1,0 +1,7 @@
+# Force LF everywhere. Without this, Windows CI runners (core.autocrlf=true
+# by default on GitHub's windows-latest image) check out text files with
+# CRLF line endings, while the runner's own stdout is LF-only - so a
+# byte-for-byte `diff` against sim/golden-hashes.txt fails on every line
+# even though the hash values are identical (see determinism CI failure,
+# session 18).
+* text=auto eol=lf
