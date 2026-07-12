@@ -17,3 +17,6 @@ secrets/
 # Generated replay exports (regenerate with the runner's export mode)
 game/replay.json
 capture.png
+
+# Python (Blender scripts)
+__pycache__/
