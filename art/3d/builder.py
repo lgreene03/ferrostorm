@@ -27,8 +27,15 @@ def mat(name, emit=0.0, rough=0.7, metal=0.15):
 def box(name, sx, sy, sz, x=0, y=0, z=0, m='gun', bevel=0.06):
     bpy.ops.mesh.primitive_cube_add(size=1, location=(x, y, z + sz/2))
     o = bpy.context.object; o.name = name
-    o.scale = (sx/2, sy/2, sz/2)
-    bpy.ops.object.transform_apply(scale=True)
+    # size=1 gives verts at ±0.5 in Blender 5.x, so scale by the full
+    # dimension for a box spanning exactly sx x sy x sz (under the container's
+    # Blender 4.0 the sx/2 factors produced correct output; 5.x halved every
+    # box while part locations stayed full-scale, exploding every model)
+    o.scale = (sx, sy, sz)
+    # scale only: location/rotation default to True and would reset the
+    # origin to world zero, making any post-hoc rotation pivot around the
+    # world origin instead of the part itself
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     if bevel > 0:
         md = o.modifiers.new('b','BEVEL'); md.width = bevel; md.segments = 2
         bpy.ops.object.modifier_apply(modifier='b')
@@ -57,11 +64,19 @@ def wedge(name, pts, h, z=0, m='rust'):
     return o
 
 def join(objs, name):
+    # Blender 5.x headless defers depsgraph evaluation: rotation_euler set
+    # after creation is not yet in matrix_world when join() bakes vertices,
+    # so rotated parts (gun barrels etc.) join unrotated. Force the update.
+    bpy.context.view_layer.update()
     bpy.ops.object.select_all(action='DESELECT')
     for o in objs: o.select_set(True)
     bpy.context.view_layer.objects.active = objs[0]
     bpy.ops.object.join()
     obj = bpy.context.object; obj.name = name
+    # normalise: verts in world space, identity transform - downstream code
+    # (battle-scene instancing, hero placement) sets .location as a world
+    # offset and relies on the origin being world zero
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     return obj
 
 def team_band(w, y, z, colour, d=0.1):

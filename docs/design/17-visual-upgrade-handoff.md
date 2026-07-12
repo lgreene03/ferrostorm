@@ -64,6 +64,58 @@ Environment section for the export command).
   `cd ~/project-ferrostorm && dotnet run --project sim/Ferrostorm.Sim.Runner -c Release -- export 2026 /tmp/ferrostorm-replay.json`
   (or wherever you point the script's `open()` call).
 
+## Status update (2026-07-12, late session): part (a) done, builder.py fixed for Blender 5
+
+Part (a) is complete: `art/3d/hero.py` and `art/3d/materials2.py` now exist
+(written from scratch as instructed below) and render a side-by-side
+blockout-vs-hero comparison to `art/3d/hero.png`. The hero cannon tank keeps
+the blockout silhouette and adds exposed road wheels, track skirts, a
+mantlet/sleeve/muzzle-brake gun assembly, commander hatch, antenna, panel
+inserts, tow hooks, and procedural weathering. Iterate further if taste
+demands, but the beats-the-blockout bar is met.
+
+**Three Blender 5.x incompatibilities were found in the committed builder.py
+and fixed this session. Without these fixes every model in the roster
+renders exploded/disassembled under Blender 5.x, even though the same code
+worked under the container's Blender 4.0:**
+
+1. **Stale matrices at join.** Headless Blender 5 defers depsgraph
+   evaluation: `rotation_euler` set after object creation is not yet in
+   `matrix_world` when `bpy.ops.object.join()` bakes vertices, so every
+   rotated part (gun barrels, wheels) joined unrotated. Fix:
+   `bpy.context.view_layer.update()` at the top of `builder.join()`.
+2. **`transform_apply` argument defaults.** `builder.box()` called
+   `transform_apply(scale=True)`, but the unspecified `location`/`rotation`
+   parameters DEFAULT TO TRUE, so it also reset each part's origin to world
+   zero, making any post-creation rotation pivot around the world origin
+   instead of the part itself. Fix: pass all three flags explicitly. A
+   compensating `transform_apply(all)` was added after join so joined
+   objects keep identity transforms (downstream code - battle-scene
+   instancing, placement via `.location` - relies on origin-at-world-zero).
+3. **Box size semantics.** `primitive_cube_add(size=1)` yields verts at
+   ±0.5 under Blender 5, and `box()` scaled by `sx/2`, producing boxes at
+   HALF their authored size while part locations stayed full-scale - every
+   multi-part model exploded into separated pieces. Fix: scale by the full
+   `(sx, sy, sz)`. The authored dimensions in every unit function only make
+   sense at full size (e.g. hull 0.62 wide with tracks at ±0.36).
+
+**Consequence for step (c):** the .glb files committed in
+game/assets/models/ were exported under Blender 4.0 and are geometrically
+correct. Re-exporting them with builder.py WITHOUT the three fixes above
+would have shipped exploded models into the Godot client. With the fixes
+they should re-export correctly, but verify one model visually in the
+Godot editor (or via the offscreen-capture trick in game/README-GODOT.md)
+before re-exporting all 20.
+
+**Debugging tip that found all three bugs:** don't trust the rendered image
+alone - add a probe that prints world-space vertex extents
+(`matrix_world @ v.co` min/max per axis) for the joined object and compare
+against the authored dimensions. hero.py has such probes (the `PROBE`
+prints) - keep them; they cost nothing and catch regressions instantly.
+Also beware: a camera looking straight down the barrels' axis made a
+correctly-assembled tank look broken for two iterations - check the camera
+before diagnosing geometry.
+
 ## The four-part plan, as originally scoped
 
 (a) Hero asset: a detailed `dir_cannon_tank` study in Blender, iterated
