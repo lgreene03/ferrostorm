@@ -1,0 +1,20 @@
+# Directorate sentinel scout - unarmed detector; the counter to Sodality stealth.
+id: dir_sentinel_scout
+name: "Sentinel Scout"
+faction: directorate
+tier: 1
+cost: 400
+build_time_ticks: 75
+hp: 90
+armour_class: none
+speed: 30
+role: recon
+weapon_ids: []
+sight_range: 7
+stealth: false
+detector: true
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  Fast, fragile, and unarmed. Its sensor suite paints stealthed hostiles
+  for everything else on the team.

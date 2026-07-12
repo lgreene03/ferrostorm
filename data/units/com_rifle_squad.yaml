@@ -1,0 +1,20 @@
+# Directorate rifle squad - Phase 1/2 test unit (squads per ADR-003).
+id: com_rifle_squad
+name: "Rifle Squad"
+faction: common
+tier: 1
+cost: 200
+build_time_ticks: 75
+hp: 100
+armour_class: none
+speed: 25
+role: infantry
+weapon_ids: [wpn_test_rifle]
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  One sim entity per squad (ADR-003). Anti-infantry rifles; near-useless
+  against heavy armour by design.

@@ -1,0 +1,19 @@
+# Example definition demonstrating schema + conventions. Values are GDD s4 starting numbers.
+id: com_harvester
+name: Harvester
+faction: common
+tier: 1
+cost: 1400
+build_time_ticks: 300
+hp: 700
+armour_class: heavy
+speed: 18
+role: economy
+weapon_ids: []
+sight_range: 5
+prerequisites: [com_refinery]
+veterancy_enabled: false
+notes: >
+  Unarmed. Carries 700 credits per load; auto-returns to nearest refinery;
+  auto-reassigns on refinery loss (US2.2). Balance intent: a harvester kill
+  is worth roughly a light tank in tempo (GDD s4).

@@ -1,0 +1,52 @@
+name: determinism
+on: [push, pull_request]
+jobs:
+  banned-tokens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sim purity check (no float/double/System.Random/Godot in /sim library)
+        run: |
+          if grep -rnE '\b(float|double|System\.Random|Godot)\b' sim/Ferrostorm.Sim/ ; then
+            echo "::error::Banned token in deterministic sim library (CLAUDE.md rules)"; exit 1
+          fi
+  determinism:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+      - name: Build
+        run: dotnet build sim/Ferrostorm.Sim.Runner -c Release
+      - name: Selftest
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- selftest
+      - name: In-process double-run (all scenarios)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- determinism 2026
+      - name: Cross-platform golden hash check
+        shell: bash
+        run: |
+          dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- golden 2026 > got.txt
+          grep -v '^#' sim/golden-hashes.txt > want.txt
+          diff got.txt want.txt || { echo "::error::State hashes diverged from golden on ${{ matrix.os }}"; exit 1; }
+      - name: Scenario assertions + perf report
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- match 2026
+      - name: LAN lockstep (5 games in CI; nightly soak runs 20)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- lan 5
+      - name: Lockstep under adverse network (chaos proxy, 60ms±30ms + stalls)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- lanchaos 1 60 30
+      - name: Presentation contract (snapshot interpolation)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- spectate
+      - name: Replay round-trip (record AI match, replay bit-exact)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- replay
+      - name: Save/load round-trip (mid-match save resumes bit-exact)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- saveload
+      - name: Campaign save round-trip (world + mission state resumes bit-exact)
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- campaignsave
+      - name: Balance gate (engagement matrix + counter audit, doc 12)
+        run: |
+          dotnet build tools/Ferrostorm.Balance -c Release
+          dotnet run --project tools/Ferrostorm.Balance -c Release --no-build

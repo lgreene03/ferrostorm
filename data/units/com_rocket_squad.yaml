@@ -1,0 +1,21 @@
+# Sodality rocket squad - completes the counter triangle (rockets beat armour,
+# armour beats rifles, rifles beat rockets). First Sodality roster entry.
+id: com_rocket_squad
+name: "Rocket Squad"
+faction: common
+tier: 1
+cost: 300
+build_time_ticks: 100
+hp: 80
+armour_class: none
+speed: 22
+role: anti_armour
+weapon_ids: [wpn_test_rocket]
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  Fragile launcher teams (ADR-003 squads). Devastating into heavy armour,
+  helpless in a knife fight with rifles.

@@ -1,0 +1,21 @@
+# Directorate howitzer - siege artillery. Enormous reach, a three-cell dead
+# zone, indiscriminate splash. Wins sieges, loses knife fights.
+id: dir_howitzer
+name: "Howitzer"
+faction: directorate
+tier: 2
+cost: 900
+build_time_ticks: 200
+hp: 160
+armour_class: light
+speed: 15
+role: siege
+weapon_ids: [wpn_howitzer]
+sight_range: 7
+stealth: false
+detector: false
+prerequisites: [com_factory]
+veterancy_enabled: true
+notes: >
+  Splash damage does not check uniforms. Anything that closes inside three
+  cells is perfectly safe from it - and it knows that.

@@ -1,0 +1,22 @@
+# Sodality phantom tank - rockets from nowhere. The signature that makes
+# Directorate players buy sentinels.
+id: sod_phantom_tank
+name: "Phantom Tank"
+faction: sodality
+tier: 2
+cost: 900
+build_time_ticks: 210
+hp: 200
+armour_class: light
+speed: 24
+role: ambush_armour
+weapon_ids: [wpn_test_rocket]
+sight_range: 5
+stealth: true
+detector: false
+prerequisites: [com_factory]
+veterancy_enabled: true
+notes: >
+  First volley free, every volley after that a negotiation. Firing breaks
+  the cloak for three seconds; a phantom that stays to slug it out is a
+  light tank that paid extra.

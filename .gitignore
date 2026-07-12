@@ -1,0 +1,19 @@
+# Godot
+.godot/
+*.import
+export_presets.cfg
+# .NET
+bin/
+obj/
+*.user
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+# Secrets - never commit
+*.env
+secrets/
+
+# Generated replay exports (regenerate with the runner's export mode)
+game/replay.json
+capture.png

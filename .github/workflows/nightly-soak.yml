@@ -1,0 +1,23 @@
+name: nightly-soak
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch: {}
+jobs:
+  soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        seed: [2026, 31337, 424242, 777, 900913]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.0.x' }
+      - name: Build
+        run: dotnet build sim/Ferrostorm.Sim.Runner -c Release
+      - name: Determinism suite at seed ${{ matrix.seed }}
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- determinism ${{ matrix.seed }}
+      - name: LAN lockstep 20-game soak
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- lan 20

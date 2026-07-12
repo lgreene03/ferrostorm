@@ -1,0 +1,4 @@
+# Ferrostorm campaign manifest v1: mission file | player faction | title
+data/missions/mission-01.fmap | 0 | Ferrostorm Rising
+data/missions/mission-02.fmap | 1 | Silent Salvage
+data/missions/mission-03.fmap | 0 | Hold the Line

@@ -1,0 +1,21 @@
+# Directorate cannon tank - Phase 1/2 test unit. Values are the sim's compiled
+# baseline; TICKET-P2-DATA-02 proves the loader reproduces them exactly.
+id: dir_cannon_tank
+name: "Cannon Tank"
+faction: directorate
+tier: 1
+cost: 600
+build_time_ticks: 150
+hp: 300
+armour_class: heavy
+speed: 20
+role: assault
+weapon_ids: [wpn_test_cannon]
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  Mainline Directorate armour. Anti-armour warhead; weak into massed
+  infantry per the damage matrix.

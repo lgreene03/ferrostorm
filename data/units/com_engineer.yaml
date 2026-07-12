@@ -1,0 +1,21 @@
+# Engineer - captures enemy structures on contact and is consumed by the
+# act. Common hardware, and the seed of Reclaimer doctrine.
+id: com_engineer
+name: "Engineer"
+faction: common
+tier: 1
+cost: 500
+build_time_ticks: 120
+hp: 60
+armour_class: none
+speed: 20
+role: capture
+weapon_ids: []
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: []
+veterancy_enabled: false
+notes: >
+  Sixty hit points of pure audacity. One reaches the door, the building
+  changes flags.

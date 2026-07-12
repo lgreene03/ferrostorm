@@ -1,0 +1,15 @@
+<Project Sdk="Godot.NET.Sdk/4.7.0">
+  <!-- Requires a local Godot 4.7.x .NET editor; Godot.NET.Sdk resolves from
+       nuget.org, which is unavailable in the headless build container. This
+       project is therefore excluded from CI; the presentation CONTRACT it
+       consumes is tested headless by the runner's spectate mode. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../sim/Ferrostorm.Sim/Ferrostorm.Sim.csproj" />
+    <ProjectReference Include="../sim/Ferrostorm.Presentation/Ferrostorm.Presentation.csproj" />
+  </ItemGroup>
+</Project>

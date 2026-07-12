@@ -1,0 +1,19 @@
+; Project SLAGLINE - Godot 4 presentation layer (TICKET-P1-07).
+; The renderer consumes sim snapshots only (ADR-001); it never touches live state.
+
+config_version=5
+
+[application]
+config/name="Ferrostorm (working title)"
+run/main_scene="res://scenes/Battle3D.tscn"
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+
+[dotnet]
+project/assembly_name="Ferrostorm.Game"
+
+[display]
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[rendering]
+renderer/rendering_method="forward_plus"

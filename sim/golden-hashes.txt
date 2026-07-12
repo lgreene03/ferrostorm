@@ -1,0 +1,26 @@
+# Golden state hashes per scenario: name seed hash. Regenerated when the state
+# schema changes during pre-production; from the first public build onward,
+# changing a value here is a replay-compatibility break requiring ADR + sign-off.
+movement 2026 0x23E883BDD4FFADFC
+pathing 2026 0x33B0DEA8A8469573
+economy 2026 0x63EF7F79587A648F
+combat 2026 0xEAF64B46391AB415
+production 2026 0x642517B0AF4C19B1
+attackmove 2026 0xB82E6FC54D4C655A
+construction 2026 0xC795692AF7F08CED
+skirmish 2026 0xDF844901214FD6C5
+stealth 2026 0x0D4150A1BC3ABBFB
+veterancy 2026 0x3744AC24D2D7454C
+victory 2026 0x57E79C01E43AD5EA
+expansion 2026 0x862C96BD7B7333F5
+artillery 2026 0xE10492A05685E8B1
+superweapon 2026 0x2FA601913F9214A0
+crush 2026 0x9740AC0DBCA2B831
+aisuper 2026 0x81CE9819C0278CAA
+veil 2026 0xB7BC8742E325624F
+waypoints 2026 0xEDB1C62F34743227
+mission 2026 0xE0CBE5C2BB60590E
+capture 2026 0x55948EF62743DAF0
+mission02 2026 0x30A0832E24A23312
+mission03 2026 0x4F8A735E76C04892
+depot 2026 0x89A3AE97B98154B5

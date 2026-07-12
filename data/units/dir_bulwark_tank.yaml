@@ -1,0 +1,20 @@
+# Directorate bulwark tank - the wall that walks. Slow, vast, undeniable.
+id: dir_bulwark_tank
+name: "Bulwark Tank"
+faction: directorate
+tier: 2
+cost: 1600
+build_time_ticks: 350
+hp: 550
+armour_class: heavy
+speed: 12
+role: breakthrough
+weapon_ids: [wpn_bulwark_cannon]
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: [com_factory]
+veterancy_enabled: true
+notes: >
+  Where the Sodality strikes from nowhere, the Directorate arrives from
+  exactly where you expect and dares you to stop it.

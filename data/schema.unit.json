@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Unit definition",
+  "type": "object",
+  "required": ["id", "name", "faction", "tier", "cost", "build_time_ticks", "hp", "armour_class", "speed", "role"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
+    "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
+    "faction": { "enum": ["directorate", "sodality", "common"] },
+    "tier": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "cost": { "type": "integer", "minimum": 1, "description": "Credits" },
+    "build_time_ticks": { "type": "integer", "minimum": 1, "description": "Sim ticks at 15Hz" },
+    "hp": { "type": "integer", "minimum": 1 },
+    "armour_class": { "enum": ["none", "light", "heavy", "structure"] },
+    "speed": { "type": "integer", "minimum": 0, "description": "Hundredths of a cell per tick, integer-encoded (18 => 0.18)" },
+    "role": { "type": "string" },
+    "weapon_ids": { "type": "array", "items": { "type": "string" } },
+    "sight_range": { "type": "integer", "minimum": 0 },
+    "stealth": { "type": "boolean", "default": false },
+    "detector": { "type": "boolean", "default": false },
+    "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required" },
+    "veterancy_enabled": { "type": "boolean", "default": true },
+    "notes": { "type": "string", "description": "Design intent, counter relationships (GDD s6-7 traceback)" }
+  }
+}

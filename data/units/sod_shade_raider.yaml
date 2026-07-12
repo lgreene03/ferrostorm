@@ -1,0 +1,22 @@
+# Sodality shade raider - the faction's stealth identity made concrete.
+# Invisible to enemies without detector coverage; firing breaks stealth
+# for three seconds.
+id: sod_shade_raider
+name: "Shade Raider"
+faction: sodality
+tier: 1
+cost: 500
+build_time_ticks: 100
+hp: 150
+armour_class: light
+speed: 28
+role: harassment
+weapon_ids: [wpn_test_rifle]
+sight_range: 5
+stealth: true
+detector: false
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  Hit-and-fade raider. Loses any stand-up fight it is seen in - the point
+  is not being seen.

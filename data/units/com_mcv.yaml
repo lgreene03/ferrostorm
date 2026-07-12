@@ -1,0 +1,21 @@
+# Mobile Construction Vehicle - deploys into a Construction Yard, founding
+# a new base with the CY's full build radius. Expensive, slow, unarmed.
+id: com_mcv
+name: "Mobile Construction Vehicle"
+faction: common
+tier: 2
+cost: 3000
+build_time_ticks: 400
+hp: 600
+armour_class: heavy
+speed: 15
+role: expansion
+weapon_ids: []
+sight_range: 5
+stealth: false
+detector: false
+prerequisites: [com_factory]
+veterancy_enabled: false
+notes: >
+  The seed of every base. Deploy consumes the vehicle; there is no
+  repacking in the vertical slice.
