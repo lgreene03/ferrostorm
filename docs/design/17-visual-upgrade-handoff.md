@@ -116,6 +116,48 @@ Also beware: a camera looking straight down the barrels' axis made a
 correctly-assembled tank look broken for two iterations - check the camera
 before diagnosing geometry.
 
+## Status update 2 (same session, later): parts (b), (c), (d) done
+
+All four parts of the plan are now complete at pipeline level:
+
+- **(b) Roster weathering:** `builder.USE_WEATHERED = True` routes every
+  non-emissive `mat()` call through `materials2.wmat()` - one switch,
+  whole roster. `art/3d/lineup.py` (new; the container-era lineup script
+  was never committed) renders all 20 models in a grid to
+  `art/3d/lineup.png` for inspection. Hero-level per-unit detail geometry
+  (road wheels, greebles etc. as done for the cannon tank in hero.py)
+  remains open creative work per unit - the materials are done, the
+  geometry pass is the long tail.
+- **(c) Bake + export:** `art/3d/bake.py` (new) UV-smart-projects each
+  model, bakes diffuse (colour only, no lighting) and roughness to 1024px
+  images, swaps in a baked-texture material preserving emission (ferrite),
+  and exports to game/assets/models/. All 20 re-exported (~950KB each, up
+  from ~30KB blockouts). Verified three ways: a Blender glTF re-import
+  render shows the weathering survived; Godot headless `--import` is
+  clean; and an offscreen Godot capture of the replay scene shows the
+  baked models rendering in the actual client. Test one model with
+  `blender -b -P bake.py -- dir_cannon_tank` before full runs.
+- **(d) Atmosphere:** `battle-scene.py` path-fixed and extended with a
+  mist pass (world mist, quadratic falloff, composited toward a cold haze
+  colour by depth) and Fog Glow glare on the emissive ferrite. Output:
+  `art/3d/battle-atmosphere.png`.
+
+**Blender 5 compositor API changes found in (d)** (add to the section
+above): `Scene.node_tree`/`use_nodes` no longer host the compositor - create
+a `CompositorNodeTree` node group and assign `scene.compositing_node_group`;
+there is no `CompositorNodeComposite` node - add an Image output socket via
+`nt.interface.new_socket(...)` and wire a `NodeGroupOutput`; glare settings
+moved from node properties to INPUT SOCKETS with spelled-out enum values
+(`glare.inputs['Type'].default_value = 'Fog Glow'`); and compositor trees
+use the unified `ShaderNodeMixRGB`/`ShaderNodeMix` instead of
+`CompositorNodeMixRGB`.
+
+Remaining open work on this ticket: per-unit detail geometry across the
+roster (use `hero.py`'s `hero_cannon_tank()` as the pattern - same
+primitives, same silhouette, added greebles), and taste-level iteration on
+weathering strength and the battle-scene composition. The pipeline itself
+is complete and verified.
+
 ## The four-part plan, as originally scoped
 
 (a) Hero asset: a detailed `dir_cannon_tank` study in Blender, iterated

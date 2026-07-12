@@ -9,7 +9,13 @@ PAL = dict(
     ferrite=(0.79,0.63,0.36,1), fhi=(0.92,0.78,0.50,1), bone=(0.83,0.81,0.75,1))
 
 _mats = {}
+USE_WEATHERED = False  # set True (see lineup.py) to route every part through
+                       # materials2.wmat - roster-wide weathering, one switch
+
 def mat(name, emit=0.0, rough=0.7, metal=0.15):
+    if USE_WEATHERED and emit == 0:
+        import materials2
+        return materials2.wmat(name, rough=rough, metal=max(metal, 0.2))
     key=(name,emit)
     if key in _mats: return _mats[key]
     m = bpy.data.materials.new(f"{name}_{emit}")

@@ -1,8 +1,11 @@
-import bpy, sys, json, math
-sys.path.insert(0, '/home/claude/b3d')
+import bpy, sys, json, math, os
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 import builder
 
-R = json.load(open('/tmp/ferrostorm-replay.json'))
+builder.USE_WEATHERED = True
+REPLAY = os.path.normpath(os.path.join(HERE, '..', '..', 'game', 'replay.json'))
+R = json.load(open(REPLAY))
 frame = max(range(len(R['frames'])), key=lambda i: len([e for e in R['frames'][i]['ev'] if e[0] == 1]))
 f = R['frames'][frame]
 print(f"rendering tick {f['t']}")
@@ -66,13 +69,48 @@ for e in f['e']:
 
 # Camera: classic RTS three-quarter, framing the Ferrite Gap fight
 fx, fy = 44, 30
-bpy.ops.object.camera_add(location=(fx - 4, -(fy + 17), 15), rotation=(math.radians(50), 0, math.radians(-8)))
+bpy.ops.object.camera_add(location=(fx - 6, -(fy + 26), 20), rotation=(math.radians(52), 0, math.radians(-10)))
 cam = bpy.context.object
-cam.data.lens = 32
+cam.data.lens = 26
 bpy.context.scene.camera = cam
 sc = bpy.context.scene
 sc.render.resolution_x = 1600; sc.render.resolution_y = 900
 sc.cycles.samples = 48
-sc.render.filepath = '/tmp/battle3d.png'
+
+# --- Atmosphere pass (plan step d) ---
+# Distance mist: enable the mist pass and composite a cold cinder haze in
+# by camera depth; compositor glare (fog glow) blooms the emissive ferrite.
+w = sc.world
+w.mist_settings.use_mist = True
+w.mist_settings.start = 14.0
+w.mist_settings.depth = 42.0
+w.mist_settings.falloff = 'QUADRATIC'
+sc.view_layers[0].use_pass_mist = True
+
+# Blender 5: Scene.node_tree is gone; the compositor lives in a node group
+# assigned to scene.compositing_node_group
+nt = bpy.data.node_groups.new('battle_comp', 'CompositorNodeTree')
+sc.compositing_node_group = nt
+rl = nt.nodes.new('CompositorNodeRLayers'); rl.location = (0, 0)
+glare = nt.nodes.new('CompositorNodeGlare'); glare.location = (300, 100)
+# Blender 5: glare settings are input sockets, and Type is a spelled-out enum
+glare.inputs['Type'].default_value = 'Fog Glow'
+glare.inputs['Quality'].default_value = 'High'
+glare.inputs['Threshold'].default_value = 0.9
+glare.inputs['Size'].default_value = 0.6
+# Blender 5 unified node types: the compositor uses shader Mix nodes
+mix = nt.nodes.new('ShaderNodeMixRGB'); mix.location = (600, 0)
+mix.blend_type = 'MIX'
+mix.inputs['Color2'].default_value = (0.055, 0.065, 0.08, 1)  # cold haze
+# Blender 5 node groups have no Composite node: expose an Image output on
+# the group interface and wire a group output node instead
+nt.interface.new_socket(name='Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+comp = nt.nodes.new('NodeGroupOutput'); comp.location = (860, 0)
+nt.links.new(rl.outputs['Image'], glare.inputs['Image'])
+nt.links.new(glare.outputs['Image'], mix.inputs['Color1'])
+nt.links.new(rl.outputs['Mist'], mix.inputs['Fac'])
+nt.links.new(mix.outputs['Color'], comp.inputs['Image'])
+
+sc.render.filepath = os.path.join(HERE, 'battle-atmosphere.png')
 bpy.ops.render.render(write_still=True)
-print("BATTLE DONE")
+print("BATTLE DONE:", sc.render.filepath)
