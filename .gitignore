@@ -20,3 +20,15 @@ capture.png
 
 # Python (Blender scripts)
 __pycache__/
+
+# Belt-and-braces: Godot's glTF importer default (embedded_image_handling=1,
+# Extract Textures) writes loose copies of the baked textures next to the
+# .glb files even though the .glb embeds them. The .glb.import files now pin
+# mode 3 (Embed as Uncompressed) so extraction should not happen; if it ever
+# does again (e.g. a fresh import regenerating defaults), keep the strays out
+# of the repo - deleting them out from under Godot's import cache corrupts
+# it (null PackedScene loads) until .godot/imported is wiped and reimported.
+game/assets/models/*_diff.png
+game/assets/models/*_rough.png
+game/assets/models/*_diff.png.import
+game/assets/models/*_rough.png.import
