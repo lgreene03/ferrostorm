@@ -43,6 +43,14 @@ public partial class SkirmishLive : Node3D
     private Panel _dragRect = null!;
     private Vector2 _dragStart;
     private bool _dragging;
+    private Sidebar _sidebar = null!;
+    private AudioDirector _audio = null!;
+    private CombatEffects _effects = null!;
+
+    // Structure placement mode
+    private int _placingType;
+    private MeshInstance3D _ghost = null!;
+    private int _yardId = -1, _factoryId = -1;
 
     public override void _Ready()
     {
@@ -88,8 +96,56 @@ public partial class SkirmishLive : Node3D
         AddChild(sun);
         AddChild(new DirectionalLight3D { Rotation = new Vector3(-0.5f, 2.6f, 0), LightEnergy = 0.35f });
 
+        _audio = new AudioDirector();
+        AddChild(_audio);
+        _audio.PlayAmbient();
+        _effects = new CombatEffects();
+        AddChild(_effects);
+
         BuildHud();
+
+        _ghost = new MeshInstance3D
+        {
+            Mesh = new BoxMesh { Size = new Vector3(2, 0.5f, 2) },
+            Visible = false,
+        };
+        AddChild(_ghost);
+
         SnapshotNow();
+    }
+
+    // ---------------- sidebar command surface ----------------
+
+    private int FindOwnStructure(EntityKind kind)
+    {
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == 0 && v.Kind == kind) return v.Id;
+        return -1;
+    }
+
+    public void QueueStructure(int structType)
+    {
+        if (_yardId >= 0)
+        {
+            _pending.Add(new Command(0, 0, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
+            _audio.Play("ui_confirm", -6);
+        }
+    }
+
+    public void QueueUnit(int unitType)
+    {
+        if (_factoryId >= 0)
+        {
+            _pending.Add(new Command(0, 0, CommandType.Produce, _factoryId, Fix64.Zero, Fix64.Zero, unitType));
+            _audio.Play("ui_confirm", -6);
+        }
+    }
+
+    public void EnterPlacement(int structType)
+    {
+        _placingType = structType;
+        _ghost.Visible = true;
+        _audio.Play("ui_click", -6);
     }
 
     private void BuildHud()
@@ -132,6 +188,10 @@ public partial class SkirmishLive : Node3D
         style.SetBorderWidthAll(1);
         _dragRect.AddThemeStyleboxOverride("panel", style);
         hud.AddChild(_dragRect);
+
+        _sidebar = new Sidebar();
+        hud.AddChild(_sidebar);
+        _sidebar.Init(this);
     }
 
     // ---------------- sim loop ----------------
@@ -157,6 +217,7 @@ public partial class SkirmishLive : Node3D
                 var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
                 _world.Step(span);
                 SnapshotNow();
+                _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
                     if (ev.Type == GameEventType.PlayerEliminated)
                         OnEliminated(ev.B);
@@ -165,6 +226,29 @@ public partial class SkirmishLive : Node3D
         _renderTime = _world.Tick - 1 + _accumulator / TickSeconds;
         SyncActors((float)delta);
         _status.Text = $"CREDITS {_world.Credits(0)}    UNITS {CountOwn()}    TICK {_world.Tick}";
+
+        _yardId = FindOwnStructure(EntityKind.ConstructionYard);
+        _factoryId = FindOwnStructure(EntityKind.Factory);
+        int ready = _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
+        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0,
+            _yardId >= 0 ? _world.QueueLength(_yardId) : 0,
+            _factoryId >= 0 ? _world.QueueLength(_factoryId) : 0);
+
+        if (_placingType > 0 && _ghost.Visible)
+        {
+            var gp = GroundPoint(GetViewport().GetMousePosition());
+            if (gp is { } p)
+            {
+                int ax = Mathf.FloorToInt(p.X), ay = Mathf.FloorToInt(p.Z);
+                _ghost.Position = new Vector3(ax + 1f, 0.25f, ay + 1f);
+                bool ok = _world.ValidPlacement(0, ax, ay);
+                _ghost.MaterialOverride = new StandardMaterial3D
+                {
+                    AlbedoColor = ok ? new Color(0.3f, 0.9f, 0.4f, 0.4f) : new Color(0.9f, 0.25f, 0.2f, 0.4f),
+                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+                };
+            }
+        }
     }
 
     private int CountOwn()
@@ -263,6 +347,12 @@ public partial class SkirmishLive : Node3D
     {
         switch (ev)
         {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } pm when _placingType > 0:
+                TryPlace(pm.Position);
+                break;
+            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _placingType > 0:
+                _placingType = 0; _ghost.Visible = false;
+                break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
                 else if (_dragging) { _dragging = false; _dragRect.Visible = false; FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift)); }
@@ -298,6 +388,51 @@ public partial class SkirmishLive : Node3D
         }
     }
 
+    private void TryPlace(Vector2 screen)
+    {
+        var gp = GroundPoint(screen);
+        if (gp is not { } p) return;
+        PlaceAtCell(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z));
+    }
+
+    /// <summary>Placement commit; public so scripted verification can drive
+    /// the same command path the mouse ghost uses.</summary>
+    public bool PlaceAtCell(int ax, int ay)
+    {
+        if (_placingType <= 0 || !_world.ValidPlacement(0, ax, ay)) { _audio.Play("ui_click", -12); return false; }
+        _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
+            Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
+        _placingType = 0; _ghost.Visible = false;
+        _audio.Play("ui_confirm", -4);
+        return true;
+    }
+
+    /// <summary>First valid placement anchor near the yard, scanning outward.
+    /// Used by scripted verification and future placement hints.</summary>
+    public (int X, int Y)? FindPlacementCell()
+    {
+        if (_yardId < 0 || !_latest.TryGetValue(_yardId, out var yard)) return null;
+        int cx = (int)yard.X - 1, cy = (int)yard.Y - 1;
+        for (int r = 2; r <= World.BuildRadius; r++)
+            for (int dx = -r; dx <= r; dx++)
+                for (int dy = -r; dy <= r; dy++)
+                {
+                    if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r) continue;
+                    if (_world.ValidPlacement(0, cx + dx, cy + dy)) return (cx + dx, cy + dy);
+                }
+        return null;
+    }
+
+    /// <summary>Verification reads.</summary>
+    public long CreditsNow => _world.Credits(0);
+    public int ReadyAtYard => _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
+    public int OwnCount(EntityKind kind)
+    {
+        int n = 0;
+        foreach (var v in _view) if (v.Alive && v.PlayerId == 0 && v.Kind == kind) n++;
+        return n;
+    }
+
     /// <summary>Right-click order resolution; public so scripted verification
     /// can drive the exact input path a player uses.</summary>
     public void IssueOrder(Vector2 screen, bool queued)
@@ -319,6 +454,7 @@ public partial class SkirmishLive : Node3D
             else if (Mobile(me.Kind))
                 _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
         }
+        _audio.Play("order_move", -8);
     }
 
     /// <summary>Programmatic hooks for offscreen verification: select all own

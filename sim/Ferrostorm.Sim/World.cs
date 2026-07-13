@@ -325,6 +325,11 @@ public sealed partial class World
     public int QueueLength(int factoryId)
         => _queues.TryGetValue(factoryId, out var q) ? q.Count : 0;
 
+    /// <summary>Read-only view of a producer's queued type ids for the sidebar
+    /// (M3, doc 18). Pure accessor: no state is touched, nothing hashed.</summary>
+    public IReadOnlyList<int> QueueContents(int factoryId)
+        => _queues.TryGetValue(factoryId, out var q) ? q : System.Array.Empty<int>();
+
     // Placeable structures (TICKET-P2-SIM-04). All structures occupy a 2x2
     // footprint of blocked cells; the entity position is the footprint centre
     // (anchor + 1 exactly), so the anchor is always recoverable as
