@@ -57,12 +57,12 @@ public partial class SkirmishLive : Node3D
         _models = new ModelLibrary();
         AddChild(_models);
 
-        string mapPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+        string mapPath = MatchConfig.MapPath ?? System.IO.Path.GetFullPath(System.IO.Path.Combine(
             ProjectSettings.GlobalizePath("res://"), "..", "data", "maps", "skirmish-01.fmap"));
         var map = MapData.Load(mapPath);
         _world = map.BuildWorld(seed: 2026, players: 2);
-        _world.GrantCredits(0, 8000);
-        _world.GrantCredits(1, 8000);
+        _world.GrantCredits(0, MatchConfig.StartCredits);
+        _world.GrantCredits(1, MatchConfig.StartCredits);
         _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
         _world.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
         // Mirrored starting force (common hardware only, so faction-neutral):
@@ -76,7 +76,12 @@ public partial class SkirmishLive : Node3D
                 _world.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
                     Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
         }
-        _enemy = SkirmishAI.Standard(1);
+        _enemy = MatchConfig.AiPreset switch
+        {
+            1 => SkirmishAI.Rusher(1),
+            2 => SkirmishAI.Turtle(1),
+            _ => SkirmishAI.Standard(1),
+        };
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked);
