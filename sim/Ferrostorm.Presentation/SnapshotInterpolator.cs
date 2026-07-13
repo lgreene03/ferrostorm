@@ -16,7 +16,8 @@ namespace Ferrostorm.Presentation;
 public sealed class SnapshotInterpolator
 {
     public readonly record struct ViewEntity(
-        int Id, bool Alive, int PlayerId, EntityKind Kind, double X, double Y, int Hp);
+        int Id, bool Alive, int PlayerId, EntityKind Kind, double X, double Y, int Hp,
+        int UnitType = 0, int MaxHp = 0);
 
     private readonly Dictionary<int, Entity[]> _snapshots = new();
     private readonly int _window;
@@ -67,11 +68,11 @@ public sealed class SnapshotInterpolator
                 var e1 = b[i];
                 double x = ToDouble(e0.X) + (ToDouble(e1.X) - ToDouble(e0.X)) * alpha;
                 double y = ToDouble(e0.Y) + (ToDouble(e1.Y) - ToDouble(e0.Y)) * alpha;
-                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp));
+                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp, e0.UnitType, e0.MaxHp));
             }
             else
             {
-                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp));
+                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp, e0.UnitType, e0.MaxHp));
             }
         }
         return true;
