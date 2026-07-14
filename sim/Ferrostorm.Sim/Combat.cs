@@ -53,6 +53,9 @@ public static class Weapons
         minRange: Fix64.FromInt(3), splashRadius: Fix64.FromFraction(3, 2));
     // Bulwark cannon: the Directorate's argument-ender. Heavy single-target.
     public static readonly WeaponDef BulwarkCannon = new(Fix64.FromInt(5), 50, Warhead.AntiArmour, 18);
+    // Vanguard autocannon (TICKET-P4-SLICE-01): a fast-cycling anti-infantry
+    // gun - the per-cost edge over massed rifles that justifies the car.
+    public static readonly WeaponDef VanguardGun = new(Fix64.FromInt(3), 18, Warhead.AntiInfantry, 6);
 
     public static WeaponDef Get(int id) => id switch
     {
@@ -62,6 +65,7 @@ public static class Weapons
         4 => TurretGun,
         5 => Howitzer,
         6 => BulwarkCannon,
+        7 => VanguardGun,
         _ => None,
     };
 }

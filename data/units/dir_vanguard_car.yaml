@@ -1,0 +1,24 @@
+# Directorate vanguard car - fast turreted harasser; the Directorate answer
+# to the shade raider, trading stealth for armour plate. Vertical-slice unit
+# (TICKET-P4-SLICE-01): the first unit developed end to end through the full
+# pipeline, and the first with a live tracking turret in the client.
+id: dir_vanguard_car
+name: "Vanguard Car"
+faction: directorate
+tier: 1
+cost: 450
+build_time_ticks: 100
+hp: 150
+armour_class: light
+speed: 32
+role: harass
+weapon_ids: [vanguard_autocannon]
+sight_range: 6
+stealth: false
+detector: false
+prerequisites: []
+veterancy_enabled: true
+notes: >
+  A wheeled gun car with a fast-slewing pintle turret. Shreds infantry and
+  runs down harvesters; melts the moment real armour looks at it. Doctrine
+  says raid, screen, and never trade with a cannon line.

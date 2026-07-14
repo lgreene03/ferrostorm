@@ -10,7 +10,7 @@ using Ferrostorm.Sim;
 const int ArmyCredits = 3000;
 const int MaxTicks = 3000;
 int[] seeds = { 11, 22, 33 };
-var types = new (int Id, string Name)[] { (1, "cannon_tank"), (2, "rifle_squad"), (3, "rocket_squad"), (8, "howitzer"), (9, "phantom_tank"), (10, "bulwark_tank") };
+var types = new (int Id, string Name)[] { (1, "cannon_tank"), (2, "rifle_squad"), (3, "rocket_squad"), (8, "howitzer"), (9, "phantom_tank"), (10, "bulwark_tank"), (12, "vanguard_car") };
 
 // Design-intent counter triangle (GDD s6): armour beats rifles, rockets beat
 // armour, rifles beat rockets - every edge must hold per-cost.
@@ -27,6 +27,11 @@ var expectedWinners = new Dictionary<(int, int), int>
     // line efficiency. Unlisted pairs are recorded, not constrained.
     [(2, 9)] = 2,  // rifles shred revealed phantoms per-cost
     [(1, 9)] = 1,  // cannons beat phantoms in a fair fight per-cost
+    // Vanguard car (the vertical-slice unit): a harasser must shred
+    // infantry per-cost and lose to anything carrying an anti-armour gun.
+    [(2, 12)] = 12, // vanguard > rifle: its whole reason to exist
+    [(1, 12)] = 1,  // cannon > vanguard: never trade with real armour
+    [(3, 12)] = 3,  // rocket > vanguard: AT infantry punishes light plate
     [(3, 9)] = 3,  // rockets likewise
     [(1, 10)] = 1, // massed cannons out-trade the wall per-cost
 };
@@ -53,9 +58,14 @@ bool hardFail = false;
     for (int i = 0; i < countB; i++)
         b.Add(world.SpawnUnit(1, Fix64.FromInt(44), Fix64.FromInt(32 - countB / 2 + i), defB.Speed, defB.Hp, defB.Armour, defB.WeaponId));
 
+    // Attack-move to the enemy muster point, not per-unit Attack: a plain
+    // Attack order ends when its target dies, and a partial wipe can leave
+    // both remnants passive and out of sight range forever - the vanguard
+    // car was the first unit fast enough to create that standoff (see
+    // docs/balance journal). Attack-move hunts to the finish.
     var cmds = new List<Command>();
-    for (int i = 0; i < a.Count; i++) cmds.Add(new Command(0, 0, CommandType.Attack, a[i], Fix64.Zero, Fix64.Zero, b[i % b.Count]));
-    for (int i = 0; i < b.Count; i++) cmds.Add(new Command(0, 1, CommandType.Attack, b[i], Fix64.Zero, Fix64.Zero, a[i % a.Count]));
+    foreach (int u in a) cmds.Add(new Command(0, 0, CommandType.AttackMove, u, Fix64.FromInt(44), Fix64.FromInt(32)));
+    foreach (int u in b) cmds.Add(new Command(0, 1, CommandType.AttackMove, u, Fix64.FromInt(20), Fix64.FromInt(32)));
 
     for (int t = 0; t < MaxTicks; t++)
     {

@@ -295,6 +295,9 @@ public sealed partial class World
         { 10, new UnitTypeDef(1600, 350, 550, ArmourClass.Heavy, 6, Fix64.FromFraction(3, 25), Faction: FactionDirectorate) },            // dir_bulwark_tank
         // Engineer: captures enemy structures on contact; consumed by the act.
         { 11, new UnitTypeDef(500, 120, 60, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Veterancy: false) },                           // com_engineer
+        // Vanguard: the Directorate harasser - the raider trade, armour for
+        // stealth (TICKET-P4-SLICE-01, the full-pipeline vertical slice).
+        { 12, new UnitTypeDef(450, 100, 150, ArmourClass.Light, 7, Fix64.FromFraction(8, 25), SightCells: 6, Faction: FactionDirectorate) }, // dir_vanguard_car
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
