@@ -11,6 +11,9 @@ config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 [dotnet]
 project/assembly_name="Ferrostorm.Game"
 
+[gui]
+theme/custom_font="res://ui/fonts/SairaCondensed-SemiBold.ttf"
+
 [display]
 window/size/viewport_width=1600
 window/size/viewport_height=900

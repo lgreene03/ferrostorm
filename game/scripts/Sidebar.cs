@@ -13,28 +13,28 @@ namespace Ferrostorm.Client;
 /// </summary>
 public partial class Sidebar : PanelContainer
 {
-    public record BuildItem(string Label, int TypeId, int Cost);
+    public record BuildItem(string Label, int TypeId, int Cost, string Icon);
 
     private static readonly BuildItem[] Structures =
     {
-        new("POWER PLANT", 1, 300),
-        new("REFINERY", 3, 2000),
-        new("FACTORY", 2, 2000),
-        new("TURRET", 5, 600),
-        new("SERVICE DEPOT", 8, 1200),
-        new("SUPERWEAPON", 6, 4000),
+        new("POWER PLANT", 1, 300, "com_power_plant"),
+        new("REFINERY", 3, 2000, "com_refinery"),
+        new("FACTORY", 2, 2000, "com_factory"),
+        new("TURRET", 5, 600, "dir_turret"),
+        new("SERVICE DEPOT", 8, 1200, "com_service_depot"),
+        new("SUPERWEAPON", 6, 4000, "dir_superweapon"),
     };
     private static readonly BuildItem[] Units =
     {
-        new("RIFLE SQUAD", 2, 200),
-        new("ROCKET SQUAD", 3, 300),
-        new("SENTINEL SCOUT", 6, 400),
-        new("ENGINEER", 11, 500),
-        new("CANNON TANK", 1, 600),
-        new("HOWITZER", 8, 900),
-        new("HARVESTER", 4, 1400),
-        new("BULWARK TANK", 10, 1600),
-        new("MCV", 7, 3000),
+        new("RIFLE SQUAD", 2, 200, "com_rifle_squad"),
+        new("ROCKET SQUAD", 3, 300, "com_rocket_squad"),
+        new("SENTINEL SCOUT", 6, 400, "dir_sentinel_scout"),
+        new("ENGINEER", 11, 500, "com_engineer"),
+        new("CANNON TANK", 1, 600, "dir_cannon_tank"),
+        new("HOWITZER", 8, 900, "dir_howitzer"),
+        new("HARVESTER", 4, 1400, "com_harvester"),
+        new("BULWARK TANK", 10, 1600, "dir_bulwark_tank"),
+        new("MCV", 7, 3000, "com_mcv"),
     };
 
     private static readonly Color Cinder = new(0.086f, 0.094f, 0.102f);
@@ -80,7 +80,7 @@ public partial class Sidebar : PanelContainer
             _structButtons[it.TypeId] = b;
             v.AddChild(b);
         }
-        _placeButton = MakeButton(new BuildItem("PLACE >>", 0, 0), () => _game.EnterPlacement(_readyType));
+        _placeButton = MakeButton(new BuildItem("PLACE >>", 0, 0, ""), () => _game.EnterPlacement(_readyType));
         _placeButton.Visible = false;
         v.AddChild(_placeButton);
 
@@ -109,6 +109,12 @@ public partial class Sidebar : PanelContainer
             Text = it.Cost > 0 ? $"{it.Label}  {it.Cost}" : it.Label,
             Alignment = HorizontalAlignment.Left,
         };
+        if (it.Icon.Length > 0 && ResourceLoader.Exists($"res://ui/icons/{it.Icon}.png"))
+        {
+            b.Icon = GD.Load<Texture2D>($"res://ui/icons/{it.Icon}.png");
+            b.ExpandIcon = true;
+            b.AddThemeConstantOverride("icon_max_width", 26);
+        }
         b.AddThemeFontSizeOverride("font_size", 12);
         b.AddThemeColorOverride("font_color", Bone);
         var normal = new StyleBoxFlat { BgColor = new Color(0.12f, 0.13f, 0.14f), BorderColor = Seam };
