@@ -10,6 +10,11 @@ jobs:
           if grep -rnE '\b(float|double|System\.Random|Godot)\b' sim/Ferrostorm.Sim/ ; then
             echo "::error::Banned token in deterministic sim library (CLAUDE.md rules)"; exit 1
           fi
+      - name: Portability check (no engine references anywhere outside /game - ADR-004)
+        run: |
+          if grep -rln 'using Godot' sim/ tools/ data/ ; then
+            echo "::error::Engine reference outside /game - the portable surface must stay engine-free (ADR-004)"; exit 1
+          fi
   determinism:
     strategy:
       fail-fast: false
