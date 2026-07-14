@@ -67,8 +67,95 @@ public partial class MainMenu : Control
 
         v.AddChild(new HSeparator());
         v.AddChild(MenuButton("COMMENCE OPERATION", StartSkirmish));
+        v.AddChild(MenuButton("CAMPAIGN", ShowCampaign));
         v.AddChild(MenuButton("REPLAY THEATRE", () => GetTree().ChangeSceneToFile("res://scenes/Battle3D.tscn")));
         v.AddChild(MenuButton("STAND DOWN", () => GetTree().Quit()));
+    }
+
+    // ---------------- campaign ----------------
+
+    private void ShowCampaign()
+    {
+        string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+            ProjectSettings.GlobalizePath("res://"), ".."));
+        var missions = new List<(string Path, string Title, int Index)>();
+        int idx = 0;
+        foreach (var line in System.IO.File.ReadAllLines(System.IO.Path.Combine(root, "data", "campaign", "campaign.txt")))
+        {
+            if (line.StartsWith('#') || line.Trim().Length == 0) continue;
+            var parts = line.Split('|');
+            missions.Add((System.IO.Path.Combine(root, parts[0].Trim()), parts[2].Trim(), ++idx));
+        }
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, "CAMPAIGN");
+        foreach (var m in missions)
+        {
+            var local = m;
+            v.AddChild(MenuButton($"{local.Index:00}  {local.Title.ToUpperInvariant()}", () =>
+            {
+                overlay.QueueFree();
+                ShowBriefing(local.Path, local.Index, local.Title);
+            }));
+        }
+        v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+    }
+
+    private void ShowBriefing(string missionPath, int index, string title)
+    {
+        string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+            ProjectSettings.GlobalizePath("res://"), ".."));
+        string briefFile = System.IO.Path.Combine(root, "data", "campaign", "briefings", $"mission-{index:00}.txt");
+        string brief = System.IO.File.Exists(briefFile) ? System.IO.File.ReadAllText(briefFile) : "(no briefing on file)";
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, title.ToUpperInvariant());
+        var text = new Label
+        {
+            Text = brief,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(420, 0),
+        };
+        text.AddThemeFontSizeOverride("font_size", 13);
+        text.AddThemeColorOverride("font_color", Bone);
+        v.AddChild(text);
+        v.AddChild(new HSeparator());
+        v.AddChild(MenuButton("COMMENCE MISSION", () =>
+        {
+            MatchConfig.MissionPath = missionPath;
+            MatchConfig.MissionIndex = index;
+            GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+        }));
+        v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+    }
+
+    private Control FullOverlay()
+    {
+        var overlay = new ColorRect { Color = Cinder with { A = 0.97f }, AnchorRight = 1, AnchorBottom = 1 };
+        AddChild(overlay);
+        return overlay;
+    }
+
+    private VBoxContainer OverlayBox(Control overlay, string heading)
+    {
+        var panel = new PanelContainer
+        {
+            AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0.5f, AnchorBottom = 0.5f,
+            OffsetLeft = -240, OffsetRight = 240, OffsetTop = -220, OffsetBottom = 220,
+        };
+        var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
+        style.SetBorderWidthAll(1);
+        style.ContentMarginLeft = 24; style.ContentMarginRight = 24;
+        style.ContentMarginTop = 18; style.ContentMarginBottom = 18;
+        panel.AddThemeStyleboxOverride("panel", style);
+        overlay.AddChild(panel);
+        var v = new VBoxContainer();
+        v.AddThemeConstantOverride("separation", 8);
+        panel.AddChild(v);
+        var h = new Label { Text = heading, HorizontalAlignment = HorizontalAlignment.Center };
+        h.AddThemeFontSizeOverride("font_size", 22);
+        h.AddThemeColorOverride("font_color", FerriteGold);
+        v.AddChild(h);
+        v.AddChild(new HSeparator());
+        return v;
     }
 
     private static OptionButton Row(VBoxContainer parent, string label)
@@ -102,6 +189,7 @@ public partial class MainMenu : Control
 
     private void StartSkirmish()
     {
+        MatchConfig.MissionPath = null;
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
@@ -115,4 +203,6 @@ public static class MatchConfig
     public static string? MapPath;
     public static int AiPreset;         // 0 standard, 1 rusher, 2 turtle
     public static long StartCredits = 8000;
+    public static string? MissionPath;  // set = campaign mission mode
+    public static int MissionIndex;
 }

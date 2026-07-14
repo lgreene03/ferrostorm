@@ -22,7 +22,10 @@ public partial class SkirmishLive : Node3D
     private const double TickSeconds = 1.0 / World.TicksPerSecond;
 
     private World _world = null!;
-    private SkirmishAI _enemy = null!;
+    private SkirmishAI? _enemy;
+    private MissionRunner? _mission;
+    private readonly List<Command> _missionCmds = new();
+    private int _seenMessages;
     private readonly SnapshotInterpolator _interp = new(windowTicks: 8);
     private readonly List<Command> _pending = new();
     private readonly List<Command> _tickCmds = new();
@@ -64,31 +67,54 @@ public partial class SkirmishLive : Node3D
         _models = new ModelLibrary();
         AddChild(_models);
 
-        string mapPath = MatchConfig.MapPath ?? System.IO.Path.GetFullPath(System.IO.Path.Combine(
-            ProjectSettings.GlobalizePath("res://"), "..", "data", "maps", "skirmish-01.fmap"));
-        var map = MapData.Load(mapPath);
-        _world = map.BuildWorld(seed: 2026, players: 2);
-        _world.GrantCredits(0, MatchConfig.StartCredits);
-        _world.GrantCredits(1, MatchConfig.StartCredits);
-        _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-        _world.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
-        // Mirrored starting force (common hardware only, so faction-neutral):
-        // a harvester and three rifle squads each - the classic opening hand.
-        for (int p = 0; p < 2; p++)
+        MapData map;
+        if (MatchConfig.MissionPath is { } missionPath)
         {
-            int sx = map.Starts[p].Cx, sy = map.Starts[p].Cy;
-            int side = p == 0 ? 1 : -1;
-            _world.SpawnHarvester(p, Fix64.FromInt(sx + 3 * side), Fix64.FromInt(sy + 2));
-            for (int i = 0; i < 3; i++)
-                _world.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
-                    Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+            // Campaign mission: the map places both sides' forces and the
+            // triggers script the enemy - no skirmish AI. Per-mission setup
+            // mirrors the runner's gated scenarios.
+            map = MapData.Load(missionPath);
+            _world = map.BuildWorld(seed: 2026, players: 2, out var tags);
+            switch (MatchConfig.MissionIndex)
+            {
+                case 1:
+                    _world.GrantCredits(0, 5000);
+                    _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
+                    break;
+                case 3:
+                    _world.GrantCredits(0, 4000);
+                    break;
+            }
+            _mission = new MissionRunner(map, tags);
         }
-        _enemy = MatchConfig.AiPreset switch
+        else
         {
-            1 => SkirmishAI.Rusher(1),
-            2 => SkirmishAI.Turtle(1),
-            _ => SkirmishAI.Standard(1),
-        };
+            string mapPath = MatchConfig.MapPath ?? System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                ProjectSettings.GlobalizePath("res://"), "..", "data", "maps", "skirmish-01.fmap"));
+            map = MapData.Load(mapPath);
+            _world = map.BuildWorld(seed: 2026, players: 2);
+            _world.GrantCredits(0, MatchConfig.StartCredits);
+            _world.GrantCredits(1, MatchConfig.StartCredits);
+            _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
+            _world.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
+            // Mirrored starting force (common hardware only, so faction-neutral):
+            // a harvester and three rifle squads each - the classic opening hand.
+            for (int p = 0; p < 2; p++)
+            {
+                int sx = map.Starts[p].Cx, sy = map.Starts[p].Cy;
+                int side = p == 0 ? 1 : -1;
+                _world.SpawnHarvester(p, Fix64.FromInt(sx + 3 * side), Fix64.FromInt(sy + 2));
+                for (int i = 0; i < 3; i++)
+                    _world.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
+                        Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+            }
+            _enemy = MatchConfig.AiPreset switch
+            {
+                1 => SkirmishAI.Rusher(1),
+                2 => SkirmishAI.Turtle(1),
+                _ => SkirmishAI.Standard(1),
+            };
+        }
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked);
@@ -196,6 +222,17 @@ public partial class SkirmishLive : Node3D
         _banner.AddThemeFontSizeOverride("font_size", 42);
         hud.AddChild(_banner);
 
+        _objective = new Label
+        {
+            Visible = false,
+            AnchorLeft = 0.5f, AnchorRight = 0.5f,
+            OffsetLeft = -260, OffsetRight = 260, OffsetTop = 52,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        _objective.AddThemeFontSizeOverride("font_size", 16);
+        _objective.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
+        hud.AddChild(_objective);
+
         _dragRect = new Panel { Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
         var style = new StyleBoxFlat
         {
@@ -238,13 +275,23 @@ public partial class SkirmishLive : Node3D
             {
                 _accumulator -= TickSeconds;
                 _tickCmds.Clear();
-                _enemy.Act(_world, _tickCmds);
+                _enemy?.Act(_world, _tickCmds);
+                _tickCmds.AddRange(_missionCmds);
+                _missionCmds.Clear();
                 _tickCmds.AddRange(_pending);
                 _pending.Clear();
                 var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
                 _world.Step(span);
+                _mission?.Tick(_world, _missionCmds);
                 SnapshotNow();
                 _fog.UpdateFrom(_world, 0);
+                if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
+                if (_mission != null && _mission.Messages.Count > _seenMessages)
+                {
+                    for (int i = _seenMessages; i < _mission.Messages.Count; i++)
+                        ShowObjective(_mission.Messages[i]);
+                    _seenMessages = _mission.Messages.Count;
+                }
                 _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
                 {
@@ -326,6 +373,21 @@ public partial class SkirmishLive : Node3D
     }
 
     private bool _paused;
+    private Label _objective = null!;
+
+    /// <summary>Mission trigger messages surface as objective toasts that
+    /// fade after a few seconds.</summary>
+    private void ShowObjective(string key)
+    {
+        _objective.Text = $"OBJECTIVE UPDATE: {key.Replace('_', ' ').ToUpperInvariant()}";
+        _objective.Visible = true;
+        _objective.Modulate = Colors.White;
+        var tw = _objective.CreateTween();
+        tw.TweenInterval(4.0);
+        tw.TweenProperty(_objective, "modulate:a", 0f, 1.2f);
+        tw.TweenCallback(Callable.From(() => _objective.Visible = false));
+        _audio.Play("production_done", -8);
+    }
 
     private static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
 
