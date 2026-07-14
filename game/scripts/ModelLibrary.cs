@@ -14,7 +14,7 @@ public partial class ModelLibrary : Node
         { 1, "dir_cannon_tank" }, { 2, "com_rifle_squad" }, { 3, "com_rocket_squad" },
         { 5, "sod_shade_raider" }, { 6, "dir_sentinel_scout" }, { 7, "com_mcv" },
         { 8, "dir_howitzer" }, { 9, "sod_phantom_tank" }, { 10, "dir_bulwark_tank" },
-        { 11, "com_engineer" },
+        { 11, "com_engineer" }, { 12, "dir_vanguard_car" },
     };
     private static readonly Dictionary<int, string> KindModel = new()
     {

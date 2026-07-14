@@ -30,6 +30,7 @@ public partial class Sidebar : PanelContainer
         new("ROCKET SQUAD", 3, 300, "com_rocket_squad"),
         new("SENTINEL SCOUT", 6, 400, "dir_sentinel_scout"),
         new("ENGINEER", 11, 500, "com_engineer"),
+        new("VANGUARD CAR", 12, 450, "dir_vanguard_car"),
         new("CANNON TANK", 1, 600, "dir_cannon_tank"),
         new("HOWITZER", 8, 900, "dir_howitzer"),
         new("HARVESTER", 4, 1400, "com_harvester"),

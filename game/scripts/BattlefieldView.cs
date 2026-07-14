@@ -279,6 +279,27 @@ public static class BattlefieldView
         }
     }
 
+    /// <summary>Selection ring, addable on demand (structures get one the
+    /// first time they are selected).</summary>
+    public static void AddSelRing(Node3D node, float radius)
+    {
+        var sel = new Color(0.95f, 0.90f, 0.70f);
+        node.AddChild(new MeshInstance3D
+        {
+            Mesh = new TorusMesh { InnerRadius = radius - 0.06f, OuterRadius = radius },
+            Position = new Vector3(0, 0.03f, 0),
+            Visible = true,
+            MaterialOverride = new StandardMaterial3D
+            {
+                AlbedoColor = sel,
+                EmissionEnabled = true,
+                Emission = sel,
+                EmissionEnergyMultiplier = 1.4f,
+            },
+            Name = "SelRing",
+        });
+    }
+
     /// <summary>Team-colour ground ring for a mobile unit plus a hidden
     /// selection ring the scene toggles. The one-place team-colour law,
     /// applied at the presentation layer.</summary>

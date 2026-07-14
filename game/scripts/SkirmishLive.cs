@@ -62,6 +62,11 @@ public partial class SkirmishLive : Node3D
     private double _lastAttackAlert = -60;
     private int _mapW, _mapH;
 
+    // Structure interaction: rally points per factory, selection readout
+    private readonly Dictionary<int, Vector3> _rally = new();
+    private MeshInstance3D _rallyMarker = null!;
+    private Label _selInfo = null!;
+
     // Turret tracking (TICKET-P4-SLICE-01): models exporting a child node
     // named "turret" slew it toward whatever they last fired at.
     private readonly Dictionary<int, Node3D> _turrets = new();
@@ -168,6 +173,16 @@ public partial class SkirmishLive : Node3D
         };
         AddChild(_ghost);
 
+        var rallyGold = new Color(0.79f, 0.63f, 0.36f);
+        _rallyMarker = new MeshInstance3D
+        {
+            Mesh = new CylinderMesh { TopRadius = 0.05f, BottomRadius = 0.05f, Height = 0.7f },
+            Visible = false,
+            MaterialOverride = new StandardMaterial3D
+            { AlbedoColor = rallyGold, EmissionEnabled = true, Emission = rallyGold, EmissionEnergyMultiplier = 1.2f },
+        };
+        AddChild(_rallyMarker);
+
         SnapshotNow();
     }
 
@@ -221,7 +236,7 @@ public partial class SkirmishLive : Node3D
 
         var hint = new Label
         {
-            Text = "left click / drag: select   right click: move / attack / harvest   shift: add + queue   wasd/edge/wheel: camera",
+            Text = "click: select unit or building   right click: move / attack / harvest / rally   R repair  X sell  P pause   ctrl+1-9 groups   wasd/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
@@ -262,6 +277,15 @@ public partial class SkirmishLive : Node3D
         _sidebar = new Sidebar();
         hud.AddChild(_sidebar);
         _sidebar.Init(this);
+
+        _selInfo = new Label
+        {
+            AnchorTop = 1, AnchorBottom = 1,
+            OffsetTop = -260, OffsetLeft = 14,
+        };
+        _selInfo.AddThemeFontSizeOverride("font_size", 13);
+        _selInfo.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
+        hud.AddChild(_selInfo);
 
         _minimap = new Minimap();
         hud.AddChild(_minimap);
@@ -311,6 +335,22 @@ public partial class SkirmishLive : Node3D
                 _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
                 {
+                    if (ev.Type == GameEventType.ProductionComplete && _rally.Count > 0
+                        && ev.A >= 0 && ev.A < _world.EntityCount)
+                    {
+                        var nu = _world.Entities[ev.A];
+                        if (nu.Alive && nu.PlayerId == 0 && nu.Kind is EntityKind.Unit or EntityKind.Harvester)
+                            foreach (var (fid, rp) in _rally)
+                                if (_latest.TryGetValue(fid, out var fv)
+                                    && System.Math.Abs(fv.X - (double)(nu.X.Raw / 4294967296.0)) < 4
+                                    && System.Math.Abs(fv.Y - (double)(nu.Y.Raw / 4294967296.0)) < 4)
+                                {
+                                    _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
+                                        Fix64.FromFraction((int)(rp.X * 100), 100),
+                                        Fix64.FromFraction((int)(rp.Z * 100), 100)));
+                                    break;
+                                }
+                    }
                     if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
                         _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
                     if (ev.Type == GameEventType.PlayerEliminated)
@@ -348,6 +388,7 @@ public partial class SkirmishLive : Node3D
             dots.Add(((float)v.X, (float)v.Y, c));
         }
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f));
+        _selInfo.Text = SelectionSummary();
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -371,6 +412,29 @@ public partial class SkirmishLive : Node3D
                 };
             }
         }
+    }
+
+    private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR" };
+
+    private string SelectionSummary()
+    {
+        if (_selection.Count == 0) return "";
+        if (_selection.Count == 1)
+        {
+            foreach (int sid in _selection)
+                if (_latest.TryGetValue(sid, out var v))
+                {
+                    string name = v.Kind == EntityKind.Unit && v.UnitType < UnitNames.Length
+                        ? UnitNames[v.UnitType] : v.Kind.ToString().ToUpperInvariant();
+                    string hp = v.MaxHp > 0 ? $"  {v.Hp}/{v.MaxHp}" : $"  {v.Hp} HP";
+                    string acts = !Mobile(v.Kind)
+                        ? (v.Kind == EntityKind.Factory ? "   right-click: rally   R repair  X sell" : "   R repair  X sell")
+                        : "";
+                    return name + hp + acts;
+                }
+            return "";
+        }
+        return $"{_selection.Count} SELECTED";
     }
 
     private int CountOwn()
@@ -514,6 +578,18 @@ public partial class SkirmishLive : Node3D
             case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0:
                 GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
                 break;
+            case InputEventKey { Keycode: Key.R, Pressed: true, Echo: false } when _selection.Count > 0:
+                foreach (int sid in _selection)
+                    if (_latest.TryGetValue(sid, out var rv) && !Mobile(rv.Kind))
+                        _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
+                _audio.Play("ui_confirm", -8);
+                break;
+            case InputEventKey { Keycode: Key.X, Pressed: true, Echo: false } when _selection.Count > 0:
+                foreach (int sid in _selection)
+                    if (_latest.TryGetValue(sid, out var xv) && !Mobile(xv.Kind))
+                        _pending.Add(new Command(0, 0, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
+                _audio.Play("ui_click", -8);
+                break;
             case InputEventKey { Keycode: Key.P, Pressed: true, Echo: false }:
                 _paused = !_paused;
                 _banner.Text = "PAUSED";
@@ -552,7 +628,15 @@ public partial class SkirmishLive : Node3D
         if ((at - _dragStart).Length() <= 8)
         {
             int hit = PickEntity(at, 0.9f, v => v.PlayerId == 0 && Mobile(v.Kind));
-            if (hit >= 0) _selection.Add(hit);
+            if (hit < 0)
+                hit = PickEntity(at, 1.4f, v => v.PlayerId == 0 && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+            if (hit >= 0)
+            {
+                _selection.Add(hit);
+                if (_actors.TryGetValue(hit, out var n) && n.GetNodeOrNull<MeshInstance3D>("SelRing") == null)
+                    BattlefieldView.AddSelRing(n, 1.5f);   // structures ring on demand
+                _audio.Play("ui_click", -14);
+            }
             return;
         }
         var tl = new Vector2(Mathf.Min(_dragStart.X, at.X), Mathf.Min(_dragStart.Y, at.Y));
@@ -631,6 +715,23 @@ public partial class SkirmishLive : Node3D
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
         if (gp is not { } p) return;
+        // Factory selected: right-click sets its rally point (client-side;
+        // fresh units get a PathMove there on ProductionComplete).
+        bool onlyStructures = true;
+        foreach (int sid in _selection)
+            if (_latest.TryGetValue(sid, out var sv) && Mobile(sv.Kind)) { onlyStructures = false; break; }
+        if (onlyStructures)
+        {
+            foreach (int sid in _selection)
+                if (_latest.TryGetValue(sid, out var sv) && sv.Kind == EntityKind.Factory)
+                {
+                    _rally[sid] = new Vector3(p.X, 0, p.Z);
+                    _rallyMarker.Position = new Vector3(p.X, 0.35f, p.Z);
+                    _rallyMarker.Visible = true;
+                    _audio.Play("ui_confirm", -8);
+                }
+            return;
+        }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == 1 && v.Kind != EntityKind.FerriteField);
@@ -666,5 +767,14 @@ public partial class SkirmishLive : Node3D
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
                 _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
+    }
+
+    public void OrderAttackMoveTo(float x, float z)
+    {
+        var cx = Fix64.FromFraction((int)(x * 100), 100);
+        var cy = Fix64.FromFraction((int)(z * 100), 100);
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
+                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, cx, cy));
     }
 }

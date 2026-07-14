@@ -408,6 +408,34 @@ def ferrite_cluster(scale=1.0):
         objs.append(o)
     return join(objs, 'ferrite_cluster')
 
+def dir_vanguard_car():
+    # The vertical-slice unit (TICKET-P4-SLICE-01): a wheeled gun car, and
+    # the first model whose turret stays a SEPARATE child object so the
+    # client can slew it toward targets (glTF preserves object hierarchy
+    # when objects are parented rather than joined).
+    parts = [box('hull', 0.44, 0.66, 0.16, 0, 0, 0.10, 'gun', 0.04)]
+    glacis = box('glacis', 0.38, 0.14, 0.10, 0, 0.34, 0.12, 'plate', 0.03)
+    glacis.rotation_euler = (-0.55, 0, 0)
+    parts.append(glacis)
+    parts.append(box('cab', 0.34, 0.2, 0.1, 0, 0.12, 0.26, 'gun', 0.03))
+    parts.append(box('screen', 0.28, 0.02, 0.06, 0, 0.225, 0.29, 'gundark', 0.008))
+    for sx in (-0.235, 0.235):   # exposed wheels: the fast silhouette
+        for i, wy in enumerate((-0.22, 0.22)):
+            parts.append(cyl(f'w{sx}{i}', 0.105, 0.09, sx, wy, 0.105, 'gundark', vs=12, ry=math.pi/2))
+    parts.append(box('bumper', 0.4, 0.06, 0.08, 0, 0.42, 0.08, 'gundark', 0.015))
+    parts.append(box('rack', 0.36, 0.18, 0.06, 0, -0.26, 0.22, 'gundark', 0.015))
+    parts.append(team_band(0.3, -0.34, 0.2, 'orange'))
+    hull = join(parts, 'dir_vanguard_car')
+
+    tparts = [cyl('tring', 0.11, 0.04, 0, -0.04, 0.30, 'gundark', vs=12)]
+    tparts.append(box('tbody', 0.16, 0.18, 0.09, 0, -0.04, 0.36, 'plate', 0.02))
+    tparts.append(box('tshield', 0.2, 0.03, 0.12, 0, 0.06, 0.37, 'gun', 0.012))
+    tparts.append(cyl('tgun', 0.024, 0.34, 0, 0.22, 0.375, 'gundark', rx=math.pi/2))
+    tparts.append(cyl('tmuzz', 0.032, 0.05, 0, 0.4, 0.375, 'plate', vs=8, rx=math.pi/2))
+    turret = join(tparts, 'turret')
+    turret.parent = hull   # identity transforms after join: safe to parent
+    return hull
+
 BUILDERS = dict(
     dir_cannon_tank=dir_cannon_tank, dir_bulwark_tank=dir_bulwark_tank,
     dir_howitzer=dir_howitzer, dir_sentinel_scout=dir_sentinel_scout,
@@ -418,7 +446,8 @@ BUILDERS = dict(
     com_power_plant=com_power_plant, com_factory=com_factory, com_refinery=com_refinery,
     com_construction_yard=com_construction_yard, dir_turret=dir_turret,
     dir_superweapon=dir_superweapon, sod_veil_projector=sod_veil_projector,
-    com_service_depot=com_service_depot, ferrite_cluster=ferrite_cluster)
+    com_service_depot=com_service_depot, ferrite_cluster=ferrite_cluster,
+    dir_vanguard_car=dir_vanguard_car)
 
 def scene_setup(sun_rot=(0.9, 0.2, 0.7), strength=3.0):
     bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()
