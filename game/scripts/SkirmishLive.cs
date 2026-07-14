@@ -35,7 +35,7 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, Vector3> _targets = new();
     private readonly Dictionary<int, SnapshotInterpolator.ViewEntity> _latest = new();
     private ModelLibrary _models = null!;
-    private Camera3D _cam = null!;
+    private RtsCamera _cam = null!;
     private double _accumulator;
     private double _renderTime;
     private int _winner = -1;
@@ -89,6 +89,31 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
     private double _now;
     private GpuParticles3D _dust = null!;
+
+    // W3-14: billboard health bars, shared static resources (the
+    // CombatEffects pattern). Bars are children of the scene, not the actor,
+    // so hull yaw never swings the offset. CenterOffset 0.45 anchors each
+    // quad's left edge at its node origin, so Scale.X shrinks rightward from
+    // a fixed left edge; the RTS camera never yaws, so world X == billboard X
+    // and the two quads stay aligned. Team colour is NOT used here (doc 16
+    // one-place law lives on the ground ring); the ramp is health state.
+    private static readonly QuadMesh HpBackMesh = new() { Size = new Vector2(0.9f, 0.10f), CenterOffset = new Vector3(0.45f, 0, 0) };
+    private static readonly QuadMesh HpFillMesh = new() { Size = new Vector2(0.9f, 0.07f), CenterOffset = new Vector3(0.45f, 0, 0) };
+    private static StandardMaterial3D Bar(Color c, int prio) => new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+        AlbedoColor = c,
+        BillboardMode = BaseMaterial3D.BillboardModeEnum.Enabled,
+        BillboardKeepScale = true,
+        NoDepthTest = true,
+        RenderPriority = prio,
+    };
+    private static readonly StandardMaterial3D BackMat = Bar(new Color(0.04f, 0.04f, 0.05f, 0.85f), 10);
+    private static readonly StandardMaterial3D FillGreen = Bar(new Color(0.42f, 0.78f, 0.32f), 11);
+    private static readonly StandardMaterial3D FillAmber = Bar(new Color(0.90f, 0.68f, 0.22f), 11);
+    private static readonly StandardMaterial3D FillRed = Bar(new Color(0.85f, 0.28f, 0.20f), 11);
+    private readonly Dictionary<int, (MeshInstance3D Back, MeshInstance3D Fill)> _hpBars = new();
 
     private static void ScanRig(Node n, ActorRig rig)
     {
@@ -171,6 +196,9 @@ public partial class SkirmishLive : Node3D
         _dust = BattlefieldView.BuildDust();
         AddChild(_dust);
         _cam.Position = new Vector3(map.Starts[0].Cx, 22, map.Starts[0].Cy + 14);
+        _cam.Snap(_cam.Position);
+        _cam.BoundsMin = Vector2.Zero;
+        _cam.BoundsMax = new Vector2(map.Width, map.Height);
         _cam.Current = true;
 
         BattlefieldView.BuildLightRig(this);
@@ -180,6 +208,7 @@ public partial class SkirmishLive : Node3D
         _audio.PlayAmbient();
         _effects = new CombatEffects();
         AddChild(_effects);
+        _effects.Camera = _cam;
 
         BuildHud();
 
@@ -310,7 +339,8 @@ public partial class SkirmishLive : Node3D
         foreach (var (bx, by) in _mapBlocked) blocked.Add((bx, by));
         _minimap.Init(_mapW, _mapH, blocked, _fog.FogImage, world =>
         {
-            _cam.Position = new Vector3(world.X, _cam.Position.Y, world.Y + _cam.Position.Y * 0.55f);
+            // W3-11: minimap clicks glide instead of teleporting.
+            _cam.FlyTo(new Vector3(world.X, 0, world.Y));
         });
     }
     private IReadOnlyList<(int Cx, int Cy)> _mapBlocked = System.Array.Empty<(int, int)>();
@@ -352,7 +382,12 @@ public partial class SkirmishLive : Node3D
                         ShowObjective(_mission.Messages[i]);
                     _seenMessages = _mission.Messages.Count;
                 }
-                _effects.OnTickEvents(_world.Events, _actors, _audio);
+                // W3-01: resolve attacker ids to sim WeaponIds so effects can
+                // pick per-weapon families. Reading _world.Entities after Step
+                // is precedented by the rally code below; the sim is not
+                // modified.
+                _effects.OnTickEvents(_world.Events, _actors, _audio,
+                    id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
                 foreach (var ev in _world.Events)
                 {
                     if (ev.Type == GameEventType.ProductionComplete)
@@ -553,6 +588,41 @@ public partial class SkirmishLive : Node3D
                 }
             }
             _targets[v.Id] = pos;
+            // W3-08: damage-state smoke below 50% hp, denser below 25%;
+            // repair above the threshold clears it. Tier changes rebuild the
+            // emitter (Amount is not safely runtime-mutable while emitting).
+            bool hurt = v.MaxHp > 0 && v.Hp * 2 < v.MaxHp && v.Kind != EntityKind.FerriteField;
+            int tier = hurt ? (v.Hp * 4 < v.MaxHp ? 2 : 1) : 0;
+            var dmg = node.GetNodeOrNull<GpuParticles3D>("DmgSmoke");
+            if (dmg != null && (tier == 0 || dmg.GetMeta("tier").AsInt32() != tier))
+            {
+                dmg.Name = "DmgSmokeGone"; // QueueFree defers; rename so a rebuild this frame finds nothing
+                dmg.QueueFree();
+                dmg = null;
+            }
+            if (tier > 0 && dmg == null && CombatEffects.MakeDamageSmoke(tier) is { } fresh)
+            {
+                fresh.Name = "DmgSmoke";
+                fresh.Position = new Vector3(0, Mobile(v.Kind) ? 0.35f : 0.7f, 0);
+                node.AddChild(fresh);
+            }
+            // W3-09: ferrite-gold stream while a harvester loads (post-Step
+            // read of HState, same precedent as the rally code).
+            if (v.Kind == EntityKind.Harvester)
+            {
+                bool loading = v.Id < _world.EntityCount && _world.Entities[v.Id].HState == HarvestState.Loading;
+                var hfx = node.GetNodeOrNull<GpuParticles3D>("HarvestFx");
+                if (loading && hfx == null)
+                {
+                    hfx = CombatEffects.MakeHarvestFx();
+                    hfx.Name = "HarvestFx";
+                    // +Z is the intake end after the Blender-Y-forward to
+                    // glTF minus-Z conversion.
+                    hfx.Position = new Vector3(0, 0.15f, 0.6f);
+                    node.AddChild(hfx);
+                }
+                else if (hfx != null) hfx.Emitting = loading;
+            }
             if (v.Kind == EntityKind.FerriteField)
             {
                 float g = Mathf.Max(0.2f, v.Hp / 12000f);
@@ -593,6 +663,12 @@ public partial class SkirmishLive : Node3D
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
                 }
                 tw.TweenCallback(Callable.From(() => corpse.QueueFree()));
+                if (_hpBars.TryGetValue(id, out var hb))
+                {
+                    hb.Back.QueueFree();
+                    hb.Fill.QueueFree();
+                    _hpBars.Remove(id);
+                }
                 _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id);
             }
 
@@ -602,6 +678,29 @@ public partial class SkirmishLive : Node3D
             if (!_targets.TryGetValue(id, out var t)) continue;
             var to = t - node.Position;
             node.Position = node.Position.Lerp(t, dt * 10f);
+            // W3-14: billboard health bars above damaged or selected mobiles.
+            if (_latest.TryGetValue(id, out var hv) && Mobile(hv.Kind))
+            {
+                bool show = node.Visible && hv.MaxHp > 0 && (_selection.Contains(id) || hv.Hp < hv.MaxHp);
+                if (show && !_hpBars.ContainsKey(id))
+                {
+                    var back = new MeshInstance3D { Mesh = HpBackMesh, MaterialOverride = BackMat, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
+                    var fill = new MeshInstance3D { Mesh = HpFillMesh, MaterialOverride = FillGreen, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
+                    AddChild(back);
+                    AddChild(fill);
+                    _hpBars[id] = (back, fill);
+                }
+                if (_hpBars.TryGetValue(id, out var b))
+                {
+                    float frac = Mathf.Clamp(hv.Hp / (float)hv.MaxHp, 0f, 1f);
+                    b.Back.Visible = show;
+                    b.Fill.Visible = show;
+                    b.Back.Position = node.Position + new Vector3(-0.45f, 1.15f, 0);
+                    b.Fill.Position = node.Position + new Vector3(-0.45f, 1.15f, 0);
+                    b.Fill.Scale = new Vector3(Mathf.Max(frac, 0.02f), 1, 1);
+                    b.Fill.MaterialOverride = frac > 0.5f ? FillGreen : frac > 0.25f ? FillAmber : FillRed;
+                }
+            }
             if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind) && to.LengthSquared() > 0.003f)
             {
                 float desired = Mathf.Atan2(-to.X, -to.Z);
