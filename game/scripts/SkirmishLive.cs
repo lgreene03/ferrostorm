@@ -62,6 +62,20 @@ public partial class SkirmishLive : Node3D
     private double _lastAttackAlert = -60;
     private int _mapW, _mapH;
 
+    // Turret tracking (TICKET-P4-SLICE-01): models exporting a child node
+    // named "turret" slew it toward whatever they last fired at.
+    private readonly Dictionary<int, Node3D> _turrets = new();
+    private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
+    private double _now;
+
+    private static Node3D? FindTurret(Node n)
+    {
+        if (n is Node3D t && n.Name.ToString().StartsWith("turret")) return t;
+        foreach (var c in n.GetChildren())
+            if (FindTurret(c) is { } f) return f;
+        return null;
+    }
+
     public override void _Ready()
     {
         _models = new ModelLibrary();
@@ -117,7 +131,7 @@ public partial class SkirmishLive : Node3D
         }
 
         BattlefieldView.BuildEnvironment(this);
-        BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked);
+        BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual);
         _mapW = map.Width; _mapH = map.Height;
         _mapBlocked = map.Blocked;
         _fog = new FogOfWar();
@@ -297,6 +311,8 @@ public partial class SkirmishLive : Node3D
                 _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
                 {
+                    if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
+                        _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
                     if (ev.Type == GameEventType.PlayerEliminated)
                         OnEliminated(ev.B);
                     // Base under attack: own structure took fire, cooled alert
@@ -411,6 +427,7 @@ public partial class SkirmishLive : Node3D
                 if (Mobile(v.Kind) && v.PlayerId >= 0) BattlefieldView.DressMobile(node, v.PlayerId);
                 AddChild(node);
                 _actors[v.Id] = node;
+                if (FindTurret(node) is { } tur) _turrets[v.Id] = tur;
             }
             _targets[v.Id] = pos;
             if (v.Kind == EntityKind.FerriteField)
@@ -425,8 +442,9 @@ public partial class SkirmishLive : Node3D
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
-            { _actors[id].QueueFree(); _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); }
+            { _actors[id].QueueFree(); _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _turrets.Remove(id); _aim.Remove(id); }
 
+        _now += dt;
         foreach (var (id, node) in _actors)
         {
             if (!_targets.TryGetValue(id, out var t)) continue;
@@ -438,6 +456,21 @@ public partial class SkirmishLive : Node3D
                 var r = node.Rotation;
                 r.Y = Mathf.LerpAngle(r.Y, desired, 1f - Mathf.Exp(-6f * dt));
                 node.Rotation = r;
+            }
+            // Turret slew: aim at the last fired-at position (relative to the
+            // hull's own yaw), then return to centre once the memory fades.
+            if (_turrets.TryGetValue(id, out var tur))
+            {
+                float desiredLocal = 0f;
+                if (_aim.TryGetValue(id, out var aim) && aim.Until > _now)
+                {
+                    var d = aim.At - node.Position;
+                    if (d.LengthSquared() > 0.01f)
+                        desiredLocal = Mathf.AngleDifference(node.Rotation.Y, Mathf.Atan2(-d.X, -d.Z));
+                }
+                var tr = tur.Rotation;
+                tr.Y = Mathf.LerpAngle(tr.Y, desiredLocal, 1f - Mathf.Exp(-9f * dt));
+                tur.Rotation = tr;
             }
         }
     }
@@ -568,6 +601,20 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>Verification reads.</summary>
+    public Vector3? FindOwnUnitPos(int unitType)
+    {
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == unitType)
+                return new Vector3((float)v.X, 0, (float)v.Y);
+        return null;
+    }
+    public bool AimActive(int unitType)
+    {
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == 0 && v.UnitType == unitType && _aim.TryGetValue(v.Id, out var a) && a.Until > _now)
+                return true;
+        return false;
+    }
     public long CreditsNow => _world.Credits(0);
     public int ReadyAtYard => _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
     public int OwnCount(EntityKind kind)

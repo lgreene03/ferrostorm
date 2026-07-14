@@ -65,8 +65,14 @@ public static class BattlefieldView
         return tex;
     }
 
-    public static void BuildTerrain(Node3D parent, int w, int h, IEnumerable<(int X, int Y)> blockedCells)
+    /// <summary>Terrain with the full visual vocabulary (TICKET-P4-TER-01):
+    /// cells the sim knows only as open or blocked render as what the map
+    /// says they are - water, hills, ruins, fences, bridges.</summary>
+    public static void BuildTerrain(Node3D parent, int w, int h,
+        IEnumerable<(int X, int Y)> blockedCells,
+        IReadOnlyDictionary<(int, int), char>? visual = null)
     {
+        visual ??= new Dictionary<(int, int), char>();
         var groundMat = new StandardMaterial3D
         {
             AlbedoColor = Colors.White,
@@ -102,22 +108,149 @@ public static class BattlefieldView
             Roughness = 0.92f,
             Uv1Scale = new Vector3(3, 3, 3),
         };
+        // Shared dressing materials
+        var waterMat = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.05f, 0.09f, 0.13f, 0.92f),
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            Metallic = 0.6f, Roughness = 0.12f,
+            NormalEnabled = true,
+            NormalTexture = GrainTex(53, 0.08f, normalMap: true),
+            NormalScale = 0.5f,
+            Uv1Scale = new Vector3(6, 6, 6),
+        };
+        var hillMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(59, 0.04f,
+                dark: new Color(0.11f, 0.115f, 0.125f),
+                light: new Color(0.19f, 0.20f, 0.215f)),
+            NormalEnabled = true,
+            NormalTexture = GrainTex(61, 0.07f, normalMap: true),
+            Roughness = 0.95f,
+        };
+        var ruinMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(67, 0.06f,
+                dark: new Color(0.16f, 0.155f, 0.145f),
+                light: new Color(0.28f, 0.27f, 0.25f)),
+            Roughness = 0.9f,
+        };
+        var fenceMat = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.23f, 0.20f, 0.16f),
+            Roughness = 0.85f,
+        };
+        var deckMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(71, 0.05f,
+                dark: new Color(0.17f, 0.16f, 0.14f),
+                light: new Color(0.27f, 0.25f, 0.22f)),
+            Roughness = 0.88f,
+        };
+
         var rng = new System.Random(2026);
         var blocked = new HashSet<(int, int)>();
         foreach (var (bx, by) in blockedCells)
         {
             blocked.Add((bx, by));
-            float jh = 0.75f + (float)rng.NextDouble() * 0.55f;
+            char kind = visual.GetValueOrDefault((bx, by), '#');
+            switch (kind)
+            {
+                case 'w':
+                    // Water: a sunken reflective slab; the shore lip is the
+                    // ground plane edge reading against it.
+                    parent.AddChild(new MeshInstance3D
+                    {
+                        Mesh = new BoxMesh { Size = new Vector3(1.02f, 0.1f, 1.02f) },
+                        Position = new Vector3(bx + 0.5f, -0.12f, by + 0.5f),
+                        MaterialOverride = waterMat,
+                    });
+                    break;
+                case 'h':
+                    // Hill: a broad smooth mound (sphere squashed flat), so
+                    // clusters merge into rolling high ground.
+                    float hr = 1.05f + (float)rng.NextDouble() * 0.25f;
+                    parent.AddChild(new MeshInstance3D
+                    {
+                        Mesh = new SphereMesh { Radius = hr, Height = 1.5f + (float)rng.NextDouble() * 0.7f, RadialSegments = 14, Rings = 7 },
+                        Position = new Vector3(bx + 0.5f, -0.15f, by + 0.5f),
+                        MaterialOverride = hillMat,
+                    });
+                    break;
+                case 'r':
+                    // Ruin: broken wall stubs at jittered heights - a dead
+                    // settlement to fight through.
+                    float wh = 0.35f + (float)rng.NextDouble() * 0.5f;
+                    parent.AddChild(new MeshInstance3D
+                    {
+                        Mesh = new BoxMesh { Size = new Vector3(0.9f, wh, 0.9f) },
+                        Position = new Vector3(bx + 0.5f, wh / 2f, by + 0.5f),
+                        Rotation = new Vector3(0, ((float)rng.NextDouble() - 0.5f) * 0.3f, 0),
+                        MaterialOverride = ruinMat,
+                    });
+                    if (rng.NextDouble() > 0.6)
+                        parent.AddChild(new MeshInstance3D
+                        {
+                            Mesh = new BoxMesh { Size = new Vector3(0.4f, wh * 1.6f, 0.3f) },
+                            Position = new Vector3(bx + 0.3f + (float)rng.NextDouble() * 0.4f, wh * 0.8f, by + 0.3f + (float)rng.NextDouble() * 0.4f),
+                            MaterialOverride = ruinMat,
+                        });
+                    break;
+                case 'f':
+                    // Fence: posts and two rails along the cell.
+                    for (int px = 0; px < 2; px++)
+                        parent.AddChild(new MeshInstance3D
+                        {
+                            Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.5f, 0.07f) },
+                            Position = new Vector3(bx + 0.2f + px * 0.6f, 0.25f, by + 0.5f),
+                            MaterialOverride = fenceMat,
+                        });
+                    for (int rail = 0; rail < 2; rail++)
+                        parent.AddChild(new MeshInstance3D
+                        {
+                            Mesh = new BoxMesh { Size = new Vector3(1.0f, 0.05f, 0.05f) },
+                            Position = new Vector3(bx + 0.5f, 0.18f + rail * 0.22f, by + 0.5f),
+                            MaterialOverride = fenceMat,
+                        });
+                    break;
+                default:
+                    float jh = 0.75f + (float)rng.NextDouble() * 0.55f;
+                    parent.AddChild(new MeshInstance3D
+                    {
+                        Mesh = new BoxMesh { Size = new Vector3(1.18f, jh, 1.18f) },
+                        Position = new Vector3(bx + 0.5f, jh / 2f - 0.06f, by + 0.5f),
+                        Rotation = new Vector3(
+                            ((float)rng.NextDouble() - 0.5f) * 0.10f,
+                            ((float)rng.NextDouble() - 0.5f) * 0.5f,
+                            ((float)rng.NextDouble() - 0.5f) * 0.10f),
+                        MaterialOverride = ridgeMat,
+                    });
+                    break;
+            }
+        }
+
+        // Bridges: OPEN cells with a raised deck and kerb rails - the sim
+        // paths straight across; the eye reads a river crossing.
+        foreach (var (cell, kind) in visual)
+        {
+            if (kind != 'B') continue;
+            var (bx, by) = cell;
             parent.AddChild(new MeshInstance3D
             {
-                Mesh = new BoxMesh { Size = new Vector3(1.18f, jh, 1.18f) },
-                Position = new Vector3(bx + 0.5f, jh / 2f - 0.06f, by + 0.5f),
-                Rotation = new Vector3(
-                    ((float)rng.NextDouble() - 0.5f) * 0.10f,
-                    ((float)rng.NextDouble() - 0.5f) * 0.5f,
-                    ((float)rng.NextDouble() - 0.5f) * 0.10f),
-                MaterialOverride = ridgeMat,
+                Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.1f, 1.04f) },
+                Position = new Vector3(bx + 0.5f, 0.05f, by + 0.5f),
+                MaterialOverride = deckMat,
             });
+            foreach (float off in new[] { -0.46f, 0.46f })
+                parent.AddChild(new MeshInstance3D
+                {
+                    Mesh = new BoxMesh { Size = new Vector3(0.08f, 0.16f, 1.04f) },
+                    Position = new Vector3(bx + 0.5f + off, 0.14f, by + 0.5f),
+                    MaterialOverride = fenceMat,
+                });
         }
 
         var rubbleMat = new StandardMaterial3D

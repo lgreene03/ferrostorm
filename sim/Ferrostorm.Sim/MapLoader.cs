@@ -7,6 +7,11 @@ namespace Ferrostorm.Sim;
 /// a strict format that fails loudly, zero dependencies, parsed once at match
 /// setup. Grid characters: '.' open ground, '#' impassable, 'F' ferrite
 /// field (standard 12000 deposit at that cell).
+/// Visual terrain classes (TICKET-P4-TER-01): to the SIM these alias exactly
+/// to open or blocked - passability and hashes are untouched - but the
+/// client reads MapData.Visual to render them as what they are:
+///   'w' water (blocked)   'h' hill (blocked)    'r' ruin (blocked)
+///   'f' fence (blocked)   'B' bridge (OPEN: the pathable river crossing)
 ///   ferrostorm-map v1
 ///   size W H
 ///   start PLAYER CX CY        (one per player; the CY footprint anchor)
@@ -33,6 +38,8 @@ public sealed class MapData
     public IReadOnlyList<MapUnit> Units { get; init; } = Array.Empty<MapUnit>();
     public IReadOnlyList<MapStructure> Structures { get; init; } = Array.Empty<MapStructure>();
     public IReadOnlyList<MapTrigger> Triggers { get; init; } = Array.Empty<MapTrigger>();
+    /// <summary>Client-only terrain dressing per cell; the sim never reads this.</summary>
+    public IReadOnlyDictionary<(int Cx, int Cy), char> Visual { get; init; } = new Dictionary<(int, int), char>();
     public const int StandardFieldAmount = 12000;
 
     public static MapData Load(string path) => Parse(File.ReadAllText(path));
@@ -75,6 +82,7 @@ public sealed class MapData
         if (w <= 0 || h <= 0 || gridAt < 0) throw new FormatException("missing size or grid");
         if (lines.Length < gridAt + h) throw new FormatException($"grid truncated: need {h} rows");
         var blocked = new List<(int, int)>();
+        var visual = new Dictionary<(int, int), char>();
         var fields = new List<(int, int)>();
         for (int y = 0; y < h; y++)
         {
@@ -86,6 +94,10 @@ public sealed class MapData
                     case '.': break;
                     case '#': blocked.Add((x, y)); break;
                     case 'F': fields.Add((x, y)); break;
+                    case 'w': case 'h': case 'r': case 'f':
+                        blocked.Add((x, y)); visual[(x, y)] = row[x]; break;
+                    case 'B':
+                        visual[(x, y)] = 'B'; break;   // bridge: open to the sim
                     default: throw new FormatException($"grid ({x},{y}): unknown character '{row[x]}'");
                 }
         }
@@ -127,7 +139,7 @@ public sealed class MapData
         return new MapData
         {
             Width = w, Height = h, Blocked = blocked, Fields = fields, Starts = starts,
-            Factions = factions, ShortGame = shortGame, Units = units, Structures = structures, Triggers = triggers,
+            Factions = factions, ShortGame = shortGame, Units = units, Structures = structures, Triggers = triggers, Visual = visual,
         };
     }
 
