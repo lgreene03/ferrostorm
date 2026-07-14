@@ -231,7 +231,7 @@ public partial class SkirmishLive : Node3D
 
     public override void _Process(double delta)
     {
-        if (_winner < 0)
+        if (_winner < 0 && !_paused)
         {
             _accumulator += delta;
             while (_accumulator >= TickSeconds)
@@ -319,11 +319,13 @@ public partial class SkirmishLive : Node3D
     private void OnEliminated(int player)
     {
         _winner = player == 0 ? 1 : 0;
-        _banner.Text = _winner == 0 ? "VICTORY" : "DEFEAT";
+        _banner.Text = (_winner == 0 ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
         _banner.AddThemeColorOverride("font_color",
             _winner == 0 ? BattlefieldView.DirectorateMark : new Color(0.8f, 0.25f, 0.2f));
         _banner.Visible = true;
     }
+
+    private bool _paused;
 
     private static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
 
@@ -411,6 +413,15 @@ public partial class SkirmishLive : Node3D
                 break;
             case InputEventKey { Keycode: Key.Escape, Pressed: true } when _placingType > 0:
                 _placingType = 0; _ghost.Visible = false;
+                break;
+            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0:
+                GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
+                break;
+            case InputEventKey { Keycode: Key.P, Pressed: true, Echo: false }:
+                _paused = !_paused;
+                _banner.Text = "PAUSED";
+                _banner.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
+                _banner.Visible = _paused && _winner < 0;
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
