@@ -52,6 +52,13 @@ public partial class SkirmishLive : Node3D
     private MeshInstance3D _ghost = null!;
     private int _yardId = -1, _factoryId = -1;
 
+    // Fog, minimap, groups, alerts
+    private FogOfWar _fog = null!;
+    private Minimap _minimap = null!;
+    private readonly Dictionary<int, HashSet<int>> _groups = new();
+    private double _lastAttackAlert = -60;
+    private int _mapW, _mapH;
+
     public override void _Ready()
     {
         _models = new ModelLibrary();
@@ -85,6 +92,11 @@ public partial class SkirmishLive : Node3D
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked);
+        _mapW = map.Width; _mapH = map.Height;
+        _mapBlocked = map.Blocked;
+        _fog = new FogOfWar();
+        AddChild(_fog);
+        _fog.Init(map.Width, map.Height);
 
         _cam = new RtsCamera();
         AddChild(_cam);
@@ -197,7 +209,17 @@ public partial class SkirmishLive : Node3D
         _sidebar = new Sidebar();
         hud.AddChild(_sidebar);
         _sidebar.Init(this);
+
+        _minimap = new Minimap();
+        hud.AddChild(_minimap);
+        var blocked = new List<(int, int)>();
+        foreach (var (bx, by) in _mapBlocked) blocked.Add((bx, by));
+        _minimap.Init(_mapW, _mapH, blocked, _fog.FogImage, world =>
+        {
+            _cam.Position = new Vector3(world.X, _cam.Position.Y, world.Y + _cam.Position.Y * 0.55f);
+        });
     }
+    private IReadOnlyList<(int Cx, int Cy)> _mapBlocked = System.Array.Empty<(int, int)>();
 
     // ---------------- sim loop ----------------
 
@@ -222,15 +244,45 @@ public partial class SkirmishLive : Node3D
                 var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
                 _world.Step(span);
                 SnapshotNow();
+                _fog.UpdateFrom(_world, 0);
                 _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
+                {
                     if (ev.Type == GameEventType.PlayerEliminated)
                         OnEliminated(ev.B);
+                    // Base under attack: own structure took fire, cooled alert
+                    if (ev.Type == GameEventType.Fired && ev.B >= 0 && ev.B < _world.EntityCount)
+                    {
+                        var target = _world.Entities[ev.B];
+                        if (target.PlayerId == 0 && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester
+                            && Time.GetTicksMsec() / 1000.0 - _lastAttackAlert > 12.0)
+                        {
+                            _lastAttackAlert = Time.GetTicksMsec() / 1000.0;
+                            _audio.Play("alert_attack", -4);
+                        }
+                    }
+                }
             }
         }
         _renderTime = _world.Tick - 1 + _accumulator / TickSeconds;
         SyncActors((float)delta);
-        _status.Text = $"CREDITS {_world.Credits(0)}    UNITS {CountOwn()}    TICK {_world.Tick}";
+        int supply = 0, draw = 0;
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
+        string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
+        _status.Text = $"CREDITS {_world.Credits(0)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}";
+
+        var dots = new List<(float, float, Color)>();
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.Kind == EntityKind.FerriteField) continue;
+            if (v.PlayerId == 1 && !_world.IsVisible(0, (int)v.X, (int)v.Y)) continue;
+            var c = v.PlayerId == 0 ? BattlefieldView.DirectorateMark
+                : v.PlayerId == 1 ? BattlefieldView.SodalityMark
+                : new Color(0.79f, 0.63f, 0.36f);
+            dots.Add(((float)v.X, (float)v.Y, c));
+        }
+        _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f));
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -302,6 +354,8 @@ public partial class SkirmishLive : Node3D
             }
             if (node.GetNodeOrNull<MeshInstance3D>("SelRing") is { } sel)
                 sel.Visible = _selection.Contains(v.Id);
+            // Fog: enemies are hidden unless their cell is currently visible
+            node.Visible = v.PlayerId != 1 || _world.IsVisible(0, (int)v.X, (int)v.Y);
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
@@ -370,6 +424,16 @@ public partial class SkirmishLive : Node3D
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
                 IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift));
+                break;
+            case InputEventKey { Pressed: true, Echo: false } key when key.Keycode is >= Key.Key1 and <= Key.Key9:
+                int slot = (int)key.Keycode - (int)Key.Key1;
+                if (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta))
+                    _groups[slot] = new HashSet<int>(_selection);          // assign
+                else if (_groups.TryGetValue(slot, out var g))
+                {
+                    _selection.Clear();                                    // recall
+                    foreach (int id in g) if (_latest.ContainsKey(id)) _selection.Add(id);
+                }
                 break;
         }
     }

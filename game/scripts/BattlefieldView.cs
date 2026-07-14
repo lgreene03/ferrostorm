@@ -79,9 +79,12 @@ public static class BattlefieldView
             Roughness = 0.96f,
             Uv1Scale = new Vector3(10, 10, 10),
         };
+        // Exactly the map bounds: anything beyond is void, so the shroud
+        // plane (same bounds) covers every lit surface and the map edge
+        // reads as a classic hard boundary.
         parent.AddChild(new MeshInstance3D
         {
-            Mesh = new PlaneMesh { Size = new Vector2(w + 24, h + 24) },
+            Mesh = new PlaneMesh { Size = new Vector2(w, h) },
             Position = new Vector3(w / 2f, 0, h / 2f),
             MaterialOverride = groundMat,
             Name = "Ground",
