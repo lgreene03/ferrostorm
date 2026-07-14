@@ -77,6 +77,13 @@ public partial class SkirmishLive : Node3D
         public Tween? RecoilTw;
         public readonly List<Node3D> Wheels = new();
         public Node3D? Dish;
+        public Node3D? Intake;
+        public Vector3 IntakeRest;
+        public readonly List<(Node3D Node, Vector3 Home)> Doors = new();
+        public Tween? DoorTw;
+        public float PrevSpeed;   // W2-04 hull pitch spring
+        public float Pitch;
+        public float BobPhase;    // W2-07 infantry stride
     }
     private readonly Dictionary<int, ActorRig> _rigs = new();
     private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
@@ -91,6 +98,8 @@ public partial class SkirmishLive : Node3D
             if (nm.StartsWith("turret")) { rig.Turret = t3; rig.TurretRest = t3.Position; }
             else if (nm.StartsWith("wheel")) rig.Wheels.Add(t3);
             else if (nm.StartsWith("dish")) rig.Dish = t3;
+            else if (nm.StartsWith("intake")) { rig.Intake = t3; rig.IntakeRest = t3.Rotation; }
+            else if (nm.StartsWith("door")) rig.Doors.Add((t3, t3.Position));
         }
         foreach (var c in n.GetChildren()) ScanRig(c, rig);
     }
@@ -346,6 +355,18 @@ public partial class SkirmishLive : Node3D
                 _effects.OnTickEvents(_world.Events, _actors, _audio);
                 foreach (var ev in _world.Events)
                 {
+                    if (ev.Type == GameEventType.ProductionComplete)
+                        foreach (var (fid2, frig2) in _rigs)
+                            if (frig2.Doors.Count > 0 && _latest.TryGetValue(fid2, out var fv2) && fv2.Kind == EntityKind.Factory)
+                            {
+                                frig2.DoorTw?.Kill();
+                                frig2.DoorTw = _actors[fid2].CreateTween();
+                                foreach (var (d, home) in frig2.Doors)
+                                    frig2.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
+                                frig2.DoorTw.TweenInterval(1.4);
+                                foreach (var (d, home) in frig2.Doors)
+                                    frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
+                            }
                     if (ev.Type == GameEventType.ProductionComplete && _rally.Count > 0
                         && ev.A >= 0 && ev.A < _world.EntityCount)
                     {
@@ -519,9 +540,17 @@ public partial class SkirmishLive : Node3D
                     BattlefieldView.AddContactBlob(node, 2.6f);
                 AddChild(node);
                 _actors[v.Id] = node;
-                var newRig = new ActorRig();
+                var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
                 _rigs[v.Id] = newRig;
+                // W2-05: structures placed mid-match rise out of the ground
+                if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField && _world.Tick > 10)
+                {
+                    node.Scale = new Vector3(1f, 0.05f, 1f);
+                    var riseTw = node.CreateTween();
+                    riseTw.TweenProperty(node, "scale", Vector3.One, 1.1f)
+                        .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                }
             }
             _targets[v.Id] = pos;
             if (v.Kind == EntityKind.FerriteField)
@@ -536,7 +565,36 @@ public partial class SkirmishLive : Node3D
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
-            { _actors[id].QueueFree(); _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); }
+            {
+                // W2-06: mobile dead become tumbling corpses for a moment;
+                // structures sink. Both free themselves via the tween.
+                var corpse = _actors[id];
+                bool wasMobile = _latest.TryGetValue(id, out var lastV) && Mobile(lastV.Kind);
+                var tw = corpse.CreateTween();
+                if (wasMobile)
+                {
+                    var rng = new System.Random(id);
+                    var tumble = corpse.Rotation + new Vector3(
+                        ((float)rng.NextDouble() - 0.5f) * 1.6f,
+                        ((float)rng.NextDouble() - 0.5f) * 2.0f,
+                        ((float)rng.NextDouble() - 0.5f) * 1.6f);
+                    tw.SetParallel();
+                    tw.TweenProperty(corpse, "rotation", tumble, 0.9f)
+                        .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+                    tw.TweenProperty(corpse, "position",
+                        corpse.Position + new Vector3(0, -0.25f, 0), 0.9f)
+                        .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+                    tw.SetParallel(false);
+                }
+                else
+                {
+                    tw.TweenProperty(corpse, "position",
+                        corpse.Position + new Vector3(0, -0.9f, 0), 1.1f)
+                        .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+                }
+                tw.TweenCallback(Callable.From(() => corpse.QueueFree()));
+                _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id);
+            }
 
         _now += dt;
         foreach (var (id, node) in _actors)
@@ -555,10 +613,33 @@ public partial class SkirmishLive : Node3D
             // hull's own yaw), then return to centre once the memory fades.
             if (_rigs.TryGetValue(id, out var rig))
             {
+                float speed = to.Length();
                 foreach (var w in rig.Wheels)
-                    w.RotateObjectLocal(Vector3.Right, to.Length() * dt * 40f + (to.LengthSquared() > 0.003f ? 6f * dt : 0f));
+                    w.RotateObjectLocal(Vector3.Right, speed * dt * 40f + (to.LengthSquared() > 0.003f ? 6f * dt : 0f));
                 if (rig.Dish != null)
                     rig.Dish.RotateY(1.2f * dt);
+                // W2-04: hull pitch from acceleration, critically damped
+                if (_latest.TryGetValue(id, out var mv) && Mobile(mv.Kind))
+                {
+                    float accel = (speed - rig.PrevSpeed) / Mathf.Max(dt, 0.001f);
+                    rig.PrevSpeed = speed;
+                    float target = Mathf.Clamp(-accel * 0.03f, -0.10f, 0.10f);
+                    rig.Pitch = Mathf.Lerp(rig.Pitch, target, 1f - Mathf.Exp(-8f * dt));
+                    var pr = node.Rotation;
+                    pr.X = rig.Pitch;
+                    node.Rotation = pr;
+                    // W2-07: infantry stride bob while moving
+                    if (mv.Kind == EntityKind.Unit && mv.UnitType is 2 or 3 or 11 && to.LengthSquared() > 0.003f)
+                    {
+                        rig.BobPhase += dt * 11f;
+                        var bp = node.Position;
+                        bp.Y = Mathf.Abs(Mathf.Sin(rig.BobPhase)) * 0.035f;
+                        node.Position = bp;
+                    }
+                    // Harvester intake churns while moving
+                    if (rig.Intake != null && to.LengthSquared() > 0.003f)
+                        rig.Intake.Rotation = rig.IntakeRest + new Vector3(Mathf.Sin((float)_now * 9f) * 0.12f, 0, 0);
+                }
             }
             if (_rigs.TryGetValue(id, out var rig2) && rig2.Turret is { } tur)
             {

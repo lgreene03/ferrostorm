@@ -253,12 +253,13 @@ def com_harvester():
     parts.append(cyl('hoprim', 0.29, 0.04, 0, 0.02, 0.58, 'olived', vs=14))
     intake = box('in', 0.5, 0.22, 0.14, 0, -0.56, 0.04, 'olived', 0.04)
     intake.rotation_euler = (0.3, 0, 0)
-    parts.append(intake)
     for i in range(4):   # intake teeth
         parts.append(box(f'tooth{i}', 0.06, 0.08, 0.06, -0.18 + i * 0.12, -0.65, 0.02, 'gundark', 0.01))
     parts.append(cyl('pipe', 0.045, 0.5, 0.3, -0.2, 0.44, 'olived', vs=8, rx=math.pi/2))
     parts.append(team_band(0.4, 0.56, 0.34, 'ferrite'))
-    return join(parts, 'com_harvester')
+    hull = join(parts, 'com_harvester')
+    child_part(hull, intake, 'intake')
+    return hull
 
 def com_mcv():
     parts = [box('body', 0.68, 1.16, 0.38, 0, 0, 0.1, 'olive', 0.07)]
@@ -306,14 +307,17 @@ def com_factory():
     parts.append(box('hall', 1.6, 1.4, 0.62, 0, 0, 0.08, 'olive', 0.08))
     for i in range(3):   # sawtooth roof monitors
         parts.append(box(f'saw{i}', 1.5, 0.28, 0.14, 0, -0.45 + i * 0.42, 0.7, 'olived', 0.02))
-    parts.append(box('d1', 0.55, 0.1, 0.44, -0.4, 0.72, 0.14, 'olived', 0.03))
-    parts.append(box('d2', 0.55, 0.1, 0.44, 0.4, 0.72, 0.14, 'olived', 0.03))
+    d1 = box('d1', 0.55, 0.1, 0.44, -0.4, 0.72, 0.14, 'olived', 0.03)
+    d2 = box('d2', 0.55, 0.1, 0.44, 0.4, 0.72, 0.14, 'olived', 0.03)
     parts.append(box('rail1', 0.06, 0.5, 0.03, -0.4, 0.95, 0.09, 'gundark', 0.008))
     parts.append(box('rail2', 0.06, 0.5, 0.03, 0.4, 0.95, 0.09, 'gundark', 0.008))
     parts.append(box('lip', 1.5, 0.12, 0.1, 0, 0.72, 0.62, 'ferrite', 0.02))
     parts.append(cyl('chim', 0.08, 0.5, -0.6, -0.5, 0.85, 'olived', vs=10))
     parts.append(cyl('chimcap', 0.1, 0.04, -0.6, -0.5, 1.1, 'gundark', vs=10))
-    return join(parts, 'com_factory')
+    hull = join(parts, 'com_factory')
+    child_part(hull, d1, 'door0')
+    child_part(hull, d2, 'door1')
+    return hull
 
 def com_refinery():
     parts = [pad()]
