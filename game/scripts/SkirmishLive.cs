@@ -67,19 +67,32 @@ public partial class SkirmishLive : Node3D
     private MeshInstance3D _rallyMarker = null!;
     private Label _selInfo = null!;
 
-    // Turret tracking (TICKET-P4-SLICE-01): models exporting a child node
-    // named "turret" slew it toward whatever they last fired at.
-    private readonly Dictionary<int, Node3D> _turrets = new();
+    // W2-01 ActorRig: named child nodes become animation handles. Turrets
+    // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
+    // antennas sway - coverage grows as models de-merge parts.
+    private sealed class ActorRig
+    {
+        public Node3D? Turret;
+        public Vector3 TurretRest;
+        public Tween? RecoilTw;
+        public readonly List<Node3D> Wheels = new();
+        public Node3D? Dish;
+    }
+    private readonly Dictionary<int, ActorRig> _rigs = new();
     private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
     private double _now;
     private GpuParticles3D _dust = null!;
 
-    private static Node3D? FindTurret(Node n)
+    private static void ScanRig(Node n, ActorRig rig)
     {
-        if (n is Node3D t && n.Name.ToString().StartsWith("turret")) return t;
-        foreach (var c in n.GetChildren())
-            if (FindTurret(c) is { } f) return f;
-        return null;
+        if (n is Node3D t3)
+        {
+            string nm = n.Name.ToString();
+            if (nm.StartsWith("turret")) { rig.Turret = t3; rig.TurretRest = t3.Position; }
+            else if (nm.StartsWith("wheel")) rig.Wheels.Add(t3);
+            else if (nm.StartsWith("dish")) rig.Dish = t3;
+        }
+        foreach (var c in n.GetChildren()) ScanRig(c, rig);
     }
 
     public override void _Ready()
@@ -350,7 +363,20 @@ public partial class SkirmishLive : Node3D
                                 }
                     }
                     if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
+                    {
                         _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
+                        // W2-02: turret recoil - kick along local backward
+                        // (+Z rotated by yaw), sprung home over 180 ms.
+                        if (_rigs.TryGetValue(ev.A, out var frig) && frig.Turret is { } rt)
+                        {
+                            frig.RecoilTw?.Kill();
+                            float yaw = rt.Rotation.Y;
+                            rt.Position = frig.TurretRest + new Vector3(Mathf.Sin(yaw), 0, Mathf.Cos(yaw)) * 0.055f;
+                            frig.RecoilTw = rt.CreateTween();
+                            frig.RecoilTw.TweenProperty(rt, "position", frig.TurretRest, 0.18f)
+                                .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+                        }
+                    }
                     if (ev.Type == GameEventType.PlayerEliminated)
                         OnEliminated(ev.B);
                     // Base under attack: own structure took fire, cooled alert
@@ -493,7 +519,9 @@ public partial class SkirmishLive : Node3D
                     BattlefieldView.AddContactBlob(node, 2.6f);
                 AddChild(node);
                 _actors[v.Id] = node;
-                if (FindTurret(node) is { } tur) _turrets[v.Id] = tur;
+                var newRig = new ActorRig();
+                ScanRig(node, newRig);
+                _rigs[v.Id] = newRig;
             }
             _targets[v.Id] = pos;
             if (v.Kind == EntityKind.FerriteField)
@@ -508,7 +536,7 @@ public partial class SkirmishLive : Node3D
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
-            { _actors[id].QueueFree(); _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _turrets.Remove(id); _aim.Remove(id); }
+            { _actors[id].QueueFree(); _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); }
 
         _now += dt;
         foreach (var (id, node) in _actors)
@@ -525,7 +553,14 @@ public partial class SkirmishLive : Node3D
             }
             // Turret slew: aim at the last fired-at position (relative to the
             // hull's own yaw), then return to centre once the memory fades.
-            if (_turrets.TryGetValue(id, out var tur))
+            if (_rigs.TryGetValue(id, out var rig))
+            {
+                foreach (var w in rig.Wheels)
+                    w.RotateObjectLocal(Vector3.Right, to.Length() * dt * 40f + (to.LengthSquared() > 0.003f ? 6f * dt : 0f));
+                if (rig.Dish != null)
+                    rig.Dish.RotateY(1.2f * dt);
+            }
+            if (_rigs.TryGetValue(id, out var rig2) && rig2.Turret is { } tur)
             {
                 float desiredLocal = 0f;
                 if (_aim.TryGetValue(id, out var aim) && aim.Until > _now)
@@ -694,6 +729,16 @@ public partial class SkirmishLive : Node3D
                 return new Vector3((float)v.X, 0, (float)v.Y);
         return null;
     }
+    public bool RecoilActive(int unitType)
+    {
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == 0 && v.UnitType == unitType
+                && _rigs.TryGetValue(v.Id, out var r) && r.Turret is { } t
+                && (t.Position - r.TurretRest).Length() > 0.01f)
+                return true;
+        return false;
+    }
+
     public bool AimActive(int unitType)
     {
         foreach (var v in _view)

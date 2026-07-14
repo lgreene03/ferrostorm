@@ -123,16 +123,19 @@ def dir_cannon_tank():
     parts += tracks(-0.38, 0.92)
     parts += tracks(0.38, 0.92)
     parts.append(cyl('ring', 0.20, 0.05, 0, -0.04, 0.315, 'gundark', vs=14))
-    parts.append(box('tur', 0.38, 0.42, 0.15, 0, -0.04, 0.34, 'plate', 0.05))
-    parts.append(box('bustle', 0.30, 0.14, 0.11, 0, -0.29, 0.35, 'gundark', 0.03))
-    parts.append(box('mant', 0.18, 0.10, 0.13, 0, 0.22, 0.375, 'gundark', 0.03))
-    parts.append(cyl('gun', 0.038, 0.58, 0, 0.52, 0.385, 'gundark', rx=math.pi/2))
-    parts.append(cyl('sleeve', 0.052, 0.20, 0, 0.34, 0.385, 'gundark', rx=math.pi/2))
-    parts.append(cyl('brake', 0.056, 0.10, 0, 0.78, 0.385, 'plate', vs=10, rx=math.pi/2))
-    parts.append(hatch(-0.10, -0.12, 0.43))
-    parts.append(antenna(0.15, -0.24, 0.41))
     parts.append(team_band(0.34, -0.395, 0.315, 'orange'))
-    return join(parts, 'dir_cannon_tank')
+    hull = join(parts, 'dir_cannon_tank')
+    tparts = [box('tur', 0.38, 0.42, 0.15, 0, -0.04, 0.34, 'plate', 0.05)]
+    tparts.append(box('bustle', 0.30, 0.14, 0.11, 0, -0.29, 0.35, 'gundark', 0.03))
+    tparts.append(box('mant', 0.18, 0.10, 0.13, 0, 0.22, 0.375, 'gundark', 0.03))
+    tparts.append(cyl('gun', 0.038, 0.58, 0, 0.52, 0.385, 'gundark', rx=math.pi/2))
+    tparts.append(cyl('sleeve', 0.052, 0.20, 0, 0.34, 0.385, 'gundark', rx=math.pi/2))
+    tparts.append(cyl('brake', 0.056, 0.10, 0, 0.78, 0.385, 'plate', vs=10, rx=math.pi/2))
+    tparts.append(hatch(-0.10, -0.12, 0.43))
+    tparts.append(antenna(0.15, -0.24, 0.41))
+    tur = join(tparts, 'turret')
+    tur.parent = hull
+    return hull
 
 def dir_bulwark_tank():
     parts = [box('hull', 0.9, 0.98, 0.32, 0, -0.02, 0.06, 'gun', 0.06)]
@@ -145,17 +148,20 @@ def dir_bulwark_tank():
     parts += tracks(-0.52, 1.1, wheel_r=0.1, wheels=5, band_w=0.19)
     parts += tracks(0.52, 1.1, wheel_r=0.1, wheels=5, band_w=0.19)
     parts.append(cyl('ring', 0.28, 0.06, 0, -0.05, 0.41, 'gundark', vs=16))
-    parts.append(box('tur', 0.58, 0.54, 0.2, 0, -0.05, 0.44, 'plate', 0.06))
-    parts.append(box('bustle', 0.44, 0.18, 0.14, 0, -0.38, 0.46, 'gundark', 0.03))
-    parts.append(box('mant', 0.34, 0.12, 0.18, 0, 0.24, 0.52, 'gundark', 0.03))
-    for gx in (-0.13, 0.13):
-        parts.append(cyl(f'g{gx}', 0.05, 0.72, gx, 0.6, 0.54, 'gundark', rx=math.pi/2))
-        parts.append(cyl(f'brk{gx}', 0.065, 0.1, gx, 0.94, 0.54, 'plate', vs=10, rx=math.pi/2))
-    parts.append(hatch(-0.15, -0.15, 0.65))
-    parts.append(hatch(0.15, -0.15, 0.65, r=0.06))
-    parts.append(antenna(0.24, -0.34, 0.52))
     parts.append(team_band(0.5, -0.5, 0.42, 'orange'))
-    return join(parts, 'dir_bulwark_tank')
+    hull = join(parts, 'dir_bulwark_tank')
+    tparts = [box('tur', 0.58, 0.54, 0.2, 0, -0.05, 0.44, 'plate', 0.06)]
+    tparts.append(box('bustle', 0.44, 0.18, 0.14, 0, -0.38, 0.46, 'gundark', 0.03))
+    tparts.append(box('mant', 0.34, 0.12, 0.18, 0, 0.24, 0.52, 'gundark', 0.03))
+    for gx in (-0.13, 0.13):
+        tparts.append(cyl(f'g{gx}', 0.05, 0.72, gx, 0.6, 0.54, 'gundark', rx=math.pi/2))
+        tparts.append(cyl(f'brk{gx}', 0.065, 0.1, gx, 0.94, 0.54, 'plate', vs=10, rx=math.pi/2))
+    tparts.append(hatch(-0.15, -0.15, 0.65))
+    tparts.append(hatch(0.15, -0.15, 0.65, r=0.06))
+    tparts.append(antenna(0.24, -0.34, 0.52))
+    tur = join(tparts, 'turret')
+    tur.parent = hull
+    return hull
 
 def dir_howitzer():
     parts = [box('hull', 0.58, 0.68, 0.2, 0, 0, 0.05, 'gun', 0.05)]
@@ -193,11 +199,13 @@ def dir_sentinel_scout():
             parts.append(cyl(f'w{sx}{i}', 0.09, 0.08, sx, wy, 0.09, 'gundark', vs=12, ry=math.pi/2))
     parts.append(box('cab', 0.3, 0.22, 0.1, 0, 0.1, 0.26, 'gun', 0.03))
     parts.append(cyl('mast', 0.045, 0.42, 0, -0.08, 0.5, 'gundark', vs=8))
-    parts.append(cyl('dish', 0.16, 0.035, 0, -0.08, 0.73, 'orange', vs=16))
+    sdish = cyl('sdish', 0.16, 0.035, 0, -0.08, 0.73, 'orange', vs=16)
     parts.append(cyl('emitter', 0.03, 0.08, 0, -0.08, 0.78, 'plate', vs=8))
     parts.append(box('pod', 0.1, 0.16, 0.08, 0.18, -0.18, 0.26, 'gundark', 0.02))
     parts.append(team_band(0.26, -0.28, 0.2, 'orange'))
-    return join(parts, 'dir_sentinel_scout')
+    hull = join(parts, 'dir_sentinel_scout')
+    child_part(hull, sdish, 'dish')
+    return hull
 
 def sod_phantom_tank():
     parts = [wedge('body', [(-0.42, -0.5), (-0.2, 0.52), (0.34, 0.44), (0.5, -0.28), (0.18, -0.56)], 0.3, m='rust')]
@@ -408,6 +416,21 @@ def ferrite_cluster(scale=1.0):
         objs.append(o)
     return join(objs, 'ferrite_cluster')
 
+
+def child_part(hull, obj, name):
+    # De-merged animation part (doc 20 Wave 2): keep obj a CHILD of hull so
+    # glTF preserves the named node. Bake any object rotation into the mesh
+    # first so the node transform is pure translation and the client can
+    # spin around clean local axes.
+    bpy.context.view_layer.update()
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    obj.name = name
+    obj.parent = hull
+    return obj
+
 def dir_vanguard_car():
     # The vertical-slice unit (TICKET-P4-SLICE-01): a wheeled gun car, and
     # the first model whose turret stays a SEPARATE child object so the
@@ -419,13 +442,16 @@ def dir_vanguard_car():
     parts.append(glacis)
     parts.append(box('cab', 0.34, 0.2, 0.1, 0, 0.12, 0.26, 'gun', 0.03))
     parts.append(box('screen', 0.28, 0.02, 0.06, 0, 0.225, 0.29, 'gundark', 0.008))
-    for sx in (-0.235, 0.235):   # exposed wheels: the fast silhouette
+    vwheels = []
+    for sx in (-0.235, 0.235):   # exposed wheels: separate spinning children
         for i, wy in enumerate((-0.22, 0.22)):
-            parts.append(cyl(f'w{sx}{i}', 0.105, 0.09, sx, wy, 0.105, 'gundark', vs=12, ry=math.pi/2))
+            vwheels.append(cyl(f'vw{sx}{i}', 0.105, 0.09, sx, wy, 0.105, 'gundark', vs=12, ry=math.pi/2))
     parts.append(box('bumper', 0.4, 0.06, 0.08, 0, 0.42, 0.08, 'gundark', 0.015))
     parts.append(box('rack', 0.36, 0.18, 0.06, 0, -0.26, 0.22, 'gundark', 0.015))
     parts.append(team_band(0.3, -0.34, 0.2, 'orange'))
     hull = join(parts, 'dir_vanguard_car')
+    for i, w in enumerate(vwheels):
+        child_part(hull, w, f'wheel{i}')
 
     tparts = [cyl('tring', 0.11, 0.04, 0, -0.04, 0.30, 'gundark', vs=12)]
     tparts.append(box('tbody', 0.16, 0.18, 0.09, 0, -0.04, 0.36, 'plate', 0.02))
