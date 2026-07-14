@@ -78,13 +78,15 @@ public partial class MainMenu : Control
     {
         string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
             ProjectSettings.GlobalizePath("res://"), ".."));
-        var missions = new List<(string Path, string Title, int Index)>();
+        var missions = new List<(string Path, string Title, int Index, HashSet<int>? Structs, HashSet<int>? Units)>();
         int idx = 0;
         foreach (var line in System.IO.File.ReadAllLines(System.IO.Path.Combine(root, "data", "campaign", "campaign.txt")))
         {
             if (line.StartsWith('#') || line.Trim().Length == 0) continue;
             var parts = line.Split('|');
-            missions.Add((System.IO.Path.Combine(root, parts[0].Trim()), parts[2].Trim(), ++idx));
+            missions.Add((System.IO.Path.Combine(root, parts[0].Trim()), parts[2].Trim(), ++idx,
+                parts.Length > 3 ? ParseAllow(parts[3]) : null,
+                parts.Length > 4 ? ParseAllow(parts[4]) : null));
         }
         var overlay = FullOverlay();
         var v = OverlayBox(overlay, "CAMPAIGN");
@@ -94,13 +96,24 @@ public partial class MainMenu : Control
             v.AddChild(MenuButton($"{local.Index:00}  {local.Title.ToUpperInvariant()}", () =>
             {
                 overlay.QueueFree();
-                ShowBriefing(local.Path, local.Index, local.Title);
+                ShowBriefing(local.Path, local.Index, local.Title, local.Structs, local.Units);
             }));
         }
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
     }
 
-    private void ShowBriefing(string missionPath, int index, string title)
+    /// <summary>Allow column: "-" means nothing, a comma list means those
+    /// ids, an absent column (caller passes nothing) means everything.</summary>
+    private static HashSet<int> ParseAllow(string col)
+    {
+        var set = new HashSet<int>();
+        foreach (var tok in col.Split(','))
+            if (int.TryParse(tok.Trim(), out int id)) set.Add(id);
+        return set;   // "-" parses to an empty set: nothing buildable
+    }
+
+    private void ShowBriefing(string missionPath, int index, string title,
+        HashSet<int>? allowedStructs, HashSet<int>? allowedUnits)
     {
         string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
             ProjectSettings.GlobalizePath("res://"), ".."));
@@ -122,6 +135,8 @@ public partial class MainMenu : Control
         {
             MatchConfig.MissionPath = missionPath;
             MatchConfig.MissionIndex = index;
+            MatchConfig.AllowedStructures = allowedStructs;
+            MatchConfig.AllowedUnits = allowedUnits;
             GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
         }));
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
@@ -190,6 +205,8 @@ public partial class MainMenu : Control
     private void StartSkirmish()
     {
         MatchConfig.MissionPath = null;
+        MatchConfig.AllowedStructures = null;   // skirmish: full catalogue
+        MatchConfig.AllowedUnits = null;
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
@@ -205,4 +222,8 @@ public static class MatchConfig
     public static long StartCredits = 8000;
     public static string? MissionPath;  // set = campaign mission mode
     public static int MissionIndex;
+    // Per-mission tech gates (client-side allow-lists per the campaign
+    // manifest; null = everything, empty = nothing buildable)
+    public static System.Collections.Generic.HashSet<int>? AllowedStructures;
+    public static System.Collections.Generic.HashSet<int>? AllowedUnits;
 }

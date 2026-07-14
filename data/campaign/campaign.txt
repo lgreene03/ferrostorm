@@ -1,4 +1,11 @@
-# Ferrostorm campaign manifest v1: mission file | player faction | title
-data/missions/mission-01.fmap | 0 | Ferrostorm Rising
-data/missions/mission-02.fmap | 1 | Silent Salvage
-data/missions/mission-03.fmap | 0 | Hold the Line
+# Ferrostorm campaign manifest v2:
+#   mission file | player faction | title | allowed structure ids | allowed unit ids
+# The allow columns gate the client build sidebar per mission (classic
+# campaign tech progression). "-" means nothing buildable; absent columns
+# mean everything (skirmish rules). Structure ids per World.GetStructureType:
+# 1 power, 2 factory, 3 refinery, 5 turret, 6 superweapon, 7 veil, 8 depot.
+# Unit ids per the catalogue: 1 cannon, 2 rifle, 3 rocket, 4 harvester,
+# 5 raider, 6 scout, 7 mcv, 8 howitzer, 9 phantom, 10 bulwark, 11 engineer.
+data/missions/mission-01.fmap | 0 | Ferrostorm Rising | 1,3,2,5 | 2,3,4,6
+data/missions/mission-02.fmap | 1 | Silent Salvage | - | -
+data/missions/mission-03.fmap | 0 | Hold the Line | 1,3,2,5,8 | 1,2,3,4,8,11

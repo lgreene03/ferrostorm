@@ -74,6 +74,9 @@ public partial class Sidebar : PanelContainer
         foreach (var it in Structures)
         {
             var b = MakeButton(it, () => _game.QueueStructure(it.TypeId));
+            // Classic campaign tech gating: disallowed items are absent,
+            // not greyed - progression should read as the tree growing.
+            b.Visible = MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true;
             _structButtons[it.TypeId] = b;
             v.AddChild(b);
         }
@@ -85,6 +88,7 @@ public partial class Sidebar : PanelContainer
         foreach (var it in Units)
         {
             var b = MakeButton(it, () => _game.QueueUnit(it.TypeId));
+            b.Visible = MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true;
             _unitButtons[it.TypeId] = b;
             v.AddChild(b);
         }

@@ -168,6 +168,7 @@ public partial class SkirmishLive : Node3D
 
     public void QueueStructure(int structType)
     {
+        if (!(MatchConfig.AllowedStructures?.Contains(structType) ?? true)) return;
         if (_yardId >= 0)
         {
             _pending.Add(new Command(0, 0, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
@@ -177,6 +178,7 @@ public partial class SkirmishLive : Node3D
 
     public void QueueUnit(int unitType)
     {
+        if (!(MatchConfig.AllowedUnits?.Contains(unitType) ?? true)) return;
         if (_factoryId >= 0)
         {
             _pending.Add(new Command(0, 0, CommandType.Produce, _factoryId, Fix64.Zero, Fix64.Zero, unitType));
