@@ -72,6 +72,7 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, Node3D> _turrets = new();
     private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
     private double _now;
+    private GpuParticles3D _dust = null!;
 
     private static Node3D? FindTurret(Node n)
     {
@@ -145,18 +146,12 @@ public partial class SkirmishLive : Node3D
 
         _cam = new RtsCamera();
         AddChild(_cam);
+        _dust = BattlefieldView.BuildDust();
+        AddChild(_dust);
         _cam.Position = new Vector3(map.Starts[0].Cx, 22, map.Starts[0].Cy + 14);
         _cam.Current = true;
 
-        var sun = new DirectionalLight3D
-        {
-            Rotation = new Vector3(-0.9f, 0.5f, 0),
-            LightEnergy = 1.4f,
-            ShadowEnabled = true,
-            DirectionalShadowMaxDistance = 120f,
-        };
-        AddChild(sun);
-        AddChild(new DirectionalLight3D { Rotation = new Vector3(-0.5f, 2.6f, 0), LightEnergy = 0.35f });
+        BattlefieldView.BuildLightRig(this);
 
         _audio = new AudioDirector();
         AddChild(_audio);
@@ -308,6 +303,9 @@ public partial class SkirmishLive : Node3D
 
     public override void _Process(double delta)
     {
+        BattlefieldView.TickWater(delta);
+        if (_dust != null)
+            _dust.GlobalPosition = new Vector3(_cam.Position.X, 2.5f, _cam.Position.Z - 8f);
         if (_winner < 0 && !_paused)
         {
             _accumulator += delta;
@@ -488,7 +486,11 @@ public partial class SkirmishLive : Node3D
             {
                 node = _models.Instantiate((int)v.Kind, v.UnitType);
                 node.Position = pos;
-                if (Mobile(v.Kind) && v.PlayerId >= 0) BattlefieldView.DressMobile(node, v.PlayerId);
+                if (Mobile(v.Kind) && v.PlayerId >= 0)
+                    BattlefieldView.DressMobile(node, v.PlayerId,
+                        v.Kind == EntityKind.Harvester ? 1.7f : 1.15f);
+                else if (v.Kind != EntityKind.FerriteField)
+                    BattlefieldView.AddContactBlob(node, 2.6f);
                 AddChild(node);
                 _actors[v.Id] = node;
                 if (FindTurret(node) is { } tur) _turrets[v.Id] = tur;

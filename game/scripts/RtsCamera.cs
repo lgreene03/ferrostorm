@@ -10,9 +10,22 @@ public partial class RtsCamera : Camera3D
     [Export] public float ZoomStep = 2.4f;
     [Export] public float MinHeight = 8f, MaxHeight = 42f;
 
+    private CameraAttributesPractical _attrs = null!;
+
     public override void _Ready()
     {
         RotationDegrees = new Vector3(-50, 0, 0);
+        // W1-10: tilt-shift far DOF, strongest zoomed in; auto-exposure
+        // explicitly off so muzzle flashes never pump the frame.
+        _attrs = new CameraAttributesPractical
+        {
+            DofBlurFarEnabled = true,
+            DofBlurFarDistance = 55f,
+            DofBlurFarTransition = 25f,
+            DofBlurAmount = 0.05f,
+            AutoExposureEnabled = false,
+        };
+        Attributes = _attrs;
     }
 
     public override void _Process(double delta)
@@ -29,6 +42,7 @@ public partial class RtsCamera : Camera3D
         if (mouse.Y < 6) move.Z -= 1;
         if (mouse.Y > size.Y - 6) move.Z += 1;
         Position += move.Normalized() * PanSpeed * (float)delta * (Position.Y / 16f);
+        _attrs.DofBlurFarDistance = Position.Y * 2.2f + 12f;
     }
 
     public override void _UnhandledInput(InputEvent ev)

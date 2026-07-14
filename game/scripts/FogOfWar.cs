@@ -21,7 +21,7 @@ public partial class FogOfWar : Node3D
     {
         _w = w; _h = h;
         _img = Image.CreateEmpty(w, h, false, Image.Format.Rgba8);
-        _img.Fill(new Color(0.01f, 0.012f, 0.016f, 0.97f));
+        _img.Fill(new Color(0.008f, 0.012f, 0.022f, 0.985f));
         _tex = ImageTexture.CreateFromImage(_img);
         var mat = new StandardMaterial3D
         {
@@ -49,9 +49,9 @@ public partial class FogOfWar : Node3D
                 if (world.IsVisible(player, x, y))
                     _img.SetPixel(x, y, new Color(0, 0, 0, 0));
                 else if (world.IsExplored(player, x, y))
-                    _img.SetPixel(x, y, new Color(0.01f, 0.012f, 0.016f, 0.55f));
+                    _img.SetPixel(x, y, new Color(0.012f, 0.018f, 0.030f, 0.38f));
                 else
-                    _img.SetPixel(x, y, new Color(0.01f, 0.012f, 0.016f, 0.97f));
+                    _img.SetPixel(x, y, new Color(0.008f, 0.012f, 0.022f, 0.985f));
             }
         _tex.Update(_img);
     }

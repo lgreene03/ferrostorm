@@ -46,6 +46,7 @@ public partial class ReplayTheater : Node3D
         foreach (var f in _replay.GetProperty("frames").EnumerateArray()) frames.Add(f);
         _frames = frames.ToArray();
         BattlefieldView.BuildEnvironment(this);
+        BattlefieldView.BuildLightRig(this);
         var map = _replay.GetProperty("map");
         var blocked = new List<(int, int)>();
         foreach (var b in map.GetProperty("blocked").EnumerateArray())
@@ -71,6 +72,7 @@ public partial class ReplayTheater : Node3D
 
     public override void _Process(double delta)
     {
+        BattlefieldView.TickWater(delta);
         if (_frames.Length == 0) return;
         _clock += (float)delta * TicksPerSecond / 2f; // frames are 2-tick samples
         while (_frame < _frames.Length - 1 && _clock >= 1f) { _clock -= 1f; ApplyFrame(_frames[++_frame]); }
