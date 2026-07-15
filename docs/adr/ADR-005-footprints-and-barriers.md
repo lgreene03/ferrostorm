@@ -1,10 +1,10 @@
 # ADR-005: Variable structure footprints and barrier placement rules
 
-Status: Proposed (Architect authored 2026-07-15; awaiting Luke's ratification)
+Status: RATIFIED (Architect authored 2026-07-15; ratified by Luke 2026-07-15)
 Closes: the ADR-005 slot reserved in docs/adr/ADR-open-queue.md ("Tile size,
 grid resolution, footprint rules")
-Gates: TICKET-P5-DEF-03, DEF-04 and DEF-05. None of them may merge before
-this document is ratified.
+Gates: TICKET-P5-DEF-03, DEF-04 and DEF-05. Ratified, so all three are
+unblocked.
 
 ## Context
 
