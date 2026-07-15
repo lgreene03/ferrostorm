@@ -1243,6 +1243,252 @@ ulong ScenarioDepot(ulong seed, Action<int, ulong>? cp = null, Action<string>? r
     return world.ComputeStateHash() ^ world2.ComputeStateHash();
 }
 
+ulong ScenarioWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // TICKET-P5-DEF-06: ADR-005 made machine-checkable. Nine phases, one per
+    // clause of the ADR - upfront pay, affordability, the barrier chain, the
+    // per-player cap, the three exclusions, auto-acquire, the anti-turtle
+    // counter, the breach, and sell-back. Phases E to H need a player
+    // eliminated or the map severed, so they run in sub-worlds (the
+    // ScenarioArtillery/ScenarioDepot precedent); every sub-world folds into
+    // the returned hash, so none of them can rot unnoticed.
+    var world = new World(seed, 64, 64, players: 2);
+    world.GrantCredits(0, 20000);
+    world.GrantCredits(1, 5000);
+    int cy0 = world.SpawnConstructionYard(0, 8, 8);
+    int cy1 = world.SpawnConstructionYard(1, 40, 40); // player 1 owns hope from tick 1: no stray elimination
+    int runner = world.SpawnUnit(0, Fix64.FromInt(50) + Fix64.Half, Fix64.FromInt(50) + Fix64.Half,
+        Fix64.FromFraction(1, 4), 100, ArmourClass.Light, 0);
+    var cmds = new List<Command>();
+    void StepN(int n) { for (int i = 0; i < n; i++) { world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+    static int Barriers(World w, int player)
+    {
+        int n = 0;
+        foreach (var e in w.Entities) if (e.Alive && e.PlayerId == player && e.Kind == EntityKind.Wall) n++;
+        return n;
+    }
+
+    // PHASE A: upfront pay (ADR-005 clause 3). A wall lands with NOTHING ready
+    // at the yard and the treasury is charged the moment it does - the exact
+    // inverse of the sidebar flow, which the negative control re-proves is
+    // still intact for real buildings.
+    int countA = world.EntityCount;
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(8), Fix64.FromInt(12), 9));
+    StepN(1);
+    if (world.EntityCount != countA + 1) throw new Exception("walls: a barrier must place with no ready slot at the yard");
+    int wallA = countA;
+    var wa = world.Entities[wallA];
+    if (wa.Kind != EntityKind.Wall || wa.StructType != 9)
+        throw new Exception($"walls: phase A spawned the wrong thing (kind {wa.Kind}, structType {wa.StructType})");
+    if (world.Credits(0) != 20000 - 100)
+        throw new Exception($"walls: a barrier must charge exactly 100 upfront (credits {world.Credits(0)})");
+    if (world.Entities[cy0].ReadyStructure != 0) throw new Exception("walls: a barrier must not touch the yard's ready slot");
+    int countANeg = world.EntityCount;
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(12), Fix64.FromInt(12), 1)); // power plant, nothing ready
+    StepN(1);
+    if (world.EntityCount != countANeg)
+        throw new Exception("walls: the upfront path must not leak - a real building with nothing ready is still refused");
+
+    // PHASE B: affordability. 99 credits do not buy a 100-credit segment, and
+    // a refused segment charges nothing.
+    world.GrantCredits(0, -(world.Credits(0) - 99));
+    int countB = world.EntityCount;
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(8), Fix64.FromInt(14), 9));
+    StepN(1);
+    if (world.EntityCount != countB) throw new Exception("walls: 99 credits must not buy a 100-credit segment");
+    if (world.Credits(0) != 99) throw new Exception($"walls: a refused segment must not charge (credits {world.Credits(0)})");
+
+    // PHASE C: the chain (ADR-005 clause 4). Anchors are chosen so each
+    // assertion has exactly one possible reason to pass: (8,14) is Chebyshev 6
+    // from the yard (legal by the yard); (8,16) is Chebyshev 8 from the yard,
+    // so ONLY the barrier chain at radius 2 can carry it; (8,19) is Chebyshev 3
+    // from the nearest segment and 11 from the yard, so nothing can.
+    world.GrantCredits(0, 20000 - 99);
+    int countC = world.EntityCount;
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(8), Fix64.FromInt(14), 9));
+    StepN(1);
+    if (world.EntityCount != countC + 1) throw new Exception("walls: a funded segment inside the yard radius must place");
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(8), Fix64.FromInt(16), 9));
+    StepN(1);
+    if (world.EntityCount != countC + 2) throw new Exception("walls: a segment must chain from a segment at Chebyshev 2");
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(8), Fix64.FromInt(19), 9));
+    StepN(1);
+    if (world.EntityCount != countC + 2) throw new Exception("walls: a segment must NOT chain at Chebyshev 3");
+    if (world.ValidPlacement(0, 9, 16, 1))
+        throw new Exception("walls: a barrier must never anchor a real building (the base-crawl exploit)");
+    if (!world.ValidPlacement(0, 12, 8, 9))
+        throw new Exception("walls: the yard must still anchor a segment inside its own radius");
+
+    // PHASE D: the cap (ADR-005 clause 5). Crawl a grid until the cap bites.
+    // Every candidate is funded and chain-legal, so the ONLY thing that can
+    // stop the crawl is MaxBarriersPerPlayer.
+    for (int gy = 12; gy <= 30; gy += 2)
+        for (int gx = 8; gx <= 30; gx += 2)
+        {
+            if (!world.ValidPlacement(0, gx, gy, 9)) continue;
+            cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(gx), Fix64.FromInt(gy), 9));
+            StepN(1);
+        }
+    if (Barriers(world, 0) != World.MaxBarriersPerPlayer)
+        throw new Exception($"walls: the cap must bite at exactly {World.MaxBarriersPerPlayer} (got {Barriers(world, 0)})");
+    int countD = world.EntityCount;
+    cmds.Add(new(0, 1, CommandType.PlaceStructure, cy1, Fix64.FromInt(44), Fix64.FromInt(40), 9));
+    StepN(1);
+    if (world.EntityCount != countD + 1 || Barriers(world, 1) != 1)
+        throw new Exception("walls: the cap is PER PLAYER - player 1's first segment must still place");
+
+    // PHASE I: sell-back and rubble. Half the cost returns and the single cell
+    // is placeable again (DEF-03's anchor recovery, exercised at size 1).
+    long beforeSell = world.Credits(0);
+    cmds.Add(new(0, 0, CommandType.SellStructure, wallA, Fix64.Zero, Fix64.Zero));
+    StepN(1);
+    if (world.Credits(0) != beforeSell + 50)
+        throw new Exception($"walls: a sold segment must refund exactly 50 (got {world.Credits(0) - beforeSell})");
+    if (world.Entities[wallA].Alive) throw new Exception("walls: a sold segment must die");
+    if (!world.ValidPlacement(0, 8, 12, 9)) throw new Exception("walls: a sold segment must free its cell");
+    cp?.Invoke(world.Tick, world.ComputeStateHash());
+
+    // PHASE E: the exclusions (ADR-005 clause 2). An engineer does not convert
+    // a fence, and a player whose last possession is one 100-credit wall is
+    // still eliminated - without that, matches never end.
+    var worldE = new World(seed + 1, 64, 64, players: 2);
+    worldE.SpawnConstructionYard(0, 8, 8);
+    int eCy1 = worldE.SpawnConstructionYard(1, 30, 30);
+    int eWall = worldE.SpawnWall(1, 36, 36);
+    var engDef = worldE.GetUnitType(11);
+    int eng = worldE.SpawnUnit(0, Fix64.FromInt(34) + Fix64.Half, Fix64.FromInt(36) + Fix64.Half,
+        engDef.Speed, engDef.Hp, engDef.Armour, engDef.WeaponId, veterancy: false, unitType: 11);
+    var ecmds = new List<Command> { new(0, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, eWall) };
+    void StepE(int n) { for (int i = 0; i < n; i++) { worldE.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(ecmds)); ecmds.Clear(); } }
+    StepE(60);
+    if (!worldE.Entities[eng].Alive) throw new Exception("walls: a fence must not consume an engineer");
+    if (worldE.Entities[eWall].PlayerId != 1) throw new Exception("walls: an engineer must not capture a barrier");
+    // The yard falls; the fence stands. Pre-damaged so the point is the
+    // victory rule, not the ballistics (DEF-04 owns the arithmetic).
+    var doomed = worldE.Entities[eCy1];
+    doomed.Hp = 30;
+    worldE.SetEntityForTest(eCy1, doomed);
+    var kDef = worldE.GetUnitType(1);
+    int killer = worldE.SpawnUnit(0, Fix64.FromInt(34) + Fix64.Half, Fix64.FromInt(31) + Fix64.Half,
+        kDef.Speed, kDef.Hp, kDef.Armour, kDef.WeaponId, kDef.SightCells, unitType: 1);
+    ecmds.Add(new(0, 0, CommandType.Attack, killer, Fix64.Zero, Fix64.Zero, eCy1));
+    bool eliminated = false;
+    for (int t = 0; t < 120; t++)
+    {
+        worldE.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(ecmds));
+        ecmds.Clear();
+        foreach (var ev in worldE.Events)
+            if (ev.Type == GameEventType.PlayerEliminated && ev.B == 1) eliminated = true;
+    }
+    if (!eliminated) throw new Exception("walls: a player left holding only a wall must still be eliminated");
+    if (worldE.Winner != 0) throw new Exception($"walls: the survivor must win (winner {worldE.Winner})");
+    if (!worldE.Entities[eWall].Alive)
+        throw new Exception("walls: phase E proves nothing unless the wall is still standing at elimination");
+    cp?.Invoke(worldE.Tick + 100000, worldE.ComputeStateHash());
+
+    // PHASE F: auto-acquire (ADR-005 clause 2). Tanks do not stop to plink at
+    // masonry - but an explicit order still bites.
+    var worldF = new World(seed + 2, 64, 64, players: 2);
+    worldF.ShortGameEnabled = false; // a rig, not a match: nobody here owns a base
+    int fWall = worldF.SpawnWall(1, 30, 30);
+    var cDef = worldF.GetUnitType(1);
+    int cannon = worldF.SpawnUnit(0, Fix64.FromInt(28) + Fix64.Half, Fix64.FromInt(30) + Fix64.Half,
+        cDef.Speed, cDef.Hp, cDef.Armour, cDef.WeaponId, cDef.SightCells, unitType: 1);
+    var fcmds = new List<Command>();
+    void StepF(int n) { for (int i = 0; i < n; i++) { worldF.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(fcmds)); fcmds.Clear(); } }
+    StepF(60); // 2 cells away, gun range 4, sight 5: every excuse to fire
+    if (worldF.Entities[fWall].Hp != 500)
+        throw new Exception($"walls: auto-acquire must ignore barriers (hp {worldF.Entities[fWall].Hp})");
+    fcmds.Add(new(0, 0, CommandType.Attack, cannon, Fix64.Zero, Fix64.Zero, fWall));
+    StepF(60);
+    if (worldF.Entities[fWall].Hp >= 500)
+        throw new Exception("walls: an explicit attack order must still bite a barrier");
+    cp?.Invoke(worldF.Tick + 200000, worldF.ComputeStateHash());
+
+    // PHASE G: the counter (GDD s6 line 53, made machine-checkable). Artillery
+    // beats static defence: the howitzer works from range 8, outside the
+    // turret's range 5 and outside its own 3-cell dead zone, and walks away
+    // untouched. This is the assertion that keeps turtling beatable.
+    var worldG = new World(seed + 3, 64, 64, players: 2);
+    worldG.ShortGameEnabled = false;
+    var seg = new int[5];
+    for (int k = 0; k < 5; k++) seg[k] = worldG.SpawnWall(1, 30, 28 + k);
+    worldG.SpawnTurret(1, 32, 29); // centre (33,30): 10.5 cells from the gun, hopelessly short
+    var gDef = worldG.GetUnitType(8);
+    int gun = worldG.SpawnUnit(0, Fix64.FromInt(22) + Fix64.Half, Fix64.FromInt(30) + Fix64.Half,
+        gDef.Speed, gDef.Hp, gDef.Armour, gDef.WeaponId, gDef.SightCells, unitType: 8);
+    int gunHp = worldG.Entities[gun].Hp;
+    var gcmds = new List<Command> { new(0, 0, CommandType.Attack, gun, Fix64.Zero, Fix64.Zero, seg[2]) };
+    worldG.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(gcmds));
+    gcmds.Clear();
+    // One shell, exact: 60 AntiBuilding vs Structure is 100%, splash is half
+    // (30) inside radius 1.5 - so both orthogonal neighbours bleed and the
+    // segments 2 cells out do not (ADR-005 clause 10).
+    if (worldG.Entities[seg[2]].Hp != 440)
+        throw new Exception($"walls: a howitzer shell must deal exactly 60 to a segment (hp {worldG.Entities[seg[2]].Hp})");
+    if (worldG.Entities[seg[1]].Hp != 470 || worldG.Entities[seg[3]].Hp != 470)
+        throw new Exception($"walls: splash must deal exactly 30 to both orthogonal neighbours ({worldG.Entities[seg[1]].Hp}/{worldG.Entities[seg[3]].Hp})");
+    if (worldG.Entities[seg[0]].Hp != 500 || worldG.Entities[seg[4]].Hp != 500)
+        throw new Exception("walls: splash radius 1.5 must not reach 2 cells");
+    for (int t = 0; t < 900; t++)
+    {
+        worldG.Step(default);
+        if (t % 300 == 299) cp?.Invoke(worldG.Tick + 300000, worldG.ComputeStateHash());
+    }
+    if (worldG.Entities[seg[2]].Alive)
+        throw new Exception("walls: artillery must breach static defence (GDD s6 line 53)");
+    if (worldG.Entities[gun].Hp != gunHp)
+        throw new Exception($"walls: the gun outranges the turret and must take nothing back (hp {worldG.Entities[gun].Hp}/{gunHp})");
+
+    // PHASE H: the breach (DEF-05). Terrain seals x=30 but for one cell, and a
+    // single enemy segment plugs it: the route is severed for the whole map.
+    // Without the breach rule the tank oscillates in place forever.
+    var worldH = new World(seed + 4, 64, 64, players: 2);
+    worldH.ShortGameEnabled = false;
+    for (int y = 0; y < 64; y++) if (y != 30) worldH.Map.SetBlocked(30, y, true);
+    int plug = worldH.SpawnWall(1, 30, 30);
+    var hDef = worldH.GetUnitType(1);
+    int breacher = worldH.SpawnUnit(0, Fix64.FromInt(24) + Fix64.Half, Fix64.FromInt(30) + Fix64.Half,
+        hDef.Speed, hDef.Hp, hDef.Armour, hDef.WeaponId, hDef.SightCells, unitType: 1);
+    // Negative control: a tank whose ordered point IS reachable must never
+    // touch the wall - RouteExists has to short-circuit the whole rule.
+    int control = worldH.SpawnUnit(0, Fix64.FromInt(10) + Fix64.Half, Fix64.FromInt(10) + Fix64.Half,
+        hDef.Speed, hDef.Hp, hDef.Armour, hDef.WeaponId, hDef.SightCells, unitType: 1);
+    var aim = (X: Fix64.FromInt(50), Y: Fix64.FromInt(30) + Fix64.Half);
+    var hcmds = new List<Command>
+    {
+        new(0, 0, CommandType.AttackMove, breacher, aim.X, aim.Y),
+        new(0, 0, CommandType.AttackMove, control, Fix64.FromInt(16), Fix64.FromInt(10) + Fix64.Half),
+    };
+    int acquiredAt = -1;
+    bool controlTouchedWall = false;
+    for (int t = 0; t < 900; t++)
+    {
+        worldH.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(hcmds));
+        hcmds.Clear();
+        if (acquiredAt < 0 && worldH.Entities[breacher].ExplicitTarget == plug) acquiredAt = t + 1;
+        if (worldH.Entities[control].ExplicitTarget == plug) controlTouchedWall = true;
+        if (t % 300 == 299) cp?.Invoke(worldH.Tick + 400000, worldH.ComputeStateHash());
+    }
+    if (acquiredAt < 0 || acquiredAt > 30)
+        throw new Exception($"walls: the breacher must acquire the sealing segment within 30 ticks (acquired at {acquiredAt})");
+    if (controlTouchedWall)
+        throw new Exception("walls: a unit with a reachable objective must never target a wall (RouteExists must short-circuit)");
+    if (worldH.Entities[plug].Alive) throw new Exception("walls: the breacher must destroy the segment sealing its route");
+    var arrived = worldH.Entities[breacher];
+    if (Fix64.DistSq(arrived.X - aim.X, arrived.Y - aim.Y) > Fix64.FromInt(16))
+        throw new Exception($"walls: the breacher must resume its march through the breach unordered (ended {arrived.X},{arrived.Y})");
+
+    report?.Invoke("walls: nine ADR-005 clauses held - (A) a segment landed with no ready slot and charged exactly 100 upfront while a real building with nothing ready stayed refused; " +
+                   "(B) 99 credits bought nothing and charged nothing; (C) the chain carried a segment to Chebyshev 2 but not 3, never anchored a power plant, and the yard still anchored its own; " +
+                   $"(D) the cap bit at exactly {World.MaxBarriersPerPlayer} per player and player 1's first segment still placed; (E) an engineer bounced off a fence and a player left holding one wall was still eliminated; " +
+                   "(F) auto-acquire ignored masonry at 2 cells but an explicit order bit; (G) a howitzer at range 8 dealt 60 direct and exactly 30 to each orthogonal neighbour, breached the line, and took nothing back from the turret; " +
+                   "(H) a tank sealed out by one segment acquired it in under 30 ticks, destroyed it, and resumed its march unordered while a tank with a reachable objective never glanced at it; " +
+                   "(I) a sold segment refunded exactly 50 and freed its cell");
+    return world.ComputeStateHash() ^ worldE.ComputeStateHash() ^ worldF.ComputeStateHash()
+         ^ worldG.ComputeStateHash() ^ worldH.ComputeStateHash();
+}
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -1268,6 +1514,7 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("mission02", (s, cp) => ScenarioMission02(s, cp)),
     ("mission03", (s, cp) => ScenarioMission03(s, cp)),
     ("depot", (s, cp) => ScenarioDepot(s, cp)),
+    ("walls", (s, cp) => ScenarioWalls(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -1423,6 +1670,79 @@ int Golden(ulong seed)
     return 0;
 }
 
+int DefenceLoadGate(ulong seed)
+{
+    // TICKET-P5-DEF-06 clause 4. The TDD s6 ratified budget, verbatim
+    // (03-technical-design-document.md:59): "600 active units + 200 structures
+    // ... sim tick under 8 ms". 160 of the 200 structures are walls - 80 per
+    // player, exactly the ADR-005 clause 5 cap - so this gate is what proves
+    // the cap is the right number rather than a guess. The armies attack-move
+    // through each other, so the O(n) auto-acquire scan, RouteExists and the
+    // barrier predicates are all on the clock, not just movement.
+    const int ticks = 1000, unitsPerPlayer = 300, wallsPerPlayer = 80, buildingsPerPlayer = 20;
+    var world = new World(seed, 128, 128, players: 2);
+    world.ShortGameEnabled = false; // a perf rig, not a match: never end early
+    for (int p = 0; p < 2; p++)
+    {
+        int wallY = p == 0 ? 10 : 110;
+        for (int i = 0; i < wallsPerPlayer; i++) world.SpawnWall(p, 10 + i % 20 * 2, wallY + i / 20 * 2);
+        int bldY = p == 0 ? 24 : 96;
+        for (int i = 0; i < buildingsPerPlayer; i++)
+        {
+            int bx = 10 + i % 10 * 4, by = bldY + i / 10 * 4;
+            if (i % 2 == 0) world.SpawnTurret(p, bx, by); else world.SpawnPowerPlant(p, bx, by);
+        }
+        var def = world.GetUnitType(1);
+        int uy = p == 0 ? 36 : 80;
+        for (int i = 0; i < unitsPerPlayer; i++)
+            world.SpawnUnit(p, Fix64.FromInt(5 + i % 30 * 2) + Fix64.Half, Fix64.FromInt(uy + i / 30) + Fix64.Half,
+                def.Speed, def.Hp, def.Armour, def.WeaponId, def.SightCells, unitType: 1);
+    }
+    if (world.EntityCount != 2 * (unitsPerPlayer + wallsPerPlayer + buildingsPerPlayer))
+        return Fail($"PERF GATE: the defence-load rig built {world.EntityCount} entities, not {2 * (unitsPerPlayer + wallsPerPlayer + buildingsPerPlayer)}");
+    // A perf rig, not a balance test: nothing may die. Measured without this,
+    // the two armies annihilate each other inside a couple of hundred ticks
+    // (33 of 600 units left at tick 1000) and the average quietly reports the
+    // cost of a nearly empty world while claiming to have measured 600 + 200.
+    // Pinning hit points keeps the whole stated population on the clock -
+    // still firing, still scanning - for every one of the 1000 ticks.
+    for (int i = 0; i < world.EntityCount; i++)
+    {
+        var e = world.Entities[i];
+        e.Hp = e.MaxHp = 1_000_000;
+        world.SetEntityForTest(i, e);
+    }
+    var cmds = new List<Command>();
+    // Order both armies onto each other's line: every unit is attack-moving.
+    foreach (var e in world.Entities)
+        if (e.Kind == EntityKind.Unit)
+            cmds.Add(new Command(0, e.PlayerId, CommandType.AttackMove, e.Id,
+                Fix64.FromInt(32), Fix64.FromInt(e.PlayerId == 0 ? 110 : 12)));
+    var sw = Stopwatch.StartNew();
+    for (int t = 0; t < ticks; t++)
+    {
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+    }
+    sw.Stop();
+    double ms = sw.Elapsed.TotalMilliseconds / ticks;
+    // The gate polices its own honesty: if the rig ever stops holding the
+    // population it claims to measure, the figure below is meaningless and
+    // this fails rather than reporting a comfortable lie.
+    int aliveUnits = 0, aliveStructures = 0, aliveWalls = 0;
+    foreach (var e in world.Entities)
+    {
+        if (!e.Alive) continue;
+        if (e.Kind == EntityKind.Unit) aliveUnits++; else aliveStructures++;
+        if (e.Kind == EntityKind.Wall) aliveWalls++;
+    }
+    if (aliveUnits != unitsPerPlayer * 2 || aliveStructures != 2 * (wallsPerPlayer + buildingsPerPlayer) || aliveWalls != 2 * wallsPerPlayer)
+        return Fail($"PERF GATE: the rig must hold its full population for the whole run (ended {aliveUnits} units, {aliveStructures} structures, {aliveWalls} walls) - a budget measured on a half-empty world proves nothing");
+    Console.WriteLine($"defence load: {ticks} ticks x {unitsPerPlayer * 2} units + {2 * (wallsPerPlayer + buildingsPerPlayer)} structures ({2 * wallsPerPlayer} walls), {ms:F3} ms/tick (budget 8)");
+    if (ms > 8.0) return Fail($"PERF GATE: defence load {ms:F3} ms/tick exceeds the 8 ms budget at 600 units + 200 structures (TDD s6)");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -1453,6 +1773,9 @@ int Match(ulong seed)
     ScenarioMission02(seed, null, Console.WriteLine);
     ScenarioMission03(seed, null, Console.WriteLine);
     ScenarioDepot(seed, null, Console.WriteLine);
+    ScenarioWalls(seed, null, Console.WriteLine);
+    int defence = DefenceLoadGate(seed);
+    if (defence != 0) return defence;
     return 0;
 }
 
