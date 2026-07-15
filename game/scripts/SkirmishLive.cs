@@ -57,6 +57,46 @@ public partial class SkirmishLive : Node3D
     private int _placingType;
     private MeshInstance3D _ghost = null!;
     private int _yardId = -1, _factoryId = -1;
+    // DEF-01: the ghost's own range ring (a child of the ghost, so it tracks
+    // the cursor for free) plus a dim ring on every own armed structure while
+    // placing - the coverage-gap read that makes turret siting a decision.
+    private Node3D _ghostRing = null!;
+    private readonly List<MeshInstance3D> _coverageRings = new();
+    // DEF-08: drag-a-line barrier placement.
+    private bool _wallDrag;
+    private (int X, int Y) _wallDragStart;
+    private readonly List<MeshInstance3D> _dragGhosts = new();
+    private int _dragRun;
+    private static readonly BoxMesh WallGhostMesh = new() { Size = new Vector3(1, 0.5f, 1) };
+    // DEF-08 clause 3: neighbour masks are rebuilt only when the wall
+    // population changes, never per frame - 160 segments rescanned every frame
+    // for a set that changes at most four cells per placement is not free.
+    private readonly Dictionary<int, int> _wallMask = new();
+    private bool _wallsDirty;
+    // DEF-09 clause 4: a mass sell is irreversible and the sim has no cancel,
+    // so it asks once. -1 means no confirmation is pending.
+    private double _sellConfirmUntil = -1;
+    // DEF-01 clause 9: the ghost tint was rebuilding a StandardMaterial3D every
+    // frame while placing. Two immutable materials, assigned by reference.
+    private static readonly StandardMaterial3D GhostValidMat = GhostMat(new Color(0.3f, 0.9f, 0.4f, 0.4f));
+    private static readonly StandardMaterial3D GhostInvalidMat = GhostMat(new Color(0.9f, 0.25f, 0.2f, 0.4f));
+    private static StandardMaterial3D GhostMat(Color c) => new()
+    {
+        AlbedoColor = c,
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+    };
+
+    /// <summary>DEF-01: the WeaponId a structure type spawns with. This mirrors
+    /// the WeaponId hardcoded in World.SpawnTurret (World.cs:486) and MUST be
+    /// updated alongside it - the sim is the source of truth, this is a
+    /// presentation-side echo of it for the placement preview only.</summary>
+    private static int WeaponOfStruct(int structType) => structType == 5 ? 4 : 0;
+
+    /// <summary>DEF-01: a weapon's range in world units. Fix64.Raw is public and
+    /// FracBits is 32, so this is the same conversion SnapshotInterpolator.ToDouble
+    /// uses. Weapon 0 (none) has no ring.</summary>
+    private static float RangeOf(int weaponId) =>
+        weaponId == 0 ? 0f : (float)(Weapons.Get(weaponId).Range.Raw / 4294967296.0);
 
     // Fog, minimap, groups, alerts
     private FogOfWar _fog = null!;
@@ -225,6 +265,12 @@ public partial class SkirmishLive : Node3D
             Visible = false,
         };
         AddChild(_ghost);
+        // DEF-01: the ghost's range ring rides as a CHILD of the ghost, so the
+        // ghost's own cursor-follow carries it and nothing per-frame is needed.
+        // Built at radius 1 so Scale is literally the radius.
+        _ghostRing = BattlefieldView.MakeRangeRing(1f, BattlefieldView.RangeRingOwn);
+        _ghost.AddChild(_ghostRing);
+        _ghostRing.Visible = false;
 
         var rallyGold = new Color(0.79f, 0.63f, 0.36f);
         _rallyMarker = new MeshInstance3D
@@ -272,7 +318,50 @@ public partial class SkirmishLive : Node3D
     {
         _placingType = structType;
         _ghost.Visible = true;
+        // DEF-01: the ghost is the real footprint, not a hardcoded 2x2. A
+        // barrier is 1x1 (ADR-005 clause 1) and must not preview as a building.
+        float f = World.FootprintOf(structType);
+        _ghost.Mesh = new BoxMesh { Size = new Vector3(f, 0.5f, f) };
+        // The ghost's own range ring: the mesh is built at radius 1, so Scale
+        // IS the radius. Unarmed structures show none.
+        float r = RangeOf(WeaponOfStruct(structType));
+        _ghostRing.Visible = r > 0;
+        if (r > 0) _ghostRing.Scale = new Vector3(r, 1, r);
+        // Coverage rings on every armed structure already standing, so the
+        // player reads the gap they are filling rather than guessing at it.
+        ClearCoverageRings();
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.PlayerId != 0 || Mobile(v.Kind)) continue;
+            if (v.Id < 0 || v.Id >= _world.EntityCount) continue;
+            float cr = RangeOf(_world.Entities[v.Id].WeaponId);
+            if (cr <= 0) continue;
+            var ring = BattlefieldView.MakeRangeRing(1f, BattlefieldView.RangeRingCoverage);
+            ring.Position = new Vector3((float)v.X,
+                BattlefieldView.GroundHeight((float)v.X, (float)v.Y) + 0.04f, (float)v.Y);
+            ring.Scale = new Vector3(cr, 1, cr);
+            AddChild(ring);
+            _coverageRings.Add(ring);
+        }
         _audio.Play("ui_click", -6);
+    }
+
+    /// <summary>DEF-01 clause 6: the single teardown for placement mode, which
+    /// two call sites previously open-coded as a two-line clear that could not
+    /// know about the coverage rings.</summary>
+    private void ExitPlacement()
+    {
+        _placingType = 0;
+        _ghost.Visible = false;
+        ClearCoverageRings();
+        ClearDragGhosts();
+        _wallDrag = false;
+    }
+
+    private void ClearCoverageRings()
+    {
+        foreach (var r in _coverageRings) r.QueueFree();
+        _coverageRings.Clear();
     }
 
     private void BuildHud()
@@ -411,6 +500,13 @@ public partial class SkirmishLive : Node3D
                     id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
                 foreach (var ev in _world.Events)
                 {
+                    // DEF-08 clause 3: a placed or destroyed barrier changes its
+                    // neighbours' masks. See RefreshWallMasks for why this is a
+                    // force rather than the sole trigger.
+                    if ((ev.Type == GameEventType.StructurePlaced || ev.Type == GameEventType.Died)
+                        && ev.A >= 0 && ev.A < _world.EntityCount
+                        && _world.Entities[ev.A].Kind == EntityKind.Wall)
+                        _wallsDirty = true;
                     if (ev.Type == GameEventType.ProductionComplete)
                         foreach (var (fid2, frig2) in _rigs)
                             if (frig2.Doors.Count > 0 && _latest.TryGetValue(fid2, out var fv2) && fv2.Kind == EntityKind.Factory)
@@ -525,7 +621,7 @@ public partial class SkirmishLive : Node3D
             else { fr = null; break; }
         }
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
-        _selInfo.Text = SelectionSummary();
+        _selInfo.Text = _wallDrag ? WallDragSummary() : SelectionSummary();
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -541,26 +637,39 @@ public partial class SkirmishLive : Node3D
             ? _world.Entities[_factoryId].BuildProgress / (_world.GetUnitType(facQ[0]).BuildTicks * 100f) : 0f;
         _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0, yardQ, facQ, yardProg, facProg);
 
-        if (_placingType > 0 && _ghost.Visible)
+        if (_placingType > 0)
         {
             var gp = GroundPoint(GetViewport().GetMousePosition());
             if (gp is { } p)
             {
                 int ax = Mathf.FloorToInt(p.X), ay = Mathf.FloorToInt(p.Z);
-                _ghost.Position = new Vector3(ax + 1f, 0.25f, ay + 1f);
-                bool ok = _world.ValidPlacement(0, ax, ay);
-                _ghost.MaterialOverride = new StandardMaterial3D
+                // DEF-08: while dragging a barrier line the run ghosts own the
+                // whole line, cursor cell included, so the single ghost stands
+                // down rather than double-blending over the run's end.
+                if (_wallDrag) UpdateDragGhosts(ax, ay);
+                else
                 {
-                    AlbedoColor = ok ? new Color(0.3f, 0.9f, 0.4f, 0.4f) : new Color(0.9f, 0.25f, 0.2f, 0.4f),
-                    Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-                };
+                    // DEF-01 clause 7: the +1 here was the 2x2 centre offset
+                    // hardcoded. Half the real footprint puts a 1x1 barrier at
+                    // its cell centre and leaves every 2x2 exactly where it was.
+                    float half = World.FootprintOf(_placingType) / 2f;
+                    _ghost.Position = new Vector3(ax + half, 0.25f, ay + half);
+                    // Passing the type makes the tint agree with the sim's own
+                    // footprint test; for types 1-8 FootprintOf is 2, which is
+                    // what the defaulted call already meant.
+                    _ghost.MaterialOverride = _world.ValidPlacement(0, ax, ay, _placingType)
+                        ? GhostValidMat : GhostInvalidMat;
+                }
             }
         }
     }
 
     private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR" };
     // W3-19: structure names by type id (Sidebar's table is private).
-    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "STRUCTURE", "SERVICE DEPOT" };
+    // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
+    // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
+    // the entry exists for completeness rather than for a live code path.
+    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "STRUCTURE", "SERVICE DEPOT", "WALL" };
 
     /// <summary>W3-19: slide-and-fade production toast. A fresh completion
     /// retriggers the animation from the top.</summary>
@@ -580,9 +689,32 @@ public partial class SkirmishLive : Node3D
         _toastTween.TweenCallback(Callable.From(() => _toast.Visible = false));
     }
 
+    /// <summary>DEF-08 clause 8: while drawing, the readout is the running cost
+    /// and whether the cap refuses the run - the two numbers that decide
+    /// whether to release the button.</summary>
+    private string WallDragSummary()
+    {
+        long cost = _dragRun * (long)World.GetStructureType(9).Cost;
+        int have = OwnCount(EntityKind.Wall);
+        string cap = have + _dragRun > World.MaxBarriersPerPlayer
+            ? $"   CAP {have}/{World.MaxBarriersPerPlayer} - RUN TRUNCATED"
+            : $"   {have + _dragRun}/{World.MaxBarriersPerPlayer}";
+        return $"{_dragRun} WALL SEGMENTS   {cost} cr{cap}";
+    }
+
     private string SelectionSummary()
     {
         if (_selection.Count == 0) return "";
+        // DEF-09 clause 5: a wall run's readout is the two actions it supports
+        // plus the refund, which is the number the player actually needs.
+        int walls = 0;
+        foreach (int sid in _selection)
+            if (_latest.TryGetValue(sid, out var wv) && wv.Kind == EntityKind.Wall) walls++;
+        if (walls > 1 && walls == _selection.Count)
+        {
+            long refund = walls * (long)World.GetStructureType(9).Cost / 2;
+            return $"{walls} WALL SEGMENTS   R repair  X sell   {refund} cr";
+        }
         if (_selection.Count == 1)
         {
             foreach (int sid in _selection)
@@ -637,11 +769,201 @@ public partial class SkirmishLive : Node3D
 
     private static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
 
+    /// <summary>
+    /// DEF-08: is this STRUCT type a barrier? ADR-005 reserves struct type 9 for
+    /// the wall and 10 for the deferred gate, and the sim maps both to
+    /// EntityKind.Wall (11). The two numbering spaces are different and the ADR
+    /// warns that a mismatch is silent and fatal, so ask the sim's own table
+    /// rather than writing 9 in the client.
+    /// </summary>
+    private static bool IsBarrier(int structType) =>
+        World.GetStructureType(structType).Kind == EntityKind.Wall;
+
+    /// <summary>
+    /// DEF-01 clause 8: the selection ring was hardcoded at 1.5, which is the
+    /// 2x2 radius; a 1x1 barrier would wear a ring wider than itself. Derive it
+    /// from the real footprint (ADR-005 clause 1), which reproduces 1.5 for
+    /// every 2x2 exactly. Mobiles already carry a hidden ring from DressMobile,
+    /// so in practice this only ever fires for structures.
+    /// </summary>
+    private void AddSelRingFor(int id)
+    {
+        if (!_actors.TryGetValue(id, out var n)) return;
+        if (n.GetNodeOrNull<MeshInstance3D>("SelRing") != null) return;
+        int st = id >= 0 && id < _world.EntityCount ? _world.Entities[id].StructType : 0;
+        BattlefieldView.AddSelRing(n, World.FootprintOf(st) * 0.75f);
+    }
+
+    /// <summary>
+    /// DEF-08 clause 5, THE LINE RULE: a strictly orthogonal run from start to
+    /// current. The dominant axis wins, so there are no diagonals and no
+    /// L-bends; the player draws two lines for a corner. Walk order is start to
+    /// end inclusive, which is the order the segments are bought in.
+    /// </summary>
+    private static List<(int X, int Y)> WallRun(int sx, int sy, int cx, int cy)
+    {
+        var run = new List<(int X, int Y)>();
+        int dx = cx - sx, dy = cy - sy;
+        if (System.Math.Abs(dx) >= System.Math.Abs(dy))
+        {
+            int step = dx >= 0 ? 1 : -1;
+            for (int x = sx; ; x += step) { run.Add((x, sy)); if (x == cx) break; }
+        }
+        else
+        {
+            int step = dy >= 0 ? 1 : -1;
+            for (int y = sy; ; y += step) { run.Add((sx, y)); if (y == cy) break; }
+        }
+        return run;
+    }
+
+    private void UpdateDragGhosts(int cx, int cy)
+    {
+        var run = WallRun(_wallDragStart.X, _wallDragStart.Y, cx, cy);
+        // The run rewrites itself every time the cursor crosses a cell, so the
+        // ghosts are pooled and hidden rather than freed and rebuilt - the
+        // _trackPool recycling precedent (clause 10).
+        while (_dragGhosts.Count < run.Count)
+        {
+            var g = new MeshInstance3D
+            {
+                Mesh = WallGhostMesh,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            };
+            AddChild(g);
+            _dragGhosts.Add(g);
+        }
+        // Clause 8: the cap is a hard sim rule (ADR-005 clause 5), so the run
+        // must read as refused BEFORE the credits leave. Segments past the cap
+        // tint red exactly as an illegal cell does.
+        int have = OwnCount(EntityKind.Wall);
+        for (int i = 0; i < _dragGhosts.Count; i++)
+        {
+            var g = _dragGhosts[i];
+            if (i >= run.Count) { g.Visible = false; continue; }
+            var (x, y) = run[i];
+            g.Visible = true;
+            g.Position = new Vector3(x + 0.5f, 0.25f, y + 0.5f);
+            bool ok = _world.ValidPlacement(0, x, y, _placingType)
+                      && have + i < World.MaxBarriersPerPlayer;
+            g.MaterialOverride = ok ? GhostValidMat : GhostInvalidMat;
+        }
+        _dragRun = run.Count;
+    }
+
+    private void ClearDragGhosts()
+    {
+        foreach (var g in _dragGhosts) g.QueueFree();
+        _dragGhosts.Clear();
+        _dragRun = 0;
+    }
+
+    private void BeginWallDrag(Vector2 screen)
+    {
+        if (GroundPoint(screen) is not { } p) return;
+        BeginWallDragAtCell(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z));
+    }
+
+    /// <summary>DEF-08: drag start; public so scripted verification drives the
+    /// same path the mouse does, as PlaceAtCell already does for single
+    /// placement.</summary>
+    public void BeginWallDragAtCell(int cx, int cy)
+    {
+        if (_placingType <= 0 || !IsBarrier(_placingType)) return;
+        _wallDrag = true;
+        _wallDragStart = (cx, cy);
+        _ghost.Visible = false;
+        UpdateDragGhosts(cx, cy);
+    }
+
+    /// <summary>
+    /// DEF-08 clause 6: commit the run. Deliberately NOT filtered on
+    /// ValidPlacement - the sim validates and rejects each segment on its own
+    /// (DEF-04 clause 7), and a client-side filter would be a second opinion
+    /// that desyncs from the sim's under lockstep. Returns the segment count.
+    /// </summary>
+    public int CommitWallDragAtCell(int cx, int cy)
+    {
+        if (!_wallDrag) return 0;
+        var run = WallRun(_wallDragStart.X, _wallDragStart.Y, cx, cy);
+        foreach (var (x, y) in run)
+            _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
+                Fix64.FromInt(x), Fix64.FromInt(y), _placingType));
+        _wallDrag = false;
+        ClearDragGhosts();
+        // Clause 7: STAY IN MODE. Draw, draw, draw, Escape.
+        _ghost.Visible = true;
+        _audio.Play("ui_confirm", -4);
+        return run.Count;
+    }
+
+    /// <summary>
+    /// DEF-08 clause 3: recompute barrier neighbour masks, and rebuild only the
+    /// actors whose mask actually moved. Placing one segment changes at most its
+    /// four neighbours, so this is cheap; rebuilding 160 masks every frame is
+    /// not, and re-instantiating 160 meshes every frame certainly is not.
+    ///
+    /// DEVIATION from the clause's "set _wallsDirty from the event stream" as
+    /// the sole trigger, and the reason is load-bearing: the interpolator runs
+    /// eight ticks behind the sim (windowTicks: 8), so a StructurePlaced event
+    /// arrives LONG before its segment surfaces in _view. An event-only latch
+    /// would be consumed on a view that does not yet contain the wall, and the
+    /// mask would then never be recomputed - the new segment and its neighbours
+    /// would keep the wrong mesh forever. So the trigger is a signature of the
+    /// view's own barrier set. Walls never move, so the set of live wall ids
+    /// determines every mask exactly; the signature is integer-only over a list
+    /// already in cache, and the expensive part still happens only on change.
+    /// The event hook is kept as a belt-and-braces force.
+    /// </summary>
+    private void RefreshWallMasks()
+    {
+        int sig = 17, n = 0;
+        foreach (var v in _view)
+            if (v.Alive && v.Kind == EntityKind.Wall) { sig = sig * 31 + v.Id; n++; }
+        if (sig == _wallSig && !_wallsDirty) return;
+        _wallSig = sig;
+        _wallsDirty = false;
+        if (n == 0) { _wallMask.Clear(); return; }
+        // Same-owner neighbours only (clause 2), so two players' walls meeting
+        // along a border do not fuse into a single run.
+        var wallCells = new Dictionary<(int, int), int>();
+        foreach (var v in _view)
+            if (v.Alive && v.Kind == EntityKind.Wall)
+                wallCells[((int)v.X, (int)v.Y)] = v.PlayerId;   // 1x1 sits at cell centre, so floor is the cell
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.Kind != EntityKind.Wall) continue;
+            int cx = (int)v.X, cy = (int)v.Y, mask = 0;
+            if (wallCells.TryGetValue((cx, cy - 1), out var pN) && pN == v.PlayerId) mask |= 1;
+            if (wallCells.TryGetValue((cx + 1, cy), out var pE) && pE == v.PlayerId) mask |= 2;
+            if (wallCells.TryGetValue((cx, cy + 1), out var pS) && pS == v.PlayerId) mask |= 4;
+            if (wallCells.TryGetValue((cx - 1, cy), out var pW) && pW == v.PlayerId) mask |= 8;
+            if (_wallMask.TryGetValue(v.Id, out int old) && old == mask) continue;
+            _wallMask[v.Id] = mask;
+            // The mask picks the MESH, so a changed mask is a different model:
+            // drop the actor and let the loop below re-instantiate it.
+            if (_actors.TryGetValue(v.Id, out var stale))
+            {
+                stale.QueueFree();
+                _actors.Remove(v.Id);
+                _rigs.Remove(v.Id);
+                _wallRebuilds++;
+            }
+        }
+    }
+    private int _wallSig = -1;
+    /// <summary>Verification read: how many barrier actors have been rebuilt for
+    /// a mask change. Lets a test assert that placing a segment touches only the
+    /// neighbours that changed, by count rather than by appearance.</summary>
+    public int WallRebuildCount => _wallRebuilds;
+    private int _wallRebuilds;
+
     private void SyncActors(float dt)
     {
         if (!_interp.TrySample(_renderTime, _view)) return;
         var seen = new HashSet<int>();
         _latest.Clear();
+        RefreshWallMasks();   // DEF-08: before the actor loop, so a fresh segment instantiates at its final mask
         foreach (var v in _view)
         {
             if (!v.Alive) continue;
@@ -652,11 +974,23 @@ public partial class SkirmishLive : Node3D
                 BattlefieldView.GroundHeight((float)v.X, (float)v.Y), (float)v.Y);
             if (!_actors.TryGetValue(v.Id, out var node))
             {
-                node = _models.Instantiate((int)v.Kind, v.UnitType);
+                // DEF-08 clause 2: a barrier picks one of six meshes by its
+                // neighbour mask, so it cannot take the generic one-mesh-per-kind
+                // path.
+                if (v.Kind == EntityKind.Wall)
+                {
+                    node = _models.InstantiateWall(_wallMask.GetValueOrDefault(v.Id), out float yawDeg);
+                    node.RotationDegrees = new Vector3(0, yawDeg, 0);
+                }
+                else node = _models.Instantiate((int)v.Kind, v.UnitType);
                 node.Position = pos;
                 if (Mobile(v.Kind) && v.PlayerId >= 0)
                     BattlefieldView.DressMobile(node, v.PlayerId,
                         v.Kind == EntityKind.Harvester ? 1.7f : 1.15f);
+                // Clause 4: 2.6 is sized for a 2x2 building and would pool a
+                // shadow far outside a 1x1 segment's own cell.
+                else if (v.Kind == EntityKind.Wall)
+                    BattlefieldView.AddContactBlob(node, 1.0f);
                 else if (v.Kind != EntityKind.FerriteField)
                     BattlefieldView.AddContactBlob(node, 2.6f);
                 else
@@ -676,8 +1010,14 @@ public partial class SkirmishLive : Node3D
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
                 _rigs[v.Id] = newRig;
-                // W2-05: structures placed mid-match rise out of the ground
-                if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField && _world.Tick > 10)
+                // A rebuilt segment loses its ring child with its old mesh.
+                if (v.Kind == EntityKind.Wall && _selection.Contains(v.Id)) AddSelRingFor(v.Id);
+                // W2-05: structures placed mid-match rise out of the ground.
+                // DEF-08 clause 4 excludes barriers: twenty segments popping out
+                // of the ground at once reads as an earthquake, and every mask
+                // rebuild would re-pop the neighbours. Walls simply appear.
+                if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField
+                    && v.Kind != EntityKind.Wall && _world.Tick > 10)
                 {
                     node.Scale = new Vector3(1f, 0.05f, 1f);
                     var riseTw = node.CreateTween();
@@ -923,11 +1263,19 @@ public partial class SkirmishLive : Node3D
     {
         switch (ev)
         {
+            // DEF-08 clause 5: a barrier draws rather than clicks - press
+            // starts the line, release commits it. Everything else places on
+            // press exactly as before.
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } pm when _placingType > 0:
-                TryPlace(pm.Position);
+                if (IsBarrier(_placingType)) BeginWallDrag(pm.Position);
+                else TryPlace(pm.Position);
+                break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } wm when _wallDrag:
+                if (GroundPoint(wm.Position) is { } wp)
+                    CommitWallDragAtCell(Mathf.FloorToInt(wp.X), Mathf.FloorToInt(wp.Z));
                 break;
             case InputEventKey { Keycode: Key.Escape, Pressed: true } when _placingType > 0:
-                _placingType = 0; _ghost.Visible = false;
+                ExitPlacement();
                 break;
             case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0:
                 GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
@@ -938,12 +1286,29 @@ public partial class SkirmishLive : Node3D
                         _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
                 _audio.Play("ui_confirm", -8);
                 break;
+            // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
+            // keypress is a match-losing misclick and the sim has no cancel for
+            // it, so past 8 structures the first X only asks. R needs no such
+            // guard: repair is reversible and cheap.
             case InputEventKey { Keycode: Key.X, Pressed: true, Echo: false } when _selection.Count > 0:
+            {
+                int n = 0;
+                foreach (int sid in _selection)
+                    if (_latest.TryGetValue(sid, out var cv) && !Mobile(cv.Kind)) n++;
+                if (n > 8 && _now > _sellConfirmUntil)
+                {
+                    _sellConfirmUntil = _now + 2.0;
+                    ShowToast($"SELL {n} STRUCTURES?   PRESS X AGAIN");
+                    _audio.Play("ui_click", -8);
+                    break;
+                }
+                _sellConfirmUntil = -1;
                 foreach (int sid in _selection)
                     if (_latest.TryGetValue(sid, out var xv) && !Mobile(xv.Kind))
                         _pending.Add(new Command(0, 0, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
                 _audio.Play("ui_click", -8);
                 break;
+            }
             case InputEventKey { Keycode: Key.P, Pressed: true, Echo: false }:
                 _paused = !_paused;
                 _banner.Text = "PAUSED";
@@ -987,20 +1352,37 @@ public partial class SkirmishLive : Node3D
             if (hit >= 0)
             {
                 _selection.Add(hit);
-                if (_actors.TryGetValue(hit, out var n) && n.GetNodeOrNull<MeshInstance3D>("SelRing") == null)
-                    BattlefieldView.AddSelRing(n, 1.5f);   // structures ring on demand
+                AddSelRingFor(hit);
                 _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));   // W3-21
             }
             return;
         }
         var tl = new Vector2(Mathf.Min(_dragStart.X, at.X), Mathf.Min(_dragStart.Y, at.Y));
         var br = new Vector2(Mathf.Max(_dragStart.X, at.X), Mathf.Max(_dragStart.Y, at.Y));
+        // DEF-09 clause 1: barriers join the box-select, and BARRIERS ONLY -
+        // deliberately not all structures. Box-dragging across your own base
+        // and silently catching the Construction Yard in a following X (sell)
+        // is a catastrophic misclick with no undo, so every other structure
+        // stays click-only.
+        // DEF-09 clause 2, the MIXED SELECTION RULE: if a drag captures both
+        // mobiles and walls, keep ONLY the mobiles. A drag across the
+        // battlefield is an army selection and must never quietly include the
+        // fence behind the enemy. This mirrors the single-click precedence
+        // above, which tries mobiles first and only falls back to structures.
+        var mobiles = new List<int>();
+        var walls = new List<int>();
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0 || !Mobile(v.Kind)) continue;
+            if (!v.Alive || v.PlayerId != 0) continue;
+            if (!Mobile(v.Kind) && v.Kind != EntityKind.Wall) continue;
             var sp = _cam.UnprojectPosition(new Vector3((float)v.X, 0.3f, (float)v.Y));
-            if (sp.X >= tl.X && sp.X <= br.X && sp.Y >= tl.Y && sp.Y <= br.Y) _selection.Add(v.Id);
+            if (sp.X < tl.X || sp.X > br.X || sp.Y < tl.Y || sp.Y > br.Y) continue;
+            (Mobile(v.Kind) ? mobiles : walls).Add(v.Id);
         }
+        foreach (int id in mobiles.Count > 0 ? mobiles : walls) _selection.Add(id);
+        // Clause 6: rings for box-selected walls too, not just the click path.
+        if (mobiles.Count == 0)
+            foreach (int id in walls) AddSelRingFor(id);
     }
 
     private void TryPlace(Vector2 screen)
@@ -1014,10 +1396,14 @@ public partial class SkirmishLive : Node3D
     /// the same command path the mouse ghost uses.</summary>
     public bool PlaceAtCell(int ax, int ay)
     {
-        if (_placingType <= 0 || !_world.ValidPlacement(0, ax, ay)) { _audio.Play("ui_click", -12); return false; }
+        if (_placingType <= 0 || !_world.ValidPlacement(0, ax, ay, _placingType))
+        { _audio.Play("ui_click", -12); return false; }
         _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
             Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
-        _placingType = 0; _ghost.Visible = false;
+        // DEF-08 clause 7: a barrier STAYS IN MODE - the classic loop is draw,
+        // draw, draw, Escape. Everything else consumes its ready slot and so
+        // leaves placement, through DEF-01's single teardown.
+        if (!IsBarrier(_placingType)) ExitPlacement();
         _audio.Play("ui_confirm", -4);
         return true;
     }
@@ -1065,6 +1451,73 @@ public partial class SkirmishLive : Node3D
     }
     public long CreditsNow => _world.Credits(0);
     public int ReadyAtYard => _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
+
+    // ---- Verification surface for DEF-01/08/09, following the PlaceAtCell and
+    // SelectAllOwn precedent: scripted checks drive the same code the mouse
+    // drives rather than a parallel copy of it. Reads only, plus the two drag
+    // entry points the mouse itself calls.
+    public IReadOnlyList<Command> PendingCommands => _pending;
+    public void ClearPending() => _pending.Clear();
+    public int PlacingType => _placingType;
+    public bool GhostVisible => _ghost.Visible;
+    public bool GhostRingVisible => _ghostRing.Visible;
+    public float GhostRingScaleX => _ghostRing.Scale.X;
+    public float GhostSizeX => ((BoxMesh)_ghost.Mesh).Size.X;
+    public int CoverageRingCount => _coverageRings.Count;
+    /// <summary>Coverage rings live as scene children, so count them the way the
+    /// acceptance asks: by walking the scene, not by trusting the list.</summary>
+    public int CoverageRingNodesInScene()
+    {
+        int n = 0;
+        foreach (var c in GetChildren())
+            if (c is MeshInstance3D m && m.Name.ToString().StartsWith("RangeRing")) n++;
+        return n;
+    }
+    public string SelectionText() => SelectionSummary();
+    /// <summary>The live HUD readout, so a test reads what the player reads.</summary>
+    public string SelInfoText => _selInfo.Text;
+    public int SelectionCount => _selection.Count;
+    public void ClearSelection() => _selection.Clear();
+    public int WallMaskOf(int id) => _wallMask.TryGetValue(id, out int m) ? m : -1;
+    public float ActorYaw(int id) => _actors.TryGetValue(id, out var n) ? n.RotationDegrees.Y : float.NaN;
+    /// <summary>The live barrier at a cell, or -1. Walls sit at cell centre.</summary>
+    public int WallAtCell(int cx, int cy)
+    {
+        foreach (var v in _view)
+            if (v.Alive && v.Kind == EntityKind.Wall && (int)v.X == cx && (int)v.Y == cy) return v.Id;
+        return -1;
+    }
+    /// <summary>Where a world point lands on screen, at the same probe height
+    /// FinishSelect's box test uses.</summary>
+    public Vector2 ScreenOf(float x, float z) => _cam.UnprojectPosition(new Vector3(x, 0.3f, z));
+    public int OwnYardId => _yardId;
+    public bool IsSelected(int id) => _selection.Contains(id);
+    /// <summary>Park the camera over a point at a chosen height, so a capture can
+    /// be framed on the thing under test.</summary>
+    public void FocusCameraOn(float x, float z, float height)
+    {
+        _cam.Snap(new Vector3(x, height, z + height * 0.55f));
+    }
+    public Vector2 GroundPosOf(int id) =>
+        _latest.TryGetValue(id, out var v) ? new Vector2((float)v.X, (float)v.Y) : Vector2.Zero;
+    public List<Vector2> OwnMobilePositions()
+    {
+        var l = new List<Vector2>();
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == 0 && Mobile(v.Kind)) l.Add(new Vector2((float)v.X, (float)v.Y));
+        return l;
+    }
+    /// <summary>Drive the real box-select path from a screen rect.</summary>
+    public int BoxSelect(Vector2 from, Vector2 to)
+    {
+        _dragStart = from;
+        FinishSelect(to, false);
+        return _selection.Count;
+    }
+    /// <summary>Drive the real key path, so the sell guard and the repair loop
+    /// are tested as the player triggers them.</summary>
+    public void PressKey(Key k) =>
+        _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false });
     public int OwnCount(EntityKind kind)
     {
         int n = 0;

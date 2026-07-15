@@ -23,7 +23,15 @@ public partial class Sidebar : PanelContainer
         new("TURRET", 5, 600, "dir_turret"),
         new("SERVICE DEPOT", 8, 1200, "com_service_depot"),
         new("SUPERWEAPON", 6, 4000, "dir_superweapon"),
+        // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
+        // slot and no build time, so it is never queued at the yard - the button
+        // enters placement directly and the treasury is charged per segment as
+        // it lands.
+        new("WALL", BarrierType, 100, "com_wall_straight"),
     };
+    /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
+    /// deferred gate).</summary>
+    private const int BarrierType = 9;
     private static readonly BuildItem[] Units =
     {
         new("RIFLE SQUAD", 2, 200, "com_rifle_squad"),
@@ -76,7 +84,11 @@ public partial class Sidebar : PanelContainer
         v.AddChild(Header("STRUCTURES"));
         foreach (var it in Structures)
         {
-            var b = MakeButton(it, () => _game.QueueStructure(it.TypeId));
+            // DEF-08 clause 9: a barrier bypasses the yard queue entirely, so
+            // its button enters placement rather than queueing.
+            var b = it.TypeId == BarrierType
+                ? MakeButton(it, () => _game.EnterPlacement(BarrierType))
+                : MakeButton(it, () => _game.QueueStructure(it.TypeId));
             // Classic campaign tech gating: disallowed items are absent,
             // not greyed - progression should read as the tree growing.
             b.Visible = MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true;
@@ -187,7 +199,11 @@ public partial class Sidebar : PanelContainer
         foreach (var (typeId, b) in _structButtons)
         {
             var def = World.GetStructureType(typeId);
-            b.Disabled = !hasYard || readyStructureType > 0 || credits < def.Cost;
+            // DEF-08 clause 9: a full ready slot pauses the yard's queue and so
+            // disables the queued structures, but a barrier never enters that
+            // slot - it stays buildable while a finished structure waits.
+            b.Disabled = !hasYard || credits < def.Cost
+                         || (typeId != BarrierType && readyStructureType > 0);
             int n = structCounts.GetValueOrDefault(typeId);
             b.Text = _baseText[b] + (n > 0 ? $"  x{n}" : "");
             ((ColorRect)b.GetNode("Fill")).OffsetRight =

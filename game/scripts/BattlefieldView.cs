@@ -1022,6 +1022,35 @@ public static class BattlefieldView
         });
     }
 
+    /// <summary>
+    /// TICKET-P5-DEF-01: a flat weapon-range ring. Built at the radius passed
+    /// in, but callers hand it 1.0 and drive the radius through Scale, so one
+    /// mesh serves every range and the per-placement allocation stays a node
+    /// rather than a mesh rebuild. Unshaded and alpha-blended so the ring reads
+    /// as a HUD overlay lying on the ground rather than as lit geometry.
+    /// </summary>
+    public static MeshInstance3D MakeRangeRing(float radius, Color c) => new()
+    {
+        Mesh = new TorusMesh { InnerRadius = radius - 0.08f, OuterRadius = radius },
+        Position = new Vector3(0, 0.04f, 0),
+        CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        MaterialOverride = new StandardMaterial3D
+        {
+            AlbedoColor = c,
+            EmissionEnabled = true,
+            Emission = c,
+            EmissionEnergyMultiplier = 1.1f,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        },
+        Name = "RangeRing",
+    };
+
+    /// <summary>Ferrite gold for the ghost's own range ring (DEF-01), and a
+    /// dimmer pour for the rings of structures already standing.</summary>
+    public static readonly Color RangeRingOwn = new(0.79f, 0.63f, 0.36f, 0.35f);
+    public static readonly Color RangeRingCoverage = new(0.79f, 0.63f, 0.36f, 0.18f);
+
     /// <summary>Selection ring, addable on demand (structures get one the
     /// first time they are selected).</summary>
     public static void AddSelRing(Node3D node, float radius)
