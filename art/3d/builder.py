@@ -243,14 +243,25 @@ def sod_shade_raider():
     return join(parts, 'sod_shade_raider')
 
 def infantry(name, tube=False, colour='olive'):
+    # W4-09: keep the dot-cluster silhouette, add soldier read at zoom -
+    # slimmer bodies, backpacks, cross-held rifles, per-man facing variety
+    # (per-part spin, the spec-accepted approximation at this scale)
     men = []
     for i, (dx, dy) in enumerate([(-0.2, -0.15), (0.2, -0.1), (0, 0.2)]):
-        b = cyl(f'b{i}', 0.07, 0.22, dx, dy, 0.11, colour, vs=8)
-        h = cyl(f'h{i}', 0.05, 0.07, dx, dy, 0.26, 'bone', vs=8)
-        men += [b, h]
+        zrot = (0.4, 2.5, 4.2)[i]
+        b = cyl(f'b{i}', 0.065, 0.20, dx, dy, 0.10, colour, vs=8)
+        b.rotation_euler = (0, 0, zrot)
+        # head lowered 0.025 to stay seated on the shortened body
+        h = cyl(f'h{i}', 0.05, 0.07, dx, dy, 0.235, 'bone', vs=8)
+        pk = box(f'pk{i}', 0.09, 0.05, 0.09, dx, dy - 0.07, 0.16, 'olived', 0.008)
+        pk.rotation_euler = (0, 0, zrot)
+        r = box(f'r{i}', 0.02, 0.22, 0.02, dx + 0.07, dy + 0.02, 0.18, 'gundark', 0.004)
+        r.rotation_euler = (0, 0, 0.5 + zrot)
+        men += [b, h, pk, r]
         if tube:
             men.append(cyl(f't{i}', 0.03, 0.24, dx + 0.06, dy, 0.3, 'ferrite', vs=8, ry=math.pi/2))
-    base = cyl('base', 0.34, 0.02, 0, 0, 0.01, 'olived', vs=16)
+    # base disc shrunk: the contact-blob decal owns the grounding job now
+    base = cyl('base', 0.30, 0.02, 0, 0, 0.01, 'olived', vs=16)
     return join(men + [base], name)
 
 def com_harvester():
@@ -261,13 +272,39 @@ def com_harvester():
     parts += tracks(0.45, 1.1, wheel_r=0.11, wheels=4, band_w=0.17, m_band='olived', m_skirt='olive')
     parts.append(cyl('hop', 0.26, 0.16, 0, 0.02, 0.5, 'ferrite', vs=14))
     parts.append(cyl('hoprim', 0.29, 0.04, 0, 0.02, 0.58, 'olived', vs=14))
-    intake = box('in', 0.5, 0.22, 0.14, 0, -0.56, 0.04, 'olived', 0.04)
-    intake.rotation_euler = (0.3, 0, 0)
-    for i in range(4):   # intake teeth
-        parts.append(box(f'tooth{i}', 0.06, 0.08, 0.06, -0.18 + i * 0.12, -0.65, 0.02, 'gundark', 0.01))
+    # W4-09: visible ore heap in the hopper - at night the glowing full
+    # hopper is the economy telling its own story
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=0.20,
+                                          location=(0, 0.02, 0.60))
+    heap = bpy.context.object; heap.name = 'heap'
+    heap.scale = (1, 1, 0.5)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    heap.data.materials.append(mat('fhi', emit=1.6, rough=0.4))
+    parts.append(heap)
     parts.append(cyl('pipe', 0.045, 0.5, 0.3, -0.2, 0.44, 'olived', vs=8, rx=math.pi/2))
+    for s in (-1, 1):   # W4-09: rear mud flaps
+        parts.append(box(f'flap{s}', 0.16, 0.03, 0.12, 0.45 * s, -0.55, 0.06, 'gundark', 0.005))
     parts.append(team_band(0.4, 0.56, 0.34, 'ferrite'))
     hull = join(parts, 'com_harvester')
+    # W4-09 intake assembly: drum + 8 drum teeth replace the 4 static hull
+    # teeth. Joined via bpy.ops.object.join() with the 'in' box active so the
+    # hinge origin of the de-merged 'intake' child (W2 churn animation) is
+    # preserved - builder.join() would re-origin to world zero and break it.
+    intake = box('in', 0.5, 0.22, 0.14, 0, -0.56, 0.04, 'olived', 0.04)
+    intake.rotation_euler = (0.3, 0, 0)
+    iparts = [intake]
+    iparts.append(cyl('drum', 0.13, 0.62, 0, -0.60, 0.11, 'gundark', vs=12, ry=math.pi/2))
+    for a in range(8):
+        ang = a * math.pi / 4
+        iparts.append(box(f'dt{a}', 0.05, 0.04, 0.04, -0.24 + (a % 4) * 0.16,
+                          -0.60 + 0.15 * math.cos(ang), 0.11 + 0.15 * math.sin(ang),
+                          'plate', 0.005))
+    bpy.context.view_layer.update()
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in iparts: p.select_set(True)
+    bpy.context.view_layer.objects.active = intake
+    bpy.ops.object.join()
+    intake = bpy.context.object; intake.name = 'in'
     child_part(hull, intake, 'intake')
     return hull
 
@@ -306,10 +343,19 @@ def com_power_plant():
     parts.append(cyl('ring', 0.3, 0.06, -0.35, 0.1, 1.02, 'ferrite', vs=14))
     parts.append(cyl('ring2', 0.44, 0.05, -0.35, 0.1, 0.76, 'olive', vs=14))
     parts.append(box('v', 0.34, 0.9, 0.7, 0.5, -0.1, 0.58, 'orange', 0.04))
-    for i in range(3):   # vent louvres
-        parts.append(box(f'lv{i}', 0.37, 0.7, 0.04, 0.5, -0.1, 0.72 + i * 0.14, 'gundark', 0.008))
+    for i in range(3):   # vent louvres (W4-08: inset, not proud-overlapping)
+        parts.append(box(f'lv{i}', 0.35, 0.7, 0.04, 0.5, -0.1, 0.72 + i * 0.14, 'gundark', 0.008))
+    # W4-08: dark recess behind the louvres so the vent reads as an opening
+    parts.append(box('vrec', 0.30, 0.86, 0.62, 0.5, -0.1, 0.62, 'cinder', 0.01))
     parts.append(cyl('feed', 0.06, 0.7, 0.05, 0.1, 0.62, 'olived', vs=8, ry=math.pi/2))
     parts.append(cyl('stack', 0.05, 0.35, 0.62, 0.55, 0.72, 'olived', vs=8))
+    # W4-08: wall pilaster ribs, roof vents + elbow pipe, cooling heat rim
+    for i in range(4):
+        parts.append(box(f'ribx{i}', 0.06, 1.56, 0.46, -0.6 + i * 0.4, 0, 0.10, 'olived', 0.01))
+    parts.append(box('vent1', 0.18, 0.28, 0.10, 0.15, -0.35, 0.66, 'olived', 0.01))
+    parts.append(box('vent2', 0.18, 0.28, 0.10, 0.45, 0.15, 0.66, 'olived', 0.01))
+    parts.append(cyl('vpipe', 0.035, 0.3, 0.15, -0.2, 0.72, 'olived', vs=8, rx=0.8))
+    parts.append(cyl('coolglow', 0.27, 0.02, -0.35, 0.1, 1.00, 'glow', vs=14, emit=1.4))
     # W4-02: lit window strip on the hall wall, red beacon on the stack top
     parts.append(box('win', 0.02, 0.9, 0.08, 0.76, 0, 0.30, 'glow', 0.005, emit=1.6))
     parts.append(cyl('bcn', 0.02, 0.05, 0.62, 0.55, 0.92, 'beacon', vs=6, emit=3.0))
@@ -364,6 +410,18 @@ def com_construction_yard():
     for i in range(3):   # stacked plate cargo between the halls
         parts.append(box(f'plate{i}', 0.5 - i * 0.08, 0.4 - i * 0.05, 0.06, 0.45, 0, 0.11 + i * 0.06, 'plate' if i % 2 else 'olived', 0.01))
     parts.append(cyl('drum', 0.12, 0.2, -0.5, 0, 0.12, 'ferrite', vs=12, ry=math.pi/2))
+    # W4-08: legs + cross-braces connect the gantry to the ground (the crane
+    # read as detached white sticks), ferrite-striped trolley, more clutter
+    for lx in (-0.62, 0.62):
+        for ly in (-0.55, 0.55):
+            parts.append(cyl(f'leg{lx}{ly}', 0.045, 0.82, lx, ly, 0.41, 'olived', vs=8))
+    for n, (bx, brx) in enumerate([(-0.62, 0.9), (-0.62, -0.9), (0.62, 0.9), (0.62, -0.9)]):
+        br = box(f'brace{n}', 0.04, 0.7, 0.05, bx, 0, 0.62, 'olived', 0.01)
+        br.rotation_euler = (brx, 0, 0)
+        parts.append(br)
+    parts.append(box('trolleymark', 0.17, 0.21, 0.02, 0, 0.15, 0.895, 'ferrite', 0.005))
+    parts.append(cyl('drum2', 0.12, 0.2, -0.5, 0.28, 0.12, 'olived', vs=12, ry=math.pi/2))
+    parts.append(box('pallet', 0.4, 0.3, 0.04, 0.45, -0.45, 0.10, 'gundark', 0.008))
     return join(parts, 'com_construction_yard')
 
 def dir_turret():
@@ -428,13 +486,53 @@ def com_service_depot():
     return join(parts, 'com_service_depot')
 
 def ferrite_cluster(scale=1.0):
+    # W4-07: seven faceted truncated shards in GOLD body material with small
+    # emissive tips plus base rubble. The old whole-emissive cones clamped
+    # white in the LDR emit bake; keeping the bodies non-emissive is what
+    # finally lets the resource read gold.
+    import random
+    rnd = random.Random(7)
     objs = []
-    for i, (dx, dy, h, r) in enumerate([(-0.4,0.1,0.7,0.2),(0.1,-0.2,1.0,0.26),(0.5,0.25,0.55,0.16),(-0.1,0.45,0.45,0.14)]):
-        bpy.ops.mesh.primitive_cone_add(radius1=r*scale, depth=h*scale, vertices=6, location=(dx*scale, dy*scale, h*scale/2))
-        o = bpy.context.object; o.name = f'c{i}'
-        o.rotation_euler = (0.1*i, 0.08*i, i*0.9)
-        o.data.materials.append(mat('fhi', emit=1.6, rough=0.3))
+    shards = [(-0.42, 0.12, 0.95, 0.16), (0.05, -0.22, 1.35, 0.22),
+              (0.5, 0.28, 0.7, 0.13), (-0.12, 0.5, 0.55, 0.11),
+              (0.3, -0.45, 0.8, 0.14), (-0.55, -0.3, 0.5, 0.10),
+              (0.62, -0.05, 0.45, 0.09)]
+    def _facet(o):
+        # Raw primitives put every vertex on a sharp edge, and wmat's
+        # pointiness chip mask interpolates across the whole face - the
+        # bodies baked grey, not gold (R/B 1.15 vs the palette's 1.42).
+        # Bevel + subdivide give faces interior verts at pointiness 0.5,
+        # confining chips to edges (measured back at R/B 1.43).
+        md = o.modifiers.new('b', 'BEVEL'); md.width = 0.02; md.segments = 2
+        bpy.ops.object.modifier_apply(modifier='b')
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.subdivide(number_cuts=3)
+        bpy.ops.object.mode_set(mode='OBJECT')
+    for i, (dx, dy, h, r) in enumerate(shards):
+        rot = (rnd.uniform(-0.22, 0.22), rnd.uniform(-0.22, 0.22), rnd.uniform(0, 6.28))
+        bpy.ops.mesh.primitive_cone_add(radius1=r*scale, radius2=r*0.25*scale,
+            depth=h*scale, vertices=5, location=(dx*scale, dy*scale, h*scale*0.45))
+        o = bpy.context.object; o.name = f'shard{i}'
+        o.rotation_euler = rot
+        _facet(o)
+        o.data.materials.append(mat('ferrite', rough=0.35, metal=0.1))
         objs.append(o)
+        bpy.ops.mesh.primitive_cone_add(radius1=r*0.55*scale, radius2=0.02,
+            depth=h*0.38*scale, vertices=5, location=(dx*scale, dy*scale, h*scale*0.78))
+        t = bpy.context.object; t.name = f'tip{i}'
+        t.rotation_euler = rot
+        t.data.materials.append(mat('fhi', emit=2.4, rough=0.3))
+        objs.append(t)
+    for j in range(5):   # base rubble ring
+        a = j * 1.256
+        bpy.ops.mesh.primitive_cube_add(size=0.14*scale,
+            location=(0.55*scale*math.cos(a), 0.55*scale*math.sin(a), 0.05))
+        c = bpy.context.object; c.name = f'rub{j}'
+        c.rotation_euler = (0.3, 0.2, a)
+        _facet(c)   # same chip-mask fix: keep the rubble dark cinder
+        c.data.materials.append(mat('cinder', rough=0.95))
+        objs.append(c)
     return join(objs, 'ferrite_cluster')
 
 
