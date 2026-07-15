@@ -114,6 +114,214 @@ foreach (var (idA, nameA) in types)
         }
     }
 
+// --- STATIC DEFENCE (TICKET-P5-DEF-17) ------------------------------------
+// GDD s6 line 53 ("artillery beats static defence") and ADR-005's stated
+// mitigation for the turtling risk ("a CI gate that proves a walled base
+// falls to a siege army"), turned into a gate that runs on every push.
+//
+// A fortified position - Construction Yard, an oversized power plant, two
+// turrets, optionally a twelve-segment wall line - is besieged by 3000 credits
+// of a single unit type under attack-move. Three wall shapes, and the first of
+// them is the whole reason this section can claim to measure anything:
+//   none   - THE CONTROL. The same fortification with no wall at all. Without
+//            it every number below is unattributable: a siege that succeeds
+//            against a walled base tells you nothing unless you know what the
+//            same siege does against an unwalled one.
+//   gapped - a two-cell doorway the turrets cover. ADR-005 clause 6 is explicit
+//            that this is the intended shape: gates are deferred and "the
+//            player leaves a gap, as players did in 1995".
+//   sealed - the doorway walled up. Pathological (the defender's own units
+//            cannot leave either), but it is the only geometry that exercises
+//            the DEF-05 breach path, so it is where the wall itself is shot.
+//
+// SiegeTicks is deliberately NOT the matrix's 3000-tick cap. That cap was sized
+// for field engagements, which resolve above in 8 to 35 seconds; a siege is a
+// different timescale, and the wall's designed function is to buy time. Capping
+// the siege at 200s would score the wall succeeding as the gate failing.
+const int SiegeTicks = 6000;
+
+// The turtling bound. A sealed wall may buy the turtle at most this many ticks
+// (80 seconds) against a siege army, measured against the unwalled control so
+// map size, army speed and turret dps all cancel out and what remains is the
+// wall's own contribution and nothing else.
+//
+// The number is set by what it has to separate, and both ends are measured
+// rather than asserted: the shipped 500hp wall buys 235 ticks, and a wall
+// regressed to 5000hp buys 1936. 1200 is the round number between them. That
+// is what "the gate bites" means here - it is not a vibe, it has been run in
+// both directions (docs/balance/2026-07-15-turtle-gate.md).
+const int MaxWallDelay = 1200;
+
+(int WallsDead, int TurretsDead, int RazeTick, int SurvPct) Besiege(ulong seed, int atkType, string wall)
+{
+    // A 64x12 corridor. The wall line spans it, so a sealed wall genuinely
+    // seals: on an open map every attacker simply walks around a twelve-segment
+    // line and the wall is never part of the measurement at all.
+    var world = new World(seed, 64, 12, players: 2);
+    // The besieger owns no structure and no MCV, so the victory test would
+    // declare it eliminated on tick 1 (World.VictorySystem). This fixture
+    // measures a siege, not a match; short game off.
+    world.ShortGameEnabled = false;
+    const int midY = 6;
+
+    int cyId = world.SpawnConstructionYard(0, 6, midY - 1);
+    // Draw is 100 (yard) + 20 + 20 (turrets) = 140. One plant, oversized, so
+    // supply >= draw and DEF-10's coming 75% rule cannot silently disarm the
+    // turrets and hand the besieger a free win.
+    world.SpawnPowerPlant(0, 6, midY + 3, supply: 200);
+    int t1 = world.SpawnTurret(0, 16, midY - 4);
+    int t2 = world.SpawnTurret(0, 16, midY + 2);
+
+    var walls = new List<int>();
+    if (wall != "none")
+        for (int k = 0; k < 12; k++)
+        {
+            if (wall == "gapped" && (k == 5 || k == 6)) continue; // the doorway
+            walls.Add(world.SpawnWall(0, 20, k));
+        }
+
+    var def = world.GetUnitType(atkType);
+    int count = ArmyCredits / def.Cost;
+    // Muster in a block: fifteen rifle squads do not fit in one column of a
+    // twelve-cell corridor. Sight is passed from the catalogue rather than left
+    // at SpawnUnit's default of 5 - the DEF-05 breach path only takes a barrier
+    // it can see, so sight is load-bearing here in a way it is not in the unit
+    // matrix above.
+    var atk = new List<int>();
+    const int rows = 8;
+    for (int i = 0; i < count; i++)
+        atk.Add(world.SpawnUnit(1, Fix64.FromInt(50 + i / rows), Fix64.FromInt(midY - Math.Min(count, rows) / 2 + i % rows),
+            def.Speed, def.Hp, def.Armour, def.WeaponId, def.SightCells, unitType: atkType));
+
+    var cmds = new List<Command>();
+    foreach (int u in atk) cmds.Add(new Command(0, 1, CommandType.AttackMove, u, Fix64.FromInt(10), Fix64.FromInt(midY)));
+
+    int razeTick = -1;
+    for (int t = 0; t < SiegeTicks; t++)
+    {
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        if (!world.Entities[cyId].Alive) { razeTick = t + 1; break; }
+    }
+
+    int wallsDead = walls.Count(w => !world.Entities[w].Alive);
+    int turretsDead = (world.Entities[t1].Alive ? 0 : 1) + (world.Entities[t2].Alive ? 0 : 1);
+    int alive = atk.Count(u => world.Entities[u].Alive);
+    return (wallsDead, turretsDead, razeTick, alive * def.Cost * 100 / ArmyCredits);
+}
+
+var besiegers = new (int Id, string Name)[] { (8, "howitzer"), (2, "rifle_squad"), (1, "cannon_tank") };
+var shapes = new[] { "none", "gapped", "sealed" };
+report.AppendLine();
+report.AppendLine("## Static defence: does a walled base fall to a siege army?");
+report.AppendLine();
+report.AppendLine($"Fortification: 1 Construction Yard, 1 power plant (supply 200 >= draw 140), 2 turrets, 12 wall segments (\"none\" is the unwalled control). Besieger: {ArmyCredits} credits of one type, attack-move, cap {SiegeTicks} ticks.");
+report.AppendLine();
+report.AppendLine("| Besieger | Wall | Segments lost | Turrets killed | Yard razed | Army retained | Verdict |");
+report.AppendLine("|---|---|---|---|---|---|---|");
+
+var razeBy = new Dictionary<(int, string), int>();
+foreach (var (id, name) in besiegers)
+    foreach (var shape in shapes)
+    {
+        var rs = seeds.Select(s => Besiege((ulong)s, id, shape)).ToArray();
+        var r = rs[0];
+        // Every seed must agree. The fixture draws no random numbers, so this is
+        // agreement by construction rather than a statistical claim - but it is
+        // a free tripwire for any RNG that leaks into the siege path later.
+        bool seedsAgree = rs.All(x => x.WallsDead == r.WallsDead && x.TurretsDead == r.TurretsDead
+                                   && x.RazeTick == r.RazeTick && x.SurvPct == r.SurvPct);
+        razeBy[(id, shape)] = r.RazeTick;
+        bool breached = r.RazeTick > 0 && r.SurvPct > 30;
+        report.AppendLine($"| {name} | {shape} | {r.WallsDead} | {r.TurretsDead}/2 | {(r.RazeTick > 0 ? "t=" + r.RazeTick : "no")} | {r.SurvPct}% | {(breached ? "BREACHED" : "held")} |");
+
+        if (!seedsAgree)
+        { report.AppendLine($"  - HARD FAIL: {name} vs {shape} wall disagrees across seeds - the siege path has become non-deterministic"); hardFail = true; }
+
+        // THE GATE. Only the howitzer is asserted, and only in the direction GDD
+        // s6 line 53 and ADR-005 commit to: the siege army gets through. The
+        // rifle and cannon rows are REPORTING ONLY - see the note below the
+        // table, and docs/balance/2026-07-15-turtle-gate.md for the working.
+        if (id != 8) continue;
+        if (r.RazeTick < 0)
+        { report.AppendLine($"  - HARD FAIL: artillery did not raze a {shape}-walled base within {SiegeTicks} ticks - GDD s6 line 53 says artillery beats static defence"); hardFail = true; }
+        else if (r.SurvPct <= 30)
+        { report.AppendLine($"  - HARD FAIL: artillery razed the {shape}-walled base but kept only {r.SurvPct}% of its army - a pyrrhic siege is not a counter"); hardFail = true; }
+        if (r.TurretsDead < 2)
+        { report.AppendLine($"  - HARD FAIL: artillery left {2 - r.TurretsDead} turret(s) standing behind a {shape} wall"); hardFail = true; }
+        // The wall is only ever shot when it seals the route: auto-acquire skips
+        // barriers (ADR-005 clause 2) and splash cannot reach a wall flush
+        // against a 2x2 turret (distSq 2.5 against a 2.25 radius), so DEF-05's
+        // breach is the only path to a dead segment.
+        if (shape == "sealed" && r.WallsDead < 1)
+        { report.AppendLine("  - HARD FAIL: artillery razed a sealed base without breaching a single segment - the breach path is dead"); hardFail = true; }
+    }
+
+// THE TURTLING BOUND. This, not the raze itself, is the assertion that can see
+// the wall at all: the raze rows above are within 0 ticks of the unwalled
+// control for a gapped wall, so a gate written on them alone would pass
+// unchanged if barriers were deleted from the game entirely.
+int noneRaze = razeBy[(8, "none")], sealedRaze = razeBy[(8, "sealed")], gappedRaze = razeBy[(8, "gapped")];
+report.AppendLine();
+report.AppendLine("| Artillery siege | Unwalled control | Gapped wall | Sealed wall |");
+report.AppendLine("|---|---|---|---|");
+report.AppendLine($"| Yard razed at tick | {noneRaze} | {gappedRaze} | {sealedRaze} |");
+report.AppendLine($"| Ticks bought by the wall | - | {(gappedRaze > 0 && noneRaze > 0 ? (gappedRaze - noneRaze).ToString() : "n/a")} | {(sealedRaze > 0 && noneRaze > 0 ? (sealedRaze - noneRaze).ToString() : "n/a")} |");
+if (noneRaze < 0)
+{ report.AppendLine("  - HARD FAIL: artillery cannot raze even an UNWALLED fortification - the control is broken, every number above is unattributable"); hardFail = true; }
+else if (sealedRaze > 0 && sealedRaze - noneRaze > MaxWallDelay)
+{
+    report.AppendLine($"  - HARD FAIL: a sealed wall bought the turtle {sealedRaze - noneRaze} ticks against a siege army, over the stated bound of {MaxWallDelay} - turtling is winning");
+    hardFail = true;
+}
+
+report.AppendLine();
+report.AppendLine("FINDING, not a caveat: against artillery a gapped wall - the shape ADR-005 clause 6");
+report.AppendLine("actually intends - is worth ZERO. The yard falls on the same tick with it and without");
+report.AppendLine("it, because the howitzer's range 9 beats the turret's range 5, so it parks outside the");
+report.AppendLine("wall and shells over the top and never has a reason to touch masonry. A sealed wall");
+report.AppendLine("buys 235 ticks, 7% of the siege. \"Artillery beats static defence\" holds, but it holds");
+report.AppendLine("independently of barriers, so this section polices the turret's range and the wall's");
+report.AppendLine("hit points, and cannot police much else. See docs/balance/2026-07-15-turtle-gate.md.");
+report.AppendLine();
+report.AppendLine("Rifle and cannon rows are REPORTING ONLY, and the reason is a finding rather than a");
+report.AppendLine("hedge: neither the ticket's \"zero segments destroyed\" nor a yard-razed test measures");
+report.AppendLine("what it appears to. Segments lost is set by geometry, not by warhead - nothing at all");
+report.AppendLine("shoots a gapped wall, and against a sealed one massed rifles out-chew the howitzer");
+report.AppendLine("(8 segments to 3). Yard-razed inverts under a different order: told to Attack the yard");
+report.AppendLine("directly, rifles raze it at t=767 losing nothing while the howitzer walks into its own");
+report.AppendLine("3-cell dead zone and dies to the last unit. Under attack-move the negative controls");
+report.AppendLine("hold only because the stall-cancel at World.cs:1488 drops AMove for good and parks them");
+report.AppendLine("short of the yard. Gating on that would gate an artefact. These rows are recorded every");
+report.AppendLine("run so the trend is visible; promoting them to blocking is gated on attack-move");
+report.AppendLine("prosecuting a base to the finish, per the faction-war precedent below.");
+
+// COST EFFICIENCY (DEF-17 clause 3). The wall is deliberately the cheapest hit
+// points in the game - that is what a wall IS - and it is paid for by having no
+// gun, no vision, no adjacency for real buildings, an 80-segment cap and splash
+// vulnerability. The bound stops a later tuning pass from quietly making walls
+// free. Integer maths: hp per credit x100, bound 800 (= 8.0).
+report.AppendLine();
+report.AppendLine("## Cost efficiency: hit points per credit");
+report.AppendLine();
+report.AppendLine("| Thing | Hit points | Cost | Hp per credit |");
+report.AppendLine("|---|---|---|---|");
+var wallDef = World.GetStructureType(9);
+const int WallHp = 500, TurretHp = 400;   // SpawnWall / SpawnTurret
+int wallHpPerCreditX100 = WallHp * 100 / wallDef.Cost;
+int turretHpPerCreditX100 = TurretHp * 100 / World.GetStructureType(5).Cost;
+var tankDef = new World(1, 8, 8, players: 1).GetUnitType(1);
+int tankHpPerCreditX100 = tankDef.Hp * 100 / tankDef.Cost;
+string Hpc(int x100) => $"{x100 / 100}.{x100 % 100:D2}";
+report.AppendLine($"| wall segment | {WallHp} | {wallDef.Cost} | {Hpc(wallHpPerCreditX100)} |");
+report.AppendLine($"| turret | {TurretHp} | {World.GetStructureType(5).Cost} | {Hpc(turretHpPerCreditX100)} |");
+report.AppendLine($"| cannon tank | {tankDef.Hp} | {tankDef.Cost} | {Hpc(tankHpPerCreditX100)} |");
+if (wallHpPerCreditX100 > 800)
+{
+    report.AppendLine($"  - HARD FAIL: a wall buys {Hpc(wallHpPerCreditX100)} hp per credit, over the stated bound of 8.0 - the cheapest hit points in the game have become free ones");
+    hardFail = true;
+}
+
 // Harvester tempo (TICKET-P2-BAL-02): the standard opening layout, run for
 // 3000 ticks, measured in delivered credits. Factions currently share one
 // economy so the sides must match exactly; the committed baseline number is
