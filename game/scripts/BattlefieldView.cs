@@ -337,6 +337,11 @@ public static class BattlefieldView
         // W4-13: the full blocked set, hoisted before any loop so ridge
         // cells can classify their neighbours.
         var blockedSet = new HashSet<(int, int)>(blockedCells);
+        // MAP-03: the scatter counts below were tuned by eye at 96x64, as
+        // absolute numbers, so a 192x128 map spread the same confetti over
+        // four times the ground and read as bare. Scale by area instead. At
+        // 96x64 this is exactly 1.0, so the three shipped maps are untouched.
+        float densityScale = (w * h) / 6144f;
         // W4-14: water cells drive shore ramps and the flat-cell mask.
         var waterCells = new HashSet<(int, int)>();
         foreach (var (cell, kind) in visual)
@@ -522,6 +527,46 @@ public static class BattlefieldView
         // W4-13: talus debris at ridge feet folds into the rubble MultiMesh
         // as extra instances rather than per-piece nodes.
         var talus = new List<(Transform3D Xform, Color Shade)>();
+
+        // MAP-01: every per-cell dressing piece below used to be its own
+        // MeshInstance3D, so terrain cost one draw call per piece and a
+        // 192x128 map wanted about 6100 of them. The pieces are only ever a
+        // box or a sphere, so they batch into one MultiMesh per material:
+        // same meshes, same transforms, same materials, same picture, an
+        // eleventh of the nodes. Emit collects; the loops below fill it; the
+        // batches are materialised once after the bridge loop.
+        var box = new BoxMesh { Size = Vector3.One };      // UNIT box; instance scale carries the real size
+        var batches = new Dictionary<Material, List<Transform3D>>();
+
+        // Hills need their own treatment, and this is the one real trap in the
+        // batching. Godot builds a MultiMesh instance's normal matrix as
+        // mat3(instance_transform) rather than its inverse-transpose, so a
+        // NON-UNIFORM per-instance scale skews the normals. On a box that is
+        // harmless: a box's face normals lie along the scale axes, so scaling
+        // by (a,b,c) sends (1,0,0) to (a,0,0), which renormalises straight back.
+        // On a sphere it is not: the normals are not axis-aligned, and squashing
+        // a unit sphere per-instance turns these matte Roughness-0.95 mounds
+        // into glossy plastic. MEASURED, not theorised - the offscreen A/B of
+        // skirmish-03 shows it plainly, and forcing the scale uniform removes it.
+        // So bucket the hills by their squash ratio k = (hh/2)/hr, give each
+        // bucket a sphere BUILT at that ratio (correct baked normals), and keep
+        // the per-instance scale UNIFORM, where mat3() is exactly right.
+        // Eight buckets puts the height error under 4%, which is invisible;
+        // the shading error it removes is not. Cost: <=8 draw calls, not one.
+        const int hillBuckets = 8;
+        const float kMin = 0.577f, kMax = 1.048f;  // (hh/2)/hr over the generator's ranges
+        var hillBins = new List<Transform3D>[hillBuckets];
+        // Scale is composed on the RIGHT (basis * FromScale) so it applies in
+        // the piece's LOCAL frame, which is what Node3D.Scale did and what
+        // BoxMesh.Size means. Basis.Scaled() would apply it in the global
+        // frame instead: measured, that turns the 0.02-thick shore ramps into
+        // 0.118-thick wedges at the wrong tilt. Do not "simplify" this.
+        void Emit(Material mat, Vector3 size, Vector3 pos, Vector3 rotEuler)
+        {
+            if (!batches.TryGetValue(mat, out var l)) batches[mat] = l = new List<Transform3D>();
+            l.Add(new Transform3D(Basis.FromEuler(rotEuler) * Basis.FromScale(size), pos));
+        }
+
         foreach (var (bx, by) in blockedCells)
         {
             char kind = visual.GetValueOrDefault((bx, by), '#');
@@ -530,12 +575,8 @@ public static class BattlefieldView
                 case 'w':
                     // Water: a sunken reflective slab; the shore lip is the
                     // ground plane edge reading against it.
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(1.02f, 0.1f, 1.02f) },
-                        Position = new Vector3(bx + 0.5f, -0.12f, by + 0.5f),
-                        MaterialOverride = waterMat,
-                    });
+                    Emit(waterMat, new Vector3(1.02f, 0.1f, 1.02f),
+                        new Vector3(bx + 0.5f, -0.12f, by + 0.5f), Vector3.Zero);
                     // W4-14 Part B/C: on each edge that meets ground, a wet
                     // ramp descending from the ground lip to the waterline,
                     // and a faint foam line just inside the water cell.
@@ -543,115 +584,73 @@ public static class BattlefieldView
                     // rotation signs verified against the capture.
                     if (!waterCells.Contains((bx - 1, by)))
                     {
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.36f, 0.02f, 1.04f) },
-                            Position = new Vector3(bx + 0.17f, -0.05f, by + 0.5f),
-                            Rotation = new Vector3(0, 0, -0.33f),
-                            MaterialOverride = shoreMat,
-                        });
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.012f, 1.04f) },
-                            Position = new Vector3(bx + 0.04f, -0.065f, by + 0.5f),
-                            MaterialOverride = foamMat,
-                        });
+                        Emit(shoreMat, new Vector3(0.36f, 0.02f, 1.04f),
+                            new Vector3(bx + 0.17f, -0.05f, by + 0.5f), new Vector3(0, 0, -0.33f));
+                        Emit(foamMat, new Vector3(0.07f, 0.012f, 1.04f),
+                            new Vector3(bx + 0.04f, -0.065f, by + 0.5f), Vector3.Zero);
                     }
                     if (!waterCells.Contains((bx + 1, by)))
                     {
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.36f, 0.02f, 1.04f) },
-                            Position = new Vector3(bx + 0.83f, -0.05f, by + 0.5f),
-                            Rotation = new Vector3(0, 0, 0.33f),
-                            MaterialOverride = shoreMat,
-                        });
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.012f, 1.04f) },
-                            Position = new Vector3(bx + 0.96f, -0.065f, by + 0.5f),
-                            MaterialOverride = foamMat,
-                        });
+                        Emit(shoreMat, new Vector3(0.36f, 0.02f, 1.04f),
+                            new Vector3(bx + 0.83f, -0.05f, by + 0.5f), new Vector3(0, 0, 0.33f));
+                        Emit(foamMat, new Vector3(0.07f, 0.012f, 1.04f),
+                            new Vector3(bx + 0.96f, -0.065f, by + 0.5f), Vector3.Zero);
                     }
                     if (!waterCells.Contains((bx, by - 1)))
                     {
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.02f, 0.36f) },
-                            Position = new Vector3(bx + 0.5f, -0.05f, by + 0.17f),
-                            Rotation = new Vector3(0.33f, 0, 0),
-                            MaterialOverride = shoreMat,
-                        });
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.012f, 0.07f) },
-                            Position = new Vector3(bx + 0.5f, -0.065f, by + 0.04f),
-                            MaterialOverride = foamMat,
-                        });
+                        Emit(shoreMat, new Vector3(1.04f, 0.02f, 0.36f),
+                            new Vector3(bx + 0.5f, -0.05f, by + 0.17f), new Vector3(0.33f, 0, 0));
+                        Emit(foamMat, new Vector3(1.04f, 0.012f, 0.07f),
+                            new Vector3(bx + 0.5f, -0.065f, by + 0.04f), Vector3.Zero);
                     }
                     if (!waterCells.Contains((bx, by + 1)))
                     {
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.02f, 0.36f) },
-                            Position = new Vector3(bx + 0.5f, -0.05f, by + 0.83f),
-                            Rotation = new Vector3(-0.33f, 0, 0),
-                            MaterialOverride = shoreMat,
-                        });
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.012f, 0.07f) },
-                            Position = new Vector3(bx + 0.5f, -0.065f, by + 0.96f),
-                            MaterialOverride = foamMat,
-                        });
+                        Emit(shoreMat, new Vector3(1.04f, 0.02f, 0.36f),
+                            new Vector3(bx + 0.5f, -0.05f, by + 0.83f), new Vector3(-0.33f, 0, 0));
+                        Emit(foamMat, new Vector3(1.04f, 0.012f, 0.07f),
+                            new Vector3(bx + 0.5f, -0.065f, by + 0.96f), Vector3.Zero);
                     }
                     break;
                 case 'h':
                     // Hill: a broad smooth mound (sphere squashed flat), so
-                    // clusters merge into rolling high ground.
+                    // clusters merge into rolling high ground. The two
+                    // NextDouble calls stay in their original order: the rng is
+                    // shared across every cell, so reordering them would
+                    // reshuffle the whole map.
                     float hr = 1.05f + (float)rng.NextDouble() * 0.25f;
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new SphereMesh { Radius = hr, Height = 1.5f + (float)rng.NextDouble() * 0.7f, RadialSegments = 14, Rings = 7 },
-                        Position = new Vector3(bx + 0.5f, -0.15f, by + 0.5f),
-                        MaterialOverride = hillMat,
-                    });
+                    float hh = 1.5f + (float)rng.NextDouble() * 0.7f;
+                    // Bucket by squash ratio; the bucket's mesh carries the
+                    // squash, the instance carries only a uniform scale.
+                    int hb = Mathf.Clamp(
+                        (int)((hh / 2f / hr - kMin) / (kMax - kMin) * hillBuckets),
+                        0, hillBuckets - 1);
+                    (hillBins[hb] ??= new List<Transform3D>()).Add(new Transform3D(
+                        Basis.FromScale(new Vector3(hr, hr, hr)),
+                        new Vector3(bx + 0.5f, -0.15f, by + 0.5f)));
                     break;
                 case 'r':
                     // Ruin: broken wall stubs at jittered heights - a dead
                     // settlement to fight through.
                     float wh = 0.35f + (float)rng.NextDouble() * 0.5f;
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(0.9f, wh, 0.9f) },
-                        Position = new Vector3(bx + 0.5f, wh / 2f, by + 0.5f),
-                        Rotation = new Vector3(0, ((float)rng.NextDouble() - 0.5f) * 0.3f, 0),
-                        MaterialOverride = ruinMat,
-                    });
+                    float ryaw = ((float)rng.NextDouble() - 0.5f) * 0.3f;
+                    Emit(ruinMat, new Vector3(0.9f, wh, 0.9f),
+                        new Vector3(bx + 0.5f, wh / 2f, by + 0.5f), new Vector3(0, ryaw, 0));
                     if (rng.NextDouble() > 0.6)
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.4f, wh * 1.6f, 0.3f) },
-                            Position = new Vector3(bx + 0.3f + (float)rng.NextDouble() * 0.4f, wh * 0.8f, by + 0.3f + (float)rng.NextDouble() * 0.4f),
-                            MaterialOverride = ruinMat,
-                        });
+                    {
+                        float sx = bx + 0.3f + (float)rng.NextDouble() * 0.4f;
+                        float sz = by + 0.3f + (float)rng.NextDouble() * 0.4f;
+                        Emit(ruinMat, new Vector3(0.4f, wh * 1.6f, 0.3f),
+                            new Vector3(sx, wh * 0.8f, sz), Vector3.Zero);
+                    }
                     break;
                 case 'f':
                     // Fence: posts and two rails along the cell.
                     for (int px = 0; px < 2; px++)
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(0.07f, 0.5f, 0.07f) },
-                            Position = new Vector3(bx + 0.2f + px * 0.6f, 0.25f, by + 0.5f),
-                            MaterialOverride = fenceMat,
-                        });
+                        Emit(fenceMat, new Vector3(0.07f, 0.5f, 0.07f),
+                            new Vector3(bx + 0.2f + px * 0.6f, 0.25f, by + 0.5f), Vector3.Zero);
                     for (int rail = 0; rail < 2; rail++)
-                        parent.AddChild(new MeshInstance3D
-                        {
-                            Mesh = new BoxMesh { Size = new Vector3(1.0f, 0.05f, 0.05f) },
-                            Position = new Vector3(bx + 0.5f, 0.18f + rail * 0.22f, by + 0.5f),
-                            MaterialOverride = fenceMat,
-                        });
+                        Emit(fenceMat, new Vector3(1.0f, 0.05f, 0.05f),
+                            new Vector3(bx + 0.5f, 0.18f + rail * 0.22f, by + 0.5f), Vector3.Zero);
                     break;
                 default:
                     // W4-13: classify rim vs interior; per-cell deterministic
@@ -664,38 +663,29 @@ public static class BattlefieldView
                     float jh = boundary
                         ? 0.75f + (float)crng.NextDouble() * 0.55f
                         : 0.95f + (float)crng.NextDouble() * 0.55f;
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(1.18f, jh, 1.18f) },
-                        Position = new Vector3(bx + 0.5f, jh / 2f - 0.06f, by + 0.5f),
-                        Rotation = new Vector3(
-                            ((float)crng.NextDouble() - 0.5f) * 0.10f,
-                            ((float)crng.NextDouble() - 0.5f) * 0.5f,
-                            ((float)crng.NextDouble() - 0.5f) * 0.10f),
-                        MaterialOverride = ridgeMat,
-                    });
+                    // Three crng draws for the jitter, in their original X/Y/Z
+                    // order - crng is per-cell, but the order still decides
+                    // which value lands on which axis.
+                    float jx = ((float)crng.NextDouble() - 0.5f) * 0.10f;
+                    float jy = ((float)crng.NextDouble() - 0.5f) * 0.5f;
+                    float jz = ((float)crng.NextDouble() - 0.5f) * 0.10f;
+                    Emit(ridgeMat, new Vector3(1.18f, jh, 1.18f),
+                        new Vector3(bx + 0.5f, jh / 2f - 0.06f, by + 0.5f),
+                        new Vector3(jx, jy, jz));
                     if (!boundary) break;
                     // Boundary cells: stepped strata plus a dust-capped top.
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(1.30f, jh * 0.38f, 1.30f) },
-                        Position = new Vector3(bx + 0.5f, jh * 0.19f - 0.06f, by + 0.5f),
-                        Rotation = new Vector3(0, ((float)crng.NextDouble() - 0.5f) * 0.12f, 0),
-                        MaterialOverride = cliffBaseMat,
-                    });
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(1.22f, jh * 0.30f, 1.22f) },
-                        Position = new Vector3(bx + 0.5f, jh * 0.55f - 0.06f, by + 0.5f),
-                        Rotation = new Vector3(0, ((float)crng.NextDouble() - 0.5f) * 0.18f, 0),
-                        MaterialOverride = ridgeMat,
-                    });
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(1.08f, 0.07f, 1.08f) },
-                        Position = new Vector3(bx + 0.5f, jh - 0.04f, by + 0.5f),
-                        MaterialOverride = groundShader, // dust-capped mesa read
-                    });
+                    Emit(cliffBaseMat, new Vector3(1.30f, jh * 0.38f, 1.30f),
+                        new Vector3(bx + 0.5f, jh * 0.19f - 0.06f, by + 0.5f),
+                        new Vector3(0, ((float)crng.NextDouble() - 0.5f) * 0.12f, 0));
+                    Emit(ridgeMat, new Vector3(1.22f, jh * 0.30f, 1.22f),
+                        new Vector3(bx + 0.5f, jh * 0.55f - 0.06f, by + 0.5f),
+                        new Vector3(0, ((float)crng.NextDouble() - 0.5f) * 0.18f, 0));
+                    // Dust-capped mesa read: the ground shader on a thin slab,
+                    // so the cap picks up the same world-space splat as the
+                    // ground below it. MODEL_MATRIX carries the MultiMesh
+                    // instance transform, so wpos is unchanged by batching.
+                    Emit(groundShader, new Vector3(1.08f, 0.07f, 1.08f),
+                        new Vector3(bx + 0.5f, jh - 0.04f, by + 0.5f), Vector3.Zero);
                     // Talus skirt: small debris boxes at the ridge foot,
                     // folded into the rubble MultiMesh below.
                     int tn = 5 + crng.Next(5);
@@ -725,42 +715,71 @@ public static class BattlefieldView
         {
             if (kind != 'B') continue;
             var (bx, by) = cell;
-            parent.AddChild(new MeshInstance3D
-            {
-                Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.1f, 1.04f) },
-                Position = new Vector3(bx + 0.5f, 0.05f, by + 0.5f),
-                MaterialOverride = deckMat,
-            });
+            Emit(deckMat, new Vector3(1.04f, 0.1f, 1.04f),
+                new Vector3(bx + 0.5f, 0.05f, by + 0.5f), Vector3.Zero);
             foreach (float off in new[] { -0.46f, 0.46f })
-                parent.AddChild(new MeshInstance3D
-                {
-                    Mesh = new BoxMesh { Size = new Vector3(0.08f, 0.16f, 1.04f) },
-                    Position = new Vector3(bx + 0.5f + off, 0.14f, by + 0.5f),
-                    MaterialOverride = fenceMat,
-                });
+                Emit(fenceMat, new Vector3(0.08f, 0.16f, 1.04f),
+                    new Vector3(bx + 0.5f + off, 0.14f, by + 0.5f), Vector3.Zero);
             // W4-18: support piers descending into the water slab, an
             // under-deck cross-beam, and kerb posts breaking the rail line.
             foreach (float px in new[] { 0.22f, 0.78f })
-                parent.AddChild(new MeshInstance3D
-                {
-                    Mesh = new BoxMesh { Size = new Vector3(0.14f, 0.55f, 0.14f) },
-                    Position = new Vector3(bx + px, -0.28f, by + 0.5f),
-                    MaterialOverride = ridgeMat,
-                });
-            parent.AddChild(new MeshInstance3D
-            {
-                Mesh = new BoxMesh { Size = new Vector3(1.04f, 0.06f, 0.2f) },
-                Position = new Vector3(bx + 0.5f, -0.02f, by + 0.5f),
-                MaterialOverride = fenceMat,
-            });
+                Emit(ridgeMat, new Vector3(0.14f, 0.55f, 0.14f),
+                    new Vector3(bx + px, -0.28f, by + 0.5f), Vector3.Zero);
+            Emit(fenceMat, new Vector3(1.04f, 0.06f, 0.2f),
+                new Vector3(bx + 0.5f, -0.02f, by + 0.5f), Vector3.Zero);
             foreach (float off in new[] { -0.46f, 0.46f })
                 foreach (float pz in new[] { 0.15f, 0.85f })
-                    parent.AddChild(new MeshInstance3D
-                    {
-                        Mesh = new BoxMesh { Size = new Vector3(0.06f, 0.22f, 0.06f) },
-                        Position = new Vector3(bx + 0.5f + off, 0.16f, by + pz),
-                        MaterialOverride = fenceMat,
-                    });
+                    Emit(fenceMat, new Vector3(0.06f, 0.22f, 0.06f),
+                        new Vector3(bx + 0.5f + off, 0.16f, by + pz), Vector3.Zero);
+        }
+
+        // MAP-01: both loops have contributed, so materialise the batches.
+        // One MultiMesh per material, every box-shaped batch sharing the unit
+        // box (a MultiMesh carries exactly one Mesh, which is precisely why
+        // batching by Material is the right and sufficient key).
+        // CastShadow stays at its default On: the shipped per-cell nodes cast
+        // shadows and the doc-20 look leans on ridge and hill shadows. Only
+        // the scatter MultiMeshes below turn shadows off, as they already did.
+        // UseColors stays false: none of the per-cell terrain tints instances.
+        foreach (var (mat, xforms) in batches)
+        {
+            var tmm = new MultiMesh
+            {
+                TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                Mesh = box,
+                InstanceCount = xforms.Count,
+            };
+            for (int i = 0; i < xforms.Count; i++) tmm.SetInstanceTransform(i, xforms[i]);
+            parent.AddChild(new MultiMeshInstance3D
+            {
+                Multimesh = tmm,
+                MaterialOverride = mat,
+                Name = "TerrainBatch",
+            });
+        }
+        // One batch per populated hill bucket, each with a sphere built at that
+        // bucket's squash so its baked normals are right under a uniform scale.
+        for (int b = 0; b < hillBuckets; b++)
+        {
+            var bin = hillBins[b];
+            if (bin == null || bin.Count == 0) continue;
+            float kMid = kMin + (b + 0.5f) * (kMax - kMin) / hillBuckets;
+            var hmm = new MultiMesh
+            {
+                TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                Mesh = new SphereMesh
+                {
+                    Radius = 1f, Height = 2f * kMid, RadialSegments = 14, Rings = 7,
+                },
+                InstanceCount = bin.Count,
+            };
+            for (int i = 0; i < bin.Count; i++) hmm.SetInstanceTransform(i, bin[i]);
+            parent.AddChild(new MultiMeshInstance3D
+            {
+                Multimesh = hmm,
+                MaterialOverride = hillMat,
+                Name = $"Hills{b}",
+            });
         }
 
         // W4-12: rubble scatter as ONE MultiMeshInstance3D at 10x density
@@ -776,15 +795,20 @@ public static class BattlefieldView
         };
         var rubbleMesh = new BoxMesh { Size = new Vector3(1f, 0.7f, 1f) };
         rubbleMesh.Material = rubbleMat;
+        // MAP-03: 2200 was the 96x64 count. It appears three times - the
+        // instance count, the loop bound, and the base index the talus fold
+        // writes above - and all three must move together or the fold indexes
+        // off the end of the MultiMesh.
+        int rubbleN = Scaled(2200, densityScale);
         var mm = new MultiMesh
         {
             TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
             UseColors = true,
             Mesh = rubbleMesh,
-            InstanceCount = 2200 + talus.Count,
+            InstanceCount = rubbleN + talus.Count,
         };
         var zeroScale = new Transform3D(Basis.Identity.Scaled(Vector3.Zero), Vector3.Zero);
-        for (int i = 0; i < 2200; i++)
+        for (int i = 0; i < rubbleN; i++)
         {
             float rx = (float)rng.NextDouble() * w, rz = (float)rng.NextDouble() * h;
             // Clustered by noise so the field does not read as uniform static.
@@ -808,9 +832,15 @@ public static class BattlefieldView
         }
         for (int i = 0; i < talus.Count; i++)
         {
-            mm.SetInstanceTransform(2200 + i, talus[i].Xform);
-            mm.SetInstanceColor(2200 + i, talus[i].Shade);
+            mm.SetInstanceTransform(rubbleN + i, talus[i].Xform);
+            mm.SetInstanceColor(rubbleN + i, talus[i].Shade);
         }
+        // MAP-03: the fold above is the one index-arithmetic trap in this
+        // file. If the count and the base ever disagree the write runs off
+        // the end, so say so out loud rather than trusting the edit.
+        if (mm.InstanceCount != rubbleN + talus.Count)
+            throw new System.InvalidOperationException(
+                $"rubble MultiMesh sized {mm.InstanceCount} but holds {rubbleN} + {talus.Count} talus");
         parent.AddChild(new MultiMeshInstance3D
         {
             Multimesh = mm,
@@ -818,14 +848,22 @@ public static class BattlefieldView
             Name = "Rubble",
         });
 
-        BuildScatter(parent, w, h, blockedSet, visual);
+        BuildScatter(parent, w, h, blockedSet, visual, densityScale);
     }
+
+    /// <summary>MAP-03: scatter counts were tuned as absolutes at 96x64
+    /// (6144 cells). Scale them by map area so per-cell density is what the
+    /// W4-12/W4-15 passes chose, whatever size the map is. At 96x64 the
+    /// factor is exactly 1.0 and every count is its shipped value.</summary>
+    private static int Scaled(int baseCount, float densityScale)
+        => Mathf.RoundToInt(baseCount * densityScale);
 
     /// <summary>W4-15: prop variety scatter - dead-grass tufts, low rock
     /// clusters hugging ridge feet, flat plate debris around ruins. Three
     /// MultiMeshes, zero-scaled rejects, all riding GroundHeight.</summary>
     private static void BuildScatter(Node3D parent, int w, int h,
-        HashSet<(int, int)> blockedSet, IReadOnlyDictionary<(int, int), char> visual)
+        HashSet<(int, int)> blockedSet, IReadOnlyDictionary<(int, int), char> visual,
+        float densityScale)
     {
         var rng = new System.Random(2027);
         var density = _groundNoise!;
@@ -876,14 +914,15 @@ public static class BattlefieldView
             Roughness = 1.0f,
             VertexColorUseAsAlbedo = true,
         });
+        int tuftN = Scaled(900, densityScale);
         var tufts = new MultiMesh
         {
             TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
             UseColors = true,
             Mesh = tuftMesh,
-            InstanceCount = 900,
+            InstanceCount = tuftN,
         };
-        for (int i = 0; i < 900; i++)
+        for (int i = 0; i < tuftN; i++)
         {
             float rx = (float)rng.NextDouble() * w, rz = (float)rng.NextDouble() * h;
             var cell = ((int)rx, (int)rz);
@@ -920,14 +959,15 @@ public static class BattlefieldView
             Roughness = 0.95f,
             VertexColorUseAsAlbedo = true,
         };
+        int rockN = Scaled(350, densityScale);
         var rocks = new MultiMesh
         {
             TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
             UseColors = true,
             Mesh = rockMesh,
-            InstanceCount = 350,
+            InstanceCount = rockN,
         };
-        for (int i = 0; i < 350; i++)
+        for (int i = 0; i < rockN; i++)
         {
             float rx, rz;
             if (boundary.Count > 0 && rng.NextDouble() < 0.6)
@@ -977,14 +1017,15 @@ public static class BattlefieldView
             Roughness = 0.95f,
             VertexColorUseAsAlbedo = true,
         };
+        int plateN = Scaled(250, densityScale);
         var plates = new MultiMesh
         {
             TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
             UseColors = true,
             Mesh = plateMesh,
-            InstanceCount = 250,
+            InstanceCount = plateN,
         };
-        for (int i = 0; i < 250; i++)
+        for (int i = 0; i < plateN; i++)
         {
             float rx, rz;
             if (ruins.Count > 0 && rng.NextDouble() < 0.5)
