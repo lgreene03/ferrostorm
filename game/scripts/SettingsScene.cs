@@ -100,6 +100,15 @@ public partial class SettingsScene : Control
 
     // ---------------- audio ----------------
 
+    /// <summary>
+    /// The four bus sliders. Each APPLIES on every change, because the whole
+    /// point of an audio slider is hearing it move, but it does NOT save on
+    /// every change: ValueChanged fires once per frame across a drag, and a
+    /// settings page that rewrites its config file sixty times a second while
+    /// you drag a slider is a settings page doing sixty times the disk work it
+    /// needs to. Saving is left to SaveSoon, which coalesces a drag into one
+    /// write, and to BACK, which is the only way out of this scene.
+    /// </summary>
     private void BuildAudio(VBoxContainer v)
     {
         v.AddChild(Section("AUDIO"));
@@ -107,26 +116,55 @@ public partial class SettingsScene : Control
         {
             Settings.MasterVolume = val;
             AudioBuses.SetVolume(AudioBuses.Master, val);
-            Settings.Save();
+            SaveSoon();
         });
         Slider(v, "EFFECTS", () => Settings.SfxVolume, val =>
         {
             Settings.SfxVolume = val;
             AudioBuses.SetVolume(AudioBuses.Sfx, val);
-            Settings.Save();
+            SaveSoon();
         });
         Slider(v, "INTERFACE", () => Settings.UiVolume, val =>
         {
             Settings.UiVolume = val;
             AudioBuses.SetVolume(AudioBuses.Ui, val);
-            Settings.Save();
+            SaveSoon();
         });
         Slider(v, "AMBIENCE", () => Settings.AmbientVolume, val =>
         {
             Settings.AmbientVolume = val;
             AudioBuses.SetVolume(AudioBuses.Ambient, val);
-            Settings.Save();
+            SaveSoon();
         });
+    }
+
+    /// <summary>Coalesce a burst of changes into one write a short while after
+    /// the last of them. A drag is one save, not one per frame.</summary>
+    private void SaveSoon()
+    {
+        _saveDue = SaveDelay;
+        _savePending = true;
+    }
+
+    private const double SaveDelay = 0.4;
+    private double _saveDue;
+    private bool _savePending;
+
+    public override void _Process(double delta)
+    {
+        if (!_savePending) return;
+        _saveDue -= delta;
+        if (_saveDue > 0) return;
+        _savePending = false;
+        Settings.Save();
+    }
+
+    /// <summary>Never leave a pending write behind: whatever the player last
+    /// dragged must be on disk before this scene stops existing, whether they
+    /// left through BACK or the tree came down under them.</summary>
+    public override void _ExitTree()
+    {
+        if (_savePending) { _savePending = false; Settings.Save(); }
     }
 
     // ---------------- video ----------------
