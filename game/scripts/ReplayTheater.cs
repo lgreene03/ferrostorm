@@ -64,6 +64,16 @@ public partial class ReplayTheater : Node3D
         {
             BattlefieldView.DressMobile(node, player);
         }
+        if (kind == 3) // W4-17: amber ground stain under ferrite deposits
+            node.AddChild(new Decal
+            {
+                TextureAlbedo = BattlefieldView.FerriteStainTex(),
+                TextureEmission = BattlefieldView.FerriteStainTex(),
+                EmissionEnergy = 0.6f,
+                Size = new Vector3(3.2f, 1.2f, 3.2f),
+                Position = new Vector3(0, 0.3f, 0),
+                Name = "Stain",
+            });
         AddChild(node);
         _actors[id] = node;
         _kinds[id] = kind;
@@ -104,9 +114,11 @@ public partial class ReplayTheater : Node3D
             int id = e[0].GetInt32(), kind = e[1].GetInt32(), ut = e[2].GetInt32(), pl = e[3].GetInt32();
             float x = e[4].GetInt32() / 100f, z = e[5].GetInt32() / 100f;
             seen.Add(id);
+            // W4-10: actors ride the ground undulation.
+            float gy = BattlefieldView.GroundHeight(x, z);
             if (!_actors.TryGetValue(id, out var node))
-                node = Spawn(id, kind, ut, pl, new Vector3(x, 0, z));
-            _targets[id] = new Vector3(x, 0, z);
+                node = Spawn(id, kind, ut, pl, new Vector3(x, gy, z));
+            _targets[id] = new Vector3(x, gy, z);
             if (kind == 3) // ferrite fades as it drains
             {
                 float g = Mathf.Max(0.2f, e[6].GetInt32() / 12000f);

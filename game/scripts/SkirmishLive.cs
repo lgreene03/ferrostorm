@@ -87,6 +87,10 @@ public partial class SkirmishLive : Node3D
     }
     private readonly Dictionary<int, ActorRig> _rigs = new();
     private readonly Dictionary<int, (Vector3 At, double Until)> _aim = new();
+    // W4-16: tyre-track decals - last stamp position per vehicle, plus a
+    // recycling pool capped at 96 decals.
+    private readonly Dictionary<int, Vector3> _lastTrack = new();
+    private readonly Queue<Decal> _trackPool = new();
     private double _now;
     private GpuParticles3D _dust = null!;
 
@@ -563,7 +567,9 @@ public partial class SkirmishLive : Node3D
             if (!v.Alive) continue;
             seen.Add(v.Id);
             _latest[v.Id] = v;
-            var pos = new Vector3((float)v.X, 0, (float)v.Y);
+            // W4-10: actors ride the ground undulation.
+            var pos = new Vector3((float)v.X,
+                BattlefieldView.GroundHeight((float)v.X, (float)v.Y), (float)v.Y);
             if (!_actors.TryGetValue(v.Id, out var node))
             {
                 node = _models.Instantiate((int)v.Kind, v.UnitType);
@@ -573,6 +579,18 @@ public partial class SkirmishLive : Node3D
                         v.Kind == EntityKind.Harvester ? 1.7f : 1.15f);
                 else if (v.Kind != EntityKind.FerriteField)
                     BattlefieldView.AddContactBlob(node, 2.6f);
+                else
+                    // W4-17: emissive amber stain pooled under the deposit;
+                    // the per-frame drain scale shrinks it as ore is mined.
+                    node.AddChild(new Decal
+                    {
+                        TextureAlbedo = BattlefieldView.FerriteStainTex(),
+                        TextureEmission = BattlefieldView.FerriteStainTex(),
+                        EmissionEnergy = 0.6f,
+                        Size = new Vector3(3.2f, 1.2f, 3.2f),
+                        Position = new Vector3(0, 0.3f, 0),
+                        Name = "Stain",
+                    });
                 AddChild(node);
                 _actors[v.Id] = node;
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
@@ -669,7 +687,7 @@ public partial class SkirmishLive : Node3D
                     hb.Fill.QueueFree();
                     _hpBars.Remove(id);
                 }
-                _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id);
+                _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
             }
 
         _now += dt;
@@ -678,6 +696,43 @@ public partial class SkirmishLive : Node3D
             if (!_targets.TryGetValue(id, out var t)) continue;
             var to = t - node.Position;
             node.Position = node.Position.Lerp(t, dt * 10f);
+            // W4-16: tyre-track decals behind vehicles. Infantry (2/3/11,
+            // plus the untyped starting squads at 0) leave none. Hidden
+            // enemy movement prints nothing (node.Visible carries the
+            // IsVisible result computed above).
+            if (_latest.TryGetValue(id, out var tk) && Mobile(tk.Kind)
+                && (tk.Kind == EntityKind.Harvester
+                    || (tk.Kind == EntityKind.Unit && tk.UnitType is not (0 or 2 or 3 or 11))))
+            {
+                if (!_lastTrack.TryGetValue(id, out var lp))
+                    _lastTrack[id] = node.Position;
+                else if ((node.Position - lp).Length() > 0.55f)
+                {
+                    if (node.Visible)
+                    {
+                        var d = new Decal
+                        {
+                            TextureAlbedo = BattlefieldView.TrackTex(),
+                            Size = new Vector3(0.5f, 1.2f, 0.62f),
+                            AlbedoMix = 1.0f,
+                            Rotation = new Vector3(0, node.Rotation.Y, 0),
+                        };
+                        AddChild(d);
+                        d.GlobalPosition = (node.Position + lp) * 0.5f + new Vector3(0, 0.3f, 0);
+                        var trkTw = d.CreateTween();
+                        trkTw.TweenInterval(8.0);
+                        trkTw.TweenProperty(d, "modulate:a", 0.0f, 6.0f);
+                        trkTw.TweenCallback(Callable.From(d.QueueFree));
+                        _trackPool.Enqueue(d);
+                        while (_trackPool.Count > 96)
+                        {
+                            var old = _trackPool.Dequeue();
+                            if (IsInstanceValid(old)) old.QueueFree();
+                        }
+                    }
+                    _lastTrack[id] = node.Position;
+                }
+            }
             // W3-14: billboard health bars above damaged or selected mobiles.
             if (_latest.TryGetValue(id, out var hv) && Mobile(hv.Kind))
             {
@@ -732,7 +787,9 @@ public partial class SkirmishLive : Node3D
                     {
                         rig.BobPhase += dt * 11f;
                         var bp = node.Position;
-                        bp.Y = Mathf.Abs(Mathf.Sin(rig.BobPhase)) * 0.035f;
+                        // W4-10: bob rides on top of the ground undulation.
+                        bp.Y = BattlefieldView.GroundHeight(bp.X, bp.Z)
+                            + Mathf.Abs(Mathf.Sin(rig.BobPhase)) * 0.035f;
                         node.Position = bp;
                     }
                     // Harvester intake churns while moving
