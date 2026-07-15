@@ -683,3 +683,28 @@ Two things in this roadmap cannot be delegated to any model, cheap or otherwise.
 Changed: this document (docs/design/20-visual-aaa-roadmap.md), new. Sixty-six canonical tickets across five waves plus three superseded duplicates in Appendix A; all specs and acceptance criteria preserved verbatim from the six dimension analyses.
 Assumed: Wave ordering 1 through 5 is dependency-safe as argued in the integration rules; the three captures named by the analysts (feel-v2-real.png, terrain-v2.png, slice-v5.png) remain the fixed verification viewpoints; W5-05 and the integration/supersession notes are roadmap additions by the design reviewer, everything else is analyst text.
 Needed next (from whom): Luke to ratify the wave order and schedule Wave 1; client-engineer agent (cheap model permitted) to execute Waves 1 through 4 under the Section 3 rules; Luke plus a strong model for Wave 5; Luke alone for TICKET-P1-13 contractor contact.
+
+### Wave 5 addendum: findings from the post-Wave-4c showcase pass (2026-07-15)
+
+Two knobs earned their place in the taste wave by observation, not theory:
+
+W5-06. Grazing-angle fog wash. A cinematic capture at camera height 5.5
+looking across roughly 40 units of ground rendered the frame near-uniform
+pale blue with the sun blooming in shot. At the real gameplay rig (height
+14 to 22, three-quarter down-angle) the same scene reads correctly: warm
+layered ground, grain, scatter, detailed structures. So this is NOT a
+defect at the view players have - RtsCamera clamps to 8..42 and never
+looks at the horizon - but it bounds any future cinematic, replay-theatre
+or cutscene camera. If such a camera is ever added, the fix is per-camera:
+drop VolumetricFogDensity toward 0.012 and SkyEnergyMultiplier toward 0.6
+while the low camera is active, or gate the fog by camera pitch. Do not
+retune the gameplay values to satisfy a view the game does not use.
+
+W5-07. Ferrite emissive clamp (carried from Wave 4a/4b). Whole-emissive
+surfaces clamp toward white in the LDR emit bake, so the ferrite cluster
+and the harvester ore heap read white-hot in the core with gold only in
+the bloom fringe. The cluster body itself now measures correctly gold
+(R-B gap 0.183, W4-07), so this is specifically the emissive tips. Fix
+candidates for the taste pass: lower emit strength on tip materials to
+1.2-1.6 so the core keeps chroma, or split tips into a non-emissive gold
+body with a small emissive core.
