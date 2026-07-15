@@ -28,7 +28,17 @@ __pycache__/
 # does again (e.g. a fresh import regenerating defaults), keep the strays out
 # of the repo - deleting them out from under Godot's import cache corrupts
 # it (null PackedScene loads) until .godot/imported is wiped and reimported.
+# DEF-07 confirmed the "if it ever does again" case is real: six brand new
+# .glb files imported with Godot's default mode 1 and extracted their textures,
+# and the rules below covered only two of the three names bake.py actually
+# writes (_diff, _norm, _orm - _rough is packed into the ORM and removed), so
+# _norm and _orm turned up untracked. Pinning mode 3 in the new .glb.import
+# files stopped it; these patterns are the belt-and-braces, now complete.
 game/assets/models/*_diff.png
 game/assets/models/*_rough.png
+game/assets/models/*_norm.png
+game/assets/models/*_orm.png
 game/assets/models/*_diff.png.import
 game/assets/models/*_rough.png.import
+game/assets/models/*_norm.png.import
+game/assets/models/*_orm.png.import

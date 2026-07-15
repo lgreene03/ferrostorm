@@ -485,6 +485,133 @@ def com_service_depot():
         parts.append(box(f'crate{i}', 0.18, 0.18, 0.16, cx, cy, 0.08, 'olived' if i % 2 else 'plate', 0.015))
     return join(parts, 'com_service_depot')
 
+# ---------------- BARRIERS (1x1 cells, ADR-005 struct type 9) ----------------
+# SCALE. One cell is one Blender unit and the origin is the footprint centre.
+# The structures above are 2x2 and open with pad(); a barrier is 1x1, so it
+# must NOT call pad(). A segment spans 0.95 about its own origin and its whole
+# AABB fits inside 1.0 x 1.0 x 0.8: overhang the cell and the run intersects
+# its own neighbours. The remaining 0.05 reads as a panel seam between
+# segments, which is what a modular barrier should look like anyway.
+#
+# ORIENTATION CONTRACT, load-bearing for DEF-08 and stated in BLENDER axes.
+# The client ships six meshes and rotates them by yaw rather than shipping
+# sixteen, so every variant is built in its mask-canonical rotation:
+#   com_wall_post      isolated, no arms
+#   com_wall_straight  one span along the X axis (arms +X and -X)
+#   com_wall_cap       ONE arm, +X. The terminating block sits on the origin,
+#                      so the run continues toward +X and the block is the
+#                      exposed end.
+#   com_wall_corner    TWO arms, +X and +Y
+#   com_wall_tee       THREE arms: +X, +Y and -Y. The -X arm is OMITTED.
+#   com_wall_cross     FOUR arms
+# SkirmishLive.cs:717-719 records the axis conversion (Blender +Y forward
+# becomes glTF -Z). DEF-08 owns the mask-to-yaw table and must derive it from
+# the contract above rather than from the draft table in doc 22: that draft's
+# tee row does not follow from this contract and is wrong twice over (see the
+# DEF-07 ledger entry for the derivation and the corrected row).
+
+# Doc 16 as it currently stands, and it is the CURRENT text that governs here:
+# "team colour appears in exactly one place per silhouette (the band/slash),
+# always", and "COMMON hardware: field olive with ferrite-gold marks". A
+# barrier is com_ shared hardware - one mesh serves both players - so the mark
+# is ferrite gold, matching the only other com_ team band in the roster
+# (com_harvester). Signal orange on a mesh both factions place would paint a
+# Directorate stripe on a Sodality wall.
+BARRIER_MARK = 'ferrite'
+# Doc 22 section 5 PROPOSES marking only where the neighbour count is not 2,
+# i.e. no mark on a straight mid-run segment. That amendment is PROPOSED and
+# blocked on Luke, and section 5.3 makes this ticket's band rule contingent on
+# his ruling, so the current one-place law governs and every variant carries
+# its one band. If the amendment is ratified, flip this to False: it is the
+# entire mechanical difference.
+BARRIER_MARK_MIDRUN = True
+
+_BW = 0.95   # span length: the segment's reach across its own cell
+_BT = 0.34   # span thickness
+_BH = 0.5    # span height above the footing deck
+_BZ = 0.06   # footing top - every part above stands on this deck
+# The ticket's floor for the footing was 0.85, which renders a continuous run
+# standing on a dashed line of separate plates: the 0.15 inter-cell gap is
+# about 4 pixels at the shipped camera and the footing shadow draws attention
+# to it. Matching the span at 0.95 gives the run one unbroken plinth, which is
+# the whole point of an auto-connecting barrier. Still inside the 1x1 cell.
+_BF = 0.95   # footing plan size
+
+def _bfoot():
+    return box('foot', _BF, _BF, _BZ, m='gundark', bevel=0.02)
+
+def _barm(name, ax, ay):
+    # one half-span, running from the origin out to its cell edge
+    h = _BW / 2
+    if ax:
+        return box(name, h, _BT, _BH, ax * h / 2, 0, _BZ, 'olived', 0.04)
+    return box(name, _BT, h, _BH, 0, ay * h / 2, _BZ, 'olived', 0.04)
+
+def _bknuckle():
+    return cyl('knuckle', 0.22, 0.62, 0, 0, _BZ + 0.31, 'olive', vs=8)
+
+def _bband(z):
+    # the one team-colour place, per doc 16's one-place law
+    return box('bd', 0.34, 0.08, 0.06, 0, 0, z, BARRIER_MARK, 0.015)
+
+def com_wall_post():
+    # mask 0: an isolated segment with no neighbours
+    parts = [_bfoot()]
+    parts.append(box('post', 0.5, 0.5, 0.55, 0, 0, _BZ, 'olived', 0.04))
+    parts.append(_bband(_BZ + 0.55))
+    return join(parts, 'com_wall_post')
+
+def com_wall_straight():
+    # masks 5 and 10: the mid-run segment, one span along the X axis. The two
+    # stiffener ribs stand proud of the span top so a long run reads as an
+    # articulated barrier rather than one extruded bar at 40 pixels.
+    parts = [_bfoot()]
+    parts.append(box('span', _BW, _BT, _BH, 0, 0, _BZ, 'olived', 0.04))
+    for i, rx in enumerate((-0.3, 0.3)):
+        parts.append(cyl(f'rib{i}', 0.14, 0.60, rx, 0, _BZ + 0.30, 'gundark', vs=8))
+    if BARRIER_MARK_MIDRUN:
+        parts.append(_bband(_BZ + _BH))
+    return join(parts, 'com_wall_straight')
+
+def com_wall_cap():
+    # masks 1/2/4/8: a run's end. The arm reaches its +X neighbour and the
+    # thicker block terminates the exposed end on the origin.
+    parts = [_bfoot()]
+    parts.append(_barm('span', 1, 0))
+    parts.append(box('cap', 0.42, 0.42, 0.6, 0, 0, _BZ, 'olive', 0.04))
+    parts.append(_bband(_BZ + 0.6))
+    return join(parts, 'com_wall_cap')
+
+def com_wall_corner():
+    # masks 3/6/12/9: two arms, +X and +Y, knuckled at the joint
+    parts = [_bfoot()]
+    parts.append(_barm('spanx', 1, 0))
+    parts.append(_barm('spany', 0, 1))
+    parts.append(_bknuckle())
+    parts.append(_bband(_BZ + 0.62))
+    return join(parts, 'com_wall_corner')
+
+def com_wall_tee():
+    # masks 7/14/13/11: three arms, +X +Y -Y. The -X arm is omitted.
+    parts = [_bfoot()]
+    parts.append(_barm('spanx', 1, 0))
+    parts.append(_barm('spany', 0, 1))
+    parts.append(_barm('spanyn', 0, -1))
+    parts.append(_bknuckle())
+    parts.append(_bband(_BZ + 0.62))
+    return join(parts, 'com_wall_tee')
+
+def com_wall_cross():
+    # mask 15: four arms
+    parts = [_bfoot()]
+    parts.append(_barm('spanx', 1, 0))
+    parts.append(_barm('spanxn', -1, 0))
+    parts.append(_barm('spany', 0, 1))
+    parts.append(_barm('spanyn', 0, -1))
+    parts.append(_bknuckle())
+    parts.append(_bband(_BZ + 0.62))
+    return join(parts, 'com_wall_cross')
+
 def ferrite_cluster(scale=1.0):
     # W4-07: seven faceted truncated shards in GOLD body material with small
     # emissive tips plus base rubble. The old whole-emissive cones clamped
@@ -593,7 +720,10 @@ BUILDERS = dict(
     com_construction_yard=com_construction_yard, dir_turret=dir_turret,
     dir_superweapon=dir_superweapon, sod_veil_projector=sod_veil_projector,
     com_service_depot=com_service_depot, ferrite_cluster=ferrite_cluster,
-    dir_vanguard_car=dir_vanguard_car)
+    dir_vanguard_car=dir_vanguard_car,
+    com_wall_post=com_wall_post, com_wall_straight=com_wall_straight,
+    com_wall_cap=com_wall_cap, com_wall_corner=com_wall_corner,
+    com_wall_tee=com_wall_tee, com_wall_cross=com_wall_cross)
 
 def scene_setup(sun_rot=(0.9, 0.2, 0.7), strength=3.0):
     bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete()
