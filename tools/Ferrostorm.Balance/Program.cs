@@ -306,15 +306,20 @@ report.AppendLine("## Cost efficiency: hit points per credit");
 report.AppendLine();
 report.AppendLine("| Thing | Hit points | Cost | Hp per credit |");
 report.AppendLine("|---|---|---|---|");
-var wallDef = World.GetStructureType(9);
-const int WallHp = 500, TurretHp = 400;   // SpawnWall / SpawnTurret
+// TICKET-P5-BD-06: hit points come off the catalogue now. This file used to
+// carry its own copy of 500 and 400 with a comment pointing at the spawn
+// methods, which is the third source of truth the catalogue move exists to
+// delete: a balance gate reading stale numbers passes while the game is wrong.
+var wallDef = World.DefaultStructureType(9);
+var turretDef = World.DefaultStructureType(5);
+int WallHp = wallDef.Hp, TurretHp = turretDef.Hp;
 int wallHpPerCreditX100 = WallHp * 100 / wallDef.Cost;
-int turretHpPerCreditX100 = TurretHp * 100 / World.GetStructureType(5).Cost;
+int turretHpPerCreditX100 = TurretHp * 100 / turretDef.Cost;
 var tankDef = new World(1, 8, 8, players: 1).GetUnitType(1);
 int tankHpPerCreditX100 = tankDef.Hp * 100 / tankDef.Cost;
 string Hpc(int x100) => $"{x100 / 100}.{x100 % 100:D2}";
 report.AppendLine($"| wall segment | {WallHp} | {wallDef.Cost} | {Hpc(wallHpPerCreditX100)} |");
-report.AppendLine($"| turret | {TurretHp} | {World.GetStructureType(5).Cost} | {Hpc(turretHpPerCreditX100)} |");
+report.AppendLine($"| turret | {TurretHp} | {turretDef.Cost} | {Hpc(turretHpPerCreditX100)} |");
 report.AppendLine($"| cannon tank | {tankDef.Hp} | {tankDef.Cost} | {Hpc(tankHpPerCreditX100)} |");
 if (wallHpPerCreditX100 > 800)
 {
@@ -394,7 +399,7 @@ for (ulong fs = 3001; fs <= 3006; fs++)
         foreach (var e in w.Entities)
         {
             if (!e.Alive || e.PlayerId < 0) continue;
-            long v = e.StructType > 0 ? World.GetStructureType(e.StructType).Cost
+            long v = e.StructType > 0 ? w.GetStructureType(e.StructType).Cost
                    : e.UnitType > 0 ? w.GetUnitType(e.UnitType).Cost
                    : 0; // surviving armies are winning positions too
             if (e.PlayerId == 0) s0 += v; else s1 += v;

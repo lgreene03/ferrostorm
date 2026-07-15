@@ -1,0 +1,15 @@
+id: sod_veil_projector
+name: Veil Projector
+faction: sodality
+cost: 1500
+build_time_ticks: 250
+hp: 900
+power_supply: 0
+power_draw: 60
+sight_range: 6
+footprint: 2
+weapon_ids: []
+notes: >
+  Sodality doctrine and the one structure the sim really does gate by faction.
+  Field-cloaks friendly mobiles within sight_range, and only at full power: a
+  brown-out drops the whole veil. hp is overridable at the spawn site.

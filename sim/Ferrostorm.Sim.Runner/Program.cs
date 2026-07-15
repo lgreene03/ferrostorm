@@ -1536,12 +1536,16 @@ int SelfTest()
     // arithmetic the 23 golden hashes rest on; assert it rather than trust it.
     if (Fix64.FromFraction(2, 2).Raw != Fix64.One.Raw) return Fail("Fix64 FromFraction(2,2) != One");
     if ((Fix64.FromInt(8) + Fix64.FromFraction(2, 2)).Raw != Fix64.FromInt(9).Raw) return Fail("footprint centre size-2 identity");
-    if (World.FootprintOf(4) != 2) return Fail("FootprintOf: construction yard is 2x2");
-    if (World.FootprintOf(9) != 1) return Fail("FootprintOf: wall is 1x1");
-    if (World.FootprintOf(0) != 2) return Fail("FootprintOf: unknown type defaults to 2x2");
+    // TICKET-P5-BD-06 turned these two into instance reads off the catalogue, so
+    // a World is needed to ask. The answers must not have moved by one cell.
+    var fp = new World(1);
+    if (fp.FootprintOf(4) != 2) return Fail("FootprintOf: construction yard is 2x2");
+    if (fp.FootprintOf(9) != 1) return Fail("FootprintOf: wall is 1x1");
+    if (fp.FootprintOf(0) != 2) return Fail("FootprintOf: unknown type defaults to 2x2");
+    if (fp.FootprintOf(World.GateStructType) != 1) return Fail("FootprintOf: ADR-005 clause 6 reserves the gate as 1x1");
     // A 2x2 centred at 9 anchors at 8; a 1x1 centred at 8.5 anchors at 8.
-    if (World.AnchorOf(Fix64.FromInt(9), 4) != 8) return Fail("AnchorOf 2x2");
-    if (World.AnchorOf(Fix64.FromInt(8) + Fix64.Half, 9) != 8) return Fail("AnchorOf 1x1");
+    if (fp.AnchorOf(Fix64.FromInt(9), 4) != 8) return Fail("AnchorOf 2x2");
+    if (fp.AnchorOf(Fix64.FromInt(8) + Fix64.Half, 9) != 8) return Fail("AnchorOf 1x1");
 
     var rng = new DeterministicRandom(42);
     ulong first = rng.NextUlong();
@@ -1620,6 +1624,45 @@ int SelfTest()
         Console.WriteLine("selftest: /data catalogue reproduces compiled defs exactly (cannon, rifle, rocket, harvester)");
     }
     else Console.WriteLine("selftest: data/units not found, catalogue wiring untested this run");
+
+    // Structure catalogue wiring (TICKET-P5-BD-06): /data/buildings must convert
+    // to exactly the compiled reference defs. This is the ticket's whole
+    // acceptance argument - the golden hashes prove the relocation changed no
+    // behaviour, and this proves the files, not the literals, are now the
+    // catalogue. Value equality on the record, every field, every type.
+    string buildingsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/buildings"));
+    if (Directory.Exists(buildingsDir) && Directory.GetFiles(buildingsDir, "*.yaml").Length > 0)
+    {
+        var refWorld = new World(0);
+        var files = Directory.GetFiles(buildingsDir, "*.yaml");
+        Array.Sort(files, StringComparer.Ordinal); // fixed order: a directory walk is not a source of truth
+        int seen = 0;
+        var seenTypes = new HashSet<int>();
+        foreach (var f in files)
+        {
+            var sd = DataLoader.LoadStructureFile(f);
+            int typeId = StructureCatalogue.TypeIdOf(sd.Id);
+            var def = StructureCatalogue.ToTypeDef(sd);
+            if (def != refWorld.GetStructureType(typeId))
+                return Fail($"structure catalogue: {sd.Id} (type {typeId}) mismatch {def} vs {refWorld.GetStructureType(typeId)}");
+            if (!seenTypes.Add(typeId)) return Fail($"structure catalogue: type {typeId} claimed twice");
+            seen++;
+        }
+        // Every compiled type must be authored: a file missing is how a
+        // hard-coded value survives a catalogue migration unnoticed.
+        for (int t = 1; t <= 9; t++)
+            if (!seenTypes.Contains(t)) return Fail($"structure catalogue: no /data/buildings file for compiled type {t}");
+        // The gate (ADR-005 clause 6) is deferred and must stay unbuildable:
+        // Cost 0 is what every command handler tests to refuse a type.
+        if (refWorld.GetStructureType(World.GateStructType).Cost != 0)
+            return Fail("structure catalogue: the reserved gate type must have no def");
+        // RegisterStructureType is the /data override path; legal before tick 0.
+        var rw = new World(0);
+        rw.RegisterStructureType(1, StructureCatalogue.ToTypeDef(
+            DataLoader.LoadStructureFile(Path.Combine(buildingsDir, "com_power_plant.yaml"))));
+        Console.WriteLine($"selftest: /data/buildings reproduces all {seen} compiled structure defs exactly");
+    }
+    else Console.WriteLine("selftest: data/buildings not found, structure catalogue untested this run");
 
     // Map loader (TICKET-P2-DATA-03): the committed skirmish map round-trips.
     string mapFile = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/maps/skirmish-01.fmap"));

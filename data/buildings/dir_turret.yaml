@@ -1,0 +1,17 @@
+id: dir_turret
+name: Turret
+faction: directorate
+cost: 600
+build_time_ticks: 150
+hp: 400
+power_supply: 0
+power_draw: 20
+sight_range: 6
+footprint: 2
+weapon_ids: [wpn_turret_gun]
+notes: >
+  The whole defensive roster at present. Anti-armour, so it loses per-cost to
+  massed infantry by a hair. GDD s5 says a turret goes offline below 75 per
+  cent power; the sim has no such check yet (TICKET-P5-DEF-10), so the
+  power_draw here buys nothing back today. The faction key is descriptive: the
+  sim gates only the veil projector.

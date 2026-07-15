@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Structure definition",
+  "description": "TICKET-P5-BD-06. Mirrors schema.unit.json's shape for placeable structures. CLAUDE.md forbids hand-editing stats in code, so these files are the catalogue and World's compiled defaults exist only to be proved equal to them by the selftest round-trip.",
+  "type": "object",
+  "required": ["id", "name", "faction", "cost", "build_time_ticks", "hp", "power_supply", "power_draw", "sight_range", "footprint"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
+    "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
+    "faction": {
+      "enum": ["directorate", "sodality", "common"],
+      "description": "DESCRIPTIVE ONLY at present, unlike the unit schema's faction key. The sim gates exactly one structure by faction (the veil projector, World.cs BuildStructure) and StructureTypeDef carries no Faction field; wiring the rest is a behaviour change and belongs to a sim ticket, not to this file."
+    },
+    "cost": { "type": "integer", "minimum": 1, "description": "Credits" },
+    "build_time_ticks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sim ticks at 15Hz. 0 is load-bearing and means 'never queued at a Construction Yard': the yard refuses it (BuildTicks <= 0). The MCV-deployed yard and the upfront-cost barrier both rely on this."
+    },
+    "hp": { "type": "integer", "minimum": 1 },
+    "power_supply": { "type": "integer", "minimum": 0, "description": "Power produced" },
+    "power_draw": { "type": "integer", "minimum": 0, "description": "Power consumed" },
+    "sight_range": { "type": "integer", "minimum": 0, "description": "Cells. 0 is load-bearing for barriers: FogSystem skips zero-sight entities." },
+    "footprint": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal." },
+    "weapon_ids": { "type": "array", "items": { "type": "string" }, "description": "First entry arms the structure; empty is unarmed." },
+    "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required before this may be queued. Parsed and carried on the def; ENFORCEMENT is TICKET-P5-BD-17, which is a sim change." },
+    "notes": { "type": "string", "description": "Design intent and GDD traceback." }
+  }
+}

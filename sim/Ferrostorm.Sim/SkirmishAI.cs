@@ -107,7 +107,7 @@ public sealed class SkirmishAI
                     Fix64.FromInt(ax), Fix64.FromInt(ay), ready));
         }
         else if (wanted != 0 && w.QueueLength(cy) == 0
-                 && w.Credits(_player) >= World.GetStructureType(wanted).Cost)
+                 && w.Credits(_player) >= w.GetStructureType(wanted).Cost)
         {
             output.Add(new Command(w.Tick, _player, CommandType.BuildStructure, cy,
                 Fix64.Zero, Fix64.Zero, wanted));
@@ -382,7 +382,7 @@ public sealed class SkirmishAI
             var s = w.Entities[i];
             if (!s.Alive || s.PlayerId != _player) continue;
             if (s.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant or EntityKind.Factory or EntityKind.Refinery)) continue;
-            int oax = World.AnchorOf(s.X, s.StructType), oay = World.AnchorOf(s.Y, s.StructType);
+            int oax = w.AnchorOf(s.X, s.StructType), oay = w.AnchorOf(s.Y, s.StructType);
             for (int ring = 3; ring <= World.BuildRadius; ring++)
                 for (int dy = -ring; dy <= ring; dy++)
                     for (int dx = -ring; dx <= ring; dx++)

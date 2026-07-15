@@ -51,19 +51,41 @@ public partial class Sidebar : PanelContainer
     private static readonly Color Bone = new(0.84f, 0.82f, 0.77f);
     private static readonly Color FerriteGold = new(0.79f, 0.63f, 0.36f);
     private static readonly Color Dim = new(0.45f, 0.44f, 0.42f);
+    // BD-10: the same two values the health bars already use (SkirmishLive
+    // FillAmber/FillRed). Not new colours - doc 16 is a closed palette.
+    private static readonly Color FillAmber = new(0.90f, 0.68f, 0.22f);
+    private static readonly Color FillRed = new(0.85f, 0.28f, 0.20f);
 
     private SkirmishLive _game = null!;
     private readonly Dictionary<int, Button> _structButtons = new();
     private readonly Dictionary<int, Button> _unitButtons = new();
     private readonly Dictionary<Button, string> _baseText = new();
-    private Label _power = null!;
+    private Label _powerLabel = null!;
+    private Control _powerBar = null!;
+    private ColorRect _powerFill = null!;
+    private ColorRect _powerTick = null!;
+    private Tween? _powerPulse;   // BD-10: brown-out pulse; killed on recovery
+    private Label _structHeader = null!;
+    private Label _unitHeader = null!;
     private Button _placeButton = null!;
     private int _readyType;
     private Tween? _placePulse;   // W3-16: PLACE-button ready pulse
 
-    public void Init(SkirmishLive game)
+    // BD-02: build time is sim data and the sidebar has no World, so it is
+    // handed the two catalogue reads it needs rather than reaching for a static.
+    // BD-06 made GetStructureType an instance method, which is why the structure
+    // side is a delegate too: a live match may register its own catalogue.
+    private System.Func<int, int> _unitBuildTicks = _ => 0;
+    private System.Func<int, World.StructureTypeDef> _structDef = World.DefaultStructureType;
+
+    private const float BarWidth = 174f;
+
+    public void Init(SkirmishLive game, System.Func<int, int> unitBuildTicks,
+        System.Func<int, World.StructureTypeDef> structDef)
     {
         _game = game;
+        _unitBuildTicks = unitBuildTicks;
+        _structDef = structDef;
         CustomMinimumSize = new Vector2(190, 0);
         AnchorLeft = 1; AnchorRight = 1; AnchorBottom = 1;
         OffsetLeft = -190;
@@ -76,19 +98,34 @@ public partial class Sidebar : PanelContainer
         AddChild(v);
 
         v.AddChild(Header("FERROSTORM UPLINK"));
-        _power = new Label { Text = "PWR --" };
-        _power.AddThemeColorOverride("font_color", FerriteGold);
-        _power.AddThemeFontSizeOverride("font_size", 12);
-        v.AddChild(_power);
 
-        v.AddChild(Header("STRUCTURES"));
+        // BD-10. GDD s5 asks for total supply against draw as a bar. What stood
+        // here was a label named _power that rendered the credits total a second
+        // time (the status line already has it) and two queue counters. The bar
+        // is the supply fill with a seam-coloured tick marking the draw line:
+        // the classic supply-bar-with-demand-marker, so headroom is a glance.
+        _powerLabel = new Label { Text = "POWER 0 / 0" };
+        _powerLabel.AddThemeColorOverride("font_color", Bone);
+        _powerLabel.AddThemeFontSizeOverride("font_size", 12);
+        v.AddChild(_powerLabel);
+        _powerBar = new Control { CustomMinimumSize = new Vector2(BarWidth, 8) };
+        var powerBack = new ColorRect { Color = Cinder, Position = Vector2.Zero, Size = new Vector2(BarWidth, 8) };
+        _powerBar.AddChild(powerBack);
+        _powerFill = new ColorRect { Color = FerriteGold, Position = Vector2.Zero, Size = new Vector2(0, 8) };
+        _powerBar.AddChild(_powerFill);
+        _powerTick = new ColorRect { Color = Seam, Position = Vector2.Zero, Size = new Vector2(2, 8) };
+        _powerBar.AddChild(_powerTick);
+        v.AddChild(_powerBar);
+
+        _structHeader = Header("STRUCTURES");
+        v.AddChild(_structHeader);
         foreach (var it in Structures)
         {
             // DEF-08 clause 9: a barrier bypasses the yard queue entirely, so
             // its button enters placement rather than queueing.
             var b = it.TypeId == BarrierType
-                ? MakeButton(it, () => _game.EnterPlacement(BarrierType))
-                : MakeButton(it, () => _game.QueueStructure(it.TypeId));
+                ? MakeButton(it, () => _game.EnterPlacement(BarrierType), _structDef(it.TypeId).BuildTicks)
+                : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).BuildTicks);
             // Classic campaign tech gating: disallowed items are absent,
             // not greyed - progression should read as the tree growing.
             b.Visible = MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true;
@@ -99,10 +136,11 @@ public partial class Sidebar : PanelContainer
         _placeButton.Visible = false;
         v.AddChild(_placeButton);
 
-        v.AddChild(Header("UNITS"));
+        _unitHeader = Header("UNITS");
+        v.AddChild(_unitHeader);
         foreach (var it in Units)
         {
-            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId));
+            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitBuildTicks(it.TypeId));
             b.Visible = MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true;
             _unitButtons[it.TypeId] = b;
             v.AddChild(b);
@@ -117,11 +155,19 @@ public partial class Sidebar : PanelContainer
         return l;
     }
 
-    private Button MakeButton(BuildItem it, System.Action onPress)
+    /// <summary>BD-02: the label carries cost AND build time. No build time was
+    /// shown anywhere in the game, so the player could not tell a 6.7-second
+    /// plant from a 20-second refinery except by watching one. Seconds, not
+    /// ticks: ticks are the sim's unit, seconds are the player's.</summary>
+    private Button MakeButton(BuildItem it, System.Action onPress, int buildTicks = 0)
     {
+        string label = it.Cost > 0 ? $"{it.Label}  {it.Cost}" : it.Label;
+        // A zero-tick item is not instant, it is not queued at all (the barrier
+        // is bought and placed outright), so a "0s" readout would be a lie.
+        if (buildTicks > 0) label += $"  {buildTicks / (float)World.TicksPerSecond:0.#}s";
         var b = new Button
         {
-            Text = it.Cost > 0 ? $"{it.Label}  {it.Cost}" : it.Label,
+            Text = label,
             Alignment = HorizontalAlignment.Left,
         };
         if (it.Icon.Length > 0 && ResourceLoader.Exists($"res://ui/icons/{it.Icon}.png"))
@@ -172,8 +218,10 @@ public partial class Sidebar : PanelContainer
     /// queue contents drive per-button count badges and a progress fill on
     /// the queue head (the classic clock substitute).</summary>
     public void Refresh(long credits, int readyStructureType, bool hasFactory, bool hasYard,
-        IReadOnlyList<int> yardQ, IReadOnlyList<int> facQ, float yardProgress, float facProgress)
+        IReadOnlyList<int> yardQ, IReadOnlyList<int> facQ, float yardProgress, float facProgress,
+        int supply, int draw)
     {
+        RefreshPower(supply, draw);
         _readyType = readyStructureType;
         _placeButton.Visible = readyStructureType > 0;
         if (readyStructureType > 0)
@@ -198,14 +246,15 @@ public partial class Sidebar : PanelContainer
         foreach (int t in yardQ) structCounts[t] = structCounts.GetValueOrDefault(t) + 1;
         foreach (var (typeId, b) in _structButtons)
         {
-            var def = World.GetStructureType(typeId);
+            var def = _structDef(typeId);
             // DEF-08 clause 9: a full ready slot pauses the yard's queue and so
             // disables the queued structures, but a barrier never enters that
             // slot - it stays buildable while a finished structure waits.
             b.Disabled = !hasYard || credits < def.Cost
                          || (typeId != BarrierType && readyStructureType > 0);
             int n = structCounts.GetValueOrDefault(typeId);
-            b.Text = _baseText[b] + (n > 0 ? $"  x{n}" : "");
+            b.Text = _baseText[b] + QueueSuffix(n, yardQ.Count > 0 && typeId == yardQ[0],
+                def.BuildTicks, yardProgress);
             ((ColorRect)b.GetNode("Fill")).OffsetRight =
                 yardQ.Count > 0 && typeId == yardQ[0] ? b.Size.X * yardProgress : 0;
         }
@@ -215,12 +264,66 @@ public partial class Sidebar : PanelContainer
         {
             b.Disabled = !hasFactory;
             int n = unitCounts.GetValueOrDefault(typeId);
-            b.Text = _baseText[b] + (n > 0 ? $"  x{n}" : "");
+            b.Text = _baseText[b] + QueueSuffix(n, facQ.Count > 0 && typeId == facQ[0],
+                _unitBuildTicks(typeId), facProgress);
             ((ColorRect)b.GetNode("Fill")).OffsetRight =
                 facQ.Count > 0 && typeId == facQ[0] ? b.Size.X * facProgress : 0;
         }
         ((ColorRect)_placeButton.GetNode("Fill")).OffsetRight = 0;
-        _power.Text = $"CREDITS {credits}    CY Q{yardQ.Count}  FAC Q{facQ.Count}";
+        // BD-10 clause 5: the queue counters move onto the section headers and
+        // the duplicated credits total goes. Credits appear once, on the status
+        // line, where they were already.
+        _structHeader.Text = yardQ.Count > 0 ? $"STRUCTURES   Q{yardQ.Count}" : "STRUCTURES";
+        _unitHeader.Text = facQ.Count > 0 ? $"UNITS   Q{facQ.Count}" : "UNITS";
+    }
+
+    /// <summary>BD-02 clause 3: the queue head also shows the seconds left on
+    /// it, so the player can decide whether to wait. Everything behind the head
+    /// shows only its count: the sim builds one item at a time per producer, so
+    /// a countdown on a queued-but-not-started item would be fiction.</summary>
+    private static string QueueSuffix(int n, bool isHead, int totalTicks, float progress)
+    {
+        if (n <= 0) return "";
+        if (!isHead || totalTicks <= 0) return $"  x{n}";
+        int remain = Mathf.CeilToInt(totalTicks * (1f - progress) / World.TicksPerSecond);
+        return n > 1 ? $"  {remain}s  x{n}" : $"  {remain}s";
+    }
+
+    /// <summary>
+    /// BD-10. The fill is supply, the tick is draw, and both are scaled to
+    /// whichever is larger so the relationship stays readable at any base size.
+    /// Colour is headroom: gold while supply covers draw, amber down to 75 per
+    /// cent (the level GDD s5 says turrets survive to), red below it, where the
+    /// label pulses. Every colour is an existing doc 16 token, so no style-bible
+    /// amendment is owed for this ticket.
+    /// </summary>
+    private void RefreshPower(int supply, int draw)
+    {
+        _powerLabel.Text = $"POWER {supply} / {draw}";
+        int span = Mathf.Max(Mathf.Max(supply, draw), 1);
+        _powerFill.Size = new Vector2(BarWidth * supply / span, 8);
+        _powerTick.Position = new Vector2(Mathf.Min(BarWidth * draw / span, BarWidth - 2), 0);
+        _powerTick.Visible = draw > 0;
+        bool brownOut = draw > 0 && supply * 4 < draw * 3;   // integer maths: below 75 per cent
+        _powerFill.Color = supply >= draw ? FerriteGold
+            : brownOut ? FillRed : FillAmber;
+        // The pulse follows the exact lifecycle of the PLACE-button tween above,
+        // including nulling the field on kill: a looping tween left behind on a
+        // state change leaks and keeps writing to modulate forever.
+        if (brownOut && _powerPulse == null)
+        {
+            _powerPulse = _powerLabel.CreateTween().SetLoops();
+            _powerPulse.TweenProperty(_powerLabel, "modulate:a", 0.45f, 0.4f)
+                .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+            _powerPulse.TweenProperty(_powerLabel, "modulate:a", 1.0f, 0.4f)
+                .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+        }
+        else if (!brownOut && _powerPulse != null)
+        {
+            _powerPulse.Kill();
+            _powerPulse = null;
+            _powerLabel.Modulate = Colors.White;
+        }
     }
 
     private static string NameOf(int structType)
@@ -228,4 +331,15 @@ public partial class Sidebar : PanelContainer
         foreach (var it in Structures) if (it.TypeId == structType) return it.Label;
         return "STRUCTURE";
     }
+
+    // ---- Verification surface (TICKET-P5-BD-01), following the SkirmishLive
+    // precedent: expose what is on screen, not a recomputation of it.
+    public string StructButtonText(int typeId) => _structButtons.TryGetValue(typeId, out var b) ? b.Text : "";
+    public string UnitButtonText(int typeId) => _unitButtons.TryGetValue(typeId, out var b) ? b.Text : "";
+    public string PowerText => _powerLabel.Text;
+    public float PowerFillWidth => _powerFill.Size.X;
+    public float PowerTickX => _powerTick.Position.X;
+    public Color PowerFillColour => _powerFill.Color;
+    public bool PowerPulsing => _powerPulse != null;
+    public string StructHeaderText => _structHeader.Text;
 }

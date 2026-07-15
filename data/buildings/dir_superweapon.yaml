@@ -1,0 +1,16 @@
+id: dir_superweapon
+name: Superweapon
+faction: directorate
+cost: 4000
+build_time_ticks: 600
+hp: 1200
+power_supply: 0
+power_draw: 100
+sight_range: 4
+footprint: 2
+weapon_ids: []
+notes: >
+  Charges over 1500 ticks, pausing while the base is underpowered, then throws
+  an area strike with five seconds of warning. The charge length is a spawn
+  override, not a catalogue value, because scenarios shorten it to test the
+  cycle.

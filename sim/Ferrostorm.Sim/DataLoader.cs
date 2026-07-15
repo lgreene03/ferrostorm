@@ -17,6 +17,12 @@ public static class DataLoader
         IReadOnlyList<string> WeaponIds, int SightRange, bool Stealth, bool Detector,
         IReadOnlyList<string> Prerequisites, bool VeterancyEnabled, string Notes);
 
+    /// <summary>TICKET-P5-BD-06: a placeable structure as authored in /data/buildings, validated against schema.structure.json.</summary>
+    public sealed record StructureData(
+        string Id, string Name, string Faction, int Cost, int BuildTimeTicks,
+        int Hp, int PowerSupply, int PowerDraw, int SightRange, int Footprint,
+        IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes);
+
     public static Dictionary<string, string> ParseFlatYaml(string text)
     {
         var map = new Dictionary<string, string>();
@@ -126,6 +132,46 @@ public static class DataLoader
     }
 
     public static UnitData LoadUnitFile(string path) => ParseUnit(File.ReadAllText(path));
+
+    /// <summary>
+    /// TICKET-P5-BD-06. Deliberately the same shape as ParseUnit, reusing the
+    /// same flat-YAML and inline-list primitives: integer maths only, culture
+    /// invariant, run at match setup and never per tick. build_time_ticks 0 and
+    /// sight_range 0 are legal here where they are not for units (the
+    /// MCV-deployed yard and the barrier both depend on the former; FogSystem's
+    /// zero-sight skip depends on the latter), so neither is defaulted away.
+    /// </summary>
+    public static StructureData ParseStructure(string yamlText)
+    {
+        var m = ParseFlatYaml(yamlText);
+        string id = ReqStr(m, "id");
+        if (!(id.StartsWith("dir_") || id.StartsWith("sod_") || id.StartsWith("com_")))
+            throw new FormatException($"id '{id}' violates the dir_/sod_/com_ prefix convention (CLAUDE.md)");
+
+        string faction = ReqStr(m, "faction");
+        if (faction is not ("directorate" or "sodality" or "common"))
+            throw new FormatException($"unknown faction '{faction}'");
+
+        int footprint = ReqInt(m, "footprint");
+        if (footprint < 1) throw new FormatException("footprint must be at least 1 cell per side");
+
+        return new StructureData(
+            Id: id,
+            Name: ReqStr(m, "name"),
+            Faction: faction,
+            Cost: ReqInt(m, "cost"),
+            BuildTimeTicks: ReqInt(m, "build_time_ticks"),
+            Hp: ReqInt(m, "hp"),
+            PowerSupply: ReqInt(m, "power_supply"),
+            PowerDraw: ReqInt(m, "power_draw"),
+            SightRange: ReqInt(m, "sight_range"),
+            Footprint: footprint,
+            WeaponIds: m.TryGetValue("weapon_ids", out var w) ? ParseInlineList(w) : new List<string>(),
+            Prerequisites: m.TryGetValue("prerequisites", out var p) ? ParseInlineList(p) : new List<string>(),
+            Notes: m.TryGetValue("notes", out var n) ? n : "");
+    }
+
+    public static StructureData LoadStructureFile(string path) => ParseStructure(File.ReadAllText(path));
 }
 
 /// <summary>Bridges loaded /data unit definitions into the sim's producible catalogue (TICKET-P2-DATA-02).</summary>
@@ -137,6 +183,9 @@ public static class UnitCatalogue
         "wpn_test_cannon" => 1,
         "wpn_test_rifle" => 2,
         "wpn_test_rocket" => 3,
+        // 4 is the turret's gun: no unit carries it, but /data/buildings does
+        // (TICKET-P5-BD-06), and one weapon-name map is the point of this switch.
+        "wpn_turret_gun" => 4,
         "wpn_howitzer" => 5,
         "wpn_bulwark_cannon" => 6,
         _ => throw new FormatException($"unknown weapon id '{name}'"),
@@ -150,4 +199,57 @@ public static class UnitCatalogue
                u.Faction == "directorate" ? World.FactionDirectorate
                    : u.Faction == "sodality" ? World.FactionSodality
                    : World.FactionCommon);
+}
+
+/// <summary>
+/// Bridges /data/buildings definitions into the sim's placeable catalogue
+/// (TICKET-P5-BD-06). The structure type id is the sim's wire and save
+/// identity, so it stays a compiled map keyed by the /data id, exactly as
+/// WeaponIdOf is for weapons: the file names the thing, the map names the
+/// number, and neither is free to drift alone.
+/// </summary>
+public static class StructureCatalogue
+{
+    /// <summary>Structure type ids as ratified in ADR-005 (9 is the wall; 10 is the deferred gate and has no file). Throws on an unknown id rather than defaulting, matching WeaponIdOf.</summary>
+    public static int TypeIdOf(string id) => id switch
+    {
+        "com_power_plant" => 1,
+        "com_factory" => 2,
+        "com_refinery" => 3,
+        "com_construction_yard" => 4,
+        "dir_turret" => 5,
+        "dir_superweapon" => 6,
+        "sod_veil_projector" => 7,
+        "com_service_depot" => 8,
+        "com_wall" => 9,
+        _ => throw new FormatException($"unknown structure id '{id}'"),
+    };
+
+    /// <summary>The EntityKind each structure type spawns as. Kind is a save-format value (World writes (byte)e.Kind), so like the type id it is code, not data.</summary>
+    public static EntityKind KindOf(string id) => TypeIdOf(id) switch
+    {
+        1 => EntityKind.PowerPlant,
+        2 => EntityKind.Factory,
+        3 => EntityKind.Refinery,
+        4 => EntityKind.ConstructionYard,
+        5 => EntityKind.Turret,
+        6 => EntityKind.Superweapon,
+        7 => EntityKind.VeilProjector,
+        8 => EntityKind.ServiceDepot,
+        9 => EntityKind.Wall,
+        _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
+    };
+
+    /// <summary>
+    /// NOTE the deliberate omission: StructureData.Prerequisites is parsed and
+    /// then dropped here, because World.StructureTypeDef has no Prereqs field
+    /// and no gate reads one. That is the same drop UnitCatalogue.ToTypeDef
+    /// performs on unit prerequisites, and TICKET-P5-BD-17 is the ticket that
+    /// fixes both at once, under a Game Designer sign-off on the tech tree.
+    /// Authoring a prereq table here would be inventing that sign-off.
+    /// </summary>
+    public static World.StructureTypeDef ToTypeDef(DataLoader.StructureData s)
+        => new(s.Cost, KindOf(s.Id), s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
+               s.SightRange, s.Footprint,
+               s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0);
 }

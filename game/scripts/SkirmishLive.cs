@@ -134,10 +134,34 @@ public partial class SkirmishLive : Node3D
     private double _lastAttackAlert = -60;
     private int _mapW, _mapH;
 
-    // Structure interaction: rally points per factory, selection readout
+    // Structure interaction: rally points per producer, selection readout.
+    // TICKET-P5-BD-14: one marker per rallied structure, shown only while that
+    // structure is selected (the classic rule). A single shared marker meant
+    // only the most recent rally was ever visible, which read as the others
+    // having been forgotten.
     private readonly Dictionary<int, Vector3> _rally = new();
-    private MeshInstance3D _rallyMarker = null!;
+    private readonly Dictionary<int, MeshInstance3D> _rallyMarkers = new();
     private Label _selInfo = null!;
+
+    // P5-ECON-07. A harvester the player parked on purpose stays parked: an
+    // explicit Stop, a bare move order, or a rally point enrols it here, and
+    // only an explicit Harvest order takes it out again. _lastAutoHarvest
+    // rate-limits the re-issue to one attempt per harvester per second.
+    private readonly HashSet<int> _manuallyStopped = new();
+    private readonly Dictionary<int, int> _lastAutoHarvest = new();
+    private const int AutoHarvestEvery = 15;   // ticks; World.TicksPerSecond
+    /// <summary>How many auto-Harvest orders this client has issued. The rate
+    /// limit is the point of the feature rather than a detail of it, so it is
+    /// counted where it happens: the commands themselves are drained into the
+    /// tick and gone, and a test that counts them afterwards counts nothing and
+    /// passes for the wrong reason. Same pattern as _wallRebuilds.</summary>
+    private int _autoHarvestIssues;
+
+    /// <summary>Producers a rally point may be set on (TICKET-P5-BD-14 clause 5).
+    /// The depot is where repaired units gather and is free once attribution is
+    /// exact. Construction Yards are deliberately absent: structures are placed,
+    /// not rallied.</summary>
+    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.ServiceDepot;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
     // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
@@ -278,16 +302,6 @@ public partial class SkirmishLive : Node3D
         _ghostRing = BattlefieldView.MakeRangeRing(1f, BattlefieldView.RangeRingOwn);
         _ghost.AddChild(_ghostRing);
         _ghostRing.Visible = false;
-
-        var rallyGold = new Color(0.79f, 0.63f, 0.36f);
-        _rallyMarker = new MeshInstance3D
-        {
-            Mesh = new CylinderMesh { TopRadius = 0.05f, BottomRadius = 0.05f, Height = 0.7f },
-            Visible = false,
-            MaterialOverride = new StandardMaterial3D
-            { AlbedoColor = rallyGold, EmissionEnabled = true, Emission = rallyGold, EmissionEnergyMultiplier = 1.2f },
-        };
-        AddChild(_rallyMarker);
 
         SnapshotNow();
     }
@@ -521,6 +535,89 @@ public partial class SkirmishLive : Node3D
         return -1;
     }
 
+    /// <summary>
+    /// TICKET-P5-ECON-06. A Harvest order with no refinery standing is accepted
+    /// by the sim and accomplishes nothing: it sets FieldId, asks for the
+    /// nearest refinery, gets -1 back, and leaves the harvester Idle without
+    /// emitting so much as an event. The player sees a right-click that does
+    /// nothing at all and concludes harvesting is broken. The sim is not the
+    /// place to fix it (refusing the command would change ApplyCommandCore's
+    /// state mutation and move every AI-driven golden), so the client refuses to
+    /// send it.
+    /// </summary>
+    private bool HasLiveRefinery()
+    {
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Refinery) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The nearest field with ferrite left, by squared distance in the sim's own
+    /// fixed-point maths, ties breaking to the lower entity id. This mirrors
+    /// World.RetargetField deliberately and exactly, including its strict
+    /// less-than: if the client picked a different field from the one the sim
+    /// would, the auto-resume would fight the sim's own reassignment.
+    /// </summary>
+    private int NearestFieldTo(Fix64 x, Fix64 y)
+    {
+        int best = -1; Fix64 bestD = Fix64.MaxValue;
+        var ents = _world.Entities;
+        for (int j = 0; j < ents.Count; j++)
+        {
+            var f = ents[j];
+            if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount <= 0) continue;
+            Fix64 d = Fix64.DistSq(f.X - x, f.Y - y);
+            if (d < bestD) { bestD = d; best = j; }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// TICKET-P5-ECON-07. A harvester that reaches HarvestState.Idle stays Idle
+    /// for the rest of the match: only a fresh Harvest command sets HState, and
+    /// nothing in the sim issues one. It bites whenever the player orders Harvest
+    /// before building a refinery, whenever every reachable field runs dry and an
+    /// expansion opens a new one, and whenever the last refinery dies and is
+    /// replaced. The AI hides all three by re-issuing Harvest every single tick;
+    /// the player had no equivalent, so this is quality of life the AI already
+    /// had and the human did not.
+    ///
+    /// It is not strategy automation (GDD s1 draws that line): a harvester the
+    /// player explicitly Stopped, moved by hand, or sent to a rally point stays
+    /// exactly where it was put, forever, and only an explicit Harvest order
+    /// re-enrols it. The re-issue goes through the ordinary command path, so it
+    /// is deterministic, lockstep-legal and replay-clean, and it is rate-limited
+    /// to one attempt per harvester per second: the AI's per-tick flood through a
+    /// lockstep relay is a known waste (P5-ECON-15) and reproducing it here would
+    /// be a new one.
+    ///
+    /// The honest home for this is the sim, where HarvestSystem already retries
+    /// FindNearestRefinery and already reassigns dry fields; it lives here
+    /// because that is touchesSim and this ships today. Recorded as a follow-up
+    /// in docs/questions/, not quietly forgotten.
+    /// </summary>
+    private void AutoResumeHarvesters()
+    {
+        if (_replay != null) return;             // a spectator issues no orders
+        if (!HasLiveRefinery()) return;          // P5-ECON-06's rule, same reason
+        int tick = _world.Tick;
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+        {
+            var e = ents[i];
+            if (!e.Alive || e.PlayerId != 0 || e.Kind != EntityKind.Harvester) continue;
+            if (e.HState != HarvestState.Idle) continue;
+            if (_manuallyStopped.Contains(i)) continue;
+            if (_lastAutoHarvest.TryGetValue(i, out int last) && tick - last < AutoHarvestEvery) continue;
+            int field = NearestFieldTo(e.X, e.Y);
+            if (field < 0) continue;             // nothing left to mine: parking is correct
+            _lastAutoHarvest[i] = tick;
+            _autoHarvestIssues++;
+            _pending.Add(new Command(0, 0, CommandType.Harvest, i, Fix64.Zero, Fix64.Zero, field));
+        }
+    }
+
     public void QueueStructure(int structType)
     {
         if (!(MatchConfig.AllowedStructures?.Contains(structType) ?? true)) return;
@@ -547,7 +644,7 @@ public partial class SkirmishLive : Node3D
         _ghost.Visible = true;
         // DEF-01: the ghost is the real footprint, not a hardcoded 2x2. A
         // barrier is 1x1 (ADR-005 clause 1) and must not preview as a building.
-        float f = World.FootprintOf(structType);
+        float f = _world.FootprintOf(structType);
         _ghost.Mesh = new BoxMesh { Size = new Vector3(f, 0.5f, f) };
         // The ghost's own range ring: the mesh is built at radius 1, so Scale
         // IS the radius. Unarmed structures show none.
@@ -689,7 +786,12 @@ public partial class SkirmishLive : Node3D
 
         _sidebar = new Sidebar();
         hud.AddChild(_sidebar);
-        _sidebar.Init(this);
+        // BD-02/BD-06: the sidebar gets the catalogue by delegate. GetUnitType
+        // was always an instance method and BD-06 made GetStructureType one too,
+        // so both reads must come from THIS world: a match may register its own
+        // catalogue before tick 0, and a sidebar reading compiled defaults would
+        // quietly price the wrong game.
+        _sidebar.Init(this, t => _world.GetUnitType(t).BuildTicks, t => _world.GetStructureType(t));
         // TICKET-P5-SAVE-01: the sidebar is a command surface, and playback takes
         // no commands - RunOneTick drops _pending outright. Leaving it up meant a
         // replay showed lit build buttons and a "PLACE >>" prompt that did
@@ -783,6 +885,7 @@ public partial class SkirmishLive : Node3D
         // applied on, which is the world's tick BEFORE the step - the same
         // convention the runner's replay gate records and replays under.
         int recTick = _world.Tick;
+        AutoResumeHarvesters();
         _tickCmds.Clear();
         if (_replay != null)
         {
@@ -851,21 +954,27 @@ public partial class SkirmishLive : Node3D
                         foreach (var (d, home) in frig2.Doors)
                             frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
                     }
-            if (ev.Type == GameEventType.ProductionComplete && _rally.Count > 0
+            // TICKET-P5-BD-14: exact attribution. The sim now names the
+            // producing structure in ev.C, so the unit goes to ITS rally point.
+            // What this replaces was a guess: a scan for any rallied structure
+            // within four cells of the new unit, walking a Dictionary in
+            // nondeterministic order, which cross-wired two factories parked
+            // close together and picked between them arbitrarily.
+            if (ev.Type == GameEventType.ProductionComplete
+                && ev.C >= 0 && _rally.TryGetValue(ev.C, out var rp)
                 && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var nu = _world.Entities[ev.A];
                 if (nu.Alive && nu.PlayerId == 0 && nu.Kind is EntityKind.Unit or EntityKind.Harvester)
-                    foreach (var (fid, rp) in _rally)
-                        if (_latest.TryGetValue(fid, out var fv)
-                            && System.Math.Abs(fv.X - (double)(nu.X.Raw / 4294967296.0)) < 4
-                            && System.Math.Abs(fv.Y - (double)(nu.Y.Raw / 4294967296.0)) < 4)
-                        {
-                            _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
-                                Fix64.FromFraction((int)(rp.X * 100), 100),
-                                Fix64.FromFraction((int)(rp.Z * 100), 100)));
-                            break;
-                        }
+                {
+                    _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
+                        Fix64.FromFraction((int)(rp.X * 100), 100),
+                        Fix64.FromFraction((int)(rp.Z * 100), 100)));
+                    // P5-ECON-07 clause 2a: a rally beats auto-harvest. A player
+                    // who pointed a factory somewhere meant it, so the new
+                    // harvester is treated as parked until it is told otherwise.
+                    if (nu.Kind == EntityKind.Harvester) _manuallyStopped.Add(ev.A);
+                }
             }
             // W3-19: flyout toast for own completions. For CY
             // completions ev.A is the yard and ev.B the structure
@@ -972,6 +1081,7 @@ public partial class SkirmishLive : Node3D
         }
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
         _selInfo.Text = _wallDrag ? WallDragSummary() : SelectionSummary();
+        ShowRallyMarkers();   // TICKET-P5-BD-14: a rally is drawn for its own producer only
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -982,10 +1092,13 @@ public partial class SkirmishLive : Node3D
         var yardQ = _yardId >= 0 ? _world.QueueContents(_yardId) : System.Array.Empty<int>();
         var facQ = _factoryId >= 0 ? _world.QueueContents(_factoryId) : System.Array.Empty<int>();
         float yardProg = _yardId >= 0 && yardQ.Count > 0
-            ? _world.Entities[_yardId].BuildProgress / (World.GetStructureType(yardQ[0]).BuildTicks * 100f) : 0f;
+            ? _world.Entities[_yardId].BuildProgress / (_world.GetStructureType(yardQ[0]).BuildTicks * 100f) : 0f;
         float facProg = _factoryId >= 0 && facQ.Count > 0
             ? _world.Entities[_factoryId].BuildProgress / (_world.GetUnitType(facQ[0]).BuildTicks * 100f) : 0f;
-        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0, yardQ, facQ, yardProg, facProg);
+        // BD-10 hands the sidebar the supply and draw already tallied above, so
+        // the bar and the status line cannot disagree about the same numbers.
+        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0, yardQ, facQ, yardProg, facProg,
+            supply, draw);
 
         if (_placingType > 0)
         {
@@ -1002,7 +1115,7 @@ public partial class SkirmishLive : Node3D
                     // DEF-01 clause 7: the +1 here was the 2x2 centre offset
                     // hardcoded. Half the real footprint puts a 1x1 barrier at
                     // its cell centre and leaves every 2x2 exactly where it was.
-                    float half = World.FootprintOf(_placingType) / 2f;
+                    float half = _world.FootprintOf(_placingType) / 2f;
                     _ghost.Position = new Vector3(ax + half, 0.25f, ay + half);
                     // Passing the type makes the tint agree with the sim's own
                     // footprint test; for types 1-8 FootprintOf is 2, which is
@@ -1044,7 +1157,7 @@ public partial class SkirmishLive : Node3D
     /// whether to release the button.</summary>
     private string WallDragSummary()
     {
-        long cost = _dragRun * (long)World.GetStructureType(9).Cost;
+        long cost = _dragRun * (long)_world.GetStructureType(9).Cost;
         int have = OwnCount(EntityKind.Wall);
         string cap = have + _dragRun > World.MaxBarriersPerPlayer
             ? $"   CAP {have}/{World.MaxBarriersPerPlayer} - RUN TRUNCATED"
@@ -1062,7 +1175,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(sid, out var wv) && wv.Kind == EntityKind.Wall) walls++;
         if (walls > 1 && walls == _selection.Count)
         {
-            long refund = walls * (long)World.GetStructureType(9).Cost / 2;
+            long refund = walls * (long)_world.GetStructureType(9).Cost / 2;
             return $"{walls} WALL SEGMENTS   R repair  X sell   {refund} cr";
         }
         if (_selection.Count == 1)
@@ -1089,6 +1202,47 @@ public partial class SkirmishLive : Node3D
         foreach (var v in _view)
             if (v.Alive && v.PlayerId == 0 && (v.Kind == EntityKind.Unit || v.Kind == EntityKind.Harvester)) n++;
         return n;
+    }
+
+    /// <summary>TICKET-P5-BD-14: the marker belonging to one rallied structure, made on demand.</summary>
+    private MeshInstance3D RallyMarkerFor(int structureId)
+    {
+        if (_rallyMarkers.TryGetValue(structureId, out var existing)) return existing;
+        var rallyGold = new Color(0.79f, 0.63f, 0.36f);
+        var m = new MeshInstance3D
+        {
+            Name = $"RallyMarker{structureId}",
+            Mesh = new CylinderMesh { TopRadius = 0.05f, BottomRadius = 0.05f, Height = 0.7f },
+            Visible = false, // ShowRallyMarkers decides; a rally is drawn only for the selected producer
+            MaterialOverride = new StandardMaterial3D
+            { AlbedoColor = rallyGold, EmissionEnabled = true, Emission = rallyGold, EmissionEnergyMultiplier = 1.2f },
+        };
+        AddChild(m);
+        _rallyMarkers[structureId] = m;
+        return m;
+    }
+
+    /// <summary>Classic rule: a rally point is drawn for the producer you have
+    /// selected and for no other. Called each frame; cheap, since the dictionary
+    /// holds one entry per rallied structure and there are never many.</summary>
+    private void ShowRallyMarkers()
+    {
+        foreach (var (sid, node) in _rallyMarkers) node.Visible = _selection.Contains(sid);
+    }
+
+    /// <summary>A dead producer's rally point and marker die with it, or the
+    /// scene accumulates gold pins pointing at nothing (BD-14 clause 4).</summary>
+    private void ForgetRally(int structureId)
+    {
+        _rally.Remove(structureId);
+        if (!_rallyMarkers.Remove(structureId, out var node)) return;
+        // QueueFree defers to the end of the frame, so rename first: until the
+        // node is actually reaped it is still a child, and anything walking the
+        // scene by name would find a marker for a structure that no longer
+        // exists. Same reason and same shape as the DmgSmokeGone rename above.
+        node.Name = "FreedRallyPin";   // deliberately not a RallyMarker* name
+        node.Visible = false;
+        node.QueueFree();
     }
 
     private void OnEliminated(int player)
@@ -1131,8 +1285,10 @@ public partial class SkirmishLive : Node3D
     /// warns that a mismatch is silent and fatal, so ask the sim's own table
     /// rather than writing 9 in the client.
     /// </summary>
-    private static bool IsBarrier(int structType) =>
-        World.GetStructureType(structType).Kind == EntityKind.Wall;
+    // BD-06 made the catalogue an instance read, so this is no longer static:
+    // the answer belongs to this match's catalogue, not to the compiled one.
+    private bool IsBarrier(int structType) =>
+        _world.GetStructureType(structType).Kind == EntityKind.Wall;
 
     /// <summary>
     /// DEF-01 clause 8: the selection ring was hardcoded at 1.5, which is the
@@ -1146,7 +1302,7 @@ public partial class SkirmishLive : Node3D
         if (!_actors.TryGetValue(id, out var n)) return;
         if (n.GetNodeOrNull<MeshInstance3D>("SelRing") != null) return;
         int st = id >= 0 && id < _world.EntityCount ? _world.Entities[id].StructType : 0;
-        BattlefieldView.AddSelRing(n, World.FootprintOf(st) * 0.75f);
+        BattlefieldView.AddSelRing(n, _world.FootprintOf(st) * 0.75f);
     }
 
     /// <summary>
@@ -1463,6 +1619,8 @@ public partial class SkirmishLive : Node3D
                     _hpBars.Remove(id);
                 }
                 _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
+                ForgetRally(id);              // TICKET-P5-BD-14: no orphan markers
+                _manuallyStopped.Remove(id);  // P5-ECON-07: ids are reused by nothing, but the set should not grow forever
             }
 
         _now += dt;
@@ -1796,6 +1954,14 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
             {
                 _pending.Add(new Command(0, 0, CommandType.Stop, id, Fix64.Zero, Fix64.Zero));
+                // P5-ECON-07 clause 2, and the line that keeps this feature
+                // quality of life rather than strategy automation (GDD s1): a
+                // harvester the player explicitly stopped stays stopped until
+                // the player explicitly says otherwise. Doc 22 records that
+                // BD-15 read this the other way (its 15-tick poll re-tasks a
+                // stopped harvester); P5-ECON-07's reading is the adopted one
+                // and the Game Designer may still overrule it.
+                if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
                 n++;
             }
         if (n == 0) return;
@@ -1938,8 +2104,45 @@ public partial class SkirmishLive : Node3D
     public string SelectionText() => SelectionSummary();
     /// <summary>The live HUD readout, so a test reads what the player reads.</summary>
     public string SelInfoText => _selInfo.Text;
+
+    // ---- TICKET-P5-BD-01 surface (BD-14 rally, P5-ECON-06/07 harvesting).
+    // Same principle as above: read the shipped state, never a copy of it.
+    /// <summary>The live world, for scripted checks that must assert on sim state (HState, Carry) the HUD only paraphrases. Reads and scenario scripting only.</summary>
+    public World LiveWorld => _world;
+    public int RallyMarkerCount => _rallyMarkers.Count;
+    /// <summary>Markers are scene children; count them by walking the scene so an orphan cannot hide in a stale dictionary.</summary>
+    public int RallyMarkerNodesInScene()
+    {
+        int n = 0;
+        foreach (var c in GetChildren())
+            if (c is MeshInstance3D m && m.Name.ToString().StartsWith("RallyMarker")
+                && !m.IsQueuedForDeletion()) n++;
+        return n;
+    }
+    public bool RallyMarkerVisible(int structureId) =>
+        _rallyMarkers.TryGetValue(structureId, out var m) && m.Visible;
+    public bool HasRally(int structureId) => _rally.ContainsKey(structureId);
+    public bool RefineryLive => HasLiveRefinery();
+    public bool IsParked(int harvesterId) => _manuallyStopped.Contains(harvesterId);
+    public int AutoHarvestIssues => _autoHarvestIssues;
+    public string ToastText => _toast.Text;
+    public bool ToastVisible => _toast.Visible;
+    /// <summary>Drive one sim tick exactly as the accumulator does, so a test exercises the shipped loop.</summary>
+    public void StepOneTick() { RunOneTick(); AfterTicks(0); }
+    public string SidebarStructText(int typeId) => _sidebar.StructButtonText(typeId);
+    public string SidebarUnitText(int typeId) => _sidebar.UnitButtonText(typeId);
+    public string SidebarPowerText => _sidebar.PowerText;
+    public float SidebarPowerFillWidth => _sidebar.PowerFillWidth;
+    public float SidebarPowerTickX => _sidebar.PowerTickX;
+    public Color SidebarPowerFillColour => _sidebar.PowerFillColour;
+    public bool SidebarPowerPulsing => _sidebar.PowerPulsing;
+    public string SidebarStructHeader => _sidebar.StructHeaderText;
     public int SelectionCount => _selection.Count;
     public void ClearSelection() => _selection.Clear();
+    /// <summary>Select exactly one entity, as a single left-click on it would.</summary>
+    public void SelectOne(int id) { _selection.Clear(); _selection.Add(id); }
+    /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
+    public void PressStop() => IssueStop();
     public int WallMaskOf(int id) => _wallMask.TryGetValue(id, out int m) ? m : -1;
     public float ActorYaw(int id) => _actors.TryGetValue(id, out var n) ? n.RotationDegrees.Y : float.NaN;
     /// <summary>The live barrier at a cell, or -1. Walls sit at cell centre.</summary>
@@ -2033,11 +2236,10 @@ public partial class SkirmishLive : Node3D
         if (onlyStructures)
         {
             foreach (int sid in _selection)
-                if (_latest.TryGetValue(sid, out var sv) && sv.Kind == EntityKind.Factory)
+                if (_latest.TryGetValue(sid, out var sv) && Ralliable(sv.Kind) && sv.PlayerId == 0)
                 {
                     _rally[sid] = new Vector3(p.X, 0, p.Z);
-                    _rallyMarker.Position = new Vector3(p.X, 0.35f, p.Z);
-                    _rallyMarker.Visible = true;
+                    RallyMarkerFor(sid).Position = new Vector3(p.X, 0.35f, p.Z);
                     // W3-17: rally clicks acknowledge in gold.
                     _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 2);
                     _audio.Play("ui_confirm", -8);
@@ -2048,19 +2250,51 @@ public partial class SkirmishLive : Node3D
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == 1 && v.Kind != EntityKind.FerriteField);
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
+        // P5-ECON-06: computed ONCE for the whole click, not per selected unit,
+        // and the answer decides whether the order is sent at all.
+        bool hasRef = HasLiveRefinery();
+        bool deniedHarvest = false;
+        int issued = 0;
         foreach (int id in _selection)
         {
             if (!_latest.TryGetValue(id, out var me)) continue;
             if (enemy >= 0)
                 _pending.Add(new Command(0, 0, CommandType.Attack, id, cx, cy, enemy, queued));
             else if (field >= 0 && me.Kind == EntityKind.Harvester)
+            {
+                // P5-ECON-06: without a refinery this command is a silent no-op
+                // that also mutates FieldId for nothing. Do not send it.
+                if (!hasRef) { deniedHarvest = true; continue; }
                 _pending.Add(new Command(0, 0, CommandType.Harvest, id, cx, cy, field, queued));
+                // P5-ECON-07 clause 2: an explicit Harvest is the one order that
+                // un-parks a harvester the player had parked.
+                _manuallyStopped.Remove(id);
+            }
             else if (Mobile(me.Kind))
+            {
                 _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
+                // P5-ECON-07 clause 2: a bare move on a harvester is the player
+                // saying where it should be. Auto-harvest must not overrule that.
+                if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
+            }
+            else continue;
+            issued++;
         }
+        if (deniedHarvest)
+        {
+            // The established denial pattern: no ui_deny asset exists, and an
+            // invalid structure placement already speaks with ui_click at -12.
+            ShowToast("NO REFINERY - BUILD ONE FIRST");
+            _audio.Play("ui_click", -12);
+        }
+        // A click that queued nothing gets no acknowledgement. P5-ECON-06 clause
+        // 4 only suppresses the gold harvest marker, which would leave a denied
+        // harvest drawing the MOVE ring and playing the move sound instead: the
+        // same lie in a different colour. Nothing issued, nothing acknowledged.
+        if (issued == 0) return;
         // W3-17: contracting acknowledgement ring at the order point, colour
         // coded by order type (attack rings sit on the target itself).
-        int mk = enemy >= 0 ? 1 : (field >= 0 ? 2 : 0);
+        int mk = enemy >= 0 ? 1 : (field >= 0 && hasRef ? 2 : 0);
         Vector3 mpos = enemy >= 0 && _latest.TryGetValue(enemy, out var ev2)
             ? new Vector3((float)ev2.X, 0, (float)ev2.Y)
             : new Vector3(p.X, 0, p.Z);

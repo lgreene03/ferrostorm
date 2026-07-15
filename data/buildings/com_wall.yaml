@@ -1,0 +1,20 @@
+# The ninth file. TICKET-P5-BD-06 was written against an eight-structure
+# catalogue and the barrier segment (ADR-005, Wave B) landed afterwards. Leaving
+# it compiled-only would leave exactly the second source of truth this ticket
+# exists to remove, so it is ported here on the same terms as the other eight.
+id: com_wall
+name: Wall
+faction: common
+cost: 100
+build_time_ticks: 0
+hp: 500
+power_supply: 0
+power_draw: 0
+sight_range: 0
+footprint: 1
+weapon_ids: []
+notes: >
+  ADR-005: 1x1, bought upfront as each segment lands, no ready slot and no
+  build time, which build_time_ticks 0 is what enforces. sight_range 0 is
+  load-bearing rather than lazy: FogSystem skips zero-sight entities, so eighty
+  segments per player cost nothing in the fog pass and grant no vision.

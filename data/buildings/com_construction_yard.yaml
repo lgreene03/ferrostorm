@@ -1,0 +1,16 @@
+id: com_construction_yard
+name: Construction Yard
+faction: common
+cost: 3000
+build_time_ticks: 0
+hp: 3000
+power_supply: 0
+power_draw: 0
+sight_range: 6
+footprint: 2
+weapon_ids: []
+notes: >
+  build_time_ticks 0 is load-bearing, not a placeholder: BuildStructure refuses
+  anything with BuildTicks <= 0, which is what keeps the yard MCV-deployed
+  rather than queueable. The cost is still real, because CancelProduce and
+  SellStructure both price it.

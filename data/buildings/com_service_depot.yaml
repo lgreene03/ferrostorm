@@ -1,0 +1,15 @@
+id: com_service_depot
+name: Service Depot
+faction: common
+cost: 1200
+build_time_ticks: 200
+hp: 1000
+power_supply: 0
+power_draw: 30
+sight_range: 4
+footprint: 2
+weapon_ids: []
+notes: >
+  Repairs own units within radius 4 at 2 hp and 1 credit per tick each. The
+  repair radius is a system constant rather than sight_range; do not assume the
+  two are the same number for any reason other than that they currently differ.

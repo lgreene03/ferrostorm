@@ -1,0 +1,19 @@
+# TICKET-P5-BD-06: the structure catalogue, ported byte-identical from the
+# compiled defaults in World.cs. The selftest proves every value here equals
+# the compiled def, and the golden hashes prove the port changed no behaviour.
+id: com_power_plant
+name: Power Plant
+faction: common
+cost: 300
+build_time_ticks: 100
+hp: 150
+power_supply: 100
+power_draw: 0
+sight_range: 4
+footprint: 2
+weapon_ids: []
+notes: >
+  The only supplier. Production rate, the superweapon charge, the veil and the
+  service depot all degrade below full supply (GDD s5), so a sniped plant is
+  felt everywhere at once. Supply and hp are overridable per scenario at the
+  spawn site; the defaults are these.

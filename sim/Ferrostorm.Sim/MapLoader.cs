@@ -162,7 +162,7 @@ public sealed class MapData
         }
         foreach (var st in Structures)
         {
-            int id = World.GetStructureType(st.StructType).Kind switch
+            int id = world.GetStructureType(st.StructType).Kind switch
             {
                 EntityKind.PowerPlant => world.SpawnPowerPlant(st.Player, st.Ax, st.Ay),
                 EntityKind.Factory => world.SpawnFactory(st.Player, st.Ax, st.Ay),

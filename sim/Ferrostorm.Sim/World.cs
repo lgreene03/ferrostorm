@@ -150,7 +150,11 @@ public struct Entity
 /// The presentation layer consumes these for sound and effects instead of
 /// diffing snapshots; they are derived from hashed state and are therefore
 /// identical on every client, but are not themselves part of the hash.
-/// A = primary entity id, B = context (target id, rank, player, type).
+/// A = primary entity id, B = context (target id, rank, player, type),
+/// C = the producing structure's entity index on ProductionComplete and -1
+/// everywhere else (TICKET-P5-BD-14). Before C existed the client had to guess
+/// which factory made a unit by position proximity, which cross-wired two
+/// factories parked within four cells of each other.
 /// </summary>
 public enum GameEventType : byte
 {
@@ -166,7 +170,7 @@ public enum GameEventType : byte
     SuperweaponImpact = 10, // detonation at (X, Y)
     Captured = 11,          // A structure, B new owner
 }
-public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default);
+public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default, int C = -1);
 
 public sealed partial class World
 {
@@ -252,14 +256,15 @@ public sealed partial class World
 
     public int SpawnRefinery(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(3);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Refinery,
             X = x, Y = y, TargetX = x, TargetY = y,
-            Hp = 2000, MaxHp = 2000, Armour = ArmourClass.Structure, WeaponId = 0, ExplicitTarget = -1, StructType = 3,
-            Sight = Fix64.FromInt(6), FieldId = -1, RefineryId = -1,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1, StructType = 3,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
@@ -344,31 +349,73 @@ public sealed partial class World
     // build-in-sidebar-then-place flow is TICKET-P2-SIM-05; barriers keep the
     // upfront-cost model instead, deducting on placement with no ready slot
     // (ADR-005 clause 3).
-    public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks);
-    public static StructureTypeDef GetStructureType(int typeId) => typeId switch
+    /// <summary>
+    /// TICKET-P5-BD-06: every field here is authored in /data/buildings and the
+    /// compiled defaults below exist to be proved equal to those files by the
+    /// selftest round-trip, not to be edited (CLAUDE.md forbids hand-editing
+    /// stats in code). Hp/PowerSupply/PowerDraw/SightCells were previously
+    /// literals scattered across the eight Spawn methods; Footprint and WeaponId
+    /// are carried so that placement and armament read the def rather than a
+    /// second switch. Like the unit catalogue this is static config and is not
+    /// part of the state hash.
+    /// </summary>
+    public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks,
+        int Hp = 0, int PowerSupply = 0, int PowerDraw = 0, int SightCells = 0,
+        int Footprint = FootprintSize, int WeaponId = 0);
+
+    /// <summary>The compiled reference catalogue: the values a /data/buildings file must reproduce exactly. Static so that callers with no World (the Balance tool) can price a structure; a live match must read GetStructureType instead, which honours RegisterStructureType.</summary>
+    public static StructureTypeDef DefaultStructureType(int typeId) => typeId switch
     {
-        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100),
-        2 => new StructureTypeDef(2000, EntityKind.Factory, 300),
-        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300),
-        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0), // MCV-deployed, never queued
-        5 => new StructureTypeDef(600, EntityKind.Turret, 150),
-        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600),
-        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250),
-        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200),
+        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4),
+        2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5),
+        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, SightCells: 6),
+        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, SightCells: 6), // MCV-deployed, never queued
+        5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4),
+        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 100, SightCells: 4),
+        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6),
+        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
         // Yard queue by the existing guard in BuildStructure, exactly as type 4 is
-        // kept out: barriers are bought upfront at placement instead.
-        9 => new StructureTypeDef(100, EntityKind.Wall, 0),
+        // kept out: barriers are bought upfront at placement instead. SightCells 0
+        // keeps 80 segments per player out of the fog pass entirely.
+        9 => new StructureTypeDef(100, EntityKind.Wall, 0, Hp: 500, SightCells: 0, Footprint: 1),
         _ => default,
     };
+
+    private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
+    private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
+    {
+        var d = new Dictionary<int, StructureTypeDef>();
+        for (int t = 1; t <= 9; t++) d[t] = DefaultStructureType(t);
+        return d;
+    }
+
+    /// <summary>The live catalogue. Unknown types return default, whose Cost 0 is what every command handler already tests to refuse them.</summary>
+    public StructureTypeDef GetStructureType(int typeId) => _structTypes.TryGetValue(typeId, out var d) ? d : default;
+
+    /// <summary>Match setup may overwrite or extend the catalogue before tick 0, mirroring RegisterUnitType. After tick 0 the catalogue is frozen: a mid-match change would be a silent replay divergence.</summary>
+    public void RegisterStructureType(int typeId, StructureTypeDef def)
+    {
+        if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
+        _structTypes[typeId] = def;
+    }
+
     /// <summary>The default footprint: every structure type except a barrier is 2x2.</summary>
     public const int FootprintSize = 2;
 
-    /// <summary>Cells per side of a structure type's square footprint (ADR-005). Barriers are 1x1; everything else is the 2x2 default.</summary>
-    public static int FootprintOf(int structType) => structType switch { 9 => 1, 10 => 1, _ => 2 };
+    /// <summary>ADR-005 clause 6: type 10 is the gate, reserved and deferred. It has no def and no file, so its 1x1 footprint cannot be read from the catalogue and is stated here instead of being silently lost.</summary>
+    public const int GateStructType = 10;
+
+    /// <summary>Cells per side of a structure type's square footprint (ADR-005), read from the def. Barriers are 1x1; everything else, including an unknown type (Footprint 0 on the default def), takes the 2x2 default that the placement path has always assumed.</summary>
+    public int FootprintOf(int structType)
+    {
+        if (structType == GateStructType) return 1;
+        int f = GetStructureType(structType).Footprint;
+        return f > 0 ? f : FootprintSize;
+    }
 
     /// <summary>Recover a structure's footprint anchor from its centre. Exact for both sizes: a 2x2 centre is anchor+1 so CellOf gives anchor+1, a 1x1 centre is anchor+0.5 so CellOf gives anchor.</summary>
-    public static int AnchorOf(Fix64 centre, int structType) => Map.CellOf(centre) - (FootprintOf(structType) - 1);
+    public int AnchorOf(Fix64 centre, int structType) => Map.CellOf(centre) - (FootprintOf(structType) - 1);
 
     // GDD Q2 strict adjacency: Chebyshev anchor distance to an own structure.
     // The Construction Yard projects the largest radius (Q2 resolution).
@@ -404,43 +451,49 @@ public sealed partial class World
     /// </summary>
     private static Fix64 FootprintCentre(int anchor, int size) => Fix64.FromInt(anchor) + Fix64.FromFraction(size, 2);
 
-    public int SpawnPowerPlant(int player, int ax, int ay, int supply = 100, int hp = 150)
+    /// <summary>The supply and hp overrides survive BD-06 as nullable rather than literal defaults: passing nothing takes the catalogue value, so there is one place to edit, and the scenarios that pass an explicit number are bit-identical either way.</summary>
+    public int SpawnPowerPlant(int player, int ax, int ay, int? supply = null, int? hp = null)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(1);
+        int sup = supply ?? def.PowerSupply, php = hp ?? def.Hp;
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.PowerPlant,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 1,
-            Hp = hp, MaxHp = hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(4), FieldId = -1, RefineryId = -1, PowerSupply = supply,
+            Hp = php, MaxHp = php, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerSupply = sup,
+            PowerDraw = def.PowerDraw,
         });
     }
 
     public int SpawnConstructionYard(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(4);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.ConstructionYard,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 4,
-            Hp = 3000, MaxHp = 3000, Armour = ArmourClass.Structure, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(6), FieldId = -1, RefineryId = -1,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
     /// <summary>Superweapon: charges over defaultCharge ticks (pausing while underpowered); a test may shorten the charge.</summary>
     public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = 1500)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(6);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Superweapon,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 6,
-            Hp = 1200, MaxHp = 1200, Armour = ArmourClass.Structure, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(4), FieldId = -1, RefineryId = -1, PowerDraw = 100,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
             ChargeTicks = chargeTicks, StrikeTicks = -1,
         });
     }
@@ -448,43 +501,47 @@ public sealed partial class World
     /// <summary>Veil projector (TICKET-P2-SIM-18): Sodality area cloak. Friendly
     /// mobile units within its Sight radius are field-cloaked - but only while
     /// the base has full power; a brown-out drops the whole veil (classic).</summary>
-    public int SpawnVeilProjector(int player, int ax, int ay, int hp = 900)
+    public int SpawnVeilProjector(int player, int ax, int ay, int? hp = null)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(7);
+        int vhp = hp ?? def.Hp;
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.VeilProjector,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 7,
-            Hp = hp, MaxHp = hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(6), FieldId = -1, RefineryId = -1, PowerDraw = 60,
+            Hp = vhp, MaxHp = vhp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
     /// <summary>Service depot: own units within radius 4 repair 2 hp/tick at 1 credit/tick each - the field hospital of the armoured column.</summary>
     public int SpawnServiceDepot(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(8);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.ServiceDepot,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 8,
-            Hp = 1000, MaxHp = 1000, Armour = ArmourClass.Structure, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(4), FieldId = -1, RefineryId = -1, PowerDraw = 30,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
     public int SpawnTurret(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(5);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Turret,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 5,
-            Hp = 400, MaxHp = 400, Armour = ArmourClass.Structure, WeaponId = 4, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(6), FieldId = -1, RefineryId = -1, PowerDraw = 20,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
@@ -496,14 +553,15 @@ public sealed partial class World
     /// </summary>
     public int SpawnWall(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay, 1);
-        Fix64 x = FootprintCentre(ax, 1), y = FootprintCentre(ay, 1);
+        var def = GetStructureType(9);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Wall,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 9,
-            Hp = 500, MaxHp = 500, Armour = ArmourClass.Structure, WeaponId = 0, ExplicitTarget = -1,
-            Sight = Fix64.Zero, FieldId = -1, RefineryId = -1, PowerDraw = 0,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
 
@@ -519,16 +577,17 @@ public sealed partial class World
         return n;
     }
 
-    public int SpawnFactory(int player, int ax, int ay, int draw = 40)
+    public int SpawnFactory(int player, int ax, int ay, int? draw = null)
     {
-        BlockFootprint(ax, ay, 2);
-        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
+        var def = GetStructureType(2);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Factory,
             X = x, Y = y, TargetX = x, TargetY = y,
-            Hp = 1500, MaxHp = 1500, Armour = ArmourClass.Structure, ExplicitTarget = -1, StructType = 2,
-            Sight = Fix64.FromInt(5), FieldId = -1, RefineryId = -1, PowerDraw = draw,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1, StructType = 2,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = draw ?? def.PowerDraw,
         });
     }
 
@@ -1610,7 +1669,9 @@ public sealed partial class World
                 if (isCy)
                 {
                     // Sidebar flow: the finished structure waits for placement.
-                    _events.Add(new GameEvent(GameEventType.ProductionComplete, i, queuedType));
+                    // C is the producing yard, which is A here too; set it anyway
+                    // so a consumer can read C without asking which case it is.
+                    _events.Add(new GameEvent(GameEventType.ProductionComplete, i, queuedType, C: i));
                     e.ReadyStructure = queuedType;
                     q.RemoveAt(0);
                     _entities[i] = e;
@@ -1626,7 +1687,9 @@ public sealed partial class World
                         ? SpawnHarvester(p, Map.CellCentre(nx), Map.CellCentre(ny))
                         : SpawnUnit(p, Map.CellCentre(nx), Map.CellCentre(ny), def.Speed, def.Hp, def.Armour, def.WeaponId,
                             def.SightCells, def.Stealth, def.Detector, def.Veterancy, queuedType);
-                    _events.Add(new GameEvent(GameEventType.ProductionComplete, spawned, queuedType));
+                    // C = the factory that built it (TICKET-P5-BD-14): the rally
+                    // attribution the client cannot recover from position alone.
+                    _events.Add(new GameEvent(GameEventType.ProductionComplete, spawned, queuedType, C: i));
                     break;
                 }
             }
