@@ -1008,7 +1008,7 @@ public sealed partial class World
     /// structure pursue it and convert it on contact. The engineer is
     /// consumed by the act; the captured structure keeps its hit points but
     /// loses its production queue and ready slot (the crews flee with the
-    /// blueprints). The signature C&C personality mechanic - and the seed of
+    /// blueprints). The signature 90s-RTS personality mechanic - and the seed of
     /// the Reclaimers' salvage identity when the third faction arrives.
     /// </summary>
     private void CaptureSystem()
