@@ -47,9 +47,11 @@ public partial class Sidebar : PanelContainer
     private SkirmishLive _game = null!;
     private readonly Dictionary<int, Button> _structButtons = new();
     private readonly Dictionary<int, Button> _unitButtons = new();
+    private readonly Dictionary<Button, string> _baseText = new();
     private Label _power = null!;
     private Button _placeButton = null!;
     private int _readyType;
+    private Tween? _placePulse;   // W3-16: PLACE-button ready pulse
 
     public void Init(SkirmishLive game)
     {
@@ -126,26 +128,83 @@ public partial class Sidebar : PanelContainer
         hover.BorderColor = FerriteGold;
         b.AddThemeStyleboxOverride("normal", normal);
         b.AddThemeStyleboxOverride("hover", hover);
-        b.AddThemeStyleboxOverride("pressed", hover);
+        // W3-16: a real pressed state (darker gold, thicker border) so clicks
+        // give feedback, and a disabled state so unaffordable items read dim.
+        var pressed = (StyleBoxFlat)normal.Duplicate();
+        pressed.BgColor = new Color(0.23f, 0.19f, 0.11f);
+        pressed.BorderColor = FerriteGold;
+        pressed.SetBorderWidthAll(2);
+        b.AddThemeStyleboxOverride("pressed", pressed);
+        var disabled = (StyleBoxFlat)normal.Duplicate();
+        disabled.BgColor = new Color(0.075f, 0.08f, 0.085f);
+        disabled.BorderColor = new Color(0.12f, 0.13f, 0.14f);
+        b.AddThemeStyleboxOverride("disabled", disabled);
+        b.AddThemeColorOverride("font_disabled_color", new Color(0.35f, 0.34f, 0.32f));
+        // W3-15: build-progress overlay on the queue head; Refresh drives
+        // OffsetRight from 0 to the button width as the head builds.
+        var fill = new ColorRect
+        {
+            Name = "Fill",
+            Color = new Color(0.79f, 0.63f, 0.36f, 0.20f),
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        fill.AnchorTop = 0; fill.AnchorBottom = 1; fill.AnchorLeft = 0; fill.AnchorRight = 0;
+        fill.OffsetRight = 0;
+        b.AddChild(fill);
+        _baseText[b] = b.Text;
         b.Pressed += () => onPress();
         return b;
     }
 
-    /// <summary>Called by the scene each frame with fresh sim reads.</summary>
-    public void Refresh(long credits, int readyStructureType, bool hasFactory, bool hasYard, int yardQueue, int factoryQueue)
+    /// <summary>Called by the scene each frame with fresh sim reads. W3-15:
+    /// queue contents drive per-button count badges and a progress fill on
+    /// the queue head (the classic clock substitute).</summary>
+    public void Refresh(long credits, int readyStructureType, bool hasFactory, bool hasYard,
+        IReadOnlyList<int> yardQ, IReadOnlyList<int> facQ, float yardProgress, float facProgress)
     {
         _readyType = readyStructureType;
         _placeButton.Visible = readyStructureType > 0;
         if (readyStructureType > 0)
             _placeButton.Text = $"PLACE {NameOf(readyStructureType)} >>";
+        // W3-16: the ready-to-place state is the most important sidebar
+        // prompt in the classic loop; pulse until the structure is placed.
+        if (readyStructureType > 0 && _placePulse == null)
+        {
+            _placePulse = _placeButton.CreateTween().SetLoops();
+            _placePulse.TweenProperty(_placeButton, "modulate", new Color(1f, 0.88f, 0.62f), 0.5f)
+                .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+            _placePulse.TweenProperty(_placeButton, "modulate", Colors.White, 0.5f)
+                .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+        }
+        else if (readyStructureType == 0 && _placePulse != null)
+        {
+            _placePulse.Kill();
+            _placePulse = null;
+            _placeButton.Modulate = Colors.White;
+        }
+        var structCounts = new Dictionary<int, int>();
+        foreach (int t in yardQ) structCounts[t] = structCounts.GetValueOrDefault(t) + 1;
         foreach (var (typeId, b) in _structButtons)
         {
             var def = World.GetStructureType(typeId);
             b.Disabled = !hasYard || readyStructureType > 0 || credits < def.Cost;
+            int n = structCounts.GetValueOrDefault(typeId);
+            b.Text = _baseText[b] + (n > 0 ? $"  x{n}" : "");
+            ((ColorRect)b.GetNode("Fill")).OffsetRight =
+                yardQ.Count > 0 && typeId == yardQ[0] ? b.Size.X * yardProgress : 0;
         }
+        var unitCounts = new Dictionary<int, int>();
+        foreach (int t in facQ) unitCounts[t] = unitCounts.GetValueOrDefault(t) + 1;
         foreach (var (typeId, b) in _unitButtons)
+        {
             b.Disabled = !hasFactory;
-        _power.Text = $"CREDITS {credits}    CY Q{yardQueue}  FAC Q{factoryQueue}";
+            int n = unitCounts.GetValueOrDefault(typeId);
+            b.Text = _baseText[b] + (n > 0 ? $"  x{n}" : "");
+            ((ColorRect)b.GetNode("Fill")).OffsetRight =
+                facQ.Count > 0 && typeId == facQ[0] ? b.Size.X * facProgress : 0;
+        }
+        ((ColorRect)_placeButton.GetNode("Fill")).OffsetRight = 0;
+        _power.Text = $"CREDITS {credits}    CY Q{yardQ.Count}  FAC Q{facQ.Count}";
     }
 
     private static string NameOf(int structType)

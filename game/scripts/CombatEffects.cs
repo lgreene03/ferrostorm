@@ -33,6 +33,11 @@ public partial class CombatEffects : Node3D
     private static readonly StandardMaterial3D ShellMat = Emissive(new Color(1.0f, 0.85f, 0.5f), 4.0f);
     private static readonly StandardMaterial3D RocketMat = Emissive(new Color(1.0f, 0.6f, 0.3f), 3.5f);
     private static readonly StandardMaterial3D HowShellMat = Emissive(new Color(1.0f, 0.75f, 0.4f), 3.0f);
+    // W3-17: order-acknowledgement rings, colour-coded by order type
+    // (bone = move, signal orange = attack, ferrite gold = harvest/rally).
+    private static readonly StandardMaterial3D OrderMoveMat = Emissive(new Color(0.84f, 0.82f, 0.77f), 2.0f);
+    private static readonly StandardMaterial3D OrderAttackMat = Emissive(new Color(0.91f, 0.42f, 0.13f), 2.5f);
+    private static readonly StandardMaterial3D OrderHarvestMat = Emissive(new Color(0.79f, 0.63f, 0.36f), 2.2f);
     private static readonly StandardMaterial3D SmokeMat = new()
     {
         ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
@@ -50,6 +55,7 @@ public partial class CombatEffects : Node3D
     private static readonly CapsuleMesh ShellMesh = new() { Radius = 0.035f, Height = 0.22f };
     private static readonly BoxMesh RocketMesh = new() { Size = new Vector3(0.05f, 0.05f, 0.18f) };
     private static readonly SphereMesh HowShellMesh = new() { Radius = 0.06f, Height = 0.12f, RadialSegments = 8, Rings = 4 };
+    private static readonly TorusMesh OrderRingMesh = new() { InnerRadius = 0.32f, OuterRadius = 0.40f };
     private static readonly QuadMesh SmokeQuad = MakeSmokeQuad();
     private static readonly ParticleProcessMaterial SmokeProcess = new()
     {
@@ -405,6 +411,27 @@ public partial class CombatEffects : Node3D
         Camera.AddTrauma(amount * Mathf.Clamp(1f - dist / falloff, 0f, 1f));
     }
 
+    /// <summary>W3-17: order-acknowledgement ground ring at the click point.
+    /// kind 0 = move (bone), 1 = attack (orange), 2 = harvest/rally (gold).
+    /// The ring CONTRACTS while fading - the expanding ring stays the
+    /// death/impact language. Built as an explicit parallel tween rather than
+    /// FadeAndFree().Parallel(): that form would attach the scale tweener to
+    /// the QueueFree callback's step, so it would only start after the fade
+    /// finished and the contraction would never be seen.</summary>
+    public void OrderMarker(Vector3 pos, int kind)
+    {
+        var mat = kind == 1 ? OrderAttackMat : kind == 2 ? OrderHarvestMat : OrderMoveMat;
+        var ring = SpawnMesh(OrderRingMesh, mat, pos + new Vector3(0, 0.06f, 0));
+        ring.Scale = Vector3.One * 1.6f;
+        var tw = ring.CreateTween();
+        tw.SetParallel();
+        tw.TweenProperty(ring, "transparency", 1.0f, 0.45f);
+        tw.TweenProperty(ring, "scale", new Vector3(0.55f, 1f, 0.55f), 0.35f)
+            .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        tw.SetParallel(false);
+        tw.TweenCallback(Callable.From(ring.QueueFree));
+    }
+
     // ---- Fired: per-weapon muzzle + projectile families (W3-01..W3-05) ----
 
     private void OnFired(GameEvent ev, IReadOnlyDictionary<int, Node3D> actors, AudioDirector? audio,
@@ -450,7 +477,7 @@ public partial class CombatEffects : Node3D
             }
         }
 
-        audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from);
+        audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from, AudioDirector.Jitter(0.06f));   // W3-21
     }
 
     private void SpawnMuzzle(Vector3 from, float quadSize, float lightEnergy)
@@ -785,7 +812,7 @@ public partial class CombatEffects : Node3D
         AddScorch(pos, big ? 2.2f : 1.2f);
         if (big) SpawnBurnSite(pos);
         Shake(big ? 0.30f : 0.12f, pos);
-        audio?.PlayAt(big ? "explosion_large" : "explosion_small", pos);
+        audio?.PlayAt(big ? "explosion_large" : "explosion_small", pos, AudioDirector.Jitter(0.05f));   // W3-21
     }
 
     // ---- W3-10: the superweapon sequence ----

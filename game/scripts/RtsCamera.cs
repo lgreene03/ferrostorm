@@ -17,9 +17,13 @@ public partial class RtsCamera : Camera3D
     public Vector2 BoundsMin = Vector2.Zero;
     public Vector2 BoundsMax = new(64, 64);
 
+    // W3-18: graded edge-pan band width and the keyboard/edge speed ramp.
+    private const float EdgeBand = 24f;
+
     private CameraAttributesPractical _attrs = null!;
     private Vector3 _target;
     private float _trauma;
+    private float _panRamp;
 
     public override void _Ready()
     {
@@ -61,12 +65,22 @@ public partial class RtsCamera : Camera3D
         if (Input.IsKeyPressed(Key.D) || Input.IsKeyPressed(Key.Right)) move.X += 1;
         var mouse = GetViewport().GetMousePosition();
         var size = GetViewport().GetVisibleRect().Size;
-        if (mouse.X < 6) move.X -= 1;
-        if (mouse.X > size.X - 6) move.X += 1;
-        if (mouse.Y < 6) move.Z -= 1;
-        if (mouse.Y > size.Y - 6) move.Z += 1;
+        // W3-18: graded 24px edge band replaces the binary 6px tests. The
+        // quadratic curve is gentle at the band's inner edge, full speed at
+        // the screen border; Clamp handles the cursor leaving the window.
+        float wL = Mathf.Clamp((EdgeBand - mouse.X) / EdgeBand, 0f, 1f);
+        float wR = Mathf.Clamp((mouse.X - (size.X - EdgeBand)) / EdgeBand, 0f, 1f);
+        float wU = Mathf.Clamp((EdgeBand - mouse.Y) / EdgeBand, 0f, 1f);
+        float wD = Mathf.Clamp((mouse.Y - (size.Y - EdgeBand)) / EdgeBand, 0f, 1f);
+        move.X += wR * wR - wL * wL;
+        move.Z += wD * wD - wU * wU;
+        // W3-18: pan speed ramps up over 0.35s from a 40 percent start so
+        // taps nudge and holds accelerate. LimitLength (not Normalized)
+        // preserves the analogue edge weights, normalising only diagonals.
+        _panRamp = move != Vector3.Zero ? Mathf.Min(1f, _panRamp + (float)delta / 0.35f) : 0f;
+        float speed = PanSpeed * (0.4f + 0.6f * _panRamp);
         // W3-11: pan the target, clamp it to the map, chase it exponentially.
-        _target += move.Normalized() * PanSpeed * (float)delta * (_target.Y / 16f);
+        _target += move.LimitLength(1f) * speed * (float)delta * (_target.Y / 16f);
         _target.X = Mathf.Clamp(_target.X, BoundsMin.X, BoundsMax.X);
         // The 0.55f factor is the look-at offset shared with Minimap.Refresh.
         float zOff = _target.Y * 0.55f;

@@ -49,6 +49,9 @@ public partial class SkirmishLive : Node3D
     private Sidebar _sidebar = null!;
     private AudioDirector _audio = null!;
     private CombatEffects _effects = null!;
+    // W3-19: production-complete flyout toast beside the sidebar.
+    private Label _toast = null!;
+    private Tween? _toastTween;
 
     // Structure placement mode
     private int _placingType;
@@ -314,6 +317,20 @@ public partial class SkirmishLive : Node3D
         _objective.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
         hud.AddChild(_objective);
 
+        // W3-19: flyout toast just left of the 190px sidebar, below the top
+        // status row; ShowToast animates it in and fades it out.
+        _toast = new Label
+        {
+            Name = "Toast",
+            Visible = false,
+            AnchorLeft = 1, AnchorRight = 1, AnchorTop = 0,
+            OffsetLeft = -520, OffsetRight = -205, OffsetTop = 84,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        _toast.AddThemeFontSizeOverride("font_size", 15);
+        _toast.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
+        hud.AddChild(_toast);
+
         _dragRect = new Panel { Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
         var style = new StyleBoxFlat
         {
@@ -422,6 +439,21 @@ public partial class SkirmishLive : Node3D
                                     break;
                                 }
                     }
+                    // W3-19: flyout toast for own completions. For CY
+                    // completions ev.A is the yard and ev.B the structure
+                    // type; for unit completions ev.A is the new unit (the
+                    // same convention the rally handler relies on).
+                    if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < _world.EntityCount)
+                    {
+                        var pe = _world.Entities[ev.A];
+                        if (pe.PlayerId == 0)
+                        {
+                            string msg = pe.Kind == EntityKind.ConstructionYard
+                                ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY  -  PLACE >>"
+                                : $"{(pe.UnitType > 0 && pe.UnitType < UnitNames.Length ? UnitNames[pe.UnitType] : "UNIT")} DEPLOYED";
+                            ShowToast(msg);
+                        }
+                    }
                     if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
                     {
                         _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
@@ -448,8 +480,17 @@ public partial class SkirmishLive : Node3D
                         {
                             _lastAttackAlert = Time.GetTicksMsec() / 1000.0;
                             _audio.Play("alert_attack", -4);
+                            // W3-20: red minimap ping at the struck structure.
+                            _minimap.Ping(
+                                new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
+                                new Color(0.85f, 0.25f, 0.2f));
                         }
                     }
+                    // W3-20: orange ping where the superweapon lands.
+                    if (ev.Type == GameEventType.SuperweaponImpact)
+                        _minimap.Ping(
+                            new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
+                            new Color(0.91f, 0.42f, 0.13f));
                 }
             }
         }
@@ -471,15 +512,34 @@ public partial class SkirmishLive : Node3D
                 : new Color(0.79f, 0.63f, 0.36f);
             dots.Add(((float)v.X, (float)v.Y, c));
         }
-        _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f));
+        // W3-20: project the four viewport corners onto the ground for the
+        // minimap frustum trapezoid. Pitch is fixed at -50 with a ~37 degree
+        // vertical half-FOV, so all four rays hit the ground in practice; the
+        // null branch is a safety.
+        var vs = GetViewport().GetVisibleRect().Size;
+        var corners = new[] { new Vector2(0, 0), new Vector2(vs.X, 0), new Vector2(vs.X, vs.Y), new Vector2(0, vs.Y) };
+        Vector2[]? fr = new Vector2[4];
+        for (int i = 0; i < 4; i++)
+        {
+            if (GroundPoint(corners[i]) is { } g) fr[i] = new Vector2(g.X, g.Z);
+            else { fr = null; break; }
+        }
+        _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
         _selInfo.Text = SelectionSummary();
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
         int ready = _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
-        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0,
-            _yardId >= 0 ? _world.QueueLength(_yardId) : 0,
-            _factoryId >= 0 ? _world.QueueLength(_factoryId) : 0);
+        // W3-15: hand the sidebar the full queue contents plus the head's
+        // build fraction (BuildProgress counts percent-ticks, total is
+        // BuildTicks * 100). Pure post-Step reads, the rally-code precedent.
+        var yardQ = _yardId >= 0 ? _world.QueueContents(_yardId) : System.Array.Empty<int>();
+        var facQ = _factoryId >= 0 ? _world.QueueContents(_factoryId) : System.Array.Empty<int>();
+        float yardProg = _yardId >= 0 && yardQ.Count > 0
+            ? _world.Entities[_yardId].BuildProgress / (World.GetStructureType(yardQ[0]).BuildTicks * 100f) : 0f;
+        float facProg = _factoryId >= 0 && facQ.Count > 0
+            ? _world.Entities[_factoryId].BuildProgress / (_world.GetUnitType(facQ[0]).BuildTicks * 100f) : 0f;
+        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0, yardQ, facQ, yardProg, facProg);
 
         if (_placingType > 0 && _ghost.Visible)
         {
@@ -499,6 +559,26 @@ public partial class SkirmishLive : Node3D
     }
 
     private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR" };
+    // W3-19: structure names by type id (Sidebar's table is private).
+    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "STRUCTURE", "SERVICE DEPOT" };
+
+    /// <summary>W3-19: slide-and-fade production toast. A fresh completion
+    /// retriggers the animation from the top.</summary>
+    private void ShowToast(string msg)
+    {
+        _toastTween?.Kill();
+        _toast.Text = msg;
+        _toast.Visible = true;
+        _toast.Modulate = new Color(1, 1, 1, 0);
+        _toast.OffsetTop = 92;
+        _toastTween = _toast.CreateTween();
+        _toastTween.TweenProperty(_toast, "modulate:a", 1f, 0.15f);
+        _toastTween.Parallel().TweenProperty(_toast, "offset_top", 84f, 0.18f)
+            .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        _toastTween.TweenInterval(2.2);
+        _toastTween.TweenProperty(_toast, "modulate:a", 0f, 0.5f);
+        _toastTween.TweenCallback(Callable.From(() => _toast.Visible = false));
+    }
 
     private string SelectionSummary()
     {
@@ -909,7 +989,7 @@ public partial class SkirmishLive : Node3D
                 _selection.Add(hit);
                 if (_actors.TryGetValue(hit, out var n) && n.GetNodeOrNull<MeshInstance3D>("SelRing") == null)
                     BattlefieldView.AddSelRing(n, 1.5f);   // structures ring on demand
-                _audio.Play("ui_click", -14);
+                _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));   // W3-21
             }
             return;
         }
@@ -1012,6 +1092,8 @@ public partial class SkirmishLive : Node3D
                     _rally[sid] = new Vector3(p.X, 0, p.Z);
                     _rallyMarker.Position = new Vector3(p.X, 0.35f, p.Z);
                     _rallyMarker.Visible = true;
+                    // W3-17: rally clicks acknowledge in gold.
+                    _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 2);
                     _audio.Play("ui_confirm", -8);
                 }
             return;
@@ -1030,7 +1112,14 @@ public partial class SkirmishLive : Node3D
             else if (Mobile(me.Kind))
                 _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
         }
-        _audio.Play("order_move", -8);
+        // W3-17: contracting acknowledgement ring at the order point, colour
+        // coded by order type (attack rings sit on the target itself).
+        int mk = enemy >= 0 ? 1 : (field >= 0 ? 2 : 0);
+        Vector3 mpos = enemy >= 0 && _latest.TryGetValue(enemy, out var ev2)
+            ? new Vector3((float)ev2.X, 0, (float)ev2.Y)
+            : new Vector3(p.X, 0, p.Z);
+        _effects.OrderMarker(mpos, mk);
+        _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
     }
 
     /// <summary>Programmatic hooks for offscreen verification: select all own

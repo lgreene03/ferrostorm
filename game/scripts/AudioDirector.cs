@@ -93,8 +93,17 @@ public partial class AudioDirector : Node
         dir.ListDirEnd();
     }
 
-    /// <summary>Play a non-positional sound (UI, orders, alerts) by name.</summary>
-    public void Play(string name, float volumeDb = 0)
+    /// <summary>W3-21: random pitch multiplier, 1 +/- amount, for killing the
+    /// machine-gun sameness of rapid selects and massed fire. Client-side
+    /// System.Random is legal here; the determinism law binds /sim only
+    /// (BattlefieldView header).</summary>
+    private static readonly System.Random _sfxRng = new();
+    public static float Jitter(float amount) => 1f + ((float)_sfxRng.NextDouble() * 2f - 1f) * amount;
+
+    /// <summary>Play a non-positional sound (UI, orders, alerts) by name.
+    /// Pitch is always written so pooled players never inherit a stale
+    /// value (W3-21).</summary>
+    public void Play(string name, float volumeDb = 0, float pitch = 1f)
     {
         if (!TryGetStream(name, out var stream) || _uiPool.Count == 0)
             return;
@@ -105,11 +114,12 @@ public partial class AudioDirector : Node
         player.Stop();
         player.Stream = stream;
         player.VolumeDb = volumeDb;
+        player.PitchScale = pitch;
         player.Play();
     }
 
     /// <summary>Play a positional battlefield sound at a world position.</summary>
-    public void PlayAt(string name, Vector3 pos)
+    public void PlayAt(string name, Vector3 pos, float pitch = 1f)
     {
         if (!TryGetStream(name, out var stream) || _positionalPool.Count == 0)
             return;
@@ -120,6 +130,7 @@ public partial class AudioDirector : Node
         player.Stop();
         player.Stream = stream;
         player.GlobalPosition = pos;
+        player.PitchScale = pitch;
         player.Play();
     }
 
