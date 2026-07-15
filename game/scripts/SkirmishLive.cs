@@ -132,6 +132,11 @@ public partial class SkirmishLive : Node3D
     private Minimap _minimap = null!;
     private readonly Dictionary<int, HashSet<int>> _groups = new();
     private double _lastAttackAlert = -60;
+    // GDD s7 line 85 names "harvester under attack" and "base under attack" as
+    // SEPARATE alerts, so they carry separate cooldowns. Sharing one would let
+    // a harassed harvester swallow the alert that says the base is falling,
+    // which is the exact moment the player most needs telling.
+    private double _lastHarvesterAlert = -60;
     private int _mapW, _mapH;
 
     // Structure interaction: rally points per producer, selection readout.
@@ -1013,19 +1018,52 @@ public partial class SkirmishLive : Node3D
             }
             if (ev.Type == GameEventType.PlayerEliminated)
                 OnEliminated(ev.B);
-            // Base under attack: own structure took fire, cooled alert
+            // Base under attack: own structure took fire, cooled alert.
+            // Harvester under attack is a SECOND alert, not a variant of this
+            // one: GDD s7 line 85 and s2 line 19 both name it in its own right,
+            // and it was previously excluded here by the same test that skips
+            // combat units. That exclusion was the defect. A play-test of
+            // skirmish-04 lost a harvester and three squads to nine AI waves
+            // and the game never said a word, because the first alert that
+            // could fire needed a STRUCTURE to be hit, by which point the army
+            // that would have answered was already dead.
+            //
+            // Combat units stay excluded deliberately. A player is expected to
+            // be watching an army they sent somewhere; a harvester is sent away
+            // and forgotten, which is exactly why the classic games alert on it.
             if (ev.Type == GameEventType.Fired && ev.B >= 0 && ev.B < _world.EntityCount)
             {
                 var target = _world.Entities[ev.B];
-                if (target.PlayerId == 0 && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester
-                    && Time.GetTicksMsec() / 1000.0 - _lastAttackAlert > 12.0)
+                double now = Time.GetTicksMsec() / 1000.0;
+                bool ownStructure = target.PlayerId == 0
+                    && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester;
+                bool ownHarvester = target.PlayerId == 0 && target.Kind == EntityKind.Harvester;
+                if (ownStructure && now - _lastAttackAlert > 12.0)
                 {
-                    _lastAttackAlert = Time.GetTicksMsec() / 1000.0;
+                    _lastAttackAlert = now;
                     _audio.Play("alert_attack", -4);
+                    ShowToast("BASE UNDER ATTACK");
                     // W3-20: red minimap ping at the struck structure.
                     _minimap.Ping(
                         new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
                         new Color(0.85f, 0.25f, 0.2f));
+                }
+                else if (ownHarvester && now - _lastHarvesterAlert > 12.0)
+                {
+                    _lastHarvesterAlert = now;
+                    // GDD s7 line 85 wants distinct audio per alert. There is
+                    // one alert asset (game/audio/alert_attack.wav), so this
+                    // leans on the pitch argument Play already takes to make the
+                    // two audibly different rather than shipping them identical.
+                    // A purpose-made cue is an audio-pipeline ticket, filed, not
+                    // faked here.
+                    _audio.Play("alert_attack", -4, 1.28f);
+                    ShowToast("HARVESTER UNDER ATTACK");
+                    // Amber rather than the base alert's red: the minimap should
+                    // say which of the two alerts fired without the toast.
+                    _minimap.Ping(
+                        new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
+                        new Color(0.95f, 0.62f, 0.15f));
                 }
             }
             // W3-20: orange ping where the superweapon lands.
