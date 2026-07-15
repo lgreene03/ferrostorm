@@ -22,6 +22,11 @@ public partial class MainMenu : Control
 
     public override void _Ready()
     {
+        // TICKET-P5-SET-01: the settings are applied at the scene roots rather
+        // than by an autoload (Settings' own header states why). Volume, video
+        // and every rebound key are live from the first frame of the menu.
+        Settings.EnsureLoaded();
+
         AnchorRight = 1; AnchorBottom = 1;
         var bg = new ColorRect { Color = Cinder, AnchorRight = 1, AnchorBottom = 1 };
         AddChild(bg);
@@ -30,7 +35,8 @@ public partial class MainMenu : Control
         {
             AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0.5f, AnchorBottom = 0.5f,
             // TICKET-P5-SAVE-01 grew the menu by two rows; the box grew with it.
-            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -250, OffsetBottom = 250,
+            // TICKET-P5-SET-01 added LAN and SETTINGS, so it grew again.
+            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -292, OffsetBottom = 292,
         };
         var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
         style.SetBorderWidthAll(1);
@@ -71,6 +77,8 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("CAMPAIGN", ShowCampaign));
         v.AddChild(MenuButton("LOAD GAME", ShowLoad));
         v.AddChild(MenuButton("REPLAYS", ShowReplays));
+        v.AddChild(MenuButton("LAN", ShowLan));
+        v.AddChild(MenuButton("SETTINGS", () => GetTree().ChangeSceneToFile("res://scenes/Settings.tscn")));
         v.AddChild(MenuButton("REPLAY THEATRE", () => GetTree().ChangeSceneToFile("res://scenes/Battle3D.tscn")));
         v.AddChild(MenuButton("STAND DOWN", () => GetTree().Quit()));
     }
@@ -103,6 +111,17 @@ public partial class MainMenu : Control
     {
         MatchConfig.ApplyFrom(meta);
         MatchConfig.LoadPath = GameFiles.SlotSave(slot);
+        LaunchBattle();
+    }
+
+    /// <summary>TICKET-P5-SET-01: every road into the battle scene goes through
+    /// here. NetSession is the state a NETWORKED battle owns and the HUD's
+    /// desync notice reads; a single-player battle must therefore start without
+    /// one, or a flag left standing by anything earlier would raise a desync
+    /// notice over a game that has no network to desync from.</summary>
+    private void LaunchBattle()
+    {
+        NetSession.Reset();
         GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
     }
 
@@ -149,7 +168,77 @@ public partial class MainMenu : Control
         MatchConfig.ApplyFrom(meta);
         MatchConfig.ReplayPath = path;
         MatchConfig.ReplayTicks = meta.Tick;
-        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+        LaunchBattle();
+    }
+
+    // ---------------- TICKET-P5-SET-01: the LAN front door ----------------
+
+    /// <summary>
+    /// HOST, JOIN, and the honest truth between them. The lockstep relay this
+    /// screen sits on is real and soak-tested, but it binds IPAddress.Loopback
+    /// (Lockstep.cs:93) and its client dials IPAddress.Loopback with a port and
+    /// no address (Lockstep.cs:241), so nothing off this machine can reach a
+    /// hosted game and JOIN has nowhere to dial. The screen says so, on the
+    /// screen, rather than offering a button that fails into a socket timeout
+    /// the player has to interpret.
+    /// </summary>
+    private void ShowLan()
+    {
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, "LAN", 380, 260);
+
+        v.AddChild(UplinkUi.Note(
+            "the lockstep relay underneath this screen is real: it merges both players' orders per tick, compares their state hashes every 30 ticks, and the sim soaks 20 games against it with zero desyncs. what is NOT here is the wire to another machine. the relay listens on loopback only, so it cannot be reached across a network, and the join client takes a port with no address to dial. two-machine play is a netcode ticket and this screen will not pretend otherwise.", 12));
+        v.AddChild(new HSeparator());
+
+        v.AddChild(UplinkUi.MenuButton("HOST GAME   (needs the loopback bind lifted)", () => { }, enabled: false));
+        v.AddChild(UplinkUi.MenuButton("JOIN BY ADDRESS   (needs an address parameter on the client)", () => { }, enabled: false));
+        v.AddChild(new HSeparator());
+
+        // What CAN be honestly offered today: the transport, driven from inside
+        // this binary, against the real match world rather than the runner's
+        // synthetic fixture.
+        var report = UplinkUi.Note(
+            "runs a relay and two lockstep clients inside this process over a real TCP socket, on the map and treasury selected above, and compares both worlds at the end.", 12);
+        v.AddChild(UplinkUi.MenuButton("RUN THE TWO-CLIENT SMOKE TEST", () => StartSmoke(report)));
+        v.AddChild(report);
+        v.AddChild(new HSeparator());
+        v.AddChild(MenuButton("BACK", () => { _smoke = null; overlay.QueueFree(); }));
+    }
+
+    private LanSmokeResult? _smoke;
+    private Label? _smokeReport;
+
+    private void StartSmoke(Label report)
+    {
+        if (_smoke is { Done: false }) return;   // one at a time
+        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MissionPath = null;
+        MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
+        _smokeReport = report;
+        report.Text = $"running {LanSmoke.DefaultTicks} ticks on two clients...";
+        _smoke = LanSmoke.Start(MatchConfig.CurrentSetup());
+    }
+
+    /// <summary>The smoke runs on background threads because the relay and both
+    /// clients block on sockets. Its result is collected here, on the main
+    /// thread, because a Godot Label may not be written from any other.</summary>
+    public override void _Process(double delta)
+    {
+        if (_smoke is { Done: true } s && _smokeReport != null)
+        {
+            _smokeReport.Text = s.Summary;
+            _smokeReport = null;
+        }
+    }
+
+    /// <summary>Offscreen verification hook: the smoke result, once it lands.</summary>
+    public LanSmokeResult? SmokeResult => _smoke;
+    public void RunSmokeForTest(int ticks)
+    {
+        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MissionPath = null;
+        _smoke = LanSmoke.Start(MatchConfig.CurrentSetup(), ticks);
     }
 
     // ---------------- campaign ----------------
@@ -198,7 +287,7 @@ public partial class MainMenu : Control
             MatchConfig.MissionIndex = index;
             MatchConfig.AllowedStructures = allowedStructs;
             MatchConfig.AllowedUnits = allowedUnits;
-            GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+            LaunchBattle();
         }));
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
     }
@@ -235,7 +324,7 @@ public partial class MainMenu : Control
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
-        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+        LaunchBattle();
     }
 }
 

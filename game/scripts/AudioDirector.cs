@@ -1,5 +1,6 @@
 using Godot;
 using System.Collections.Generic;
+using Ferrostorm.Client;   // AudioBuses (TICKET-P5-SET-01)
 
 namespace Ferrostorm;
 
@@ -36,21 +37,26 @@ public partial class AudioDirector : Node
     {
         LoadStreams();
 
+        // TICKET-P5-SET-01: every voice used to play on Master, which is why the
+        // settings scene had nothing to hold on to. Each pool now names its own
+        // bus, so a slider moves one layer of the mix and not the whole of it.
+        AudioBuses.Ensure();
+
         for (int i = 0; i < UiPoolSize; i++)
         {
-            var player = new AudioStreamPlayer { Name = $"UiVoice{i}" };
+            var player = new AudioStreamPlayer { Name = $"UiVoice{i}", Bus = AudioBuses.Ui };
             AddChild(player);
             _uiPool.Add(player);
         }
 
         for (int i = 0; i < PositionalPoolSize; i++)
         {
-            var player = new AudioStreamPlayer3D { Name = $"WorldVoice{i}" };
+            var player = new AudioStreamPlayer3D { Name = $"WorldVoice{i}", Bus = AudioBuses.Sfx };
             AddChild(player);
             _positionalPool.Add(player);
         }
 
-        _ambientPlayer = new AudioStreamPlayer { Name = "AmbientVoice" };
+        _ambientPlayer = new AudioStreamPlayer { Name = "AmbientVoice", Bus = AudioBuses.Ambient };
         AddChild(_ambientPlayer);
     }
 

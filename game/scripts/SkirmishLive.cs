@@ -16,7 +16,11 @@ namespace Ferrostorm.Client;
 ///
 /// Controls: left click / drag selects own units; right click orders
 /// (move, attack an enemy under the cursor, harvest a ferrite field);
-/// shift adds to selection and queues orders; WASD/edge/wheel camera.
+/// shift adds to selection and queues orders; arrows/edge/wheel camera.
+/// Every key is an InputMap action and rebindable (TICKET-P5-SET-01); nothing
+/// in this file matches a literal keycode any more except the bare modifiers
+/// (shift to queue, ctrl to assign a group), which are not actions because a
+/// modifier is not a binding.
 /// </summary>
 public partial class SkirmishLive : Node3D
 {
@@ -70,6 +74,9 @@ public partial class SkirmishLive : Node3D
     // W3-19: production-complete flyout toast beside the sidebar.
     private Label _toast = null!;
     private Tween? _toastTween;
+    // TICKET-P5-SET-01: the LAN desync notice (doc 18 Phase D: "desync notice
+    // surfaced in the HUD"). Driven by NetSession, latched, never fades.
+    private Label _desyncNotice = null!;
 
     // Structure placement mode
     private int _placingType;
@@ -94,6 +101,10 @@ public partial class SkirmishLive : Node3D
     // DEF-09 clause 4: a mass sell is irreversible and the sim has no cancel,
     // so it asks once. -1 means no confirmation is pending.
     private double _sellConfirmUntil = -1;
+    // TICKET-P5-SET-01: attack-move is armed by its key and committed by the
+    // next left click, so the player picks the destination rather than the
+    // mouse happening to be somewhere when the key went down.
+    private bool _attackMoveArmed;
     // DEF-01 clause 9: the ghost tint was rebuilding a StandardMaterial3D every
     // frame while placing. Two immutable materials, assigned by reference.
     private static readonly StandardMaterial3D GhostValidMat = GhostMat(new Color(0.3f, 0.9f, 0.4f, 0.4f));
@@ -196,6 +207,12 @@ public partial class SkirmishLive : Node3D
 
     public override void _Ready()
     {
+        // TICKET-P5-SET-01: applied here as well as in the menu, because
+        // Skirmish.tscn is launched scene-direct (that is how this client is
+        // verified offscreen) and a battle reached that way must still come up
+        // with the player's volume, video and key bindings.
+        Settings.EnsureLoaded();
+
         _models = new ModelLibrary();
         AddChild(_models);
 
@@ -586,6 +603,10 @@ public partial class SkirmishLive : Node3D
         _status.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
         hud.AddChild(_status);
 
+        // TICKET-P5-SET-01: the hint reads the live bindings rather than
+        // restating the defaults. A hint that says "R repair" to a player who
+        // rebound repair to F is worse than no hint.
+        string K(string action) => Settings.KeyName(Settings.BindOf(action));
         var hint = new Label
         {
             // TICKET-P5-SAVE-01: a replay takes no orders, so it must not advertise
@@ -593,13 +614,33 @@ public partial class SkirmishLive : Node3D
             // swallowing the click, is the exact "silently ignores orders" read
             // that makes a working replay look like a broken game.
             Text = _replay != null
-                ? "REPLAY PLAYBACK   the recorded stream issues every order   click: select   wasd/edge/wheel camera   escape: uplink"
-                : "click: select unit or building   right click: move / attack / harvest / rally   R repair  X sell  P menu (save/load)   ctrl+1-9 groups   wasd/edge/wheel camera",
+                ? $"REPLAY PLAYBACK   the recorded stream issues every order   click: select   arrows/edge/wheel camera   {K("cancel")}: uplink"
+                : $"click: select   right click: move / attack / harvest / rally   {K("attack_move")} attack-move  {K("stop")} stop  "
+                  + $"{K("repair")} repair  {K("sell")} sell  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
         hint.AddThemeColorOverride("font_color", new Color(0.5f, 0.5f, 0.48f));
         hud.AddChild(hint);
+
+        // TICKET-P5-SET-01: the desync notice. Latched and unmissable, in the
+        // one colour this HUD reserves for a thing that has gone wrong, because
+        // a desynced lockstep match is over whether or not it looks like it:
+        // both players carry on commanding worlds that no longer agree. Read
+        // NetSession's header before believing this can fire in a shipped
+        // match - nothing single-player drives it, and no networked mode ships.
+        _desyncNotice = new Label
+        {
+            Name = "DesyncNotice",
+            Visible = false,
+            AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0, AnchorBottom = 0,
+            OffsetLeft = -300, OffsetRight = 300, OffsetTop = 118,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _desyncNotice.AddThemeFontSizeOverride("font_size", 18);
+        _desyncNotice.AddThemeColorOverride("font_color", new Color(0.92f, 0.28f, 0.22f));
+        hud.AddChild(_desyncNotice);
 
         _banner = new Label
         {
@@ -688,6 +729,7 @@ public partial class SkirmishLive : Node3D
     public override void _Process(double delta)
     {
         BattlefieldView.TickWater(delta);
+        RefreshDesyncNotice();
         if (_dust != null)
             _dust.GlobalPosition = new Vector3(_cam.Position.X, 2.5f, _cam.Position.Z - 8f);
         if (AutoStep && Running)
@@ -715,6 +757,18 @@ public partial class SkirmishLive : Node3D
     /// <summary>Is the sim allowed to advance? A finished match, a pause, and a
     /// replay that has reached the end of its stream all stop it.</summary>
     private bool Running => _winner < 0 && !_paused && !_replayDone;
+
+    /// <summary>TICKET-P5-SET-01: raise the desync notice if the session has one.
+    /// Polled rather than pushed because NetSession is written by a relay reader
+    /// thread, and a background thread may not touch a Godot node.</summary>
+    private void RefreshDesyncNotice()
+    {
+        if (!NetSession.Desynced || _desyncNotice.Visible) return;
+        _desyncNotice.Text =
+            $"DESYNC AT TICK {NetSession.DesyncTick}\nthis match's players no longer share a world; the result is void";
+        _desyncNotice.Visible = true;
+        _audio.Play("alert_attack", -4);
+    }
 
     /// <summary>
     /// One simulation tick, exactly as the player experiences it. _Process calls
@@ -1562,6 +1616,14 @@ public partial class SkirmishLive : Node3D
 
     public override void _UnhandledInput(InputEvent ev)
     {
+        // TICKET-P5-SET-01: every key this scene answers to is an InputMap
+        // action now, so the settings scene can rebind any of them and this
+        // method never learns of it. Keys are dispatched before the mouse cases
+        // because the two sets are disjoint; the ORDER WITHIN each set is the
+        // load-bearing part and is preserved exactly.
+        if (ev is InputEventKey { Pressed: true, Echo: false } && HandleKeyAction(ev))
+            return;
+
         switch (ev)
         {
             // DEF-08 clause 5: a barrier draws rather than clicks - press
@@ -1575,52 +1637,11 @@ public partial class SkirmishLive : Node3D
                 if (GroundPoint(wm.Position) is { } wp)
                     CommitWallDragAtCell(Mathf.FloorToInt(wp.X), Mathf.FloorToInt(wp.Z));
                 break;
-            // TICKET-P5-SAVE-01: the pause menu owns Escape while it is up, and
-            // it is tested first - a player who opened it wants out of it, not
-            // out of placement mode underneath it.
-            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _pauseMenu != null:
-                ClosePause();
-                break;
-            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _placingType > 0:
-                ExitPlacement();
-                break;
-            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0 || _replayDone:
-                QuitToMenu();
-                break;
-            case InputEventKey { Keycode: Key.R, Pressed: true, Echo: false } when _selection.Count > 0:
-                foreach (int sid in _selection)
-                    if (_latest.TryGetValue(sid, out var rv) && !Mobile(rv.Kind))
-                        _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
-                _audio.Play("ui_confirm", -8);
-                break;
-            // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
-            // keypress is a match-losing misclick and the sim has no cancel for
-            // it, so past 8 structures the first X only asks. R needs no such
-            // guard: repair is reversible and cheap.
-            case InputEventKey { Keycode: Key.X, Pressed: true, Echo: false } when _selection.Count > 0:
-            {
-                int n = 0;
-                foreach (int sid in _selection)
-                    if (_latest.TryGetValue(sid, out var cv) && !Mobile(cv.Kind)) n++;
-                if (n > 8 && _now > _sellConfirmUntil)
-                {
-                    _sellConfirmUntil = _now + 2.0;
-                    ShowToast($"SELL {n} STRUCTURES?   PRESS X AGAIN");
-                    _audio.Play("ui_click", -8);
-                    break;
-                }
-                _sellConfirmUntil = -1;
-                foreach (int sid in _selection)
-                    if (_latest.TryGetValue(sid, out var xv) && !Mobile(xv.Kind))
-                        _pending.Add(new Command(0, 0, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
-                _audio.Play("ui_click", -8);
-                break;
-            }
-            // TICKET-P5-SAVE-01: P still pauses, but the pause is now a menu -
-            // the overlay is the pause indicator the banner used to be, and it
-            // is where saving, loading and abandoning live.
-            case InputEventKey { Keycode: Key.P, Pressed: true, Echo: false }:
-                TogglePause();
+            // TICKET-P5-SET-01: armed attack-move consumes the next left click,
+            // and is tested before the drag-select case that would otherwise
+            // swallow it. Classic two-step: press the key, pick the ground.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } am when _attackMoveArmed:
+                CommitAttackMove(am.Position);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
@@ -1635,17 +1656,151 @@ public partial class SkirmishLive : Node3D
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
                 IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift));
                 break;
-            case InputEventKey { Pressed: true, Echo: false } key when key.Keycode is >= Key.Key1 and <= Key.Key9:
-                int slot = (int)key.Keycode - (int)Key.Key1;
-                if (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta))
-                    _groups[slot] = new HashSet<int>(_selection);          // assign
-                else if (_groups.TryGetValue(slot, out var g))
-                {
-                    _selection.Clear();                                    // recall
-                    foreach (int id in g) if (_latest.ContainsKey(id)) _selection.Add(id);
-                }
-                break;
         }
+    }
+
+    /// <summary>
+    /// The keyboard half, dispatched on InputMap actions rather than literal
+    /// keycodes. Returns true when the event was consumed.
+    ///
+    /// ev.IsActionPressed, NOT Input.IsActionJustPressed, and the difference
+    /// matters here: IsActionJustPressed answers for the whole FRAME, so two
+    /// key events arriving in one frame would both see it true and both fire.
+    /// Asking the event whether IT is the action is the engine's idiom for an
+    /// input callback and is what the literal keycode matches used to do.
+    /// Modifier keys are matched non-exactly on purpose, which is how ctrl+3
+    /// still reaches group_3 below and is then told apart from a bare 3.
+    /// </summary>
+    private bool HandleKeyAction(InputEvent ev)
+    {
+        if (ev.IsActionPressed("cancel"))
+        {
+            // TICKET-P5-SAVE-01: the pause menu owns cancel while it is up, and
+            // it is tested first - a player who opened it wants out of it, not
+            // out of placement mode underneath it.
+            if (_pauseMenu != null) { ClosePause(); return true; }
+            if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
+            if (_placingType > 0) { ExitPlacement(); return true; }
+            if (_winner >= 0 || _replayDone) { QuitToMenu(); return true; }
+            return false;
+        }
+        if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
+        if (ev.IsActionPressed("stop")) { IssueStop(); return true; }
+        if (ev.IsActionPressed("repair") && _selection.Count > 0)
+        {
+            foreach (int sid in _selection)
+                if (_latest.TryGetValue(sid, out var rv) && !Mobile(rv.Kind))
+                    _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
+            _audio.Play("ui_confirm", -8);
+            return true;
+        }
+        // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
+        // keypress is a match-losing misclick and the sim has no cancel for
+        // it, so past 8 structures the first press only asks. Repair needs no
+        // such guard: it is reversible and cheap.
+        if (ev.IsActionPressed("sell") && _selection.Count > 0)
+        {
+            int n = 0;
+            foreach (int sid in _selection)
+                if (_latest.TryGetValue(sid, out var cv) && !Mobile(cv.Kind)) n++;
+            if (n > 8 && _now > _sellConfirmUntil)
+            {
+                _sellConfirmUntil = _now + 2.0;
+                ShowToast($"SELL {n} STRUCTURES?   PRESS {Settings.KeyName(Settings.BindOf("sell"))} AGAIN");
+                _audio.Play("ui_click", -8);
+                return true;
+            }
+            _sellConfirmUntil = -1;
+            foreach (int sid in _selection)
+                if (_latest.TryGetValue(sid, out var xv) && !Mobile(xv.Kind))
+                    _pending.Add(new Command(0, 0, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
+            _audio.Play("ui_click", -8);
+            return true;
+        }
+        // TICKET-P5-SAVE-01: this still pauses, but the pause is now a menu -
+        // the overlay is the pause indicator the banner used to be, and it
+        // is where saving, loading and abandoning live.
+        if (ev.IsActionPressed("pause_menu")) { TogglePause(); return true; }
+        for (int slot = 0; slot < 9; slot++)
+        {
+            if (!ev.IsActionPressed($"group_{slot + 1}")) continue;
+            if (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta))
+                _groups[slot] = new HashSet<int>(_selection);          // assign
+            else if (_groups.TryGetValue(slot, out var g))
+            {
+                _selection.Clear();                                    // recall
+                foreach (int id in g) if (_latest.ContainsKey(id)) _selection.Add(id);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // ---------------- TICKET-P5-SET-01: attack-move and stop ----------------
+
+    /// <summary>Doc 18 Phase A asked for A attack-move and the client never had
+    /// it: AttackMove was reachable from a verification hook and from nothing a
+    /// player could press. Two-step by design, as the classics are: arming the
+    /// order and then picking its destination, because a one-step
+    /// attack-move-to-the-cursor is a different order every time the mouse
+    /// moves, and the whole point of the order is choosing where the army
+    /// fights.</summary>
+    private void ArmAttackMove()
+    {
+        if (_replay != null) return;               // a spectator issues no orders
+        int movers = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit) movers++;
+        if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
+        if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
+        _attackMoveArmed = true;
+        ShowToast($"ATTACK-MOVE: PICK A DESTINATION   ({movers} UNITS)");
+        _audio.Play("ui_click", -10);
+    }
+
+    private void DisarmAttackMove(string? toast = null)
+    {
+        if (!_attackMoveArmed) return;
+        _attackMoveArmed = false;
+        if (toast != null) ShowToast(toast);
+    }
+
+    private void CommitAttackMove(Vector2 screen)
+    {
+        _attackMoveArmed = false;
+        if (GroundPoint(screen) is not { } p) return;
+        var cx = Fix64.FromFraction((int)(p.X * 100), 100);
+        var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
+        int n = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
+            {
+                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, cx, cy));
+                n++;
+            }
+        // W3-17's attack colour: an attack-move is an attack order, and it must
+        // not acknowledge in the same gold a plain move does.
+        _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
+        _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        ShowToast($"ATTACK-MOVE ORDERED   ({n} UNITS)");
+    }
+
+    /// <summary>Stop: drop the current order where you stand. Issued to every
+    /// mobile in the selection, structures ignored (the sim would too).</summary>
+    private void IssueStop()
+    {
+        if (_replay != null) return;
+        DisarmAttackMove();
+        int n = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
+            {
+                _pending.Add(new Command(0, 0, CommandType.Stop, id, Fix64.Zero, Fix64.Zero));
+                n++;
+            }
+        if (n == 0) return;
+        _audio.Play("ui_click", -10);
+        ShowToast($"STOP   ({n} UNITS)");
     }
 
     private void FinishSelect(Vector2 at, bool add)
@@ -1822,9 +1977,23 @@ public partial class SkirmishLive : Node3D
         return _selection.Count;
     }
     /// <summary>Drive the real key path, so the sell guard and the repair loop
-    /// are tested as the player triggers them.</summary>
+    /// are tested as the player triggers them. TICKET-P5-SET-01: this now goes
+    /// through the InputMap exactly as a real keyboard does - the event carries
+    /// a keycode and the actions are defined on keycodes, so a rebind moves
+    /// this hook's behaviour too, which is the point of testing through it.</summary>
     public void PressKey(Key k) =>
         _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false });
+
+    /// <summary>TICKET-P5-SET-01: drive a real left click through the real
+    /// input path, so armed attack-move is committed the way the mouse commits
+    /// it rather than by calling the commit directly.</summary>
+    public void PressLeftClick(Vector2 at) =>
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = at });
+
+    public bool AttackMoveArmed => _attackMoveArmed;
+    public bool DesyncNoticeVisible => _desyncNotice.Visible;
+    public string DesyncNoticeText => _desyncNotice.Text;
 
     // TICKET-P5-SAVE-01 verification surface. StepTicks drives the SHIPPING
     // tick body, not a copy of it, so an offscreen run and a played match reach

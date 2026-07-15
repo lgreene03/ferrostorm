@@ -11,5 +11,9 @@
   <ItemGroup>
     <ProjectReference Include="../sim/Ferrostorm.Sim/Ferrostorm.Sim.csproj" />
     <ProjectReference Include="../sim/Ferrostorm.Presentation/Ferrostorm.Presentation.csproj" />
+    <!-- TICKET-P5-SET-01: the LAN screen drives the SAME Relay and
+         LockstepClient the runner's lan mode soaks. A second copy of the wire
+         format living in the client is how the two silently stop agreeing. -->
+    <ProjectReference Include="../sim/Ferrostorm.Net/Ferrostorm.Net.csproj" />
   </ItemGroup>
 </Project>

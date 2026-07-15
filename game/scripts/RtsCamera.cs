@@ -2,8 +2,9 @@ using Godot;
 
 namespace Ferrostorm.Client;
 
-/// <summary>Classic RTS rig: 50-degree three-quarter view, WASD/edge pan,
-/// wheel zoom toward the cursor. Attach to a Camera3D. Wave 3 (doc 20):
+/// <summary>Classic RTS rig: 50-degree three-quarter view, arrow/edge pan
+/// (TICKET-P5-SET-01: rebindable InputMap actions; the WASD half is gone, see
+/// _Process), wheel zoom toward the cursor. Attach to a Camera3D. Wave 3 (doc 20):
 /// panning drives a target the camera chases with exponential smoothing,
 /// clamped to the map bounds; FlyTo glides to minimap jumps; AddTrauma feeds
 /// a decaying shake applied through H/VOffset so it never fights the pan or
@@ -58,11 +59,21 @@ public partial class RtsCamera : Camera3D
 
     public override void _Process(double delta)
     {
+        // TICKET-P5-SET-01: pan is four rebindable InputMap actions, and the
+        // literal WASD half is GONE rather than moved. It could not survive: doc
+        // 18 Phase A wants A for attack-move and S for stop, and a key that both
+        // pans the camera and orders the army does neither. The defaults are the
+        // arrow keys, which with the graded edge band and the minimap is the
+        // classic scheme; a player who wants WASD back rebinds these four rows
+        // in the settings scene, and the conflict detector will make them move
+        // attack-move and stop out of the way first, which is the honest order
+        // to do it in. Input.IsActionPressed (not IsActionJustPressed): a pan is
+        // held, and this is a frame poll rather than an input callback.
         var move = Vector3.Zero;
-        if (Input.IsKeyPressed(Key.W) || Input.IsKeyPressed(Key.Up)) move.Z -= 1;
-        if (Input.IsKeyPressed(Key.S) || Input.IsKeyPressed(Key.Down)) move.Z += 1;
-        if (Input.IsKeyPressed(Key.A) || Input.IsKeyPressed(Key.Left)) move.X -= 1;
-        if (Input.IsKeyPressed(Key.D) || Input.IsKeyPressed(Key.Right)) move.X += 1;
+        if (Input.IsActionPressed("camera_forward")) move.Z -= 1;
+        if (Input.IsActionPressed("camera_back")) move.Z += 1;
+        if (Input.IsActionPressed("camera_left")) move.X -= 1;
+        if (Input.IsActionPressed("camera_right")) move.X += 1;
         var mouse = GetViewport().GetMousePosition();
         var size = GetViewport().GetVisibleRect().Size;
         // W3-18: graded 24px edge band replaces the binary 6px tests. The
