@@ -29,7 +29,8 @@ public partial class MainMenu : Control
         var panel = new PanelContainer
         {
             AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0.5f, AnchorBottom = 0.5f,
-            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -190, OffsetBottom = 190,
+            // TICKET-P5-SAVE-01 grew the menu by two rows; the box grew with it.
+            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -250, OffsetBottom = 250,
         };
         var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
         style.SetBorderWidthAll(1);
@@ -68,26 +69,97 @@ public partial class MainMenu : Control
         v.AddChild(new HSeparator());
         v.AddChild(MenuButton("COMMENCE OPERATION", StartSkirmish));
         v.AddChild(MenuButton("CAMPAIGN", ShowCampaign));
+        v.AddChild(MenuButton("LOAD GAME", ShowLoad));
+        v.AddChild(MenuButton("REPLAYS", ShowReplays));
         v.AddChild(MenuButton("REPLAY THEATRE", () => GetTree().ChangeSceneToFile("res://scenes/Battle3D.tscn")));
         v.AddChild(MenuButton("STAND DOWN", () => GetTree().Quit()));
+    }
+
+    // ---------------- TICKET-P5-SAVE-01: saves and replays ----------------
+
+    private void ShowLoad()
+    {
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, "LOAD OPERATION", 320, 230);
+        int found = 0;
+        for (int i = 1; i <= GameFiles.SlotCount; i++)
+        {
+            int slot = i;
+            var meta = MatchMeta.Read(GameFiles.SlotMeta(slot));
+            bool occupied = meta != null && System.IO.File.Exists(GameFiles.SlotSave(slot));
+            if (occupied) found++;
+            v.AddChild(UplinkUi.MenuButton(
+                $"SLOT {slot}   " + (occupied ? meta!.Line() : "EMPTY"),
+                () => { overlay.QueueFree(); StartLoaded(slot, meta!); },
+                enabled: occupied));
+        }
+        v.AddChild(new HSeparator());
+        if (found == 0)
+            v.AddChild(UplinkUi.Note("no saves yet - save from the operations menu (P) during a battle", 12));
+        v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+    }
+
+    private void StartLoaded(int slot, MatchMeta meta)
+    {
+        MatchConfig.ApplyFrom(meta);
+        MatchConfig.LoadPath = GameFiles.SlotSave(slot);
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+    }
+
+    /// <summary>The replay browser over user://replays. Playback re-simulates
+    /// the recorded command stream through the live battle pipeline, so a
+    /// replay is watched in the same 3D view the match was played in rather
+    /// than in the baked-JSON theatre.</summary>
+    private void ShowReplays()
+    {
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, "REPLAYS", 360, 250);
+        var all = GameFiles.Replays();
+        if (all.Count == 0)
+            v.AddChild(UplinkUi.Note("no recordings yet - every skirmish and mission you play is recorded here automatically", 12));
+        int shown = 0;
+        foreach (var (path, meta) in all)
+        {
+            if (shown++ >= MaxReplayRows) break;
+            if (meta is null)
+            {
+                // An orphan .frep is real, so it is listed rather than hidden -
+                // but without its sidecar there is no way to know which map or
+                // which starting credits built the world it needs, and guessing
+                // would produce a confident, silent desync.
+                v.AddChild(UplinkUi.MenuButton(
+                    $"{System.IO.Path.GetFileNameWithoutExtension(path)}   (no sidecar - cannot rebuild the setup)",
+                    () => { }, enabled: false));
+                continue;
+            }
+            string local = path;
+            var m = meta;
+            v.AddChild(UplinkUi.MenuButton(m.Line(), () => { overlay.QueueFree(); PlayReplay(local, m); }));
+        }
+        if (all.Count > MaxReplayRows)
+            v.AddChild(UplinkUi.Note($"showing the {MaxReplayRows} most recent of {all.Count}", 11));
+        v.AddChild(new HSeparator());
+        v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+    }
+
+    private const int MaxReplayRows = 10;
+
+    private void PlayReplay(string path, MatchMeta meta)
+    {
+        MatchConfig.ApplyFrom(meta);
+        MatchConfig.ReplayPath = path;
+        MatchConfig.ReplayTicks = meta.Tick;
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
     }
 
     // ---------------- campaign ----------------
 
     private void ShowCampaign()
     {
-        string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
-            ProjectSettings.GlobalizePath("res://"), ".."));
-        var missions = new List<(string Path, string Title, int Index, HashSet<int>? Structs, HashSet<int>? Units)>();
-        int idx = 0;
-        foreach (var line in System.IO.File.ReadAllLines(System.IO.Path.Combine(root, "data", "campaign", "campaign.txt")))
-        {
-            if (line.StartsWith('#') || line.Trim().Length == 0) continue;
-            var parts = line.Split('|');
-            missions.Add((System.IO.Path.Combine(root, parts[0].Trim()), parts[2].Trim(), ++idx,
-                parts.Length > 3 ? ParseAllow(parts[3]) : null,
-                parts.Length > 4 ? ParseAllow(parts[4]) : null));
-        }
+        // TICKET-P5-SAVE-01: the manifest parser moved to Campaign, because
+        // loading a campaign save needs the same allow-lists and two parsers
+        // for one file is how the two drift apart.
+        var missions = Campaign.Load();
         var overlay = FullOverlay();
         var v = OverlayBox(overlay, "CAMPAIGN");
         foreach (var m in missions)
@@ -102,22 +174,11 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
     }
 
-    /// <summary>Allow column: "-" means nothing, a comma list means those
-    /// ids, an absent column (caller passes nothing) means everything.</summary>
-    private static HashSet<int> ParseAllow(string col)
-    {
-        var set = new HashSet<int>();
-        foreach (var tok in col.Split(','))
-            if (int.TryParse(tok.Trim(), out int id)) set.Add(id);
-        return set;   // "-" parses to an empty set: nothing buildable
-    }
-
     private void ShowBriefing(string missionPath, int index, string title,
         HashSet<int>? allowedStructs, HashSet<int>? allowedUnits)
     {
-        string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(
-            ProjectSettings.GlobalizePath("res://"), ".."));
-        string briefFile = System.IO.Path.Combine(root, "data", "campaign", "briefings", $"mission-{index:00}.txt");
+        string briefFile = System.IO.Path.Combine(
+            GameFiles.RepoRoot, "data", "campaign", "briefings", $"mission-{index:00}.txt");
         string brief = System.IO.File.Exists(briefFile) ? System.IO.File.ReadAllText(briefFile) : "(no briefing on file)";
         var overlay = FullOverlay();
         var v = OverlayBox(overlay, title.ToUpperInvariant());
@@ -142,36 +203,13 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
     }
 
-    private Control FullOverlay()
-    {
-        var overlay = new ColorRect { Color = Cinder with { A = 0.97f }, AnchorRight = 1, AnchorBottom = 1 };
-        AddChild(overlay);
-        return overlay;
-    }
+    // TICKET-P5-SAVE-01: the overlay chrome these two wrapped now lives in
+    // UplinkUi, so the pause menu wears the same clothes instead of a
+    // hand-copied second set that drifts.
+    private Control FullOverlay() => UplinkUi.FullOverlay(this);
 
-    private VBoxContainer OverlayBox(Control overlay, string heading)
-    {
-        var panel = new PanelContainer
-        {
-            AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0.5f, AnchorBottom = 0.5f,
-            OffsetLeft = -240, OffsetRight = 240, OffsetTop = -220, OffsetBottom = 220,
-        };
-        var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
-        style.SetBorderWidthAll(1);
-        style.ContentMarginLeft = 24; style.ContentMarginRight = 24;
-        style.ContentMarginTop = 18; style.ContentMarginBottom = 18;
-        panel.AddThemeStyleboxOverride("panel", style);
-        overlay.AddChild(panel);
-        var v = new VBoxContainer();
-        v.AddThemeConstantOverride("separation", 8);
-        panel.AddChild(v);
-        var h = new Label { Text = heading, HorizontalAlignment = HorizontalAlignment.Center };
-        h.AddThemeFontSizeOverride("font_size", 22);
-        h.AddThemeColorOverride("font_color", FerriteGold);
-        v.AddChild(h);
-        v.AddChild(new HSeparator());
-        return v;
-    }
+    private VBoxContainer OverlayBox(Control overlay, string heading, int halfW = 240, int halfH = 220)
+        => UplinkUi.OverlayBox(overlay, heading, halfW, halfH);
 
     private static OptionButton Row(VBoxContainer parent, string label)
     {
@@ -186,21 +224,8 @@ public partial class MainMenu : Control
         return opt;
     }
 
-    private Button MenuButton(string text, System.Action onPress)
-    {
-        var b = new Button { Text = text };
-        b.AddThemeColorOverride("font_color", Bone);
-        var normal = new StyleBoxFlat { BgColor = new Color(0.12f, 0.13f, 0.14f), BorderColor = Seam };
-        normal.SetBorderWidthAll(1);
-        normal.ContentMarginTop = 8; normal.ContentMarginBottom = 8;
-        var hover = (StyleBoxFlat)normal.Duplicate();
-        hover.BorderColor = FerriteGold;
-        b.AddThemeStyleboxOverride("normal", normal);
-        b.AddThemeStyleboxOverride("hover", hover);
-        b.AddThemeStyleboxOverride("pressed", hover);
-        b.Pressed += () => onPress();
-        return b;
-    }
+    private static Button MenuButton(string text, System.Action onPress)
+        => UplinkUi.MenuButton(text, onPress);
 
     private void StartSkirmish()
     {
@@ -226,4 +251,55 @@ public static class MatchConfig
     // manifest; null = everything, empty = nothing buildable)
     public static System.Collections.Generic.HashSet<int>? AllowedStructures;
     public static System.Collections.Generic.HashSet<int>? AllowedUnits;
+
+    // TICKET-P5-SAVE-01. Both are consumed once by SkirmishLive._Ready and
+    // cleared here, because they describe THIS scene change and nothing after
+    // it: a stale ReplayPath would silently turn the next skirmish into a
+    // playback of the last one.
+    public static string? LoadPath;     // set = resume this save file
+    public static string? ReplayPath;   // set = play this recording back
+    public static int ReplayTicks;      // the recording's length, from its sidecar
+
+    /// <summary>The setup the battle scene is about to build, in the one shape
+    /// saves and replays store. Reading MatchConfig ends here.</summary>
+    public static MatchSetup CurrentSetup()
+    {
+        string map = MissionPath ?? MapPath
+            ?? GameFiles.Abs(System.IO.Path.Combine("data", "maps", "skirmish-01.fmap"));
+        var s = new MatchSetup
+        {
+            MapPath = GameFiles.Rel(map),
+            MissionIndex = MissionPath != null ? MissionIndex : 0,
+            AiPreset = AiPreset,
+            StartCredits = StartCredits,
+        };
+        return s;
+    }
+
+    /// <summary>Point the next scene change at the match a sidecar describes.
+    /// The campaign allow-lists are re-derived from the manifest rather than
+    /// stored in the save: they are content, not state, and a save written
+    /// before a manifest edit should honour the edit.</summary>
+    public static void ApplyFrom(MatchMeta meta)
+    {
+        var s = meta.Setup;
+        AiPreset = s.AiPreset;
+        StartCredits = s.StartCredits;
+        MissionIndex = s.MissionIndex;
+        if (s.IsMission)
+        {
+            MissionPath = GameFiles.Abs(s.MapPath);
+            MapPath = null;
+            var entry = Campaign.ByIndex(s.MissionIndex);
+            AllowedStructures = entry?.Structs;
+            AllowedUnits = entry?.Units;
+        }
+        else
+        {
+            MissionPath = null;
+            MapPath = GameFiles.Abs(s.MapPath);
+            AllowedStructures = null;
+            AllowedUnits = null;
+        }
+    }
 }

@@ -2,6 +2,7 @@ using Godot;
 using Ferrostorm.Presentation;
 using Ferrostorm.Sim;
 using System.Collections.Generic;
+using System.IO;
 
 namespace Ferrostorm.Client;
 
@@ -40,7 +41,24 @@ public partial class SkirmishLive : Node3D
     private double _renderTime;
     private int _winner = -1;
 
+    // TICKET-P5-SAVE-01: persistence and replays. Exactly one of these three
+    // states holds for a scene: recording a fresh live match (_rec set), playing
+    // a recording back (_replay set), or resumed from a save (_resumed, which
+    // records nothing - see ResumeFromSave).
+    private MatchSetup _setup = new();
+    private ReplayWriter? _rec;
+    private string _recPath = "";
+    private bool _recDone;
+    private Replay? _replay;
+    private int _replayTicks;
+    private bool _replayDone;
+    private bool _replayVerified;
+    private ulong _replayFinalHash;
+    private bool _resumed;
+    private PauseMenu? _pauseMenu;
+
     // HUD
+    private CanvasLayer _hud = null!;
     private Label _status = null!;
     private Label _banner = null!;
     private Panel _dragRect = null!;
@@ -181,54 +199,26 @@ public partial class SkirmishLive : Node3D
         _models = new ModelLibrary();
         AddChild(_models);
 
-        MapData map;
-        if (MatchConfig.MissionPath is { } missionPath)
+        _setup = MatchConfig.CurrentSetup();
+        MapData map = MapData.Load(GameFiles.Abs(_setup.MapPath));
+        _world = BuildStartingWorld(_setup, map, out var tags);
+        if (_setup.IsMission) _mission = new MissionRunner(map, tags);
+        else _enemy = _setup.AiPreset switch
         {
-            // Campaign mission: the map places both sides' forces and the
-            // triggers script the enemy - no skirmish AI. Per-mission setup
-            // mirrors the runner's gated scenarios.
-            map = MapData.Load(missionPath);
-            _world = map.BuildWorld(seed: 2026, players: 2, out var tags);
-            switch (MatchConfig.MissionIndex)
-            {
-                case 1:
-                    _world.GrantCredits(0, 5000);
-                    _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-                    break;
-                case 3:
-                    _world.GrantCredits(0, 4000);
-                    break;
-            }
-            _mission = new MissionRunner(map, tags);
-        }
-        else
-        {
-            string mapPath = MatchConfig.MapPath ?? System.IO.Path.GetFullPath(System.IO.Path.Combine(
-                ProjectSettings.GlobalizePath("res://"), "..", "data", "maps", "skirmish-01.fmap"));
-            map = MapData.Load(mapPath);
-            _world = map.BuildWorld(seed: 2026, players: 2);
-            _world.GrantCredits(0, MatchConfig.StartCredits);
-            _world.GrantCredits(1, MatchConfig.StartCredits);
-            _world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-            _world.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
-            // Mirrored starting force (common hardware only, so faction-neutral):
-            // a harvester and three rifle squads each - the classic opening hand.
-            for (int p = 0; p < 2; p++)
-            {
-                int sx = map.Starts[p].Cx, sy = map.Starts[p].Cy;
-                int side = p == 0 ? 1 : -1;
-                _world.SpawnHarvester(p, Fix64.FromInt(sx + 3 * side), Fix64.FromInt(sy + 2));
-                for (int i = 0; i < 3; i++)
-                    _world.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
-                        Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
-            }
-            _enemy = MatchConfig.AiPreset switch
-            {
-                1 => SkirmishAI.Rusher(1),
-                2 => SkirmishAI.Turtle(1),
-                _ => SkirmishAI.Standard(1),
-            };
-        }
+            1 => SkirmishAI.Rusher(1),
+            2 => SkirmishAI.Turtle(1),
+            _ => SkirmishAI.Standard(1),
+        };
+
+        // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
+        if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath, map);
+        else if (MatchConfig.ReplayPath is { } replayPath) BeginPlayback(replayPath);
+        else BeginRecording();
+        // Consumed. Both describe THIS scene change and nothing after it, and a
+        // ReplayPath left standing would silently turn the next skirmish the
+        // player starts into a playback of the last one they watched.
+        MatchConfig.LoadPath = null;
+        MatchConfig.ReplayPath = null;
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual);
@@ -283,6 +273,226 @@ public partial class SkirmishLive : Node3D
         AddChild(_rallyMarker);
 
         SnapshotNow();
+    }
+
+    // ---------------- TICKET-P5-SAVE-01: setup, saves, replays ----------------
+
+    /// <summary>
+    /// The world a match begins from, derived from nothing but its setup and its
+    /// map. Static and free of scene state on purpose: a fresh match, a replay
+    /// playback and offscreen verification must all build the identical world
+    /// from the identical inputs, and the only way to guarantee that is for
+    /// there to be exactly one function that builds it. Every value it reads is
+    /// carried in the sidecar beside the file, so a save or a replay written
+    /// today still rebuilds its own world after the setup options grow.
+    /// </summary>
+    public static World BuildStartingWorld(MatchSetup setup, MapData map,
+        out Dictionary<string, List<int>> tags)
+    {
+        if (setup.IsMission)
+        {
+            // Campaign mission: the map places both sides' forces and the
+            // triggers script the enemy - no skirmish AI. Per-mission setup
+            // mirrors the runner's gated scenarios.
+            var m = map.BuildWorld(setup.Seed, players: 2, out tags);
+            switch (setup.MissionIndex)
+            {
+                case 1:
+                    m.GrantCredits(0, 5000);
+                    m.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
+                    break;
+                case 3:
+                    m.GrantCredits(0, 4000);
+                    break;
+            }
+            return m;
+        }
+        var w = map.BuildWorld(setup.Seed, players: 2, out tags);
+        w.GrantCredits(0, setup.StartCredits);
+        w.GrantCredits(1, setup.StartCredits);
+        w.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
+        w.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
+        // Mirrored starting force (common hardware only, so faction-neutral):
+        // a harvester and three rifle squads each - the classic opening hand.
+        for (int p = 0; p < 2; p++)
+        {
+            int sx = map.Starts[p].Cx, sy = map.Starts[p].Cy;
+            int side = p == 0 ? 1 : -1;
+            w.SpawnHarvester(p, Fix64.FromInt(sx + 3 * side), Fix64.FromInt(sy + 2));
+            for (int i = 0; i < 3; i++)
+                w.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
+                    Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+        }
+        return w;
+    }
+
+    /// <summary>Replace the freshly built world with a saved one. The fresh
+    /// build above is not waste: it is what produces the mission tags, which a
+    /// save deliberately does not store (MissionRunner's own note - the mission
+    /// is rebuilt from the same map, then its state is restored on top).</summary>
+    private void ResumeFromSave(string path, MapData map)
+    {
+        // Read the whole file into memory first and drive both readers off the
+        // one stream, which is the exact shape the campaignsave gate proves.
+        var ms = new MemoryStream(File.ReadAllBytes(path));
+        _world = World.Load(ms);
+        // SIM DEFECT WORKAROUND, and it is a real one, found by this ticket's
+        // own verification rather than by reading: ComputeStateHash hashes
+        // _playerFaction (World.cs:1776) but World.Save never writes it, so
+        // World.Load returns a world where every player is Directorate again
+        // ("everyone Directorate until told otherwise", World.cs:216). It is not
+        // cosmetic - faction gates what a player may build (World.cs:745, :789),
+        // so a loaded save would let a side build the wrong faction's hardware.
+        // Both sim gates miss it because skirmish-01.fmap and mission-01.fmap
+        // declare no factions at all, so their worlds are all-Directorate and
+        // the dropped field happens to round-trip as 0.
+        // The honest client-side repair is to re-apply the faction from the map,
+        // exactly as the mission tags are rebuilt from the map rather than
+        // stored (MissionRunner's own note). This is sound ONLY because a
+        // faction is map content: SetFaction is called from exactly one place in
+        // the whole sim, MapLoader.BuildWorld, and nothing mutates it mid-match.
+        // If the sim ever lets a player change faction during a game, this stops
+        // being correct and the field must go into the save format instead.
+        // Reported for sim-engineer rather than patched here: the save format is
+        // not this ticket's to change, and every non-client caller of
+        // World.Save/Load is still affected.
+        foreach (var (p, f) in map.Factions) _world.SetFaction(p, f);
+        if (_mission != null)
+        {
+            using var br = new BinaryReader(ms, System.Text.Encoding.UTF8, leaveOpen: true);
+            _mission.LoadState(br);
+            // The restored message log is history, not news. Without this the
+            // resumed battle fires an objective toast for every message the
+            // mission had already delivered, racing a tween per message on one
+            // label. Surfacing the current objective persistently on resume is a
+            // real gap, but it is a HUD feature and not this ticket's.
+            _seenMessages = _mission.Messages.Count;
+        }
+        // A .frep is a command stream from tick 0. A session that begins at tick
+        // T cannot honestly be expressed in that format without shipping the
+        // save alongside it, so a resumed game records nothing. Said out loud in
+        // the HUD rather than left for the player to discover.
+        _resumed = true;
+    }
+
+    private void BeginPlayback(string path)
+    {
+        _replay = Replay.Load(path);
+        _replayTicks = MatchConfig.ReplayTicks;
+        _enemy = null;   // the recorded stream already carries the AI's decisions
+    }
+
+    private void BeginRecording()
+    {
+        _rec = new ReplayWriter(_setup.Seed, _setup.MapName);
+        string stamp = Time.GetDatetimeStringFromSystem(utc: true).Replace(':', '-');
+        string stem = $"{stamp}-{_setup.MapName}";
+        _recPath = Path.Combine(GameFiles.ReplaysDir, stem + ".frep");
+        for (int n = 1; File.Exists(_recPath); n++)
+            _recPath = Path.Combine(GameFiles.ReplaysDir, $"{stem}-{n}.frep");
+    }
+
+    /// <summary>Close the recording and write its sidecar. Idempotent, because
+    /// it is reached from victory, from abandoning, and from _ExitTree as a
+    /// backstop, and ReplayWriter.Finish appends its hash line every call.</summary>
+    private void FinishRecording()
+    {
+        if (_rec is null || _recDone) return;
+        _recDone = true;
+        if (_world.Tick < GameFiles.MinRecordedTicks) return;
+        ulong hash = _world.ComputeStateHash();
+        _rec.Finish(hash, _recPath);
+        var meta = MatchMeta.For(_setup, _world.Tick, _world.Credits(0));
+        meta.FinalHash = $"{hash:X16}";
+        meta.Write(Path.ChangeExtension(_recPath, ".json"));
+    }
+
+    /// <summary>The playback verdict: this is the replay acceptance criterion
+    /// made visible to the player rather than only to a test. The stream
+    /// re-simulated to the recorded hash, or it did not, and the banner says
+    /// which.</summary>
+    private void FinishPlayback()
+    {
+        _replayDone = true;
+        ulong got = _world.ComputeStateHash();
+        _replayFinalHash = got;
+        _replayVerified = got == _replay!.FinalHash;
+        _banner.AddThemeFontSizeOverride("font_size", 22);
+        _banner.Text = _replayVerified
+            ? $"REPLAY COMPLETE\n\n{_world.Tick} TICKS RE-SIMULATED\n0x{got:X16} MATCHES THE RECORDING\n\npress escape for uplink"
+            : $"REPLAY DIVERGED\n\n0x{got:X16}\nvs recorded 0x{_replay.FinalHash:X16}\n\npress escape for uplink";
+        _banner.AddThemeColorOverride("font_color",
+            _replayVerified ? BattlefieldView.DirectorateMark : new Color(0.85f, 0.25f, 0.2f));
+        _banner.Visible = true;
+    }
+
+    public bool CanSave => _replay is null;
+
+    public string ModeLine() => _replay != null
+        ? $"REPLAY PLAYBACK   {_setup.Describe()}   TICK {_world.Tick} / {_replayTicks}"
+        : _resumed
+            ? $"{_setup.Describe()}   TICK {_world.Tick}   (resumed - not recording)"
+            : $"{_setup.Describe()}   TICK {_world.Tick}";
+
+    /// <summary>Write the world (and, in a campaign, the mission's own trigger
+    /// state) to a slot, with the sidecar the browser reads. World then mission
+    /// on one stream is the order the campaignsave gate proves.</summary>
+    public void SaveToSlot(int slot)
+    {
+        using var ms = new MemoryStream();
+        _world.Save(ms);
+        if (_mission != null)
+        {
+            using var bw = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true);
+            _mission.Save(bw);
+        }
+        File.WriteAllBytes(GameFiles.SlotSave(slot), ms.ToArray());
+        MatchMeta.For(_setup, _world.Tick, _world.Credits(0)).Write(GameFiles.SlotMeta(slot));
+        _audio.Play("ui_confirm", -6);
+    }
+
+    /// <summary>Loading rebuilds the scene rather than mutating this one: every
+    /// actor, rig, decal and effect in the tree belongs to the world being
+    /// discarded, and reconciling them against a world from another tick is a
+    /// far larger surface than simply starting the scene again with a load path
+    /// set. _Ready is the one place a match is assembled, so it stays that way.</summary>
+    public void LoadFromSlot(int slot, MatchMeta meta)
+    {
+        FinishRecording();
+        MatchConfig.ApplyFrom(meta);
+        MatchConfig.LoadPath = GameFiles.SlotSave(slot);
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+    }
+
+    public void QuitToMenu()
+    {
+        FinishRecording();
+        GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
+    }
+
+    /// <summary>Last-ditch finalisation: a window closed mid-match, or a scene
+    /// changed by a path that forgot. A half-written recording is worth more
+    /// than none.</summary>
+    public override void _ExitTree() => FinishRecording();
+
+    public void TogglePause()
+    {
+        if (_pauseMenu != null) { ClosePause(); return; }
+        if (_winner >= 0 || _replayDone) return;
+        _paused = true;
+        _banner.Visible = false;
+        _pauseMenu = new PauseMenu { Name = "PauseMenu" };
+        _hud.AddChild(_pauseMenu);
+        _pauseMenu.Init(this);
+        _audio.Play("ui_click", -8);
+    }
+
+    public void ClosePause()
+    {
+        if (_pauseMenu is null) return;
+        _pauseMenu.QueueFree();
+        _pauseMenu = null;
+        _paused = false;
     }
 
     // ---------------- sidebar command surface ----------------
@@ -366,7 +576,7 @@ public partial class SkirmishLive : Node3D
 
     private void BuildHud()
     {
-        var hud = new CanvasLayer { Name = "Hud" };
+        var hud = _hud = new CanvasLayer { Name = "Hud" };
         AddChild(hud);
         _status = new Label
         {
@@ -378,7 +588,13 @@ public partial class SkirmishLive : Node3D
 
         var hint = new Label
         {
-            Text = "click: select unit or building   right click: move / attack / harvest / rally   R repair  X sell  P pause   ctrl+1-9 groups   wasd/edge/wheel camera",
+            // TICKET-P5-SAVE-01: a replay takes no orders, so it must not advertise
+            // orders. Telling a spectator to right-click to attack, and then
+            // swallowing the click, is the exact "silently ignores orders" read
+            // that makes a working replay look like a broken game.
+            Text = _replay != null
+                ? "REPLAY PLAYBACK   the recorded stream issues every order   click: select   wasd/edge/wheel camera   escape: uplink"
+                : "click: select unit or building   right click: move / attack / harvest / rally   R repair  X sell  P menu (save/load)   ctrl+1-9 groups   wasd/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
@@ -433,6 +649,12 @@ public partial class SkirmishLive : Node3D
         _sidebar = new Sidebar();
         hud.AddChild(_sidebar);
         _sidebar.Init(this);
+        // TICKET-P5-SAVE-01: the sidebar is a command surface, and playback takes
+        // no commands - RunOneTick drops _pending outright. Leaving it up meant a
+        // replay showed lit build buttons and a "PLACE >>" prompt that did
+        // nothing when clicked. Hidden rather than disabled: it is not the
+        // spectator's queue, it is a recording of someone else's.
+        _sidebar.Visible = _replay is null;
 
         _selInfo = new Label
         {
@@ -468,135 +690,209 @@ public partial class SkirmishLive : Node3D
         BattlefieldView.TickWater(delta);
         if (_dust != null)
             _dust.GlobalPosition = new Vector3(_cam.Position.X, 2.5f, _cam.Position.Z - 8f);
-        if (_winner < 0 && !_paused)
+        if (AutoStep && Running)
         {
             _accumulator += delta;
-            while (_accumulator >= TickSeconds)
+            while (_accumulator >= TickSeconds && Running)
             {
                 _accumulator -= TickSeconds;
-                _tickCmds.Clear();
-                _enemy?.Act(_world, _tickCmds);
-                _tickCmds.AddRange(_missionCmds);
-                _missionCmds.Clear();
-                _tickCmds.AddRange(_pending);
-                _pending.Clear();
-                var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
-                _world.Step(span);
-                _mission?.Tick(_world, _missionCmds);
-                SnapshotNow();
-                _fog.UpdateFrom(_world, 0);
-                if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
-                if (_mission != null && _mission.Messages.Count > _seenMessages)
+                RunOneTick();
+            }
+            if (!Running) _accumulator = 0;
+        }
+        AfterTicks(delta);
+    }
+
+    /// <summary>TICKET-P5-SAVE-01 verification hook. When false the scene never
+    /// advances the sim from its own 15 Hz accumulator and only StepTicks moves
+    /// it, so an offscreen run can measure a hash at an exact tick instead of
+    /// racing the frame clock. Static because it has to be set BEFORE the scene
+    /// loads: the race it removes is the one between _Ready finishing and the
+    /// first _Process. Always true in a played game; nothing in the client ever
+    /// writes it.</summary>
+    public static bool AutoStep = true;
+
+    /// <summary>Is the sim allowed to advance? A finished match, a pause, and a
+    /// replay that has reached the end of its stream all stop it.</summary>
+    private bool Running => _winner < 0 && !_paused && !_replayDone;
+
+    /// <summary>
+    /// One simulation tick, exactly as the player experiences it. _Process calls
+    /// it from the 15 Hz accumulator and offscreen verification calls it
+    /// directly; there is deliberately no second implementation, because a test
+    /// that drives a parallel copy of the tick loop proves nothing about the one
+    /// that ships.
+    /// </summary>
+    private void RunOneTick()
+    {
+        // TICKET-P5-SAVE-01. The bucket a command belongs to is the tick it is
+        // applied on, which is the world's tick BEFORE the step - the same
+        // convention the runner's replay gate records and replays under.
+        int recTick = _world.Tick;
+        _tickCmds.Clear();
+        if (_replay != null)
+        {
+            // Playback: the stream is the only source of orders. Clicks still
+            // select and the camera still flies, so a replay can be watched, but
+            // nothing a spectator does reaches the sim.
+            _tickCmds.AddRange(_replay.CommandsFor(recTick));
+            _pending.Clear();
+        }
+        else
+        {
+            _enemy?.Act(_world, _tickCmds);
+            _tickCmds.AddRange(_pending);
+            _pending.Clear();
+            // Record what the AI and the player decided, restamped with the tick
+            // they are about to be applied on: the player's commands are all
+            // built with tick 0 (nothing in the sim reads Command.Tick, and
+            // ComputeStateHash does not hash it), so the field is free for the
+            // replay to bucket on and useless for anything else.
+            if (_rec != null)
+                foreach (var c in _tickCmds)
+                    _rec.Record(new Command(recTick, c.PlayerId, c.Type, c.EntityId, c.X, c.Y, c.AuxId, c.Queued));
+        }
+        // Mission commands are NEVER recorded: the same MissionRunner re-derives
+        // them from the same world during playback, and recording them as well
+        // would issue every scripted assault twice. They are appended last, so
+        // live order and playback order are the same order.
+        _tickCmds.AddRange(_missionCmds);
+        _missionCmds.Clear();
+        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
+        _world.Step(span);
+        _mission?.Tick(_world, _missionCmds);
+        SnapshotNow();
+        _fog.UpdateFrom(_world, 0);
+        if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
+        if (_mission != null && _mission.Messages.Count > _seenMessages)
+        {
+            for (int i = _seenMessages; i < _mission.Messages.Count; i++)
+                ShowObjective(_mission.Messages[i]);
+            _seenMessages = _mission.Messages.Count;
+        }
+        // W3-01: resolve attacker ids to sim WeaponIds so effects can
+        // pick per-weapon families. Reading _world.Entities after Step
+        // is precedented by the rally code below; the sim is not
+        // modified.
+        _effects.OnTickEvents(_world.Events, _actors, _audio,
+            id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
+        foreach (var ev in _world.Events)
+        {
+            // DEF-08 clause 3: a placed or destroyed barrier changes its
+            // neighbours' masks. See RefreshWallMasks for why this is a
+            // force rather than the sole trigger.
+            if ((ev.Type == GameEventType.StructurePlaced || ev.Type == GameEventType.Died)
+                && ev.A >= 0 && ev.A < _world.EntityCount
+                && _world.Entities[ev.A].Kind == EntityKind.Wall)
+                _wallsDirty = true;
+            if (ev.Type == GameEventType.ProductionComplete)
+                foreach (var (fid2, frig2) in _rigs)
+                    if (frig2.Doors.Count > 0 && _latest.TryGetValue(fid2, out var fv2) && fv2.Kind == EntityKind.Factory)
+                    {
+                        frig2.DoorTw?.Kill();
+                        frig2.DoorTw = _actors[fid2].CreateTween();
+                        foreach (var (d, home) in frig2.Doors)
+                            frig2.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
+                        frig2.DoorTw.TweenInterval(1.4);
+                        foreach (var (d, home) in frig2.Doors)
+                            frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
+                    }
+            if (ev.Type == GameEventType.ProductionComplete && _rally.Count > 0
+                && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var nu = _world.Entities[ev.A];
+                if (nu.Alive && nu.PlayerId == 0 && nu.Kind is EntityKind.Unit or EntityKind.Harvester)
+                    foreach (var (fid, rp) in _rally)
+                        if (_latest.TryGetValue(fid, out var fv)
+                            && System.Math.Abs(fv.X - (double)(nu.X.Raw / 4294967296.0)) < 4
+                            && System.Math.Abs(fv.Y - (double)(nu.Y.Raw / 4294967296.0)) < 4)
+                        {
+                            _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
+                                Fix64.FromFraction((int)(rp.X * 100), 100),
+                                Fix64.FromFraction((int)(rp.Z * 100), 100)));
+                            break;
+                        }
+            }
+            // W3-19: flyout toast for own completions. For CY
+            // completions ev.A is the yard and ev.B the structure
+            // type; for unit completions ev.A is the new unit (the
+            // same convention the rally handler relies on).
+            if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var pe = _world.Entities[ev.A];
+                if (pe.PlayerId == 0)
                 {
-                    for (int i = _seenMessages; i < _mission.Messages.Count; i++)
-                        ShowObjective(_mission.Messages[i]);
-                    _seenMessages = _mission.Messages.Count;
-                }
-                // W3-01: resolve attacker ids to sim WeaponIds so effects can
-                // pick per-weapon families. Reading _world.Entities after Step
-                // is precedented by the rally code below; the sim is not
-                // modified.
-                _effects.OnTickEvents(_world.Events, _actors, _audio,
-                    id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
-                foreach (var ev in _world.Events)
-                {
-                    // DEF-08 clause 3: a placed or destroyed barrier changes its
-                    // neighbours' masks. See RefreshWallMasks for why this is a
-                    // force rather than the sole trigger.
-                    if ((ev.Type == GameEventType.StructurePlaced || ev.Type == GameEventType.Died)
-                        && ev.A >= 0 && ev.A < _world.EntityCount
-                        && _world.Entities[ev.A].Kind == EntityKind.Wall)
-                        _wallsDirty = true;
-                    if (ev.Type == GameEventType.ProductionComplete)
-                        foreach (var (fid2, frig2) in _rigs)
-                            if (frig2.Doors.Count > 0 && _latest.TryGetValue(fid2, out var fv2) && fv2.Kind == EntityKind.Factory)
-                            {
-                                frig2.DoorTw?.Kill();
-                                frig2.DoorTw = _actors[fid2].CreateTween();
-                                foreach (var (d, home) in frig2.Doors)
-                                    frig2.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
-                                frig2.DoorTw.TweenInterval(1.4);
-                                foreach (var (d, home) in frig2.Doors)
-                                    frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
-                            }
-                    if (ev.Type == GameEventType.ProductionComplete && _rally.Count > 0
-                        && ev.A >= 0 && ev.A < _world.EntityCount)
-                    {
-                        var nu = _world.Entities[ev.A];
-                        if (nu.Alive && nu.PlayerId == 0 && nu.Kind is EntityKind.Unit or EntityKind.Harvester)
-                            foreach (var (fid, rp) in _rally)
-                                if (_latest.TryGetValue(fid, out var fv)
-                                    && System.Math.Abs(fv.X - (double)(nu.X.Raw / 4294967296.0)) < 4
-                                    && System.Math.Abs(fv.Y - (double)(nu.Y.Raw / 4294967296.0)) < 4)
-                                {
-                                    _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
-                                        Fix64.FromFraction((int)(rp.X * 100), 100),
-                                        Fix64.FromFraction((int)(rp.Z * 100), 100)));
-                                    break;
-                                }
-                    }
-                    // W3-19: flyout toast for own completions. For CY
-                    // completions ev.A is the yard and ev.B the structure
-                    // type; for unit completions ev.A is the new unit (the
-                    // same convention the rally handler relies on).
-                    if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < _world.EntityCount)
-                    {
-                        var pe = _world.Entities[ev.A];
-                        if (pe.PlayerId == 0)
-                        {
-                            string msg = pe.Kind == EntityKind.ConstructionYard
-                                ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY  -  PLACE >>"
-                                : $"{(pe.UnitType > 0 && pe.UnitType < UnitNames.Length ? UnitNames[pe.UnitType] : "UNIT")} DEPLOYED";
-                            ShowToast(msg);
-                        }
-                    }
-                    if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
-                    {
-                        _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
-                        // W2-02: turret recoil - kick along local backward
-                        // (+Z rotated by yaw), sprung home over 180 ms.
-                        if (_rigs.TryGetValue(ev.A, out var frig) && frig.Turret is { } rt)
-                        {
-                            frig.RecoilTw?.Kill();
-                            float yaw = rt.Rotation.Y;
-                            rt.Position = frig.TurretRest + new Vector3(Mathf.Sin(yaw), 0, Mathf.Cos(yaw)) * 0.055f;
-                            frig.RecoilTw = rt.CreateTween();
-                            frig.RecoilTw.TweenProperty(rt, "position", frig.TurretRest, 0.18f)
-                                .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
-                        }
-                    }
-                    if (ev.Type == GameEventType.PlayerEliminated)
-                        OnEliminated(ev.B);
-                    // Base under attack: own structure took fire, cooled alert
-                    if (ev.Type == GameEventType.Fired && ev.B >= 0 && ev.B < _world.EntityCount)
-                    {
-                        var target = _world.Entities[ev.B];
-                        if (target.PlayerId == 0 && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester
-                            && Time.GetTicksMsec() / 1000.0 - _lastAttackAlert > 12.0)
-                        {
-                            _lastAttackAlert = Time.GetTicksMsec() / 1000.0;
-                            _audio.Play("alert_attack", -4);
-                            // W3-20: red minimap ping at the struck structure.
-                            _minimap.Ping(
-                                new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
-                                new Color(0.85f, 0.25f, 0.2f));
-                        }
-                    }
-                    // W3-20: orange ping where the superweapon lands.
-                    if (ev.Type == GameEventType.SuperweaponImpact)
-                        _minimap.Ping(
-                            new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
-                            new Color(0.91f, 0.42f, 0.13f));
+                    // TICKET-P5-SAVE-01: "PLACE >>" is a call to action, and a
+                    // spectator has no action to take - the ready slot belongs
+                    // to whoever recorded the match. The readout stays (it is
+                    // real information); the prompt goes.
+                    string msg = pe.Kind == EntityKind.ConstructionYard
+                        ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY"
+                            + (_replay is null ? "  -  PLACE >>" : "")
+                        : $"{(pe.UnitType > 0 && pe.UnitType < UnitNames.Length ? UnitNames[pe.UnitType] : "UNIT")} DEPLOYED";
+                    ShowToast(msg);
                 }
             }
+            if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
+            {
+                _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
+                // W2-02: turret recoil - kick along local backward
+                // (+Z rotated by yaw), sprung home over 180 ms.
+                if (_rigs.TryGetValue(ev.A, out var frig) && frig.Turret is { } rt)
+                {
+                    frig.RecoilTw?.Kill();
+                    float yaw = rt.Rotation.Y;
+                    rt.Position = frig.TurretRest + new Vector3(Mathf.Sin(yaw), 0, Mathf.Cos(yaw)) * 0.055f;
+                    frig.RecoilTw = rt.CreateTween();
+                    frig.RecoilTw.TweenProperty(rt, "position", frig.TurretRest, 0.18f)
+                        .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+                }
+            }
+            if (ev.Type == GameEventType.PlayerEliminated)
+                OnEliminated(ev.B);
+            // Base under attack: own structure took fire, cooled alert
+            if (ev.Type == GameEventType.Fired && ev.B >= 0 && ev.B < _world.EntityCount)
+            {
+                var target = _world.Entities[ev.B];
+                if (target.PlayerId == 0 && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester
+                    && Time.GetTicksMsec() / 1000.0 - _lastAttackAlert > 12.0)
+                {
+                    _lastAttackAlert = Time.GetTicksMsec() / 1000.0;
+                    _audio.Play("alert_attack", -4);
+                    // W3-20: red minimap ping at the struck structure.
+                    _minimap.Ping(
+                        new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
+                        new Color(0.85f, 0.25f, 0.2f));
+                }
+            }
+            // W3-20: orange ping where the superweapon lands.
+            if (ev.Type == GameEventType.SuperweaponImpact)
+                _minimap.Ping(
+                    new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
+                    new Color(0.91f, 0.42f, 0.13f));
         }
+        // TICKET-P5-SAVE-01: playback ends the instant the recorded stream is
+        // exhausted, and reports whether it landed on the recorded hash.
+        if (_replay != null && !_replayDone && _world.Tick >= _replayTicks) FinishPlayback();
+    }
+
+    /// <summary>Per-frame work that is not the sim: interpolated actors, the HUD
+    /// readouts, the minimap. It runs whether or not a tick happened this frame
+    /// and never mutates the world.</summary>
+    private void AfterTicks(double delta)
+    {
         _renderTime = _world.Tick - 1 + _accumulator / TickSeconds;
         SyncActors((float)delta);
         int supply = 0, draw = 0;
         foreach (var e in _world.Entities)
             if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
         string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
-        _status.Text = $"CREDITS {_world.Credits(0)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}";
+        // TICKET-P5-SAVE-01: the mode is on the status line because two of the
+        // three modes change what the player's clicks do, and a replay that
+        // silently ignores orders reads as a broken game.
+        string mode = _replay != null ? $"    REPLAY {_world.Tick}/{_replayTicks}"
+            : _resumed ? "    RESUMED (not recording)" : "";
+        _status.Text = $"CREDITS {_world.Credits(0)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}{mode}";
 
         var dots = new List<(float, float, Color)>();
         foreach (var v in _view)
@@ -744,6 +1040,11 @@ public partial class SkirmishLive : Node3D
     private void OnEliminated(int player)
     {
         _winner = player == 0 ? 1 : 0;
+        // TICKET-P5-SAVE-01: the match is over, so the recording is complete.
+        // Closing it here rather than at scene exit means the file is on disk
+        // and in the browser before the player has finished reading the banner.
+        FinishRecording();
+        ClosePause();
         _banner.Text = (_winner == 0 ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
         _banner.AddThemeColorOverride("font_color",
             _winner == 0 ? BattlefieldView.DirectorateMark : new Color(0.8f, 0.25f, 0.2f));
@@ -1274,11 +1575,17 @@ public partial class SkirmishLive : Node3D
                 if (GroundPoint(wm.Position) is { } wp)
                     CommitWallDragAtCell(Mathf.FloorToInt(wp.X), Mathf.FloorToInt(wp.Z));
                 break;
+            // TICKET-P5-SAVE-01: the pause menu owns Escape while it is up, and
+            // it is tested first - a player who opened it wants out of it, not
+            // out of placement mode underneath it.
+            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _pauseMenu != null:
+                ClosePause();
+                break;
             case InputEventKey { Keycode: Key.Escape, Pressed: true } when _placingType > 0:
                 ExitPlacement();
                 break;
-            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0:
-                GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
+            case InputEventKey { Keycode: Key.Escape, Pressed: true } when _winner >= 0 || _replayDone:
+                QuitToMenu();
                 break;
             case InputEventKey { Keycode: Key.R, Pressed: true, Echo: false } when _selection.Count > 0:
                 foreach (int sid in _selection)
@@ -1309,11 +1616,11 @@ public partial class SkirmishLive : Node3D
                 _audio.Play("ui_click", -8);
                 break;
             }
+            // TICKET-P5-SAVE-01: P still pauses, but the pause is now a menu -
+            // the overlay is the pause indicator the banner used to be, and it
+            // is where saving, loading and abandoning live.
             case InputEventKey { Keycode: Key.P, Pressed: true, Echo: false }:
-                _paused = !_paused;
-                _banner.Text = "PAUSED";
-                _banner.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
-                _banner.Visible = _paused && _winner < 0;
+                TogglePause();
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
@@ -1518,6 +1825,23 @@ public partial class SkirmishLive : Node3D
     /// are tested as the player triggers them.</summary>
     public void PressKey(Key k) =>
         _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false });
+
+    // TICKET-P5-SAVE-01 verification surface. StepTicks drives the SHIPPING
+    // tick body, not a copy of it, so an offscreen run and a played match reach
+    // the same states by the same code.
+    public void StepTicks(int n) { for (int i = 0; i < n && Running; i++) RunOneTick(); }
+    public int DebugTick => _world.Tick;
+    public ulong DebugStateHash() => _world.ComputeStateHash();
+    public string RecordingPath => _recPath;
+    public bool IsRecording => _rec != null && !_recDone;
+    public bool IsReplay => _replay != null;
+    public bool ReplayDone => _replayDone;
+    public bool ReplayVerified => _replayVerified;
+    public ulong ReplayFinalHash => _replayFinalHash;
+    public bool Resumed => _resumed;
+    public bool PauseOpen => _pauseMenu != null;
+    public MatchSetup Setup => _setup;
+    public int FactionOf(int player) => _world.FactionOf(player);
     public int OwnCount(EntityKind kind)
     {
         int n = 0;
