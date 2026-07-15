@@ -36,7 +36,10 @@ public readonly struct Command
     { Tick = tick; PlayerId = playerId; Type = type; EntityId = entityId; X = x; Y = y; AuxId = auxId; Queued = queued; }
 }
 
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10 }
+// APPEND ONLY. The state hash stores (int)e.Kind and the save format writes
+// (byte)e.Kind, so appending a value is invisible to both for every existing
+// kind; renumbering one silently rewrites every golden hash and every replay.
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 /// <summary>
@@ -249,8 +252,8 @@ public sealed partial class World
 
     public int SpawnRefinery(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Refinery,
@@ -333,11 +336,14 @@ public sealed partial class World
     public IReadOnlyList<int> QueueContents(int factoryId)
         => _queues.TryGetValue(factoryId, out var q) ? q : System.Array.Empty<int>();
 
-    // Placeable structures (TICKET-P2-SIM-04). All structures occupy a 2x2
-    // footprint of blocked cells; the entity position is the footprint centre
-    // (anchor + 1 exactly), so the anchor is always recoverable as
-    // CellOf(X) - 1. Costs deduct upfront on placement; the classic
-    // build-in-sidebar-then-place flow is TICKET-P2-SIM-05.
+    // Placeable structures (TICKET-P2-SIM-04, footprints generalised by
+    // TICKET-P5-DEF-03 per ADR-005). Footprint size is a per-type property:
+    // types 1 to 8 occupy the 2x2 default, barriers occupy 1x1. The entity
+    // position is always the footprint centre (anchor + size/2), so the anchor
+    // is recoverable as CellOf(X) - (size - 1) for either size. The classic
+    // build-in-sidebar-then-place flow is TICKET-P2-SIM-05; barriers keep the
+    // upfront-cost model instead, deducting on placement with no ready slot
+    // (ADR-005 clause 3).
     public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks);
     public static StructureTypeDef GetStructureType(int typeId) => typeId switch
     {
@@ -349,36 +355,59 @@ public sealed partial class World
         6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200),
+        // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
+        // Yard queue by the existing guard in BuildStructure, exactly as type 4 is
+        // kept out: barriers are bought upfront at placement instead.
+        9 => new StructureTypeDef(100, EntityKind.Wall, 0),
         _ => default,
     };
+    /// <summary>The default footprint: every structure type except a barrier is 2x2.</summary>
     public const int FootprintSize = 2;
+
+    /// <summary>Cells per side of a structure type's square footprint (ADR-005). Barriers are 1x1; everything else is the 2x2 default.</summary>
+    public static int FootprintOf(int structType) => structType switch { 9 => 1, 10 => 1, _ => 2 };
+
+    /// <summary>Recover a structure's footprint anchor from its centre. Exact for both sizes: a 2x2 centre is anchor+1 so CellOf gives anchor+1, a 1x1 centre is anchor+0.5 so CellOf gives anchor.</summary>
+    public static int AnchorOf(Fix64 centre, int structType) => Map.CellOf(centre) - (FootprintOf(structType) - 1);
+
     // GDD Q2 strict adjacency: Chebyshev anchor distance to an own structure.
     // The Construction Yard projects the largest radius (Q2 resolution).
     public const int BuildRadius = 5;
     public const int CyBuildRadius = 7;
+    /// <summary>A barrier anchors only other barriers, and only this far (ADR-005 clause 4): a wall crawls outward two cells and 100 credits at a step, but never carries a factory with it.</summary>
+    public const int BarrierBuildRadius = 2;
+    /// <summary>Per-player barrier cap (ADR-005 clause 5). Derived from the TDD s6 ratified budget of 200 structures (03-technical-design-document.md:59): 2 x 80 + ~32 real buildings = ~192, inside budget. A performance guarantee, not a design flourish.</summary>
+    public const int MaxBarriersPerPlayer = 80;
 
-    private void UnblockFootprint(int ax, int ay)
+    private void UnblockFootprint(int ax, int ay, int size)
     {
-        for (int dy = 0; dy < FootprintSize; dy++)
-            for (int dx = 0; dx < FootprintSize; dx++)
+        for (int dy = 0; dy < size; dy++)
+            for (int dx = 0; dx < size; dx++)
                 Map.SetBlocked(ax + dx, ay + dy, false);
         _flow.Clear();
     }
 
-    private void BlockFootprint(int ax, int ay)
+    private void BlockFootprint(int ax, int ay, int size)
     {
-        for (int dy = 0; dy < FootprintSize; dy++)
-            for (int dx = 0; dx < FootprintSize; dx++)
+        for (int dy = 0; dy < size; dy++)
+            for (int dx = 0; dx < size; dx++)
                 Map.SetBlocked(ax + dx, ay + dy, true);
         _flow.Clear(); // passability changed: every cached route is suspect
     }
 
-    private static Fix64 FootprintCentre(int anchor) => Fix64.FromInt(anchor + 1);
+    /// <summary>
+    /// Centre of a size x size footprint anchored at 'anchor'. Bit-identical to
+    /// the former FromInt(anchor + 1) for size 2: FromFraction(2, 2) computes
+    /// ((Int128)2 &lt;&lt; 32) / 2 == 1L &lt;&lt; 32 == Fix64.One, and
+    /// FromInt(a).Raw + One.Raw == (long)(a + 1) &lt;&lt; 32 == FromInt(a + 1).Raw.
+    /// Do not substitute any other formula.
+    /// </summary>
+    private static Fix64 FootprintCentre(int anchor, int size) => Fix64.FromInt(anchor) + Fix64.FromFraction(size, 2);
 
     public int SpawnPowerPlant(int player, int ax, int ay, int supply = 100, int hp = 150)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.PowerPlant,
@@ -390,8 +419,8 @@ public sealed partial class World
 
     public int SpawnConstructionYard(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.ConstructionYard,
@@ -404,8 +433,8 @@ public sealed partial class World
     /// <summary>Superweapon: charges over defaultCharge ticks (pausing while underpowered); a test may shorten the charge.</summary>
     public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = 1500)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Superweapon,
@@ -421,8 +450,8 @@ public sealed partial class World
     /// the base has full power; a brown-out drops the whole veil (classic).</summary>
     public int SpawnVeilProjector(int player, int ax, int ay, int hp = 900)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.VeilProjector,
@@ -435,8 +464,8 @@ public sealed partial class World
     /// <summary>Service depot: own units within radius 4 repair 2 hp/tick at 1 credit/tick each - the field hospital of the armoured column.</summary>
     public int SpawnServiceDepot(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.ServiceDepot,
@@ -448,8 +477,8 @@ public sealed partial class World
 
     public int SpawnTurret(int player, int ax, int ay)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Turret,
@@ -459,10 +488,41 @@ public sealed partial class World
         });
     }
 
+    /// <summary>
+    /// Barrier segment (ADR-005): 1x1, bought upfront at placement, no ready
+    /// slot, no build time. Sight = Fix64.Zero is deliberate and load-bearing:
+    /// FogSystem skips zero-sight entities, so 80 walls per player cost nothing
+    /// in the fog pass and grant no vision.
+    /// </summary>
+    public int SpawnWall(int player, int ax, int ay)
+    {
+        BlockFootprint(ax, ay, 1);
+        Fix64 x = FootprintCentre(ax, 1), y = FootprintCentre(ay, 1);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Wall,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 9,
+            Hp = 500, MaxHp = 500, Armour = ArmourClass.Structure, WeaponId = 0, ExplicitTarget = -1,
+            Sight = Fix64.Zero, FieldId = -1, RefineryId = -1, PowerDraw = 0,
+        });
+    }
+
+    /// <summary>Living barrier count for a player, enforcing MaxBarriersPerPlayer. Entity-index scan: deterministic.</summary>
+    private int CountBarriers(int player)
+    {
+        int n = 0;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (e.Alive && e.PlayerId == player && IsBarrier(e.Kind)) n++;
+        }
+        return n;
+    }
+
     public int SpawnFactory(int player, int ax, int ay, int draw = 40)
     {
-        BlockFootprint(ax, ay);
-        Fix64 x = FootprintCentre(ax), y = FootprintCentre(ay);
+        BlockFootprint(ax, ay, 2);
+        Fix64 x = FootprintCentre(ax, 2), y = FootprintCentre(ay, 2);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Factory,
@@ -623,24 +683,45 @@ public sealed partial class World
                 // placement retains readiness for another attempt.
                 var sd = GetStructureType(c.AuxId);
                 if (sd.Cost <= 0) break;
-                int readyCy = -1;
-                for (int i = 0; i < _entities.Count; i++)
-                {
-                    var o = _entities[i];
-                    if (o.Alive && o.PlayerId == c.PlayerId && o.Kind == EntityKind.ConstructionYard
-                        && o.ReadyStructure == c.AuxId) { readyCy = i; break; }
-                }
-                if (readyCy < 0) break;
+                // Barriers (ADR-005 clause 3) revive the upfront-cost model:
+                // they have no ready slot and no build time, so the treasury is
+                // charged the moment the segment lands. Everything else keeps
+                // the sidebar readiness flow untouched.
+                bool barrier = IsBarrier(sd.Kind);
                 int ax = Map.CellOf(c.X), ay = Map.CellOf(c.Y);
-                if (!ValidPlacement(c.PlayerId, ax, ay)) break;
-                var cyEnt = _entities[readyCy];
-                cyEnt.ReadyStructure = 0;
-                _entities[readyCy] = cyEnt;
+                int readyCy = -1;
+                if (barrier)
+                {
+                    if (_credits[c.PlayerId] < sd.Cost) break;
+                    if (CountBarriers(c.PlayerId) >= MaxBarriersPerPlayer) break;
+                }
+                else
+                {
+                    for (int i = 0; i < _entities.Count; i++)
+                    {
+                        var o = _entities[i];
+                        if (o.Alive && o.PlayerId == c.PlayerId && o.Kind == EntityKind.ConstructionYard
+                            && o.ReadyStructure == c.AuxId) { readyCy = i; break; }
+                    }
+                    if (readyCy < 0) break;
+                }
+                // Order matters: validate before charging, charge before spawning.
+                if (!ValidPlacement(c.PlayerId, ax, ay, c.AuxId)) break;
+                if (barrier)
+                {
+                    _credits[c.PlayerId] -= sd.Cost;
+                }
+                else
+                {
+                    var cyEnt = _entities[readyCy];
+                    cyEnt.ReadyStructure = 0;
+                    _entities[readyCy] = cyEnt;
+                    // The carrier entity is often the ready CY itself; resync the
+                    // local copy so the ApplyCommand epilogue writeback cannot
+                    // resurrect the readiness we just consumed.
+                    if (readyCy == c.EntityId) e = cyEnt;
+                }
                 _events.Add(new GameEvent(GameEventType.StructurePlaced, _entities.Count, c.AuxId));
-                // The carrier entity is often the ready CY itself; resync the
-                // local copy so the ApplyCommand epilogue writeback cannot
-                // resurrect the readiness we just consumed.
-                if (readyCy == c.EntityId) e = cyEnt;
                 switch (sd.Kind)
                 {
                     case EntityKind.PowerPlant: SpawnPowerPlant(c.PlayerId, ax, ay); break;
@@ -651,6 +732,7 @@ public sealed partial class World
                     case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay); break;
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
+                    case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
                 }
                 break;
             }
@@ -696,7 +778,7 @@ public sealed partial class World
                 var sold = GetStructureType(e.StructType);
                 _credits[e.PlayerId] += sold.Cost / 2;
                 e.Alive = false;
-                UnblockFootprint(Map.CellOf(e.X) - 1, Map.CellOf(e.Y) - 1);
+                UnblockFootprint(AnchorOf(e.X, e.StructType), AnchorOf(e.Y, e.StructType), FootprintOf(e.StructType));
                 break;
             }
             case CommandType.Produce:
@@ -719,9 +801,17 @@ public sealed partial class World
     private static bool IsStructure(EntityKind k)
         => k is EntityKind.Refinery or EntityKind.Factory or EntityKind.PowerPlant
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
-             or EntityKind.VeilProjector or EntityKind.ServiceDepot;
+             or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall;
+
+    /// <summary>
+    /// A barrier is a structure for blocking, selling, repairing and damage, and
+    /// is excluded from the victory test, engineer capture and combat
+    /// auto-acquisition (ADR-005 clause 2). DEF-09 appends 'or EntityKind.Gate'.
+    /// </summary>
+    private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
 
     /// <summary>Footprint physically clear (bounds, terrain, standing entities), ignoring adjacency - MCV deployment founds a base from nothing.</summary>
+    /// <remarks>Fixed at FootprintSize by design (ADR-005 clause 1): only MCV deploy calls this, and a Construction Yard is always 2x2.</remarks>
     public bool ValidFoundation(int ax, int ay, int ignoreEntity = -1)
     {
         for (int dy = 0; dy < FootprintSize; dy++)
@@ -742,14 +832,18 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// GDD Q2 strict adjacency: every cell of the 2x2 footprint must be in
-    /// bounds, unblocked, and free of standing entities, and the anchor must
+    /// GDD Q2 strict adjacency: every cell of the candidate's footprint must be
+    /// in bounds, unblocked, and free of standing entities, and the anchor must
     /// lie within BuildRadius (Chebyshev) of an own living structure's anchor.
+    /// The structType argument selects the footprint size (ADR-005 clause 1);
+    /// it defaults to 0, which FootprintOf maps to the 2x2 default, so every
+    /// pre-existing caller keeps its exact meaning.
     /// </summary>
-    public bool ValidPlacement(int player, int ax, int ay)
+    public bool ValidPlacement(int player, int ax, int ay, int structType = 0)
     {
-        for (int dy = 0; dy < FootprintSize; dy++)
-            for (int dx = 0; dx < FootprintSize; dx++)
+        int size = FootprintOf(structType);
+        for (int dy = 0; dy < size; dy++)
+            for (int dx = 0; dx < size; dx++)
             {
                 int cx = ax + dx, cy = ay + dy;
                 if (!Map.InBounds(cx, cy) || Map.IsBlocked(cx, cy)) return false;
@@ -759,14 +853,21 @@ public sealed partial class World
             var o = _entities[i];
             if (!o.Alive || IsStructure(o.Kind)) continue; // structure cells are already blocked
             int ocx = Map.CellOf(o.X), ocy = Map.CellOf(o.Y);
-            if (ocx >= ax && ocx < ax + FootprintSize && ocy >= ay && ocy < ay + FootprintSize) return false;
+            if (ocx >= ax && ocx < ax + size && ocy >= ay && ocy < ay + size) return false;
         }
+        // ADR-005 clause 4: a barrier anchors only other barriers, and at its
+        // own shorter radius. With no barrier present this loop is identical to
+        // the pre-DEF-04 rule.
+        bool candidateIsBarrier = IsBarrier(GetStructureType(structType).Kind);
         for (int i = 0; i < _entities.Count; i++)
         {
             var o = _entities[i];
             if (!o.Alive || o.PlayerId != player || !IsStructure(o.Kind)) continue;
-            int oax = Map.CellOf(o.X) - 1, oay = Map.CellOf(o.Y) - 1;
-            int radius = o.Kind == EntityKind.ConstructionYard ? CyBuildRadius : BuildRadius;
+            bool anchorIsBarrier = IsBarrier(o.Kind);
+            if (anchorIsBarrier && !candidateIsBarrier) continue; // a wall never anchors a real building
+            int oax = AnchorOf(o.X, o.StructType), oay = AnchorOf(o.Y, o.StructType);
+            int radius = anchorIsBarrier ? BarrierBuildRadius
+                : o.Kind == EntityKind.ConstructionYard ? CyBuildRadius : BuildRadius;
             if (Math.Max(Math.Abs(oax - ax), Math.Abs(oay - ay)) <= radius) return true;
         }
         return false;
@@ -918,7 +1019,8 @@ public sealed partial class World
             if (!e.Alive || e.UnitType != 11 || e.ExplicitTarget < 0) continue;
             if (!ValidId(e.ExplicitTarget)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             var t = _entities[e.ExplicitTarget];
-            if (!t.Alive || !IsStructure(t.Kind) || t.PlayerId == e.PlayerId)
+            // ADR-005 clause 2: engineers do not capture fences.
+            if (!t.Alive || !IsStructure(t.Kind) || IsBarrier(t.Kind) || t.PlayerId == e.PlayerId)
             { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
             if (d <= Fix64.FromFraction(49, 16)) // within 1.75 cells of the footprint centre: through the door
@@ -940,6 +1042,29 @@ public sealed partial class World
             }
             _entities[i] = e;
         }
+    }
+
+    /// <summary>Is there any flow route from this entity's cell to its ordered attack-move point? Reads the deterministic flow cache; FlowField.Build is pure, so building here or in MovementSystem yields the same field.</summary>
+    private bool RouteExists(in Entity e)
+    {
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
+        int tcx = Map.CellOf(e.AMoveX), tcy = Map.CellOf(e.AMoveY);
+        if (cx == tcx && cy == tcy) return true;
+        return _flow.Get(Map, tcx, tcy).NextCell(Map, cx, cy) >= 0;
+    }
+
+    /// <summary>Nearest living enemy barrier by squared distance; ties break to the lower id via strict less-than in entity index order (the FindNearestRefinery precedent).</summary>
+    private int NearestEnemyBarrier(in Entity e)
+    {
+        int best = -1; Fix64 bestD = Fix64.MaxValue;
+        for (int j = 0; j < _entities.Count; j++)
+        {
+            var t = _entities[j];
+            if (!t.Alive || !IsBarrier(t.Kind) || t.PlayerId < 0 || t.PlayerId == e.PlayerId) continue;
+            Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
+            if (d < bestD) { bestD = d; best = j; }
+        }
+        return best;
     }
 
     private void CombatSystem()
@@ -997,7 +1122,13 @@ public sealed partial class World
                 for (int j = 0; j < _entities.Count; j++)
                 {
                     var t = _entities[j];
-                    if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField) continue;
+                    // Barriers are skipped exactly as ferrite fields are (ADR-005
+                    // clause 2): without this your tanks stop to plink at a wall
+                    // instead of the turret behind it, and this O(n) inner scan
+                    // grows by 160 entities for every armed unit every tick. An
+                    // explicit Attack order still targets a wall; only
+                    // auto-acquisition declines to.
+                    if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
                     if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
                     Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
                     if (d >= w.MinRange * w.MinRange && d <= w.Range * w.Range && d < bestD) { bestD = d; target = j; }
@@ -1041,6 +1172,34 @@ public sealed partial class World
                     var t = _entities[sightTarget];
                     e.TargetX = t.X; e.TargetY = t.Y;
                 }
+                else if (!RouteExists(in e) && NearestEnemyBarrier(in e) is int wid && wid >= 0)
+                {
+                    // BREACH (ADR-005 / DEF-05). The ordered point is unreachable
+                    // and an enemy barrier exists: make a hole rather than
+                    // oscillating in place forever. Two stages, deliberately:
+                    // path toward the nearest barrier from anywhere on the map
+                    // (a fully enclosed base severs the route for units nowhere
+                    // near a wall, which would otherwise stand still), but only
+                    // take it as a target once it is inside this unit's own
+                    // Sight, so the unit never shoots a wall it cannot see.
+                    // Self-healing needs no cleanup: when the wall dies the
+                    // stale-target guard above clears ExplicitTarget next tick,
+                    // AMove is still true so the march resumes, and the death
+                    // path unblocks the footprint and clears the flow cache, so
+                    // the next route query rebuilds against the breach.
+                    //
+                    // We do NOT halt here. This block also runs on the ticks
+                    // when ExplicitTarget is already the wall but the wall is
+                    // still outside weapon range (the pursuit branch above
+                    // leaves target < 0), so halting on sight would stomp that
+                    // pursuit and park the unit in the band between Sight and
+                    // Range forever - the very freeze this ticket exists to
+                    // kill. Closing is always right; the pursuit branch owns
+                    // the stop, via its "in range: hold and fire".
+                    var wall = _entities[wid];
+                    if (Fix64.DistSq(wall.X - e.X, wall.Y - e.Y) <= e.Sight * e.Sight) e.ExplicitTarget = wid;
+                    e.TargetX = wall.X; e.TargetY = wall.Y;
+                }
                 else if (Fix64.DistSq(e.AMoveX - e.X, e.AMoveY - e.Y) <= Fix64.FromInt(16))
                 {
                     // All clear and inside the crowd radius of the ordered
@@ -1078,7 +1237,7 @@ public sealed partial class World
                 t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
                 // Destroyed structures leave passable rubble: the footprint
                 // unblocks and cached routes are discarded.
-                if (IsStructure(t.Kind)) UnblockFootprint(Map.CellOf(t.X) - 1, Map.CellOf(t.Y) - 1);
+                if (IsStructure(t.Kind)) UnblockFootprint(AnchorOf(t.X, t.StructType), AnchorOf(t.Y, t.StructType), FootprintOf(t.StructType));
                 // Kill credit for veterancy: the first attacker this tick.
                 int killer = firstAttacker[i];
                 if (killer >= 0)
@@ -1497,7 +1656,7 @@ public sealed partial class World
             {
                 _events.Add(new GameEvent(GameEventType.Died, i, -1));
                 t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
-                if (IsStructure(t.Kind)) UnblockFootprint(Map.CellOf(t.X) - 1, Map.CellOf(t.Y) - 1);
+                if (IsStructure(t.Kind)) UnblockFootprint(AnchorOf(t.X, t.StructType), AnchorOf(t.Y, t.StructType), FootprintOf(t.StructType));
             }
             _entities[i] = t;
         }
@@ -1550,7 +1709,10 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.PlayerId < 0) continue;
-            if (IsStructure(e.Kind) || e.UnitType == 7) hasHope[e.PlayerId] = true;
+            // ADR-005 clause 2: a barrier is not hope. Without this exclusion a
+            // player whose last possession is one 100-credit wall is never
+            // eliminated and the match never ends.
+            if ((IsStructure(e.Kind) && !IsBarrier(e.Kind)) || e.UnitType == 7) hasHope[e.PlayerId] = true;
         }
         int living = 0, last = -1;
         for (int p = 0; p < _players; p++)

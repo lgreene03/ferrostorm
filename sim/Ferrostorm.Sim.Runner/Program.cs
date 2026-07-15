@@ -1283,6 +1283,19 @@ int SelfTest()
     if (Fix64.Abs(s2 * s2 - two) > Fix64.FromFraction(1, 1_000_000)) return Fail("Fix64 sqrt precision");
     if (Fix64.FromInt(-5) + Fix64.FromInt(5) != Fix64.Zero) return Fail("Fix64 negatives");
 
+    // ADR-005 / TICKET-P5-DEF-03: the variable-footprint refactor is only
+    // behaviour-neutral if FromFraction(2, 2) is bit-identical to One, so that
+    // FootprintCentre(a, 2) still produces exactly FromInt(a + 1). This is the
+    // arithmetic the 23 golden hashes rest on; assert it rather than trust it.
+    if (Fix64.FromFraction(2, 2).Raw != Fix64.One.Raw) return Fail("Fix64 FromFraction(2,2) != One");
+    if ((Fix64.FromInt(8) + Fix64.FromFraction(2, 2)).Raw != Fix64.FromInt(9).Raw) return Fail("footprint centre size-2 identity");
+    if (World.FootprintOf(4) != 2) return Fail("FootprintOf: construction yard is 2x2");
+    if (World.FootprintOf(9) != 1) return Fail("FootprintOf: wall is 1x1");
+    if (World.FootprintOf(0) != 2) return Fail("FootprintOf: unknown type defaults to 2x2");
+    // A 2x2 centred at 9 anchors at 8; a 1x1 centred at 8.5 anchors at 8.
+    if (World.AnchorOf(Fix64.FromInt(9), 4) != 8) return Fail("AnchorOf 2x2");
+    if (World.AnchorOf(Fix64.FromInt(8) + Fix64.Half, 9) != 8) return Fail("AnchorOf 1x1");
+
     var rng = new DeterministicRandom(42);
     ulong first = rng.NextUlong();
     if (first != new DeterministicRandom(42).NextUlong()) return Fail("RNG not reproducible");

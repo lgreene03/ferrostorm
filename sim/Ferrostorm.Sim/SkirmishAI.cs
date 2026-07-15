@@ -382,7 +382,7 @@ public sealed class SkirmishAI
             var s = w.Entities[i];
             if (!s.Alive || s.PlayerId != _player) continue;
             if (s.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant or EntityKind.Factory or EntityKind.Refinery)) continue;
-            int oax = Map.CellOf(s.X) - 1, oay = Map.CellOf(s.Y) - 1;
+            int oax = World.AnchorOf(s.X, s.StructType), oay = World.AnchorOf(s.Y, s.StructType);
             for (int ring = 3; ring <= World.BuildRadius; ring++)
                 for (int dy = -ring; dy <= ring; dy++)
                     for (int dx = -ring; dx <= ring; dx++)

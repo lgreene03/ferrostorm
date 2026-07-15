@@ -171,6 +171,7 @@ public sealed class MapData
                 EntityKind.Turret => world.SpawnTurret(st.Player, st.Ax, st.Ay),
                 EntityKind.Superweapon => world.SpawnSuperweapon(st.Player, st.Ax, st.Ay),
                 EntityKind.VeilProjector => world.SpawnVeilProjector(st.Player, st.Ax, st.Ay),
+                EntityKind.Wall => world.SpawnWall(st.Player, st.Ax, st.Ay),
                 _ => throw new FormatException($"map structure: unknown struct type {st.StructType}"),
             };
             Tag(st.Tag, id);
