@@ -152,6 +152,20 @@ moved from node properties to INPUT SOCKETS with spelled-out enum values
 use the unified `ShaderNodeMixRGB`/`ShaderNodeMix` instead of
 `CompositorNodeMixRGB`.
 
+**Blender 5 bake-buffer trap found in Wave 4 (session 2026-07-15):** bake
+results land in the target image's unsaved in-memory buffer, and running
+the NEXT `bpy.ops.object.bake` (for the following object in a multi-object
+model) re-evaluates the scene and silently drops any such buffer that has
+not been packed or saved. Symptom: the first object's normal map exported
+pure black while later-composed images (written via `pixels.foreach_set`)
+survived, so every visible surface shaded near-black in the client. Fix in
+bake.py's `bake_pass()`: call `img.pack()` immediately after the bake.
+Related import-side gotcha: each model's `.glb.import` sidecar must pin
+`gltf/embedded_image_handling=3` (Embed as Uncompressed); a sidecar
+regenerated with the default 1 (Extract Textures) writes loose texture
+PNGs next to the .glb on every import (dir_vanguard_car did this from the
+Wave 2 rebake until Wave 4 fixed it).
+
 Remaining open work on this ticket: per-unit detail geometry across the
 roster (use `hero.py`'s `hero_cannon_tank()` as the pattern - same
 primitives, same silhouette, added greebles), and taste-level iteration on

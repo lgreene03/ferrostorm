@@ -59,6 +59,33 @@ def wmat(name, emit=0.0, rough=0.7, metal=0.25, wear=0.5, grime=0.5):
     gramp.color_ramp.elements[1].position = 0.62
     nt.links.new(n2.outputs['Fac'], gramp.inputs['Fac'])
 
+    # --- W4-04 shading normals: bevel shader rounds every hard edge, a
+    # brick-mortar grid cuts panel seam lines in object space, and the
+    # 34-scale wear noise adds micro grain. Cycles' NORMAL bake picks all
+    # of this up, so the baked tangent normal map carries the edge read.
+    coord = nt.nodes.new('ShaderNodeTexCoord'); coord.location = (-1400, -500)
+    bev = nt.nodes.new('ShaderNodeBevel'); bev.location = (-1200, -700)
+    bev.samples = 8
+    bev.inputs['Radius'].default_value = 0.015
+    seam = nt.nodes.new('ShaderNodeTexBrick'); seam.location = (-1200, -500)
+    seam.inputs['Scale'].default_value = 4.0
+    seam.inputs['Mortar Size'].default_value = 0.006
+    seam.inputs['Color1'].default_value = (0.5, 0.5, 0.5, 1)
+    seam.inputs['Color2'].default_value = (0.5, 0.5, 0.5, 1)
+    seam.inputs['Mortar'].default_value = (0, 0, 0, 1)
+    nt.links.new(coord.outputs['Object'], seam.inputs['Vector'])
+    bump1 = nt.nodes.new('ShaderNodeBump'); bump1.location = (-1000, -500)
+    bump1.inputs['Strength'].default_value = 0.25
+    bump1.inputs['Distance'].default_value = 0.005
+    nt.links.new(seam.outputs['Color'], bump1.inputs['Height'])
+    nt.links.new(bev.outputs['Normal'], bump1.inputs['Normal'])
+    bump2 = nt.nodes.new('ShaderNodeBump'); bump2.location = (-800, -500)
+    bump2.inputs['Strength'].default_value = 0.06
+    bump2.inputs['Distance'].default_value = 0.002
+    nt.links.new(n1.outputs['Fac'], bump2.inputs['Height'])
+    nt.links.new(bump1.outputs['Normal'], bump2.inputs['Normal'])
+    nt.links.new(bump2.outputs['Normal'], b.inputs['Normal'])
+
     # Base colour: base -> darkened by grime -> chipped to bare metal on edges
     dark = tuple(c * 0.42 for c in base[:3]) + (1,)
     chip = (0.50, 0.53, 0.56, 1) if name not in ('rust', 'rustp', 'rustd') \

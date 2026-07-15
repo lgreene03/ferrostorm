@@ -6,7 +6,9 @@ PAL = dict(
     gundark=(0.17,0.20,0.23,1), orange=(0.91,0.42,0.13,1),
     rust=(0.47,0.24,0.16,1), rustp=(0.60,0.32,0.21,1), rustd=(0.30,0.15,0.10,1), teal=(0.24,0.70,0.63,1),
     olive=(0.39,0.37,0.32,1), olived=(0.25,0.24,0.20,1),
-    ferrite=(0.79,0.63,0.36,1), fhi=(0.92,0.78,0.50,1), bone=(0.83,0.81,0.75,1))
+    ferrite=(0.79,0.63,0.36,1), fhi=(0.92,0.78,0.50,1), bone=(0.83,0.81,0.75,1),
+    # W4-02: warm lamp glow (ferrite-adjacent, palette law kept) and red beacon
+    glow=(1.0,0.85,0.55,1), beacon=(1.0,0.16,0.10,1))
 
 _mats = {}
 USE_WEATHERED = False  # set True (see lineup.py) to route every part through
@@ -30,7 +32,7 @@ def mat(name, emit=0.0, rough=0.7, metal=0.15):
     _mats[key] = m
     return m
 
-def box(name, sx, sy, sz, x=0, y=0, z=0, m='gun', bevel=0.06):
+def box(name, sx, sy, sz, x=0, y=0, z=0, m='gun', bevel=0.06, emit=0.0):
     bpy.ops.mesh.primitive_cube_add(size=1, location=(x, y, z + sz/2))
     o = bpy.context.object; o.name = name
     # size=1 gives verts at ±0.5 in Blender 5.x, so scale by the full
@@ -45,14 +47,14 @@ def box(name, sx, sy, sz, x=0, y=0, z=0, m='gun', bevel=0.06):
     if bevel > 0:
         md = o.modifiers.new('b','BEVEL'); md.width = bevel; md.segments = 2
         bpy.ops.object.modifier_apply(modifier='b')
-    o.data.materials.append(mat(m))
+    o.data.materials.append(mat(m, emit=emit))
     return o
 
-def cyl(name, r, h, x=0, y=0, z=0, m='gun', vs=12, rx=0, ry=0):
+def cyl(name, r, h, x=0, y=0, z=0, m='gun', vs=12, rx=0, ry=0, emit=0.0):
     bpy.ops.mesh.primitive_cylinder_add(radius=r, depth=h, vertices=vs, location=(x, y, z))
     o = bpy.context.object; o.name = name
     o.rotation_euler = (rx, ry, 0)
-    o.data.materials.append(mat(m))
+    o.data.materials.append(mat(m, emit=emit))
     return o
 
 def wedge(name, pts, h, z=0, m='rust'):
@@ -86,7 +88,8 @@ def join(objs, name):
     return obj
 
 def team_band(w, y, z, colour, d=0.06):
-    return box('band', w, d, 0.06, 0, y, z, colour, bevel=0.012)
+    # W4-02: the one team-colour place is now self-lit (night identification)
+    return box('band', w, d, 0.06, 0, y, z, colour, bevel=0.012, emit=1.2)
 
 def tracks(x, length, wheel_r=0.082, wheels=4, band_w=0.15, m_band='gundark', m_skirt='gun'):
     """Detailed track unit for one side: upper tread run + top skirt, road
@@ -109,6 +112,11 @@ def hatch(x, y, z, r=0.075):
 def antenna(x, y, z, h=0.34):
     return cyl(f'ant{x}{y}', 0.006, h, x, y, z + h / 2, 'gundark', vs=6)
 
+def headlights(hx, y, z):
+    # W4-02: paired glacis headlights on Directorate vehicles, self-lit
+    return [box(f'hl{s}', 0.05, 0.02, 0.03, s * hx, y, z, 'glow', 0.005, emit=2.5)
+            for s in (-1, 1)]
+
 # ---------------- UNITS (1 blender unit = 1 cell) ----------------
 def dir_cannon_tank():
     parts = [box('hull', 0.62, 0.78, 0.24, 0, -0.02, 0.04, 'gun', 0.05)]
@@ -124,6 +132,7 @@ def dir_cannon_tank():
     parts += tracks(0.38, 0.92)
     parts.append(cyl('ring', 0.20, 0.05, 0, -0.04, 0.315, 'gundark', vs=14))
     parts.append(team_band(0.34, -0.395, 0.315, 'orange'))
+    parts += headlights(0.22, 0.47, 0.16)
     hull = join(parts, 'dir_cannon_tank')
     tparts = [box('tur', 0.38, 0.42, 0.15, 0, -0.04, 0.34, 'plate', 0.05)]
     tparts.append(box('bustle', 0.30, 0.14, 0.11, 0, -0.29, 0.35, 'gundark', 0.03))
@@ -149,6 +158,7 @@ def dir_bulwark_tank():
     parts += tracks(0.52, 1.1, wheel_r=0.1, wheels=5, band_w=0.19)
     parts.append(cyl('ring', 0.28, 0.06, 0, -0.05, 0.41, 'gundark', vs=16))
     parts.append(team_band(0.5, -0.5, 0.42, 'orange'))
+    parts += headlights(0.30, 0.58, 0.20)
     hull = join(parts, 'dir_bulwark_tank')
     tparts = [box('tur', 0.58, 0.54, 0.2, 0, -0.05, 0.44, 'plate', 0.06)]
     tparts.append(box('bustle', 0.44, 0.18, 0.14, 0, -0.38, 0.46, 'gundark', 0.03))
@@ -218,7 +228,7 @@ def sod_phantom_tank():
         parts.append(cyl(f'tm{i}', 0.058, 0.1, tx, ty + 0.26, 0.4, 'rustp', vs=8, rx=math.pi/2))
     parts.append(cyl('exh1', 0.03, 0.18, -0.3, -0.5, 0.36, 'rustd', vs=8, rx=0.5))
     parts.append(cyl('exh2', 0.03, 0.18, -0.2, -0.53, 0.36, 'rustd', vs=8, rx=0.5))
-    parts.append(box('sl', 0.3, 0.07, 0.1, -0.26, -0.34, 0.28, 'teal', 0.02))
+    parts.append(box('sl', 0.3, 0.07, 0.1, -0.26, -0.34, 0.28, 'teal', 0.02, emit=1.5))
     return join(parts, 'sod_phantom_tank')
 
 def sod_shade_raider():
@@ -229,7 +239,7 @@ def sod_shade_raider():
     parts.append(wedge('blade1', [(-0.34, -0.3), (-0.26, 0.28), (-0.2, 0.24), (-0.28, -0.3)], 0.06, z=0.04, m='rustd'))
     parts.append(wedge('blade2', [(0.3, -0.22), (0.36, 0.2), (0.3, 0.24), (0.24, -0.18)], 0.06, z=0.04, m='rustd'))
     parts.append(cyl('exh', 0.025, 0.16, -0.14, -0.36, 0.16, 'rustd', vs=8, rx=0.6))
-    parts.append(box('sl', 0.22, 0.06, 0.08, -0.18, -0.24, 0.18, 'teal', 0.02))
+    parts.append(box('sl', 0.22, 0.06, 0.08, -0.18, -0.24, 0.18, 'teal', 0.02, emit=1.5))
     return join(parts, 'sod_shade_raider')
 
 def infantry(name, tube=False, colour='olive'):
@@ -246,7 +256,7 @@ def infantry(name, tube=False, colour='olive'):
 def com_harvester():
     parts = [box('body', 0.78, 1.0, 0.36, 0, 0.02, 0.08, 'olive', 0.12)]
     parts.append(box('cab', 0.4, 0.24, 0.16, 0, 0.44, 0.44, 'olived', 0.04))
-    parts.append(box('screen', 0.32, 0.03, 0.09, 0, 0.565, 0.47, 'gundark', 0.008))
+    parts.append(box('screen', 0.32, 0.03, 0.09, 0, 0.565, 0.47, 'glow', 0.008, emit=1.8))
     parts += tracks(-0.45, 1.1, wheel_r=0.11, wheels=4, band_w=0.17, m_band='olived', m_skirt='olive')
     parts += tracks(0.45, 1.1, wheel_r=0.11, wheels=4, band_w=0.17, m_band='olived', m_skirt='olive')
     parts.append(cyl('hop', 0.26, 0.16, 0, 0.02, 0.5, 'ferrite', vs=14))
@@ -264,7 +274,7 @@ def com_harvester():
 def com_mcv():
     parts = [box('body', 0.68, 1.16, 0.38, 0, 0, 0.1, 'olive', 0.07)]
     parts.append(box('cab', 0.5, 0.3, 0.2, 0, 0.44, 0.48, 'ferrite', 0.04))
-    parts.append(box('screen', 0.4, 0.03, 0.1, 0, 0.585, 0.52, 'gundark', 0.008))
+    parts.append(box('screen', 0.4, 0.03, 0.1, 0, 0.585, 0.52, 'glow', 0.008, emit=1.8))
     parts += tracks(-0.4, 1.24, wheel_r=0.105, wheels=5, band_w=0.15, m_band='olived', m_skirt='olive')
     parts += tracks(0.4, 1.24, wheel_r=0.105, wheels=5, band_w=0.15, m_band='olived', m_skirt='olive')
     # deployment crane: post, boom, cable, hook block
@@ -300,6 +310,9 @@ def com_power_plant():
         parts.append(box(f'lv{i}', 0.37, 0.7, 0.04, 0.5, -0.1, 0.72 + i * 0.14, 'gundark', 0.008))
     parts.append(cyl('feed', 0.06, 0.7, 0.05, 0.1, 0.62, 'olived', vs=8, ry=math.pi/2))
     parts.append(cyl('stack', 0.05, 0.35, 0.62, 0.55, 0.72, 'olived', vs=8))
+    # W4-02: lit window strip on the hall wall, red beacon on the stack top
+    parts.append(box('win', 0.02, 0.9, 0.08, 0.76, 0, 0.30, 'glow', 0.005, emit=1.6))
+    parts.append(cyl('bcn', 0.02, 0.05, 0.62, 0.55, 0.92, 'beacon', vs=6, emit=3.0))
     return join(parts, 'com_power_plant')
 
 def com_factory():
@@ -314,6 +327,10 @@ def com_factory():
     parts.append(box('lip', 1.5, 0.12, 0.1, 0, 0.72, 0.62, 'ferrite', 0.02))
     parts.append(cyl('chim', 0.08, 0.5, -0.6, -0.5, 0.85, 'olived', vs=10))
     parts.append(cyl('chimcap', 0.1, 0.04, -0.6, -0.5, 1.1, 'gundark', vs=10))
+    # W4-02: chimney beacon plus a glow lintel strip above each door
+    parts.append(cyl('bcn', 0.02, 0.05, -0.6, -0.5, 1.14, 'beacon', vs=6, emit=3.0))
+    for n, dx in enumerate((-0.4, 0.4)):
+        parts.append(box(f'dglow{n}', 0.5, 0.02, 0.04, dx, 0.78, 0.60, 'glow', 0.005, emit=1.4))
     hull = join(parts, 'com_factory')
     child_part(hull, d1, 'door0')
     child_part(hull, d2, 'door1')
@@ -325,7 +342,7 @@ def com_refinery():
     parts.append(box('hut', 0.4, 0.34, 0.22, 0.55, -0.05, 0.52, 'olived', 0.03))
     parts.append(cyl('silo', 0.45, 1.0, -0.4, 0.25, 0.58, 'olived', vs=14))
     parts.append(cyl('siloband', 0.47, 0.05, -0.4, 0.25, 0.75, 'olive', vs=14))
-    parts.append(cyl('core', 0.3, 0.1, -0.4, 0.25, 1.1, 'fhi', vs=14))
+    parts.append(cyl('core', 0.3, 0.1, -0.4, 0.25, 1.1, 'fhi', vs=14, emit=2.0))
     parts.append(cyl('pipe', 0.055, 0.62, -0.05, 0.0, 0.75, 'olived', vs=8, ry=math.pi/2))
     parts.append(cyl('valve', 0.09, 0.03, -0.05, 0.0, 0.84, 'ferrite', vs=10, rx=math.pi/2))
     parts.append(box('dock', 0.8, 0.5, 0.06, 0.35, 0.62, 0.08, 'ferrite', 0.02))
@@ -375,7 +392,7 @@ def dir_superweapon():
         parts.append(st)
     parts.append(cyl('dish', 0.55, 0.1, 0, 0, 0.45, 'gun', vs=20))
     parts.append(cyl('dishrim', 0.58, 0.04, 0, 0, 0.5, 'plate', vs=20))
-    parts.append(cyl('core', 0.16, 0.5, 0, 0, 0.55, 'orange', vs=10))
+    parts.append(cyl('core', 0.16, 0.5, 0, 0, 0.55, 'orange', vs=10, emit=2.2))
     for i in range(3):   # charge coils climbing the core
         parts.append(cyl(f'coil{i}', 0.2, 0.03, 0, 0, 0.6 + i * 0.12, 'gundark', vs=12))
     parts.append(box('f1', 0.1, 1.5, 0.16, 0, 0, 0.3, 'gundark', 0.02))
@@ -390,9 +407,9 @@ def sod_veil_projector():
     parts.append(wedge('shard2', [(0.2, 0.25), (0.45, 0.4), (0.4, 0.1)], 0.38, z=0.08, m='rustd'))
     parts.append(cyl('spire', 0.08, 1.1, 0, 0, 0.9, 'rustd', vs=8))
     parts.append(cyl('collar', 0.13, 0.06, 0, 0, 1.15, 'rustp', vs=8))
-    parts.append(cyl('orb', 0.18, 0.18, 0, 0, 1.5, 'teal', vs=10))
-    parts.append(cyl('r1', 0.5, 0.03, 0, 0, 0.8, 'teal', vs=18))
-    parts.append(cyl('r2', 0.34, 0.025, 0, 0, 1.12, 'teal', vs=16))
+    parts.append(cyl('orb', 0.18, 0.18, 0, 0, 1.5, 'teal', vs=10, emit=1.8))
+    parts.append(cyl('r1', 0.5, 0.03, 0, 0, 0.8, 'teal', vs=18, emit=1.8))
+    parts.append(cyl('r2', 0.34, 0.025, 0, 0, 1.12, 'teal', vs=16, emit=1.8))
     for a in range(3):   # guy-wire anchor spikes
         gx, gy = 0.72 * math.cos(a * 2.09 + 0.5), 0.72 * math.sin(a * 2.09 + 0.5)
         parts.append(cyl(f'guy{a}', 0.02, 0.5, gx, gy, 0.3, 'rustd', vs=6, rx=0.4 * math.sin(a * 2.09 + 0.5), ry=-0.4 * math.cos(a * 2.09 + 0.5)))
@@ -445,7 +462,7 @@ def dir_vanguard_car():
     glacis.rotation_euler = (-0.55, 0, 0)
     parts.append(glacis)
     parts.append(box('cab', 0.34, 0.2, 0.1, 0, 0.12, 0.26, 'gun', 0.03))
-    parts.append(box('screen', 0.28, 0.02, 0.06, 0, 0.225, 0.29, 'gundark', 0.008))
+    parts.append(box('screen', 0.28, 0.02, 0.06, 0, 0.225, 0.29, 'glow', 0.008, emit=1.8))
     vwheels = []
     for sx in (-0.235, 0.235):   # exposed wheels: separate spinning children
         for i, wy in enumerate((-0.22, 0.22)):
@@ -453,6 +470,7 @@ def dir_vanguard_car():
     parts.append(box('bumper', 0.4, 0.06, 0.08, 0, 0.42, 0.08, 'gundark', 0.015))
     parts.append(box('rack', 0.36, 0.18, 0.06, 0, -0.26, 0.22, 'gundark', 0.015))
     parts.append(team_band(0.3, -0.34, 0.2, 'orange'))
+    parts += headlights(0.16, 0.44, 0.14)
     hull = join(parts, 'dir_vanguard_car')
     for i, w in enumerate(vwheels):
         child_part(hull, w, f'wheel{i}')
