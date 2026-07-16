@@ -100,6 +100,7 @@ public static class Settings
         ("stop", "STOP"),
         ("repair", "REPAIR"),
         ("sell", "SELL"),
+        ("deploy", "DEPLOY"),   // TICKET-P5-SPAWN-03: unpack the selected MCV
         ("pause_menu", "OPERATIONS MENU"),
         ("cancel", "CANCEL / BACK"),
         ("camera_left", "CAMERA LEFT"),

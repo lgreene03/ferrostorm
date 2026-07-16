@@ -154,6 +154,11 @@ public partial class SkirmishLive : Node3D
     // TICKET-P5-SPAWN-02: own Deploys awaiting a verdict (MCV id -> the tick
     // the order was applied on), so the sim's silent refusal can be reported.
     private readonly Dictionary<int, int> _pendingDeploys = new();
+    // TICKET-P5-SPAWN-03: the MCV's catalogue id (com_mcv in World's compiled
+    // unit catalogue, and the id the sim's own Deploy guard tests). Named here
+    // because the deploy control tests it in three places and a bare 7 in each
+    // is how one of them drifts.
+    private const int McvUnitType = 7;
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
     // carry the identical destination (see SendMobilesToDepot for why exact
     // equality matters: the sim's arrival contagion keys on it).
@@ -1143,11 +1148,9 @@ public partial class SkirmishLive : Node3D
         // after the step that applied the order, the deploy was refused and
         // the player is told why. An MCV that is no longer a live MCV either
         // deployed (Deployed consumed it) or died, and neither needs this
-        // toast. NOTE, loudly: nothing in the shipped client ISSUES a Deploy
-        // for player 0 today - the player can buy an MCV and cannot unpack it.
-        // That missing control is its own ticket; this watcher covers every
-        // path a Deploy can take once one exists, and the IssueDeploy
-        // verification hook below proves it against the live sim rule.
+        // toast. The watcher arms above on any player-0 Deploy in the applied
+        // stream rather than on an issue path, which is why the deploy key and
+        // the double-click (TICKET-P5-SPAWN-03) inherited it without wiring.
         if (_pendingDeploys.Count > 0)
         {
             List<int>? decided = null;
@@ -1157,7 +1160,7 @@ public partial class SkirmishLive : Node3D
                 bool stillMcv = mcv >= 0 && mcv < _world.EntityCount
                     && _world.Entities[mcv].Alive
                     && _world.Entities[mcv].Kind == EntityKind.Unit
-                    && _world.Entities[mcv].UnitType == 7;
+                    && _world.Entities[mcv].UnitType == McvUnitType;
                 if (stillMcv)
                 {
                     ShowToast("DEPLOY BLOCKED - CLEAR THE AREA");
@@ -1358,7 +1361,13 @@ public partial class SkirmishLive : Node3D
                         rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
                     string acts = !Mobile(v.Kind)
                         ? (v.Kind == EntityKind.Factory ? "   right-click: rally   R repair  X sell" : "   R repair  X sell")
-                        : "";
+                        // TICKET-P5-SPAWN-03: the MCV advertises its one
+                        // action the way the structures advertise repair,
+                        // read from the live binding (the SET-01 rule) so a
+                        // rebound key never leaves the readout lying.
+                        : v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
+                            ? $"   {Settings.KeyName(Settings.BindOf("deploy"))} deploy"
+                            : "";
                     return name + hp + rep + acts;
                 }
             return "";
@@ -2118,6 +2127,17 @@ public partial class SkirmishLive : Node3D
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } am when _attackMoveArmed:
                 CommitAttackMove(am.Position);
                 break;
+            // TICKET-P5-SPAWN-03: double-click an own MCV and it unpacks, the
+            // classic idiom. The first click of the pair already selected the
+            // vehicle through FinishSelect; this second press issues instead
+            // of starting a drag. A double-click on anything else fails the
+            // guard and falls through to the case below, behaving exactly as
+            // two single clicks always have.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true, DoubleClick: true } dc
+                when _replay == null && PickOwnMcv(dc.Position) is >= 0 and var dmcv:
+                IssueDeploy(dmcv);
+                _audio.Play("ui_confirm", -8);
+                break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
                 else if (_dragging) { _dragging = false; _dragRect.Visible = false; FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift)); }
@@ -2166,6 +2186,10 @@ public partial class SkirmishLive : Node3D
             HandleRepairKey();
             return true;
         }
+        // TICKET-P5-SPAWN-03: the deploy key. Only consumed when it issued
+        // something - a bare press with no MCV selected means nothing and is
+        // left to whatever else might answer the key after a rebind.
+        if (ev.IsActionPressed("deploy") && DeploySelectedMcvs()) return true;
         // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
         // keypress is a match-losing misclick and the sim has no cancel for
         // it, so past 8 structures the first press only asks. Repair carries
@@ -2464,6 +2488,46 @@ public partial class SkirmishLive : Node3D
         ShowToast($"STOP   ({n} UNITS)");
     }
 
+    // -------- TICKET-P5-SPAWN-03: the deploy control --------
+
+    /// <summary>
+    /// One MCV ordered to unpack, through the same pending path every player
+    /// command takes. Born as TICKET-P5-SPAWN-02's verification hook, kept
+    /// public as one: the deploy key and the double-click both issue through
+    /// it now, so a scripted check and a played match share the exact path.
+    /// The sim's clear-area rule gives the verdict; a refusal is reported by
+    /// the SPAWN-02 watcher in RunOneTick, so no caller needs to ask twice.
+    /// </summary>
+    public void IssueDeploy(int mcvId) =>
+        _pending.Add(new Command(0, 0, CommandType.Deploy, mcvId, Fix64.Zero, Fix64.Zero));
+
+    /// <summary>The deploy key's handler: every own MCV in the selection is
+    /// ordered to unpack; whatever else is selected alongside is left alone,
+    /// the HandleRepairKey partition principle. Returns whether anything was
+    /// issued, so the caller can decline to consume an empty press.</summary>
+    private bool DeploySelectedMcvs()
+    {
+        if (_replay != null) return false;   // a spectator issues no orders
+        int n = 0;
+        foreach (int sid in _selection)
+            if (_latest.TryGetValue(sid, out var dv) && dv.PlayerId == 0
+                && dv.Kind == EntityKind.Unit && dv.UnitType == McvUnitType)
+            {
+                IssueDeploy(sid);
+                n++;
+            }
+        if (n == 0) return false;
+        _audio.Play("ui_confirm", -8);
+        return true;
+    }
+
+    /// <summary>The own MCV under the cursor, or -1. Same pick radius as the
+    /// mobile branch of FinishSelect, so the vehicle that answers a
+    /// double-click is exactly the one a single click would select.</summary>
+    private int PickOwnMcv(Vector2 at)
+        => PickEntity(at, 0.9f, v => v.PlayerId == 0
+            && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType);
+
     private void FinishSelect(Vector2 at, bool add)
     {
         if (!add) _selection.Clear();
@@ -2666,13 +2730,6 @@ public partial class SkirmishLive : Node3D
         _rankPips.TryGetValue(id, out var p) ? (p.P2.Visible ? 2 : p.P1.Visible ? 1 : 0) : 0;
     /// <summary>The ghost-and-commit truth for the current placement type.</summary>
     public bool CanPlaceAt(int ax, int ay) => _placingType > 0 && CanPlace(ax, ay, _placingType);
-    /// <summary>TICKET-P5-SPAWN-02 verification: issue a Deploy for an own MCV
-    /// through the same pending path every player command takes. The client
-    /// has no player-facing deploy control yet (reported as a finding, not
-    /// fixed here); the blocked-deploy toast must still be provable against
-    /// the live sim rule.</summary>
-    public void IssueDeploy(int mcvId) =>
-        _pending.Add(new Command(0, 0, CommandType.Deploy, mcvId, Fix64.Zero, Fix64.Zero));
     public bool SidebarStructVisible(int typeId) => _sidebar.StructButtonVisible(typeId);
     /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
     public void PressStop() => IssueStop();
