@@ -137,6 +137,27 @@ public partial class SkirmishLive : Node3D
     // a harassed harvester swallow the alert that says the base is falling,
     // which is the exact moment the player most needs telling.
     private double _lastHarvesterAlert = -60;
+    // TICKET-P5-PWR-01 (part of ALERT-02): the low-power alert is EDGE
+    // triggered on the 75 per cent crossing, not on the state - fire when the
+    // ratio drops below three quarters having been above it, re-arm when it
+    // recovers. Once per crossing, never once per frame, and not at the mere
+    // sub-100 dip either: below 100 the player is only slowed and the sidebar
+    // bar already reads amber; below 75 the guns are next (PWR-04).
+    private bool _wasBrownOut;
+    /// <summary>Verification read (the _autoHarvestIssues pattern): how many
+    /// times the low-power alert actually fired, so a test can prove the edge
+    /// trigger fires once per crossing rather than once per frame.</summary>
+    public int LowPowerAlerts { get; private set; }
+    // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
+    // -1 means no confirmation is pending.
+    private double _repairConfirmUntil = -1;
+    // TICKET-P5-SPAWN-02: own Deploys awaiting a verdict (MCV id -> the tick
+    // the order was applied on), so the sim's silent refusal can be reported.
+    private readonly Dictionary<int, int> _pendingDeploys = new();
+    // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
+    // carry the identical destination (see SendMobilesToDepot for why exact
+    // equality matters: the sim's arrival contagion keys on it).
+    private int _depotBay;
     private int _mapW, _mapH;
 
     // Structure interaction: rally points per producer, selection readout.
@@ -163,10 +184,15 @@ public partial class SkirmishLive : Node3D
     private int _autoHarvestIssues;
 
     /// <summary>Producers a rally point may be set on (TICKET-P5-BD-14 clause 5).
-    /// The depot is where repaired units gather and is free once attribution is
-    /// exact. Construction Yards are deliberately absent: structures are placed,
-    /// not rallied.</summary>
-    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.ServiceDepot;
+    /// Factory only: rally fires on ProductionComplete carrying the producer in
+    /// ev.C, and the Factory is the only producer that completes units. The
+    /// Service Depot's old entry was a dead affordance - it produces nothing,
+    /// so its rally marker could be set and never fired (TICKET-P5-REP-10
+    /// retired it honestly). Construction Yards stay deliberately absent:
+    /// structures are placed, not rallied. This stays a predicate rather than
+    /// a compare because PROD-05 adds Barracks and Airfield here when those
+    /// producers exist.</summary>
+    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
     // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
@@ -219,6 +245,37 @@ public partial class SkirmishLive : Node3D
     private static readonly StandardMaterial3D FillAmber = Bar(new Color(0.90f, 0.68f, 0.22f), 11);
     private static readonly StandardMaterial3D FillRed = Bar(new Color(0.85f, 0.28f, 0.20f), 11);
     private readonly Dictionary<int, (MeshInstance3D Back, MeshInstance3D Fill)> _hpBars = new();
+
+    // TICKET-P5-VET-01: rank chevrons, riding the health-bar machinery (scene
+    // children, billboarded, positioned per frame so hull yaw never swings
+    // them). One triangle at rank 1 (3 kills), two at rank 2 (6), in the rally
+    // gold the HUD already owns. Both pips are made together and visibility
+    // does the rest: rank never decreases, so there is no shrink path to test.
+    private static readonly ArrayMesh PipMesh = MakePipMesh();
+    private static readonly StandardMaterial3D PipMat = MakePipMat();
+    private static ArrayMesh MakePipMesh()
+    {
+        var st = new SurfaceTool();
+        st.Begin(Mesh.PrimitiveType.Triangles);
+        st.AddVertex(new Vector3(-0.085f, 0f, 0f));
+        st.AddVertex(new Vector3(0f, 0.095f, 0f));
+        st.AddVertex(new Vector3(0.085f, 0f, 0f));
+        return st.Commit();
+    }
+    private static StandardMaterial3D MakePipMat()
+    {
+        var m = Bar(new Color(0.79f, 0.63f, 0.36f), 12);
+        m.CullMode = BaseMaterial3D.CullModeEnum.Disabled; // a one-sided triangle vanishes at half the billboard's yaws
+        return m;
+    }
+    private MeshInstance3D NewPip() => new()
+    {
+        Mesh = PipMesh,
+        MaterialOverride = PipMat,
+        CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        Visible = false,
+    };
+    private readonly Dictionary<int, (MeshInstance3D P1, MeshInstance3D P2)> _rankPips = new();
 
     private static void ScanRig(Node n, ActorRig rig)
     {
@@ -718,7 +775,9 @@ public partial class SkirmishLive : Node3D
             Text = _replay != null
                 ? $"REPLAY PLAYBACK   the recorded stream issues every order   click: select   arrows/edge/wheel camera   {K("cancel")}: uplink"
                 : $"click: select   right click: move / attack / harvest / rally   {K("attack_move")} attack-move  {K("stop")} stop  "
-                  + $"{K("repair")} repair  {K("sell")} sell  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
+                  // TICKET-P5-REP-09: "repair bldgs", because R repairs
+                  // structures and the old hint promised more than R could do.
+                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
@@ -920,6 +979,12 @@ public partial class SkirmishLive : Node3D
         // live order and playback order are the same order.
         _tickCmds.AddRange(_missionCmds);
         _missionCmds.Clear();
+        // TICKET-P5-SPAWN-02: remember own Deploys so their outcome can be
+        // reported after the step. The sim decides a Deploy inside this very
+        // Step, so the verdict below is never more than one tick stale.
+        foreach (var c in _tickCmds)
+            if (c.Type == CommandType.Deploy && c.PlayerId == 0)
+                _pendingDeploys[c.EntityId] = recTick;
         var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
         _world.Step(span);
         _mission?.Tick(_world, _missionCmds);
@@ -1072,6 +1137,36 @@ public partial class SkirmishLive : Node3D
                     new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
                     new Color(0.91f, 0.42f, 0.13f));
         }
+        // TICKET-P5-SPAWN-02: the sim refuses a Deploy on an obstructed
+        // foundation by doing nothing at all (World.cs:874-891 - the rule is
+        // right, the silence is not). If the ordered MCV is still a live MCV
+        // after the step that applied the order, the deploy was refused and
+        // the player is told why. An MCV that is no longer a live MCV either
+        // deployed (Deployed consumed it) or died, and neither needs this
+        // toast. NOTE, loudly: nothing in the shipped client ISSUES a Deploy
+        // for player 0 today - the player can buy an MCV and cannot unpack it.
+        // That missing control is its own ticket; this watcher covers every
+        // path a Deploy can take once one exists, and the IssueDeploy
+        // verification hook below proves it against the live sim rule.
+        if (_pendingDeploys.Count > 0)
+        {
+            List<int>? decided = null;
+            foreach (var (mcv, at) in _pendingDeploys)
+            {
+                if (_world.Tick <= at) continue;   // verdict tick not reached (never in practice)
+                bool stillMcv = mcv >= 0 && mcv < _world.EntityCount
+                    && _world.Entities[mcv].Alive
+                    && _world.Entities[mcv].Kind == EntityKind.Unit
+                    && _world.Entities[mcv].UnitType == 7;
+                if (stillMcv)
+                {
+                    ShowToast("DEPLOY BLOCKED - CLEAR THE AREA");
+                    _audio.Play("ui_click", -12);   // the established denial voice
+                }
+                (decided ??= new List<int>()).Add(mcv);
+            }
+            if (decided != null) foreach (int id in decided) _pendingDeploys.Remove(id);
+        }
         // TICKET-P5-SAVE-01: playback ends the instant the recorded stream is
         // exhausted, and reports whether it landed on the recorded hash.
         if (_replay != null && !_replayDone && _world.Tick >= _replayTicks) FinishPlayback();
@@ -1088,6 +1183,27 @@ public partial class SkirmishLive : Node3D
         foreach (var e in _world.Entities)
             if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
         string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
+        // TICKET-P5-PWR-01: the low-power alert, on the 75 per cent CROSSING.
+        // Same integer test as the sidebar's brown-out colour (Sidebar.cs),
+        // so the klaxon and the red bar cannot disagree about the threshold.
+        bool brownOut = draw > 0 && supply * 4 < draw * 3;
+        if (brownOut && !_wasBrownOut)
+        {
+            LowPowerAlerts++;
+            ShowToast("LOW POWER");
+            // The one alert asset again (see the harvester alert in
+            // RunOneTick): a third pitch keeps the three alerts audibly
+            // apart. A purpose-made cue is owed from the audio pipeline;
+            // this does not pretend GDD s7 line 85's "distinct audio" is
+            // closed.
+            _audio.Play("alert_attack", -4, 0.82f);
+            // Gold ping at the primary Construction Yard: power is a base
+            // problem, and the yard is where the base is.
+            int yard = FindOwnStructure(EntityKind.ConstructionYard);
+            if (yard >= 0 && _latest.TryGetValue(yard, out var yv))
+                _minimap.Ping(new Vector2((float)yv.X, (float)yv.Y), new Color(0.79f, 0.63f, 0.36f));
+        }
+        _wasBrownOut = brownOut;
         // TICKET-P5-SAVE-01: the mode is on the status line because two of the
         // three modes change what the player's clicks do, and a replay that
         // silently ignores orders reads as a broken game.
@@ -1155,10 +1271,10 @@ public partial class SkirmishLive : Node3D
                     // its cell centre and leaves every 2x2 exactly where it was.
                     float half = _world.FootprintOf(_placingType) / 2f;
                     _ghost.Position = new Vector3(ax + half, 0.25f, ay + half);
-                    // Passing the type makes the tint agree with the sim's own
-                    // footprint test; for types 1-8 FootprintOf is 2, which is
-                    // what the defaulted call already meant.
-                    _ghost.MaterialOverride = _world.ValidPlacement(0, ax, ay, _placingType)
+                    // TICKET-P5-SPAWN-01: the tint answers the same question
+                    // the commit will ask - geometry AND, for a barrier, the
+                    // treasury and the cap - through the one shared predicate.
+                    _ghost.MaterialOverride = CanPlace(ax, ay, _placingType)
                         ? GhostValidMat : GhostInvalidMat;
                 }
             }
@@ -1170,7 +1286,9 @@ public partial class SkirmishLive : Node3D
     // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
     // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
     // the entry exists for completeness rather than for a live code path.
-    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "STRUCTURE", "SERVICE DEPOT", "WALL" };
+    // TICKET-P5-PROD-01 named type 7: the Veil Projector has a button now, so
+    // its ready toast must name it.
+    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL" };
 
     /// <summary>W3-19: slide-and-fade production toast. A fresh completion
     /// retriggers the animation from the top.</summary>
@@ -1214,7 +1332,10 @@ public partial class SkirmishLive : Node3D
         if (walls > 1 && walls == _selection.Count)
         {
             long refund = walls * (long)_world.GetStructureType(9).Cost / 2;
-            return $"{walls} WALL SEGMENTS   R repair  X sell   {refund} cr";
+            // TICKET-P5-REP-06: the readout carries the repair DRAIN as well
+            // as the sell refund - the drain is the number that decides
+            // whether to press R on a forty-segment run.
+            return $"{walls} WALL SEGMENTS   R repair {walls * 15} cr/s  X sell {refund} cr";
         }
         if (_selection.Count == 1)
         {
@@ -1224,14 +1345,48 @@ public partial class SkirmishLive : Node3D
                     string name = v.Kind == EntityKind.Unit && v.UnitType < UnitNames.Length
                         ? UnitNames[v.UnitType] : v.Kind.ToString().ToUpperInvariant();
                     string hp = v.MaxHp > 0 ? $"  {v.Hp}/{v.MaxHp}" : $"  {v.Hp} HP";
+                    // TICKET-P5-REP-04: state the real rate - 2 hp per tick at
+                    // 15 Hz is 30 hp/s for 15 cr/s, and the player should not
+                    // have to derive that. The stall is PER STRUCTURE, not a
+                    // global credit test: World.cs charges in entity-index
+                    // order, so on a thin treasury the lowest-index buildings
+                    // heal while the rest stall, and a global test would print
+                    // REPAIRING on a building that is not being repaired.
+                    string rep = "";
+                    if (!Mobile(v.Kind) && v.PlayerId == 0
+                        && sid >= 0 && sid < _world.EntityCount && _world.Entities[sid].Repairing)
+                        rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
                     string acts = !Mobile(v.Kind)
                         ? (v.Kind == EntityKind.Factory ? "   right-click: rally   R repair  X sell" : "   R repair  X sell")
                         : "";
-                    return name + hp + acts;
+                    return name + hp + rep + acts;
                 }
             return "";
         }
         return $"{_selection.Count} SELECTED";
+    }
+
+    /// <summary>
+    /// TICKET-P5-REP-04: will this repairing structure actually be charged
+    /// (and so healed) on the next tick? World.cs pays repairing structures
+    /// 1 credit each in entity-index order, so a structure stalls when the
+    /// treasury cannot also cover every repairing own structure at a lower
+    /// index. Honest caveat: the Service Depot's own per-unit drain
+    /// interleaves in the same index order and can make this read optimistic
+    /// by a few credits while units sit in a depot aura; exactness would need
+    /// the sim to publish its charge ledger, which is not this ticket's to add.
+    /// </summary>
+    private bool RepairStalled(int id)
+    {
+        int ahead = 0;
+        var ents = _world.Entities;
+        for (int i = 0; i < id && i < ents.Count; i++)
+        {
+            var e = ents[i];
+            if (e.Alive && e.PlayerId == 0 && e.Repairing
+                && !Mobile(e.Kind) && e.Kind != EntityKind.FerriteField) ahead++;
+        }
+        return _world.Credits(0) < ahead + 1;
     }
 
     private int CountOwn()
@@ -1327,6 +1482,26 @@ public partial class SkirmishLive : Node3D
     // the answer belongs to this match's catalogue, not to the compiled one.
     private bool IsBarrier(int structType) =>
         _world.GetStructureType(structType).Kind == EntityKind.Wall;
+
+    /// <summary>
+    /// TICKET-P5-SPAWN-01: the one placement truth the ghost tint and the
+    /// single-click commit share. ValidPlacement stays the sim's GEOMETRY
+    /// predicate (other callers depend on that meaning - the cap and credit
+    /// tests do NOT move into it); but a barrier is bought upfront, and the
+    /// sim refuses a broke or capped placement at the command (World.cs
+    /// PlaceStructure), so a ghost that only answers for geometry glows green
+    /// over a click that will do nothing. The drag path already asks the cap
+    /// question (UpdateDragGhosts); the single-click path not asking was a
+    /// defect, not a choice. Reads GetStructureType, the live catalogue, not
+    /// DefaultStructureType.
+    /// </summary>
+    private bool CanPlace(int ax, int ay, int type)
+    {
+        if (!_world.ValidPlacement(0, ax, ay, type)) return false;
+        if (!IsBarrier(type)) return true;
+        return _world.Credits(0) >= _world.GetStructureType(type).Cost
+            && OwnCount(EntityKind.Wall) < World.MaxBarriersPerPlayer;
+    }
 
     /// <summary>
     /// DEF-01 clause 8: the selection ring was hardcoded at 1.5, which is the
@@ -1593,6 +1768,55 @@ public partial class SkirmishLive : Node3D
                 fresh.Position = new Vector3(0, Mobile(v.Kind) ? 0.35f : 0.7f, 0);
                 node.AddChild(fresh);
             }
+            // TICKET-P5-REP-03: an amber pulsing ground ring on own structures
+            // while the sim says they are repairing. Post-Step read of
+            // Repairing (the rally precedent); the sim clears the flag itself
+            // at full health, which removes the ring here. The ring rides as a
+            // child of the actor, so a dying structure sinks with its ring.
+            if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField
+                && v.PlayerId == 0 && v.Id >= 0 && v.Id < _world.EntityCount)
+            {
+                bool repairing = _world.Entities[v.Id].Repairing;
+                var rring = node.GetNodeOrNull<MeshInstance3D>("RepairRing");
+                if (repairing && rring == null)
+                {
+                    // The DEF-01 ring machinery: built at radius 1, so Scale
+                    // IS the radius, sized off the live footprint. Rally gold,
+                    // not a new colour (doc 16 is a closed palette).
+                    float rr = _world.FootprintOf(_world.Entities[v.Id].StructType) * 0.85f;
+                    rring = BattlefieldView.MakeRangeRing(1f, new Color(0.79f, 0.63f, 0.36f, 0.6f));
+                    rring.Name = "RepairRing";
+                    rring.Scale = new Vector3(rr, 1, rr);
+                    node.AddChild(rring);
+                    var pulse = rring.CreateTween().SetLoops();
+                    pulse.TweenProperty(rring, "transparency", 0.65f, 0.45f)
+                        .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+                    pulse.TweenProperty(rring, "transparency", 0.0f, 0.45f)
+                        .SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+                }
+                else if (!repairing && rring != null)
+                {
+                    rring.Name = "RepairRingGone"; // QueueFree defers; the DmgSmokeGone rename precedent
+                    rring.QueueFree();
+                }
+            }
+            // TICKET-P5-REP-07: the depot's heal aura, drawn while selected.
+            // Radius is World.DepotRepairRadiusCells - the system constant the
+            // sim itself heals by, NOT sight_range, which matches it only by
+            // coincidence (com_service_depot.yaml warns of exactly that).
+            if (v.Kind == EntityKind.ServiceDepot && v.PlayerId == 0)
+            {
+                var aura = node.GetNodeOrNull<MeshInstance3D>("DepotAura");
+                if (aura == null)
+                {
+                    aura = BattlefieldView.MakeRangeRing(1f, BattlefieldView.RangeRingOwn);
+                    aura.Name = "DepotAura";
+                    aura.Scale = new Vector3(World.DepotRepairRadiusCells, 1, World.DepotRepairRadiusCells);
+                    aura.Visible = false;
+                    node.AddChild(aura);
+                }
+                aura.Visible = _selection.Contains(v.Id);
+            }
             // W3-09: ferrite-gold stream while a harvester loads (post-Step
             // read of HState, same precedent as the rally code).
             if (v.Kind == EntityKind.Harvester)
@@ -1656,6 +1880,14 @@ public partial class SkirmishLive : Node3D
                     hb.Fill.QueueFree();
                     _hpBars.Remove(id);
                 }
+                // TICKET-P5-VET-01: pips are scene children like the bars, so
+                // a corpse must not leave its chevrons hanging in the air.
+                if (_rankPips.TryGetValue(id, out var deadPips))
+                {
+                    deadPips.P1.QueueFree();
+                    deadPips.P2.QueueFree();
+                    _rankPips.Remove(id);
+                }
                 _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
                 ForgetRally(id);              // TICKET-P5-BD-14: no orphan markers
                 _manuallyStopped.Remove(id);  // P5-ECON-07: ids are reused by nothing, but the set should not grow forever
@@ -1705,9 +1937,30 @@ public partial class SkirmishLive : Node3D
                 }
             }
             // W3-14: billboard health bars above damaged or selected mobiles.
-            if (_latest.TryGetValue(id, out var hv) && Mobile(hv.Kind))
+            // TICKET-P5-REP-05 widens the gate to own structures (ferrite
+            // fields excluded - a deposit's Hp is its yield, not a wound).
+            // Wall bars show only while selected, or a forty-segment run
+            // grows forty bars. Structure bars scale their WIDTH off the real
+            // footprint and ride higher: the shipped 0.9-wide bar is tuned
+            // for mobiles and would float a third-width inside a 2x2 roof.
+            if (_latest.TryGetValue(id, out var hv)
+                && (Mobile(hv.Kind) || (hv.PlayerId == 0 && hv.Kind != EntityKind.FerriteField)))
             {
-                bool show = node.Visible && hv.MaxHp > 0 && (_selection.Contains(id) || hv.Hp < hv.MaxHp);
+                bool show = node.Visible && hv.MaxHp > 0
+                    && (hv.Kind == EntityKind.Wall
+                        ? _selection.Contains(id)
+                        : _selection.Contains(id) || hv.Hp < hv.MaxHp);
+                float wide = 1f, lift = 1.15f;
+                if (!Mobile(hv.Kind))
+                {
+                    wide = id >= 0 && id < _world.EntityCount
+                        ? _world.FootprintOf(_world.Entities[id].StructType) : World.FootprintSize;
+                    // The Mobile ? 0.35 : 0.7 smoke precedent: structures are
+                    // taller, so the bar rides higher - except the wall, which
+                    // is a knee-high slab and keeps a low bar (its footprint
+                    // already gives it the mobile width).
+                    lift = hv.Kind == EntityKind.Wall ? 0.9f : 2.0f;
+                }
                 if (show && !_hpBars.ContainsKey(id))
                 {
                     var back = new MeshInstance3D { Mesh = HpBackMesh, MaterialOverride = BackMat, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
@@ -1721,11 +1974,37 @@ public partial class SkirmishLive : Node3D
                     float frac = Mathf.Clamp(hv.Hp / (float)hv.MaxHp, 0f, 1f);
                     b.Back.Visible = show;
                     b.Fill.Visible = show;
-                    b.Back.Position = node.Position + new Vector3(-0.45f, 1.15f, 0);
-                    b.Fill.Position = node.Position + new Vector3(-0.45f, 1.15f, 0);
-                    b.Fill.Scale = new Vector3(Mathf.Max(frac, 0.02f), 1, 1);
+                    // The quad anchors its left edge at its node origin
+                    // (CenterOffset 0.45), so a footprint-wide bar starts
+                    // footprint-half to the left and Scale.X carries both the
+                    // width and, on the fill, the health fraction.
+                    b.Back.Position = node.Position + new Vector3(-0.45f * wide, lift, 0);
+                    b.Fill.Position = node.Position + new Vector3(-0.45f * wide, lift, 0);
+                    b.Back.Scale = new Vector3(wide, 1, 1);
+                    b.Fill.Scale = new Vector3(Mathf.Max(frac, 0.02f) * wide, 1, 1);
                     b.Fill.MaterialOverride = frac > 0.5f ? FillGreen : frac > 0.25f ? FillAmber : FillRed;
                 }
+            }
+            // TICKET-P5-VET-01: rank pips. The elite self-heal has shipped
+            // since P2 (1 hp per 15 ticks, free, no depot, no power), but the
+            // client never drew rank, so a player watching one tank heal and
+            // another not could not learn the rule. Post-Step read of
+            // Entity.Rank; thresholds live in the sim (3 kills, then 6).
+            if (_latest.TryGetValue(id, out var pv) && Mobile(pv.Kind)
+                && id >= 0 && id < _world.EntityCount && _world.Entities[id].Rank > 0)
+            {
+                int rank = _world.Entities[id].Rank;
+                if (!_rankPips.TryGetValue(id, out var pips))
+                {
+                    pips = (NewPip(), NewPip());
+                    AddChild(pips.P1);
+                    AddChild(pips.P2);
+                    _rankPips[id] = pips;
+                }
+                pips.P1.Visible = node.Visible;
+                pips.P2.Visible = node.Visible && rank >= 2;
+                pips.P1.Position = node.Position + new Vector3(rank >= 2 ? -0.11f : 0f, 1.34f, 0);
+                pips.P2.Position = node.Position + new Vector3(0.11f, 1.34f, 0);
             }
             if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind) && to.LengthSquared() > 0.003f)
             {
@@ -1884,16 +2163,15 @@ public partial class SkirmishLive : Node3D
         if (ev.IsActionPressed("stop")) { IssueStop(); return true; }
         if (ev.IsActionPressed("repair") && _selection.Count > 0)
         {
-            foreach (int sid in _selection)
-                if (_latest.TryGetValue(sid, out var rv) && !Mobile(rv.Kind))
-                    _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
-            _audio.Play("ui_confirm", -8);
+            HandleRepairKey();
             return true;
         }
         // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
         // keypress is a match-losing misclick and the sim has no cancel for
-        // it, so past 8 structures the first press only asks. Repair needs no
-        // such guard: it is reversible and cheap.
+        // it, so past 8 structures the first press only asks. Repair carries
+        // the same guard now (TICKET-P5-REP-06): it is reversible, but not
+        // cheap - at the 80-segment barrier cap (World.MaxBarriersPerPlayer)
+        // a full wall-run repair drains 1200 credits per second.
         if (ev.IsActionPressed("sell") && _selection.Count > 0)
         {
             int n = 0;
@@ -1930,6 +2208,185 @@ public partial class SkirmishLive : Node3D
             return true;
         }
         return false;
+    }
+
+    // ---------------- TICKET-P5-REP-01/02/06/08: the repair key ----------------
+
+    /// <summary>
+    /// The R key, partitioned into what the sim can actually do rather than
+    /// sprayed at the selection (TICKET-P5-REP-01: the old handler played the
+    /// confirmation chime whether or not anything could be repaired, which on
+    /// three damaged tanks was a confident lie). Structures get the Repair
+    /// command - set-on across a multi-select rather than a blind toggle
+    /// (REP-08), behind a mass-confirmation guard past 8 (REP-06, the sell
+    /// guard's shape). A mobile-only selection goes to SendMobilesToDepot
+    /// (REP-02). Mixed: the structures repair, and the toast says how many
+    /// damaged units still need a depot.
+    /// </summary>
+    private void HandleRepairKey()
+    {
+        if (_replay != null) return;   // a spectator issues no orders
+        var structures = new List<int>();
+        var mobiles = new List<int>();
+        foreach (int sid in _selection)
+            if (_latest.TryGetValue(sid, out var rv))
+                (Mobile(rv.Kind) ? mobiles : structures).Add(sid);
+        if (structures.Count == 0)
+        {
+            if (mobiles.Count > 0) SendMobilesToDepot(mobiles);
+            return;
+        }
+
+        // REP-08: read each structure's live Repairing flag. If any is off,
+        // this press switches ON exactly those (result: all repairing); only
+        // when every one is already repairing does the press switch all off.
+        // Same key, same sim command, coherent behaviour, zero sim change.
+        var targets = new List<int>();
+        foreach (int sid in structures)
+            if (sid >= 0 && sid < _world.EntityCount && !_world.Entities[sid].Repairing)
+                targets.Add(sid);
+        bool switchingOff = targets.Count == 0;
+        if (switchingOff) targets = structures;
+
+        // REP-06: past 8 structures being switched ON, the first press only
+        // asks - the drain is real money (15 cr/s each; 1200 cr/s at the
+        // barrier cap). Switching OFF needs no guard: stopping a drain is
+        // exactly what a misclick recovery wants.
+        if (!switchingOff && targets.Count > 8 && _now > _repairConfirmUntil)
+        {
+            _repairConfirmUntil = _now + 2.0;
+            ShowToast($"REPAIR {targets.Count} STRUCTURES?  {targets.Count * 15} cr/s   PRESS {Settings.KeyName(Settings.BindOf("repair"))} AGAIN");
+            _audio.Play("ui_click", -8);
+            return;
+        }
+        _repairConfirmUntil = -1;
+        foreach (int sid in targets)
+            _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
+        // REP-01, the single line that kills the lie: the confirmation chime
+        // belongs to the branch that actually did something.
+        _audio.Play("ui_confirm", -8);
+        // REP-01 mixed rule: say how many damaged units the chime did NOT cover.
+        int needDepot = 0;
+        foreach (int mid in mobiles)
+            if (_latest.TryGetValue(mid, out var mv) && mv.MaxHp > 0 && mv.Hp < mv.MaxHp) needDepot++;
+        if (needDepot > 0)
+            ShowToast(needDepot == 1
+                ? "1 DAMAGED UNIT NEEDS A SERVICE DEPOT"
+                : $"{needDepot} DAMAGED UNITS NEED A SERVICE DEPOT");
+    }
+
+    /// <summary>
+    /// TICKET-P5-REP-02: R on a mobile-only selection sends the damaged ones
+    /// to the player's nearest live Service Depot - a point about 2 cells from
+    /// the depot centre, comfortably inside the radius-4 aura, and the depot
+    /// heals moving units, so no arrival logic is needed. The preconditions
+    /// are read BEFORE anything is promised, or this recreates REP-01's sin
+    /// one layer out: the depot heals nothing in a brown-out and nothing at
+    /// zero credits, and sending units to park beside a dead pump while the
+    /// game chirps that it handled it is the exact lie this wave exists to
+    /// kill. Sent units join the player-directed set (P5-ECON-07), so
+    /// auto-resume leaves them parked until told otherwise.
+    /// </summary>
+    private void SendMobilesToDepot(List<int> mobiles)
+    {
+        var damaged = new List<int>();
+        foreach (int id in mobiles)
+            if (_latest.TryGetValue(id, out var v) && v.MaxHp > 0 && v.Hp < v.MaxHp)
+                damaged.Add(id);
+        if (damaged.Count == 0)
+        {
+            // Nothing issued, nothing acknowledged - but silence reads as a
+            // dead key, so say why (the P5-ECON-06 denial pattern throughout).
+            ShowToast("NO DAMAGE TO REPAIR");
+            _audio.Play("ui_click", -12);
+            return;
+        }
+        float cxs = 0, cys = 0;
+        foreach (int id in damaged) { var v = _latest[id]; cxs += (float)v.X; cys += (float)v.Y; }
+        int depot = NearestOwnDepotTo(new Vector2(cxs / damaged.Count, cys / damaged.Count));
+        if (depot < 0)
+        {
+            ShowToast($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(8).Cost} cr)");
+            _audio.Play("ui_click", -12);
+            return;
+        }
+        int supply = 0, draw = 0;
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
+        if (supply < draw)
+        {
+            ShowToast("DEPOT OFFLINE: LOW POWER");   // World's depot gate, said out loud
+            _audio.Play("ui_click", -12);
+            return;
+        }
+        if (_world.Credits(0) < 1)
+        {
+            ShowToast("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
+            _audio.Play("ui_click", -12);
+            return;
+        }
+        var dp = _latest[depot];
+        foreach (int id in damaged)
+        {
+            var v = _latest[id];
+            // WHERE to send them is dictated by two sim arrival rules, both
+            // found by this ticket's own offscreen verification rather than by
+            // reading. (1) Crowd arrival (World.cs StepToward): a combat unit
+            // considers a PathMove complete within 4 CELLS of its destination
+            // - the same 4 cells as the depot aura - so a unit aimed at a
+            // point 2 cells out settles up to 6 cells from the depot, healed
+            // not at all. (2) Arrival contagion (World.cs SeparationSystem):
+            // a unit pressing against a stopped unit with the IDENTICAL
+            // destination stops too, so a pack sharing one destination parks
+            // in layers growing outward past the aura edge. So each combat
+            // unit is aimed at its OWN point half a cell past the depot
+            // centre along its own approach line, with a per-order jitter so
+            // no two orders ever share an exact target: crowd arrival then
+            // parks each unit ~3.5 cells out, inside the aura, and contagion
+            // never fires. Harvesters have neither rule and would drive into
+            // the building, so they keep the exact 2-cells-out point on their
+            // own side.
+            Fix64 dx, dy;
+            var dir = new Vector2((float)(v.X - dp.X), (float)(v.Y - dp.Y));
+            dir = dir.LengthSquared() < 0.01f ? new Vector2(1f, 0f) : dir.Normalized();
+            if (v.Kind == EntityKind.Unit)
+            {
+                _depotBay = (_depotBay + 1) % 97;
+                float px = (float)dp.X - dir.X * 0.5f + 0.003f * (1 + _depotBay);
+                float py = (float)dp.Y - dir.Y * 0.5f;
+                dx = Fix64.FromFraction((int)(px * 1000), 1000);
+                dy = Fix64.FromFraction((int)(py * 1000), 1000);
+            }
+            else
+            {
+                dx = Fix64.FromFraction((int)(((float)dp.X + dir.X * 2f) * 1000), 1000);
+                dy = Fix64.FromFraction((int)(((float)dp.Y + dir.Y * 2f) * 1000), 1000);
+            }
+            _pending.Add(new Command(0, 0, CommandType.PathMove, id, dx, dy));
+            _manuallyStopped.Add(id);   // player-directed: auto-resume keeps off
+        }
+        _effects.OrderMarker(new Vector3((float)dp.X, 0, (float)dp.Y), 0);
+        _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        ShowToast(damaged.Count == 1
+            ? "1 UNIT TO THE SERVICE DEPOT"
+            : $"{damaged.Count} UNITS TO THE SERVICE DEPOT");
+    }
+
+    /// <summary>TICKET-P5-REP-02: the nearest live own Service Depot to a
+    /// point, by squared distance. A NEW finder on purpose: FindOwnStructure
+    /// returns the first depot in view order, which is the wrong one as soon
+    /// as there are two.</summary>
+    private int NearestOwnDepotTo(Vector2 at)
+    {
+        int best = -1;
+        float bestD = float.MaxValue;
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.PlayerId != 0 || v.Kind != EntityKind.ServiceDepot) continue;
+            float d = new Vector2((float)v.X - at.X, (float)v.Y - at.Y).LengthSquared();
+            if (d < bestD) { bestD = d; best = v.Id; }
+        }
+        return best;
     }
 
     // ---------------- TICKET-P5-SET-01: attack-move and stop ----------------
@@ -2062,7 +2519,9 @@ public partial class SkirmishLive : Node3D
     /// the same command path the mouse ghost uses.</summary>
     public bool PlaceAtCell(int ax, int ay)
     {
-        if (_placingType <= 0 || !_world.ValidPlacement(0, ax, ay, _placingType))
+        // TICKET-P5-SPAWN-01: same predicate as the ghost tint, so a red
+        // ghost and a refused click are the same answer given twice.
+        if (_placingType <= 0 || !CanPlace(ax, ay, _placingType))
         { _audio.Play("ui_click", -12); return false; }
         _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
             Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
@@ -2179,6 +2638,42 @@ public partial class SkirmishLive : Node3D
     public void ClearSelection() => _selection.Clear();
     /// <summary>Select exactly one entity, as a single left-click on it would.</summary>
     public void SelectOne(int id) { _selection.Clear(); _selection.Add(id); }
+    /// <summary>Add to the selection, as a shift-click on it would.</summary>
+    public void SelectAlso(int id) => _selection.Add(id);
+
+    // ---- Wave 1 verification surface (TICKET-P5-REP/VET/SPAWN/PWR/PROD),
+    // the established principle: read the shipped state, never a copy of it.
+    public int HpBarCount => _hpBars.Count;
+    /// <summary>Bars are scene children; count them by walking the scene so an
+    /// orphan cannot hide in a stale dictionary (the RallyMarker precedent).
+    /// Matched on the shared fill mesh, NOT a name: Godot discards a custom
+    /// name on sibling collision (auto-renaming to the class name), so bars
+    /// past the first would be invisible to a name walk.</summary>
+    public int HpBarNodesInScene()
+    {
+        int n = 0;
+        foreach (var c in GetChildren())
+            if (c is MeshInstance3D m && m.Mesh == HpFillMesh && !m.IsQueuedForDeletion()) n++;
+        return n;
+    }
+    public bool HpBarShown(int id) => _hpBars.TryGetValue(id, out var b) && b.Fill.Visible;
+    public bool RepairRingOn(int id) =>
+        _actors.TryGetValue(id, out var n) && n.GetNodeOrNull<MeshInstance3D>("RepairRing") != null;
+    public bool DepotAuraVisible(int id) =>
+        _actors.TryGetValue(id, out var n) && n.GetNodeOrNull<MeshInstance3D>("DepotAura") is { Visible: true };
+    /// <summary>How many chevrons this entity is wearing right now.</summary>
+    public int RankPipsShown(int id) =>
+        _rankPips.TryGetValue(id, out var p) ? (p.P2.Visible ? 2 : p.P1.Visible ? 1 : 0) : 0;
+    /// <summary>The ghost-and-commit truth for the current placement type.</summary>
+    public bool CanPlaceAt(int ax, int ay) => _placingType > 0 && CanPlace(ax, ay, _placingType);
+    /// <summary>TICKET-P5-SPAWN-02 verification: issue a Deploy for an own MCV
+    /// through the same pending path every player command takes. The client
+    /// has no player-facing deploy control yet (reported as a finding, not
+    /// fixed here); the blocked-deploy toast must still be provable against
+    /// the live sim rule.</summary>
+    public void IssueDeploy(int mcvId) =>
+        _pending.Add(new Command(0, 0, CommandType.Deploy, mcvId, Fix64.Zero, Fix64.Zero));
+    public bool SidebarStructVisible(int typeId) => _sidebar.StructButtonVisible(typeId);
     /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
     public void PressStop() => IssueStop();
     public int WallMaskOf(int id) => _wallMask.TryGetValue(id, out int m) ? m : -1;

@@ -426,6 +426,16 @@ public sealed partial class World
     /// <summary>Per-player barrier cap (ADR-005 clause 5). Derived from the TDD s6 ratified budget of 200 structures (03-technical-design-document.md:59): 2 x 80 + ~32 real buildings = ~192, inside budget. A performance guarantee, not a design flourish.</summary>
     public const int MaxBarriersPerPlayer = 80;
 
+    /// <summary>TICKET-P5-REP-07: the Service Depot's field-repair reach, in
+    /// cells. A system constant, deliberately NOT sight_range - the depot sees
+    /// 4 cells by coincidence and com_service_depot.yaml:12-15 warns about
+    /// exactly that confusion; probes confirm radius 4 heals and radius 5 does
+    /// not. The client draws the selected depot's aura ring from this same
+    /// constant so the two cannot drift. Named from the existing literal in
+    /// ProductionSystem's depot loop (a squared-distance compare against 16),
+    /// so behaviour is bit-identical.</summary>
+    public const int DepotRepairRadiusCells = 4;
+
     private void UnblockFootprint(int ax, int ay, int size)
     {
         for (int dy = 0; dy < size; dy++)
@@ -1607,7 +1617,9 @@ public sealed partial class World
                     var v = _entities[u];
                     if (!v.Alive || v.PlayerId != e.PlayerId || v.Hp >= v.MaxHp) continue;
                     if (v.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
-                    if (Fix64.DistSq(v.X - e.X, v.Y - e.Y) > Fix64.FromInt(16)) continue;
+                    // Squared distance, so the compare is radius squared: 16.
+                    if (Fix64.DistSq(v.X - e.X, v.Y - e.Y)
+                        > Fix64.FromInt(DepotRepairRadiusCells * DepotRepairRadiusCells)) continue;
                     if (_credits[e.PlayerId] < 1) break;
                     _credits[e.PlayerId] -= 1;
                     v.Hp = v.Hp + 2 > v.MaxHp ? v.MaxHp : v.Hp + 2;

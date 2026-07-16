@@ -22,6 +22,12 @@ public partial class Sidebar : PanelContainer
         new("FACTORY", 2, 2000, "com_factory"),
         new("TURRET", 5, 600, "dir_turret"),
         new("SERVICE DEPOT", 8, 1200, "com_service_depot"),
+        // TICKET-P5-PROD-01: the Sodality's signature building, fully
+        // implemented in the sim since P2 and never buildable by a person.
+        // The button is gated on faction in Init - absent for the
+        // Directorate, exactly as the sim itself refuses the command
+        // (World.cs BuildStructure's faction check, which stays authoritative).
+        new("VEIL PROJECTOR", VeilType, 1500, "sod_veil_projector"),
         new("SUPERWEAPON", 6, 4000, "dir_superweapon"),
         // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
         // slot and no build time, so it is never queued at the yard - the button
@@ -32,6 +38,9 @@ public partial class Sidebar : PanelContainer
     /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
     /// deferred gate).</summary>
     private const int BarrierType = 9;
+    /// <summary>Struct type 7, the Veil Projector - Sodality doctrine
+    /// (TICKET-P5-PROD-01; the sim's gate lives in World.cs BuildStructure).</summary>
+    private const int VeilType = 7;
     private static readonly BuildItem[] Units =
     {
         new("RIFLE SQUAD", 2, 200, "com_rifle_squad"),
@@ -128,7 +137,14 @@ public partial class Sidebar : PanelContainer
                 : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).BuildTicks);
             // Classic campaign tech gating: disallowed items are absent,
             // not greyed - progression should read as the tree growing.
-            b.Visible = MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true;
+            // TICKET-P5-PROD-01: the faction gate reads the same shape - the
+            // Veil Projector button exists only for a Sodality player 0,
+            // mirroring the sim's own refusal rather than second-guessing it
+            // (the sim's check is untouched and still refuses a hand-crafted
+            // command). Faction is map content, set before tick 0 and never
+            // mutated mid-match, so an Init-time read is sound.
+            b.Visible = (MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true)
+                && (it.TypeId != VeilType || _game.FactionOf(0) == World.FactionSodality);
             _structButtons[it.TypeId] = b;
             v.AddChild(b);
         }
@@ -335,6 +351,10 @@ public partial class Sidebar : PanelContainer
     // ---- Verification surface (TICKET-P5-BD-01), following the SkirmishLive
     // precedent: expose what is on screen, not a recomputation of it.
     public string StructButtonText(int typeId) => _structButtons.TryGetValue(typeId, out var b) ? b.Text : "";
+    /// <summary>TICKET-P5-PROD-01: is this structure's button actually on
+    /// offer? Visibility is the gate (absent, not greyed), so it is what a
+    /// test must read.</summary>
+    public bool StructButtonVisible(int typeId) => _structButtons.TryGetValue(typeId, out var b) && b.Visible;
     public string UnitButtonText(int typeId) => _unitButtons.TryGetValue(typeId, out var b) ? b.Text : "";
     public string PowerText => _powerLabel.Text;
     public float PowerFillWidth => _powerFill.Size.X;
