@@ -1546,6 +1546,23 @@ int SelfTest()
     // A 2x2 centred at 9 anchors at 8; a 1x1 centred at 8.5 anchors at 8.
     if (fp.AnchorOf(Fix64.FromInt(9), 4) != 8) return Fail("AnchorOf 2x2");
     if (fp.AnchorOf(Fix64.FromInt(8) + Fix64.Half, 9) != 8) return Fail("AnchorOf 1x1");
+    // TICKET-P5-BASE-01: AnchorOf must invert FootprintCentre for footprints 3
+    // and 4 too - schema.structure.json permits up to 4, and the shipped
+    // "- (size - 1)" was off by one for both (silent and fatal, ADR-005:76).
+    // No compiled type carries either size, so register test types; the centre
+    // below is FootprintCentre's documented formula, anchor + size/2.
+    fp.RegisterStructureType(98, new World.StructureTypeDef(1, EntityKind.Factory, 1, Footprint: 3));
+    fp.RegisterStructureType(99, new World.StructureTypeDef(1, EntityKind.Factory, 1, Footprint: 4));
+    foreach (int size in new[] { 3, 4 })
+    {
+        int testType = size == 3 ? 98 : 99;
+        for (int a = 0; a <= 48; a++)
+        {
+            Fix64 centre = Fix64.FromInt(a) + Fix64.FromFraction(size, 2);
+            if (fp.AnchorOf(centre, testType) != a)
+                return Fail($"AnchorOf: footprint {size} round-trip failed at anchor {a}");
+        }
+    }
 
     var rng = new DeterministicRandom(42);
     ulong first = rng.NextUlong();
@@ -1584,6 +1601,7 @@ int SelfTest()
         if (u.Cost != 1400 || u.Hp != 700 || u.BuildTimeTicks != 300) return Fail("data: numbers");
         if (u.Armour != ArmourClass.Heavy || u.WeaponIds.Count != 0) return Fail("data: armour/weapons");
         if (u.Prerequisites.Count != 1 || u.Prerequisites[0] != "com_refinery") return Fail("data: prerequisites");
+        if (u.ProducedAt != "com_factory") return Fail("data: produced_at (TICKET-P5-PROD-03)");
         if (u.Speed != Fix64.FromFraction(18, 100)) return Fail("data: speed encoding");
         if (u.VeterancyEnabled) return Fail("data: veterancy flag");
         if (!u.Notes.Contains("US2.2")) return Fail("data: folded notes block");
@@ -1591,37 +1609,43 @@ int SelfTest()
     }
     else Console.WriteLine("selftest: data file not found at expected relative path, loader untested this run");
 
-    // Catalogue wiring (TICKET-P2-DATA-02): the /data files must convert to
-    // exactly the compiled reference defs - value equality on the record.
+    // Catalogue wiring (TICKET-P2-DATA-02, walk per TICKET-P5-PROD-02): every
+    // /data/units file must convert to exactly its compiled reference def -
+    // value equality on the record, produced_at and prerequisites included.
+    // A directory walk, not a hand-kept list: the hand-kept list is how
+    // dir_vanguard_car.yaml went unverified for a whole phase (PROD-D9).
     string unitsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units"));
-    if (Directory.Exists(unitsDir))
+    if (Directory.Exists(unitsDir) && Directory.GetFiles(unitsDir, "*.yaml").Length > 0)
     {
         var refWorld = new World(0);
-        var cannon = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_cannon_tank.yaml")));
-        var rifle = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "com_rifle_squad.yaml")));
-        if (cannon != refWorld.GetUnitType(1)) return Fail($"catalogue: cannon mismatch {cannon} vs {refWorld.GetUnitType(1)}");
-        if (rifle != refWorld.GetUnitType(2)) return Fail($"catalogue: rifle mismatch {rifle} vs {refWorld.GetUnitType(2)}");
-        var rocket = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "com_rocket_squad.yaml")));
-        var harv = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "com_harvester.yaml")));
-        if (rocket != refWorld.GetUnitType(3)) return Fail($"catalogue: rocket mismatch {rocket} vs {refWorld.GetUnitType(3)}");
-        if (harv != refWorld.GetUnitType(4)) return Fail($"catalogue: harvester mismatch {harv} vs {refWorld.GetUnitType(4)}");
-        var raider = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "sod_shade_raider.yaml")));
-        var scout = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_sentinel_scout.yaml")));
-        var mcv = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "com_mcv.yaml")));
-        var howitzer = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_howitzer.yaml")));
-        if (howitzer != refWorld.GetUnitType(8)) return Fail($"catalogue: howitzer mismatch {howitzer} vs {refWorld.GetUnitType(8)}");
-        var phantom = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "sod_phantom_tank.yaml")));
-        var bulwark = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_bulwark_tank.yaml")));
-        var engineer = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "com_engineer.yaml")));
-        if (phantom != refWorld.GetUnitType(9)) return Fail($"catalogue: phantom mismatch {phantom} vs {refWorld.GetUnitType(9)}");
-        if (bulwark != refWorld.GetUnitType(10)) return Fail($"catalogue: bulwark mismatch {bulwark} vs {refWorld.GetUnitType(10)}");
-        if (engineer != refWorld.GetUnitType(11)) return Fail($"catalogue: engineer mismatch {engineer} vs {refWorld.GetUnitType(11)}");
-        if (raider != refWorld.GetUnitType(5)) return Fail($"catalogue: raider mismatch {raider} vs {refWorld.GetUnitType(5)}");
-        if (scout != refWorld.GetUnitType(6)) return Fail($"catalogue: scout mismatch {scout} vs {refWorld.GetUnitType(6)}");
-        if (mcv != refWorld.GetUnitType(7)) return Fail($"catalogue: mcv mismatch {mcv} vs {refWorld.GetUnitType(7)}");
+        var unitFiles = Directory.GetFiles(unitsDir, "*.yaml");
+        Array.Sort(unitFiles, StringComparer.Ordinal); // fixed order: a directory walk is not a source of truth
+        int unitsSeen = 0;
+        var unitTypesSeen = new HashSet<int>();
+        foreach (var f in unitFiles)
+        {
+            var ud = DataLoader.LoadUnitFile(f);
+            int typeId = UnitCatalogue.TypeIdOf(ud.Id);
+            var def = UnitCatalogue.ToTypeDef(ud);
+            if (def != refWorld.GetUnitType(typeId))
+                return Fail($"catalogue: {ud.Id} (unit type {typeId}) mismatch {def} vs {refWorld.GetUnitType(typeId)}");
+            if (!unitTypesSeen.Add(typeId)) return Fail($"catalogue: unit type {typeId} claimed twice");
+            unitsSeen++;
+        }
+        // Every compiled unit type must be authored. Unit types are dense from
+        // 1 (doc 23 s4.1), so walk the compiled catalogue until it runs out
+        // rather than trusting a magic max that rots.
+        int unitsCompiled = 0;
+        for (int t = 1; refWorld.GetUnitType(t).Cost > 0; t++)
+        {
+            unitsCompiled++;
+            if (!unitTypesSeen.Contains(t)) return Fail($"catalogue: no /data/units file for compiled unit type {t}");
+        }
+        if (unitsSeen != unitsCompiled)
+            return Fail($"catalogue: {unitsSeen} unit files but {unitsCompiled} compiled unit types");
         var w = new World(0);
-        w.RegisterUnitType(1, cannon); // legal before tick 0
-        Console.WriteLine("selftest: /data catalogue reproduces compiled defs exactly (cannon, rifle, rocket, harvester)");
+        w.RegisterUnitType(1, UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_cannon_tank.yaml")))); // legal before tick 0
+        Console.WriteLine($"selftest: /data/units reproduces all {unitsSeen} compiled unit defs exactly (produced_at and prerequisites included)");
     }
     else Console.WriteLine("selftest: data/units not found, catalogue wiring untested this run");
 
@@ -1649,9 +1673,15 @@ int SelfTest()
             seen++;
         }
         // Every compiled type must be authored: a file missing is how a
-        // hard-coded value survives a catalogue migration unnoticed.
-        for (int t = 1; t <= 9; t++)
+        // hard-coded value survives a catalogue migration unnoticed. Bounded
+        // by the catalogue's own constant (TICKET-P5-PROD-02), and the gate is
+        // skipped EXPLICITLY: type 10 is ADR-005's reservation, with no def
+        // and no file, and this loop is exactly where the reservation bites.
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            if (t == World.GateStructType) continue;
             if (!seenTypes.Contains(t)) return Fail($"structure catalogue: no /data/buildings file for compiled type {t}");
+        }
         // The gate (ADR-005 clause 6) is deferred and must stay unbuildable:
         // Cost 0 is what every command handler tests to refuse a type.
         if (refWorld.GetStructureType(World.GateStructType).Cost != 0)

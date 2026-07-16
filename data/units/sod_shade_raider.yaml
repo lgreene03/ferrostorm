@@ -15,6 +15,7 @@ weapon_ids: [wpn_test_rifle]
 sight_range: 5
 stealth: true
 detector: false
+produced_at: com_factory
 prerequisites: []
 veterancy_enabled: true
 notes: >

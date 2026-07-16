@@ -11,6 +11,7 @@ speed: 18
 role: economy
 weapon_ids: []
 sight_range: 5
+produced_at: com_factory
 prerequisites: [com_refinery]
 veterancy_enabled: false
 notes: >

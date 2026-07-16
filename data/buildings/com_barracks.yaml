@@ -1,0 +1,20 @@
+# Barracks - the infantry production building (TICKET-P5-PROD-03, numbers per
+# doc 23 s4.3, Balance co-sign on file with the roadmap). Struct type 11; note
+# UNIT type 11 is the engineer - different namespaces, no clash. Catalogued
+# ahead of the production wiring: nothing is buildable from this file yet.
+id: com_barracks
+name: Barracks
+faction: common
+cost: 500
+build_time_ticks: 100
+hp: 800
+power_supply: 0
+power_draw: 20
+sight_range: 5
+footprint: 2
+weapon_ids: []
+prerequisites: [com_power_plant]
+notes: >
+  Cheap and early, because that is what makes an infantry rush a real strategy
+  rather than a factory afterthought. Produces every unit whose produced_at is
+  com_barracks: the rifle squad, the rocket squad and the engineer.

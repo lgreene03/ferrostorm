@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Unit definition",
   "type": "object",
-  "required": ["id", "name", "faction", "tier", "cost", "build_time_ticks", "hp", "armour_class", "speed", "role"],
+  "required": ["id", "name", "faction", "tier", "cost", "build_time_ticks", "hp", "armour_class", "speed", "role", "produced_at"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
@@ -20,6 +20,8 @@
     "stealth": { "type": "boolean", "default": false },
     "detector": { "type": "boolean", "default": false },
     "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required" },
+    "produced_at": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$",
+      "description": "Structure id of the building that produces this unit. The producer IS a prerequisite; do not repeat it in the prerequisites list." },
     "veterancy_enabled": { "type": "boolean", "default": true },
     "notes": { "type": "string", "description": "Design intent, counter relationships (GDD s6-7 traceback)" }
   }

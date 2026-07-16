@@ -13,6 +13,7 @@ weapon_ids: [wpn_bulwark_cannon]
 sight_range: 5
 stealth: false
 detector: false
+produced_at: com_factory
 prerequisites: [com_factory]
 veterancy_enabled: true
 notes: >

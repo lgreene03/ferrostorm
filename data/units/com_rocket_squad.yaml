@@ -14,6 +14,7 @@ weapon_ids: [wpn_test_rocket]
 sight_range: 5
 stealth: false
 detector: false
+produced_at: com_barracks
 prerequisites: []
 veterancy_enabled: true
 notes: >

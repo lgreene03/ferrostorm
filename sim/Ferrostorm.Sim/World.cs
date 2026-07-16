@@ -39,7 +39,11 @@ public readonly struct Command
 // APPEND ONLY. The state hash stores (int)e.Kind and the save format writes
 // (byte)e.Kind, so appending a value is invisible to both for every existing
 // kind; renumbering one silently rewrites every golden hash and every replay.
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11 }
+// Barracks and RadarUplink are catalogued (struct types 11 and 12) but not yet
+// spawnable; Airfield, Emplacement, Bastion and Outpost are reservations only
+// (doc 23 s4.1), taken now because reserving is free and a later collision
+// with a saved byte is silent and fatal.
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 /// <summary>
@@ -283,26 +287,69 @@ public sealed partial class World
     // RegisterUnitType. The catalogue is static config, like weapons, and is
     // therefore not part of the state hash.
     public const int FactionCommon = 2;
+    /// <summary>
+    /// Prereqs (structure type ids that must stand alive) and ProducedAt (the
+    /// structure type whose queue builds this unit; 2 = the factory) are
+    /// CARRIED, NOT READ this wave (TICKET-P5-PROD-03): no gate branches on
+    /// either until the tech-tree tickets land. Trailing and defaulted so the
+    /// twelve compiled entries keep compiling. Equality is declared by hand
+    /// because the synthesized record comparison would test the Prereqs ARRAY
+    /// REFERENCE, and the selftest round-trip (/data file == compiled def)
+    /// compares defs built on both sides of that reference.
+    /// </summary>
     public readonly record struct UnitTypeDef(int Cost, int BuildTicks, int Hp, ArmourClass Armour, int WeaponId, Fix64 Speed,
         EntityKind Kind = EntityKind.Unit, bool Stealth = false, bool Detector = false, bool Veterancy = true, int SightCells = 5,
-        int Faction = FactionCommon);
+        int Faction = FactionCommon, int[]? Prereqs = null, int ProducedAt = 2)
+    {
+        public bool Equals(UnitTypeDef other)
+            => Cost == other.Cost && BuildTicks == other.BuildTicks && Hp == other.Hp
+            && Armour == other.Armour && WeaponId == other.WeaponId && Speed == other.Speed
+            && Kind == other.Kind && Stealth == other.Stealth && Detector == other.Detector
+            && Veterancy == other.Veterancy && SightCells == other.SightCells && Faction == other.Faction
+            && ProducedAt == other.ProducedAt && PrereqsEqual(Prereqs, other.Prereqs);
+        public override int GetHashCode()
+        {
+            var h = new HashCode();
+            h.Add(Cost); h.Add(BuildTicks); h.Add(Hp); h.Add(Armour); h.Add(WeaponId); h.Add(Speed);
+            h.Add(Kind); h.Add(Stealth); h.Add(Detector); h.Add(Veterancy); h.Add(SightCells);
+            h.Add(Faction); h.Add(ProducedAt);
+            if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
+            return h.ToHashCode();
+        }
+    }
+
+    /// <summary>Value comparison for a def's prerequisite list: null and empty
+    /// both mean "no prerequisites" and compare equal; order is significant
+    /// (the lists are authored, not computed).</summary>
+    private static bool PrereqsEqual(int[]? a, int[]? b)
+    {
+        int an = a?.Length ?? 0, bn = b?.Length ?? 0;
+        if (an != bn) return false;
+        for (int i = 0; i < an; i++) if (a![i] != b![i]) return false;
+        return true;
+    }
     private readonly Dictionary<int, UnitTypeDef> _unitTypes = new()
     {
+        // Prereqs/ProducedAt mirror the /data files verbatim (the round-trip
+        // selftest proves it) and are carried unread this wave: the infantry
+        // trio names the barracks (struct type 11) as producer, everything
+        // else takes the factory default. The tech-tree cleanup of the
+        // prerequisite lists is a Game Designer ticket, not this one.
         { 1, new UnitTypeDef(600, 150, 300, ArmourClass.Heavy, 1, Fix64.FromFraction(1, 5), Faction: FactionDirectorate) },   // dir_cannon_tank
-        { 2, new UnitTypeDef(200, 75, 100, ArmourClass.None, 2, Fix64.FromFraction(1, 4)) },     // com_rifle_squad (common)
-        { 3, new UnitTypeDef(300, 100, 80, ArmourClass.None, 3, Fix64.FromFraction(11, 50)) },   // com_rocket_squad (common: the counter-triangle is shared, identity lives in the specials)
-        { 4, new UnitTypeDef(1400, 300, 700, ArmourClass.Heavy, 0, Fix64.FromFraction(9, 50), EntityKind.Harvester, Veterancy: false) }, // com_harvester
+        { 2, new UnitTypeDef(200, 75, 100, ArmourClass.None, 2, Fix64.FromFraction(1, 4), ProducedAt: 11) },     // com_rifle_squad (common)
+        { 3, new UnitTypeDef(300, 100, 80, ArmourClass.None, 3, Fix64.FromFraction(11, 50), ProducedAt: 11) },   // com_rocket_squad (common: the counter-triangle is shared, identity lives in the specials)
+        { 4, new UnitTypeDef(1400, 300, 700, ArmourClass.Heavy, 0, Fix64.FromFraction(9, 50), EntityKind.Harvester, Veterancy: false, Prereqs: new[] { 3 }) }, // com_harvester
         { 5, new UnitTypeDef(500, 100, 150, ArmourClass.Light, 2, Fix64.FromFraction(7, 25), Stealth: true, Faction: FactionSodality) },            // sod_shade_raider
         { 6, new UnitTypeDef(400, 75, 90, ArmourClass.None, 0, Fix64.FromFraction(3, 10), Detector: true, SightCells: 7, Faction: FactionDirectorate) }, // dir_sentinel_scout
-        { 7, new UnitTypeDef(3000, 400, 600, ArmourClass.Heavy, 0, Fix64.FromFraction(3, 20), Veterancy: false) },        // com_mcv
-        { 8, new UnitTypeDef(900, 200, 160, ArmourClass.Light, 5, Fix64.FromFraction(3, 20), SightCells: 7, Faction: FactionDirectorate) },            // dir_howitzer
+        { 7, new UnitTypeDef(3000, 400, 600, ArmourClass.Heavy, 0, Fix64.FromFraction(3, 20), Veterancy: false, Prereqs: new[] { 2 }) },        // com_mcv
+        { 8, new UnitTypeDef(900, 200, 160, ArmourClass.Light, 5, Fix64.FromFraction(3, 20), SightCells: 7, Faction: FactionDirectorate, Prereqs: new[] { 2 }) },            // dir_howitzer
         // Signature units (TICKET-P3-FAC-02): the personality pieces.
         // Phantom: the Sodality stealth tank - rockets from nowhere.
-        { 9, new UnitTypeDef(900, 210, 200, ArmourClass.Light, 3, Fix64.FromFraction(6, 25), Stealth: true, Faction: FactionSodality) },  // sod_phantom_tank
+        { 9, new UnitTypeDef(900, 210, 200, ArmourClass.Light, 3, Fix64.FromFraction(6, 25), Stealth: true, Faction: FactionSodality, Prereqs: new[] { 2 }) },  // sod_phantom_tank
         // Bulwark: the Directorate wall that walks. Slow, vast, undeniable.
-        { 10, new UnitTypeDef(1600, 350, 550, ArmourClass.Heavy, 6, Fix64.FromFraction(3, 25), Faction: FactionDirectorate) },            // dir_bulwark_tank
+        { 10, new UnitTypeDef(1600, 350, 550, ArmourClass.Heavy, 6, Fix64.FromFraction(3, 25), Faction: FactionDirectorate, Prereqs: new[] { 2 }) },            // dir_bulwark_tank
         // Engineer: captures enemy structures on contact; consumed by the act.
-        { 11, new UnitTypeDef(500, 120, 60, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Veterancy: false) },                           // com_engineer
+        { 11, new UnitTypeDef(500, 120, 60, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Veterancy: false, ProducedAt: 11) },                           // com_engineer
         // Vanguard: the Directorate harasser - the raider trade, armour for
         // stealth (TICKET-P4-SLICE-01, the full-pipeline vertical slice).
         { 12, new UnitTypeDef(450, 100, 150, ArmourClass.Light, 7, Fix64.FromFraction(8, 25), SightCells: 6, Faction: FactionDirectorate) }, // dir_vanguard_car
@@ -345,7 +392,7 @@ public sealed partial class World
     // TICKET-P5-DEF-03 per ADR-005). Footprint size is a per-type property:
     // types 1 to 8 occupy the 2x2 default, barriers occupy 1x1. The entity
     // position is always the footprint centre (anchor + size/2), so the anchor
-    // is recoverable as CellOf(X) - (size - 1) for either size. The classic
+    // is recoverable as CellOf(X) - size/2 for any size. The classic
     // build-in-sidebar-then-place flow is TICKET-P2-SIM-05; barriers keep the
     // upfront-cost model instead, deducting on placement with no ready slot
     // (ADR-005 clause 3).
@@ -361,7 +408,26 @@ public sealed partial class World
     /// </summary>
     public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks,
         int Hp = 0, int PowerSupply = 0, int PowerDraw = 0, int SightCells = 0,
-        int Footprint = FootprintSize, int WeaponId = 0);
+        int Footprint = FootprintSize, int WeaponId = 0, int[]? Prereqs = null)
+    {
+        // Hand-declared for the same reason as UnitTypeDef: the synthesized
+        // comparison would test the Prereqs array reference and quietly fail
+        // the /data round-trip on logically identical defs. Prereqs is carried
+        // unread this wave (TICKET-P5-PROD-03); no build gate consults it yet.
+        public bool Equals(StructureTypeDef other)
+            => Cost == other.Cost && Kind == other.Kind && BuildTicks == other.BuildTicks
+            && Hp == other.Hp && PowerSupply == other.PowerSupply && PowerDraw == other.PowerDraw
+            && SightCells == other.SightCells && Footprint == other.Footprint
+            && WeaponId == other.WeaponId && PrereqsEqual(Prereqs, other.Prereqs);
+        public override int GetHashCode()
+        {
+            var h = new HashCode();
+            h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
+            h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
+            if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
+            return h.ToHashCode();
+        }
+    }
 
     /// <summary>The compiled reference catalogue: the values a /data/buildings file must reproduce exactly. Static so that callers with no World (the Balance tool) can price a structure; a live match must read GetStructureType instead, which honours RegisterStructureType.</summary>
     public static StructureTypeDef DefaultStructureType(int typeId) => typeId switch
@@ -379,14 +445,40 @@ public sealed partial class World
         // kept out: barriers are bought upfront at placement instead. SightCells 0
         // keeps 80 segments per player out of the fog pass entirely.
         9 => new StructureTypeDef(100, EntityKind.Wall, 0, Hp: 500, SightCells: 0, Footprint: 1),
+        // 10 is the gate: RESERVED by ADR-005 clause 6, deliberately no def.
+        // Barracks (TICKET-P5-PROD-03, numbers from doc 23 s4.3): cheap and
+        // early, because that is what makes an infantry rush a real strategy
+        // rather than a factory afterthought. Struct type 11 is the barracks;
+        // UNIT type 11 is the engineer - different namespaces, no clash.
+        // Catalogued but not yet spawnable: no Spawn method, no PlaceStructure
+        // arm, no sidebar entry until the barracks ticket lands.
+        11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 }),
+        // Radar uplink (doc 23 s4.2 numbers): catalogued but not yet spawnable,
+        // exactly as the barracks. The minimap blackout it will one day gate is
+        // a Game Designer decision and is NOT smuggled in here.
+        12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 }),
         _ => default,
     };
+
+    /// <summary>
+    /// The highest COMPILED structure type (TICKET-P5-PROD-02): the bound for
+    /// every loop that enumerates the catalogue. EntityKind reservations above
+    /// it (airfield, emplacement, bastion, outpost) have numbers but no defs
+    /// and no /data files, so they must stay OUTSIDE this bound until
+    /// implemented. Enumerating loops must also skip GateStructType: the gate
+    /// is inside the bound but has no def and no file (ADR-005 clause 6).
+    /// </summary>
+    public const int MaxStructType = 12;
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
     {
         var d = new Dictionary<int, StructureTypeDef>();
-        for (int t = 1; t <= 9; t++) d[t] = DefaultStructureType(t);
+        for (int t = 1; t <= MaxStructType; t++)
+        {
+            if (t == GateStructType) continue; // reserved: no def to seed (ADR-005)
+            d[t] = DefaultStructureType(t);
+        }
         return d;
     }
 
@@ -414,8 +506,18 @@ public sealed partial class World
         return f > 0 ? f : FootprintSize;
     }
 
-    /// <summary>Recover a structure's footprint anchor from its centre. Exact for both sizes: a 2x2 centre is anchor+1 so CellOf gives anchor+1, a 1x1 centre is anchor+0.5 so CellOf gives anchor.</summary>
-    public int AnchorOf(Fix64 centre, int structType) => Map.CellOf(centre) - (FootprintOf(structType) - 1);
+    /// <summary>
+    /// Recover a structure's footprint anchor from its centre: CellOf(centre)
+    /// minus size/2 in integer division (TICKET-P5-BASE-01). Exact for every
+    /// size schema.structure.json permits (1 to 4): a 1x1 centre is anchor+0.5
+    /// so CellOf gives anchor - 0; a 2x2 centre is anchor+1, minus 1; a 3x3
+    /// centre is anchor+1.5 so CellOf gives anchor+1, minus 1; a 4x4 centre is
+    /// anchor+2, minus 2. For sizes 1 and 2 - the only values any /data file
+    /// uses - this is bit-identical to the previous "- (size - 1)" expression,
+    /// which the byte-identical goldens prove; for 3 and 4 the old expression
+    /// was wrong by one, which ADR-005 line 76 names as silent and fatal.
+    /// </summary>
+    public int AnchorOf(Fix64 centre, int structType) => Map.CellOf(centre) - FootprintOf(structType) / 2;
 
     // GDD Q2 strict adjacency: Chebyshev anchor distance to an own structure.
     // The Construction Yard projects the largest radius (Q2 resolution).
@@ -957,6 +1059,37 @@ public sealed partial class World
 
     // ---- Systems (fixed order) ----
 
+    /// <summary>
+    /// TICKET-P5-PWR-02: the one power tally. Called per SYSTEM, not once per
+    /// Step, and that is load-bearing: CombatSystem can destroy a plant on the
+    /// tick ProductionSystem then reads, and the shipped behaviour is that
+    /// ProductionSystem sees the post-combat total. Collapsing the calls into
+    /// a shared per-Step tally would move every golden hash. The PlayerId
+    /// upper bound closes PWR-D6: a scenario-spawned entity with an
+    /// out-of-range player would previously have indexed past the span.
+    /// </summary>
+    private void ComputePower(Span<int> supply, Span<int> draw)
+    {
+        supply.Clear();
+        draw.Clear();
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (!e.Alive || e.PlayerId < 0 || e.PlayerId >= _players) continue;
+            supply[e.PlayerId] += e.PowerSupply;
+            draw[e.PlayerId] += e.PowerDraw;
+        }
+    }
+
+    /// <summary>
+    /// GDD s7 line 85's 75 per cent threshold in integer maths with no
+    /// division - the same expression the client's power bar already uses
+    /// (Sidebar.cs), so the sim's notion of a brown-out and the UI's cannot
+    /// drift (PWR-D4). Unread by the sim until PWR-04's turret gate lands;
+    /// declared beside the tally so the gate arrives as one guard line.
+    /// </summary>
+    private static bool AtLeast75(int supply, int draw) => draw <= 0 || supply * 4 >= draw * 3;
+
     private void MovementSystem()
     {
         for (int i = 0; i < _entities.Count; i++)
@@ -1020,13 +1153,17 @@ public sealed partial class World
     /// </summary>
     private void DetectionSystem()
     {
+        // Power tally factored out (TICKET-P5-PWR-02); the per-entity work
+        // below stays in its own loop. The split is hash-neutral: the field
+        // sets are disjoint, and the tally completed before the veil loop
+        // read it in the fused version too.
         Span<int> supply = stackalloc int[_players];
         Span<int> draw = stackalloc int[_players];
+        ComputePower(supply, draw);
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
             if (!e.Alive) continue;
-            if (e.PlayerId >= 0) { supply[e.PlayerId] += e.PowerSupply; draw[e.PlayerId] += e.PowerDraw; }
             bool dirty = false;
             if (e.RevealTicks > 0) { e.RevealTicks--; dirty = true; }
             if (e.DetectedMask != 0) { e.DetectedMask = 0; dirty = true; }
@@ -1138,6 +1275,19 @@ public sealed partial class World
 
     private void CombatSystem()
     {
+        // TICKET-P5-PWR-02: the third tally. Nothing in this system reads it
+        // yet - PWR-04's turret gate is what will - but it exists now so the
+        // gate lands as one guard line rather than a restructure, and so the
+        // perf gate prices the extra O(n) pass today rather than discovering
+        // it later. Snapshot semantics, pinned deliberately: this tally runs
+        // BEFORE damage is applied, so the gate will see PRE-combat power (a
+        // plant destroyed on tick N disables its turrets on tick N+1), while
+        // ProductionSystem's own tally sees the post-combat total the same
+        // tick. Both are deterministic; they are different numbers.
+        Span<int> combatSupply = stackalloc int[_players];
+        Span<int> combatDraw = stackalloc int[_players];
+        ComputePower(combatSupply, combatDraw);
+
         // Acquire and fire. Damage applied immediately; deaths processed after
         // the scan so within-tick results don't depend on entity order.
         Span<int> pendingDamage = _entities.Count <= 4096 ? stackalloc int[_entities.Count] : new int[_entities.Count];
@@ -1574,15 +1724,11 @@ public sealed partial class World
     /// </summary>
     private void ProductionSystem()
     {
+        // Freshly tallied here rather than shared from CombatSystem's call:
+        // production must see the POST-combat total (TICKET-P5-PWR-02).
         Span<int> supply = stackalloc int[_players];
         Span<int> draw = stackalloc int[_players];
-        for (int i = 0; i < _entities.Count; i++)
-        {
-            var e = _entities[i];
-            if (!e.Alive || e.PlayerId < 0) continue;
-            supply[e.PlayerId] += e.PowerSupply;
-            draw[e.PlayerId] += e.PowerDraw;
-        }
+        ComputePower(supply, draw);
 
         for (int i = 0; i < _entities.Count; i++)
         {

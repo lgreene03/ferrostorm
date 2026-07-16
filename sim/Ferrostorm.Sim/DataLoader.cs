@@ -15,7 +15,7 @@ public static class DataLoader
         string Id, string Name, string Faction, int Tier, int Cost, int BuildTimeTicks,
         int Hp, ArmourClass Armour, Fix64 Speed, string Role,
         IReadOnlyList<string> WeaponIds, int SightRange, bool Stealth, bool Detector,
-        IReadOnlyList<string> Prerequisites, bool VeterancyEnabled, string Notes);
+        IReadOnlyList<string> Prerequisites, string ProducedAt, bool VeterancyEnabled, string Notes);
 
     /// <summary>TICKET-P5-BD-06: a placeable structure as authored in /data/buildings, validated against schema.structure.json.</summary>
     public sealed record StructureData(
@@ -127,6 +127,10 @@ public static class DataLoader
             Stealth: OptBool(m, "stealth", false),
             Detector: OptBool(m, "detector", false),
             Prerequisites: m.TryGetValue("prerequisites", out var p) ? ParseInlineList(p) : new List<string>(),
+            // Required (TICKET-P5-PROD-03): the structure id whose queue
+            // builds this unit. Role cannot carry it - "economy" is already
+            // overloaded to mean EntityKind.Harvester - so it is its own key.
+            ProducedAt: ReqStr(m, "produced_at"),
             VeterancyEnabled: OptBool(m, "veterancy_enabled", true),
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
@@ -188,7 +192,37 @@ public static class UnitCatalogue
         "wpn_turret_gun" => 4,
         "wpn_howitzer" => 5,
         "wpn_bulwark_cannon" => 6,
+        // As authored in dir_vanguard_car.yaml (TICKET-P4-SLICE-01) - note the
+        // missing wpn_ prefix, which is the file's inconsistency, not this
+        // map's. Unmapped until TICKET-P5-PROD-02 made the unit round-trip a
+        // directory walk: the one unit file the selftest never loaded was
+        // hiding the one weapon name the map never learned (PROD-D9's point).
+        "vanguard_autocannon" => 7,
         _ => throw new FormatException($"unknown weapon id '{name}'"),
+    };
+
+    /// <summary>Producible unit type ids: the file names the thing, this map
+    /// names the number, and neither is free to drift alone - the selftest
+    /// directory walk (TICKET-P5-PROD-02) proves every file against its
+    /// compiled def through this map. Mirrors StructureCatalogue.TypeIdOf;
+    /// throws on an unknown id rather than defaulting. Unit types are dense
+    /// 1 through 12; struct type numbering is a DIFFERENT namespace (unit 11
+    /// is the engineer, struct 11 is the barracks).</summary>
+    public static int TypeIdOf(string id) => id switch
+    {
+        "dir_cannon_tank" => 1,
+        "com_rifle_squad" => 2,
+        "com_rocket_squad" => 3,
+        "com_harvester" => 4,
+        "sod_shade_raider" => 5,
+        "dir_sentinel_scout" => 6,
+        "com_mcv" => 7,
+        "dir_howitzer" => 8,
+        "sod_phantom_tank" => 9,
+        "dir_bulwark_tank" => 10,
+        "com_engineer" => 11,
+        "dir_vanguard_car" => 12,
+        _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 
     public static World.UnitTypeDef ToTypeDef(DataLoader.UnitData u)
@@ -198,7 +232,12 @@ public static class UnitCatalogue
                u.Stealth, u.Detector, u.VeterancyEnabled, u.SightRange,
                u.Faction == "directorate" ? World.FactionDirectorate
                    : u.Faction == "sodality" ? World.FactionSodality
-                   : World.FactionCommon);
+                   : World.FactionCommon,
+               // Carried, not read (TICKET-P5-PROD-03): prerequisites and the
+               // producer link ride into the def so the tech-tree tickets gate
+               // on values that already round-trip; nothing branches on them yet.
+               StructureCatalogue.PrereqIds(u.Prerequisites),
+               StructureCatalogue.TypeIdOf(u.ProducedAt));
 }
 
 /// <summary>
@@ -210,7 +249,7 @@ public static class UnitCatalogue
 /// </summary>
 public static class StructureCatalogue
 {
-    /// <summary>Structure type ids as ratified in ADR-005 (9 is the wall; 10 is the deferred gate and has no file). Throws on an unknown id rather than defaulting, matching WeaponIdOf.</summary>
+    /// <summary>Structure type ids as ratified in ADR-005 (9 is the wall; 10 is the deferred gate and has no file; new types number from 11 upward per doc 23 s4.1). Throws on an unknown id rather than defaulting, matching WeaponIdOf.</summary>
     public static int TypeIdOf(string id) => id switch
     {
         "com_power_plant" => 1,
@@ -222,6 +261,8 @@ public static class StructureCatalogue
         "sod_veil_projector" => 7,
         "com_service_depot" => 8,
         "com_wall" => 9,
+        "com_barracks" => 11,
+        "com_radar_uplink" => 12,
         _ => throw new FormatException($"unknown structure id '{id}'"),
     };
 
@@ -237,19 +278,30 @@ public static class StructureCatalogue
         7 => EntityKind.VeilProjector,
         8 => EntityKind.ServiceDepot,
         9 => EntityKind.Wall,
+        11 => EntityKind.Barracks,
+        12 => EntityKind.RadarUplink,
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 
-    /// <summary>
-    /// NOTE the deliberate omission: StructureData.Prerequisites is parsed and
-    /// then dropped here, because World.StructureTypeDef has no Prereqs field
-    /// and no gate reads one. That is the same drop UnitCatalogue.ToTypeDef
-    /// performs on unit prerequisites, and TICKET-P5-BD-17 is the ticket that
-    /// fixes both at once, under a Game Designer sign-off on the tech tree.
-    /// Authoring a prereq table here would be inventing that sign-off.
-    /// </summary>
+    /// <summary>Prerequisite ids resolved to structure type numbers - a unit's
+    /// and a structure's prerequisites are both structure ids, so one resolver
+    /// serves both catalogues. Empty becomes null: both mean "none" and the
+    /// def equality treats them identically.</summary>
+    public static int[]? PrereqIds(IReadOnlyList<string> ids)
+    {
+        if (ids.Count == 0) return null;
+        var r = new int[ids.Count];
+        for (int i = 0; i < ids.Count; i++) r[i] = TypeIdOf(ids[i]);
+        return r;
+    }
+
+    /// <summary>Prerequisites now ride into the def (TICKET-P5-PROD-03) instead
+    /// of being parsed and dropped; nothing reads them until the tech-tree
+    /// tickets land, which keeps this wave hash-neutral while ending the era
+    /// of the loader silently discarding authored data.</summary>
     public static World.StructureTypeDef ToTypeDef(DataLoader.StructureData s)
         => new(s.Cost, KindOf(s.Id), s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
-               s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0);
+               s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
+               PrereqIds(s.Prerequisites));
 }

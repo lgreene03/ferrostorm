@@ -16,6 +16,7 @@ weapon_ids: [vanguard_autocannon]
 sight_range: 6
 stealth: false
 detector: false
+produced_at: com_factory
 prerequisites: []
 veterancy_enabled: true
 notes: >
