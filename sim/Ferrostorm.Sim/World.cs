@@ -1136,7 +1136,19 @@ public sealed partial class World
         if (distSq <= stepSq)
         {
             e.X = aimX; e.Y = aimY;
-            if (aimX == e.TargetX && aimY == e.TargetY) { e.Moving = false; e.AMove = false; }
+            if (aimX == e.TargetX && aimY == e.TargetY)
+            {
+                // Exact arrival stops the walk. It only ends an attack-move
+                // under the same rule as the completion branch in CombatSystem:
+                // the point actually reached must be the ORDERED point and
+                // nothing targetable may stand within sight of it. Without the
+                // guard, landing exactly on the point (or, rarer, exactly on a
+                // pursuit target's coordinates) released the stance regardless,
+                // which is the same arrival-without-arrival hole in miniature.
+                e.Moving = false;
+                if (e.AMove && e.TargetX == e.AMoveX && e.TargetY == e.AMoveY && !EnemyNearAMovePoint(in e))
+                    e.AMove = false;
+            }
         }
         else
         {
@@ -1271,6 +1283,35 @@ public sealed partial class World
             if (d < bestD) { bestD = d; best = j; }
         }
         return best;
+    }
+
+    /// <summary>
+    /// Does any targetable enemy stand within this unit's sight of its ordered
+    /// attack-move point? This is the completion question: "all clear" must be
+    /// judged from where the unit was SENT, not from where the crowd happened
+    /// to stop, or the lead unit of a crowd halts up to the crowd radius short
+    /// and declares victory over a base it cannot see. Evaluated lazily at the
+    /// completion sites so the cost lands once per completion attempt rather
+    /// than once per enemy per tick, and so the rule holds identically on the
+    /// auto-acquire path, the explicit-target path (breach pursuit holds
+    /// ExplicitTarget while AMove is up) and the exact-arrival path in MoveTo.
+    /// Filters mirror auto-acquisition exactly: barriers and ferrite fields are
+    /// not "something to fight" (ADR-005 clause 2) and stealth follows
+    /// CanTarget - unseen is untargetable, so an unseen enemy cannot hold the
+    /// stance open. Reads e.Sight, which is immutable after spawn and therefore
+    /// deliberately unhashed; if sight ever becomes mutable at runtime it must
+    /// enter ComputeStateHash or this predicate desyncs invisibly.
+    /// </summary>
+    private bool EnemyNearAMovePoint(in Entity e)
+    {
+        for (int j = 0; j < _entities.Count; j++)
+        {
+            var t = _entities[j];
+            if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
+            if (!CanTarget(e.PlayerId, in t)) continue;
+            if (Fix64.DistSq(t.X - e.AMoveX, t.Y - e.AMoveY) <= e.Sight * e.Sight) return true;
+        }
+        return false;
     }
 
     private void CombatSystem()
@@ -1419,10 +1460,21 @@ public sealed partial class World
                     if (Fix64.DistSq(wall.X - e.X, wall.Y - e.Y) <= e.Sight * e.Sight) e.ExplicitTarget = wid;
                     e.TargetX = wall.X; e.TargetY = wall.Y;
                 }
-                else if (Fix64.DistSq(e.AMoveX - e.X, e.AMoveY - e.Y) <= Fix64.FromInt(16))
+                else if (Fix64.DistSq(e.AMoveX - e.X, e.AMoveY - e.Y) <= Fix64.FromInt(16) && !EnemyNearAMovePoint(in e))
                 {
                     // All clear and inside the crowd radius of the ordered
                     // point: the attack-move is complete.
+                    //
+                    // "All clear" is judged from the ORDERED POINT, not from
+                    // this unit's feet (EnemyNearAMovePoint). The crowd radius
+                    // is 4 cells, so the lead unit halts up to 4 cells short;
+                    // judging sight from there declares victory while the thing
+                    // it was sent to kill sits 4 cells further out than it can
+                    // see. Worse, halting here leaves TargetX/Y on the ordered
+                    // point, which makes this unit a textbook arrival-contagion
+                    // seed and strips AMove from the whole crowd behind it
+                    // within a few ticks. The army parks intact outside an
+                    // untouched base.
                     e.Moving = false; e.AMove = false;
                     _entities[i] = e;
                     continue;
@@ -1646,8 +1698,24 @@ public sealed partial class World
                         // crowd has reached it - this unit has arrived too.
                         // Bounded to near the destination so a queue in a
                         // chokepoint cannot freeze by chain reaction.
+                        //
+                        // The neighbour must have ARRIVED, not merely be stopped.
+                        // A unit that halts to FIRE keeps its attack-move stance
+                        // and keeps TargetX/Y on its ordered point (the combat
+                        // branch stops it without retargeting), so without the
+                        // !o.AMove clause the first unit to pause and shoot
+                        // becomes an arrival seed and cancels the attack-move of
+                        // the entire crowd behind it, up to 20 cells from a
+                        // destination none of them reached. A unit that has
+                        // released the stance has genuinely finished its order,
+                        // which is what makes it sound evidence that the crowd
+                        // is there. Contagion is transitive by design - each
+                        // newly settled ring seeds the next - and !o.AMove
+                        // propagates along the chain, so the reach is unchanged.
+                        // Plain moves never set AMove, so their settling
+                        // behaviour is untouched.
                         if (e.Kind == EntityKind.Unit && o.Kind == EntityKind.Unit
-                            && !o.Moving && e.UseFlow
+                            && !o.Moving && !o.AMove && e.UseFlow
                             && (!e.AMove || (e.TargetX == e.AMoveX && e.TargetY == e.AMoveY))
                             && o.TargetX == e.TargetX && o.TargetY == e.TargetY
                             && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(400))
@@ -1704,7 +1772,19 @@ public sealed partial class World
                     e.StallTicks += 2;
                 else if (e.StallTicks > 0)
                     e.StallTicks--;
-                if (e.StallTicks >= 4 * TicksPerSecond) { e.Moving = false; e.AMove = false; e.StallTicks = 0; }
+                if (e.StallTicks >= 4 * TicksPerSecond)
+                {
+                    // Giving up on the WALK is always right - the unit is
+                    // rim-locked and shoving achieves nothing. Giving up on the
+                    // FIGHT is only right if this is the destination: a jam 19
+                    // cells short of the objective is traffic, not arrival, and
+                    // benching the unit there leaves it inert for the rest of
+                    // the match while the crowd ahead of it moves on without
+                    // it. Near the destination the two coincide and the
+                    // heuristic keeps its original meaning.
+                    if (e.AMove && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16)) e.AMove = false;
+                    e.Moving = false; e.StallTicks = 0;
+                }
             }
 
             _entities[i] = e; // persists arrival state even with zero push
