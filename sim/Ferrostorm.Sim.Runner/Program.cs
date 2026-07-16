@@ -2311,11 +2311,24 @@ int SaveLoad()
     // finish from the same stream: the loaded world must hash identically at
     // the save point AND at the end. Any serialization slip - hashed or not -
     // surfaces as divergence.
+    // Q001 hardening: BuildSkirmishWorld's map declares no factions, so
+    // _playerFaction was [0, 0] here and a save format that DROPPED the
+    // faction still round-tripped it as zero by luck; the field was
+    // droppable and no gate could see it. Every world in this scenario now
+    // declares a non-zero faction for player 1, and the round trip must
+    // preserve it explicitly as well as through the hash.
     const ulong seed = 2026;
     const int half = 1500, full = 3000;
-    var recorded = new List<Command>[full];
+    World BuildFactionedWorld()
     {
         var w = BuildSkirmishWorld(seed);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        return w;
+    }
+    var recorded = new List<Command>[full];
+    {
+        var w = BuildFactionedWorld();
         var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
         for (int t = 0; t < full; t++)
         {
@@ -2328,24 +2341,26 @@ int SaveLoad()
     }
     ulong hashFull;
     {
-        var w = BuildSkirmishWorld(seed);
+        var w = BuildFactionedWorld();
         for (int t = 0; t < full; t++) w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
         hashFull = w.ComputeStateHash();
     }
 
-    var live = BuildSkirmishWorld(seed);
+    var live = BuildFactionedWorld();
     for (int t = 0; t < half; t++) live.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
     ulong hashMid = live.ComputeStateHash();
     using var ms = new MemoryStream();
     live.Save(ms);
     ms.Position = 0;
     var loaded = World.Load(ms);
+    if (loaded.FactionOf(1) != World.FactionSodality)
+        return Fail($"saveload: faction dropped by the round trip (player 1 saved as {World.FactionSodality}, loaded as {loaded.FactionOf(1)})");
     if (loaded.ComputeStateHash() != hashMid)
         return Fail($"saveload: loaded hash 0x{loaded.ComputeStateHash():X16} != saved 0x{hashMid:X16}");
     for (int t = half; t < full; t++) loaded.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
     if (loaded.ComputeStateHash() != hashFull)
         return Fail($"saveload: resumed run diverged (0x{loaded.ComputeStateHash():X16} vs 0x{hashFull:X16})");
-    Console.WriteLine($"saveload: {ms.Length} bytes; loaded hash exact at the save point; resumed run reached the uninterrupted final hash 0x{hashFull:X16} bit-for-bit");
+    Console.WriteLine($"saveload: {ms.Length} bytes; player 1's Sodality faction survived the round trip; loaded hash exact at the save point; resumed run reached the uninterrupted final hash 0x{hashFull:X16} bit-for-bit");
     return 0;
 }
 

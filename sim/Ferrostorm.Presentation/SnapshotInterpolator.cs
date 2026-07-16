@@ -46,8 +46,13 @@ public sealed class SnapshotInterpolator
     /// Sample the view at a fractional sim time (in ticks). Positions lerp
     /// between bracketing snapshots; everything discrete (Alive, Hp, Kind)
     /// snaps to the earlier snapshot so nothing flickers ahead of its tick.
-    /// Entities absent from either bracket (born or died between) render at
-    /// the snapshot where they exist, unlerped.
+    /// The loop walks the EARLIER bracket only. An entity present there but
+    /// absent from the later bracket renders at the earlier snapshot,
+    /// unlerped; an entity that exists only in the later bracket (born
+    /// between the two) is not emitted at all until render time reaches its
+    /// first snapshot, so a newborn appears one tick late. That latency is
+    /// deliberate: at the sim's 15 Hz it is under 67 ms, and it keeps the
+    /// rule that nothing ever appears ahead of the tick that created it.
     /// </summary>
     public bool TrySample(double simTime, List<ViewEntity> output)
     {

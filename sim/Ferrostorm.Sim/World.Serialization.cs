@@ -8,16 +8,21 @@ namespace Ferrostorm.Sim;
 /// makes this the safety net for fields not covered by the hash (their
 /// corruption diverges the continued replay instead).
 /// Binary, little-endian, versioned, with a trailing magic to catch truncation.
+/// Format v2 (Q001): the per-player faction array is stored, because
+/// ComputeStateHash hashes it and a save that drops a hashed field cannot
+/// honour the contract above. v1 saves are still accepted and load with
+/// every faction defaulted to Directorate, exactly as v1 always behaved.
 /// </summary>
 public sealed partial class World
 {
-    private const uint SaveMagic = 0x534C4131;   // "FER1"
+    private const uint SaveMagicV1 = 0x534C4131; // original format: no faction array (Q001)
+    private const uint SaveMagicV2 = 0x534C4132; // v2 adds the per-player faction array
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagic);
+        w.Write(SaveMagicV2);
         w.Write(Tick);
         w.Write(Winner);
         w.Write(ShortGameEnabled);
@@ -37,6 +42,7 @@ public sealed partial class World
         w.Write(_rng.State);
         for (int p = 0; p < _players; p++)
         {
+            w.Write(_playerFaction[p]); // v2: hashed state, so saved state (Q001)
             w.Write(_credits[p]);
             w.Write(_eliminatedAnnounced[p]);
             w.Write(_explored[p].Length);
@@ -79,7 +85,8 @@ public sealed partial class World
     public static World Load(Stream stream)
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        if (r.ReadUInt32() != SaveMagic) throw new InvalidDataException("not a ferrostorm save");
+        uint magic = r.ReadUInt32();
+        if (magic != SaveMagicV1 && magic != SaveMagicV2) throw new InvalidDataException("not a ferrostorm save");
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
         bool shortGame = r.ReadBoolean();
@@ -96,6 +103,9 @@ public sealed partial class World
         world._rng.State = r.ReadUInt64();
         for (int p = 0; p < players; p++)
         {
+            // v1 saves predate the faction field; the constructor default
+            // (everyone Directorate) is exactly what v1 always produced.
+            if (magic == SaveMagicV2) world._playerFaction[p] = r.ReadByte();
             world._credits[p] = r.ReadInt64();
             world._eliminatedAnnounced[p] = r.ReadBoolean();
             int words = r.ReadInt32();

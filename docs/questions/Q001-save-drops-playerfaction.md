@@ -54,3 +54,35 @@ The client took option 2 because a save-format change is not a client ticket's t
 1. A ruling on option 1 vs option 2, and if option 1, deletion of the client workaround in `SkirmishLive.ResumeFromSave` along with the assertion in the verification probe that pins the defect.
 2. **Regardless of the ruling: close the gate hole.** Either extend the `campaignsave` gate to a map that declares factions, or give the `saveload` gate a `SetFaction` call before it saves. A field that no scenario can see is a field that can be dropped again.
 3. A check of whether any other hashed-but-unsaved field exists. This one was found by accident, from the client, by a ticket that was not looking for it; the same method (diff every hashed field across a round trip) would find the rest.
+
+## RESOLVED (2026-07-17, sim-engineer)
+
+Option 1, as recommended. The save format now carries the faction.
+
+- `World.Save` writes format v2 (`SaveMagicV2 = 0x534C4132`): one faction byte
+  per player, written at the head of each per-player block. `World.Load`
+  accepts both magics. A v2 save restores the faction array; a v1 save
+  (`SaveMagicV1 = 0x534C4131`) still loads and leaves every faction at the
+  constructor default, Directorate, which is exactly what v1 always produced.
+  Anything that is neither magic still fails with "not a ferrostorm save".
+- Verified end to end with both formats: a v1 file written by the pre-fix
+  serialiser loads under the new code with factions `[0,0]` and reaches the
+  pre-save hash the moment the faction is re-applied, byte for byte; a v2
+  file reproduces the pre-save hash immediately, faction intact. Garbage
+  bytes are still rejected readably.
+- The gate hole is closed: the `saveload` gate now declares player 1 as
+  Sodality in all three of its worlds and asserts, after the round trip,
+  that the faction survived AND that the loaded hash equals the pre-save
+  hash. Run against the unfixed serialiser the gate fails red with
+  "faction dropped by the round trip (player 1 saved as 1, loaded as 0)".
+- The client workaround in `SkirmishLive.ResumeFromSave` is deleted along
+  with its now-dead `map` parameter; a short comment points back here.
+- Item 3 (other hashed-but-unsaved fields): audited `ComputeStateHash`
+  against `Save` field by field. Every other hashed field is written
+  (entities, factory queues, order queues, rng state, credits, explored,
+  tick, winner, short game). The save also writes several fields the hash
+  does not cover (`Sight`, `Command.Tick`, `_eliminatedAnnounced`, the
+  blocked map), which is the correct direction: the save is a superset of
+  the hash. `_playerFaction` was the only field on the wrong side.
+- The 24 golden hashes are untouched, as predicted: `ComputeStateHash` did
+  not change and `git diff sim/golden-hashes.txt` is empty.

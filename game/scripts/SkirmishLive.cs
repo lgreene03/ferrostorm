@@ -319,7 +319,7 @@ public partial class SkirmishLive : Node3D
         };
 
         // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
-        if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath, map);
+        if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath);
         else if (MatchConfig.ReplayPath is { } replayPath) BeginPlayback(replayPath);
         else BeginRecording();
         // Consumed. Both describe THIS scene change and nothing after it, and a
@@ -428,33 +428,16 @@ public partial class SkirmishLive : Node3D
     /// build above is not waste: it is what produces the mission tags, which a
     /// save deliberately does not store (MissionRunner's own note - the mission
     /// is rebuilt from the same map, then its state is restored on top).</summary>
-    private void ResumeFromSave(string path, MapData map)
+    private void ResumeFromSave(string path)
     {
         // Read the whole file into memory first and drive both readers off the
         // one stream, which is the exact shape the campaignsave gate proves.
         var ms = new MemoryStream(File.ReadAllBytes(path));
         _world = World.Load(ms);
-        // SIM DEFECT WORKAROUND, and it is a real one, found by this ticket's
-        // own verification rather than by reading: ComputeStateHash hashes
-        // _playerFaction (World.cs:1776) but World.Save never writes it, so
-        // World.Load returns a world where every player is Directorate again
-        // ("everyone Directorate until told otherwise", World.cs:216). It is not
-        // cosmetic - faction gates what a player may build (World.cs:745, :789),
-        // so a loaded save would let a side build the wrong faction's hardware.
-        // Both sim gates miss it because skirmish-01.fmap and mission-01.fmap
-        // declare no factions at all, so their worlds are all-Directorate and
-        // the dropped field happens to round-trip as 0.
-        // The honest client-side repair is to re-apply the faction from the map,
-        // exactly as the mission tags are rebuilt from the map rather than
-        // stored (MissionRunner's own note). This is sound ONLY because a
-        // faction is map content: SetFaction is called from exactly one place in
-        // the whole sim, MapLoader.BuildWorld, and nothing mutates it mid-match.
-        // If the sim ever lets a player change faction during a game, this stops
-        // being correct and the field must go into the save format instead.
-        // Reported for sim-engineer rather than patched here: the save format is
-        // not this ticket's to change, and every non-client caller of
-        // World.Save/Load is still affected.
-        foreach (var (p, f) in map.Factions) _world.SetFaction(p, f);
+        // The faction re-apply workaround that lived here is gone: the sim
+        // round-trips _playerFaction itself as of the Q001 fix (save format
+        // v2; the hardened saveload gate pins it). See docs/questions/
+        // Q001-save-drops-playerfaction.md for the history.
         if (_mission != null)
         {
             using var br = new BinaryReader(ms, System.Text.Encoding.UTF8, leaveOpen: true);
@@ -1327,6 +1310,11 @@ public partial class SkirmishLive : Node3D
     private string SelectionSummary()
     {
         if (_selection.Count == 0) return "";
+        // TICKET-P5-SET-01 rule, applied here too: the readout names the LIVE
+        // bindings, never the default letters - hard-coded "R repair  X sell"
+        // lies to a player who has rebound either key.
+        string kRepair = Settings.KeyName(Settings.BindOf("repair"));
+        string kSell = Settings.KeyName(Settings.BindOf("sell"));
         // DEF-09 clause 5: a wall run's readout is the two actions it supports
         // plus the refund, which is the number the player actually needs.
         int walls = 0;
@@ -1337,8 +1325,8 @@ public partial class SkirmishLive : Node3D
             long refund = walls * (long)_world.GetStructureType(9).Cost / 2;
             // TICKET-P5-REP-06: the readout carries the repair DRAIN as well
             // as the sell refund - the drain is the number that decides
-            // whether to press R on a forty-segment run.
-            return $"{walls} WALL SEGMENTS   R repair {walls * 15} cr/s  X sell {refund} cr";
+            // whether to press repair on a forty-segment run.
+            return $"{walls} WALL SEGMENTS   {kRepair} repair {walls * 15} cr/s  {kSell} sell {refund} cr";
         }
         if (_selection.Count == 1)
         {
@@ -1360,7 +1348,7 @@ public partial class SkirmishLive : Node3D
                         && sid >= 0 && sid < _world.EntityCount && _world.Entities[sid].Repairing)
                         rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
                     string acts = !Mobile(v.Kind)
-                        ? (v.Kind == EntityKind.Factory ? "   right-click: rally   R repair  X sell" : "   R repair  X sell")
+                        ? (v.Kind == EntityKind.Factory ? $"   right-click: rally   {kRepair} repair  {kSell} sell" : $"   {kRepair} repair  {kSell} sell")
                         // TICKET-P5-SPAWN-03: the MCV advertises its one
                         // action the way the structures advertise repair,
                         // read from the live binding (the SET-01 rule) so a
