@@ -14,7 +14,8 @@ namespace Ferrostorm.Client;
 /// </summary>
 public static class AudioBuses
 {
-    public const string Master = "Master", Sfx = "Sfx", Ui = "Ui", Ambient = "Ambient";
+    // TICKET-P6-MUSIC-01 adds the Music bus beside the original three.
+    public const string Master = "Master", Sfx = "Sfx", Ui = "Ui", Ambient = "Ambient", Music = "Music";
 
     private static bool _built;
 
@@ -22,7 +23,7 @@ public static class AudioBuses
     {
         if (_built) return;
         _built = true;
-        foreach (string name in new[] { Sfx, Ui, Ambient })
+        foreach (string name in new[] { Sfx, Ui, Ambient, Music })
         {
             if (AudioServer.GetBusIndex(name) >= 0) continue;
             int idx = AudioServer.BusCount;
@@ -71,6 +72,7 @@ public static class Settings
     public static float SfxVolume = 0.9f;
     public static float UiVolume = 0.8f;
     public static float AmbientVolume = 0.6f;
+    public static float MusicVolume = 0.7f;   // TICKET-P6-MUSIC-01
 
     // ---- video ----
     public static bool Fullscreen;
@@ -179,6 +181,7 @@ public static class Settings
         SfxVolume = (float)cfg.GetValue("audio", "sfx", SfxVolume);
         UiVolume = (float)cfg.GetValue("audio", "ui", UiVolume);
         AmbientVolume = (float)cfg.GetValue("audio", "ambient", AmbientVolume);
+        MusicVolume = (float)cfg.GetValue("audio", "music", MusicVolume);
 
         Fullscreen = (bool)cfg.GetValue("video", "fullscreen", Fullscreen);
         VSync = (bool)cfg.GetValue("video", "vsync", VSync);
@@ -201,6 +204,7 @@ public static class Settings
         cfg.SetValue("audio", "sfx", SfxVolume);
         cfg.SetValue("audio", "ui", UiVolume);
         cfg.SetValue("audio", "ambient", AmbientVolume);
+        cfg.SetValue("audio", "music", MusicVolume);
         cfg.SetValue("video", "fullscreen", Fullscreen);
         cfg.SetValue("video", "vsync", VSync);
         cfg.SetValue("video", "msaa", MsaaIndex);
@@ -232,6 +236,7 @@ public static class Settings
         AudioBuses.SetVolume(AudioBuses.Sfx, SfxVolume);
         AudioBuses.SetVolume(AudioBuses.Ui, UiVolume);
         AudioBuses.SetVolume(AudioBuses.Ambient, AmbientVolume);
+        AudioBuses.SetVolume(AudioBuses.Music, MusicVolume);
     }
 
     public static void ApplyVideo()
@@ -311,6 +316,7 @@ public static class Settings
     public static void ResetDefaults()
     {
         MasterVolume = 0.9f; SfxVolume = 0.9f; UiVolume = 0.8f; AmbientVolume = 0.6f;
+        MusicVolume = 0.7f;
         Fullscreen = false;
         VSync = true;
         MsaaIndex = System.Array.FindIndex(MsaaOptions, o => o.Value == _defaultMsaa);

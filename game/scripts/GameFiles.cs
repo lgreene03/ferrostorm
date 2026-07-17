@@ -79,6 +79,15 @@ public sealed class MatchSetup
     public int AiPreset;              // 0 standard, 1 rusher, 2 turtle
     public long StartCredits = 8000;
     public ulong Seed = 2026;
+    // TICKET-P6-FACTION-01: the sides, applied by BuildStartingWorld before
+    // tick 0 (skirmish only; a mission's map declares its own). TWO fields,
+    // not one: every sidecar written before this ticket describes a match in
+    // which both players were Directorate (the World constructor default),
+    // so the missing-field default must decode to that legacy pairing or
+    // every old replay re-simulates a different world and reports DIVERGED.
+    // A fresh menu skirmish gives the opponent the other side (doc 24).
+    public int Faction;               // player 0: 0 Directorate, 1 Sodality
+    public int OppFaction;            // player 1
 
     public string MapName => Path.GetFileNameWithoutExtension(MapPath);
     public bool IsMission => MissionIndex > 0;
@@ -128,6 +137,11 @@ public sealed class MatchMeta
             w.WriteNumber("ai_preset", Setup.AiPreset);
             w.WriteNumber("start_credits", Setup.StartCredits);
             w.WriteNumber("seed", Setup.Seed);
+            // TICKET-P6-FACTION-01: the .frep format stays untouched (seed,
+            // setup name, command stream); the sides ride here, in the
+            // sidecar, exactly as every other setup field already does.
+            w.WriteNumber("faction", Setup.Faction);
+            w.WriteNumber("opp_faction", Setup.OppFaction);
             if (FinalHash.Length > 0) w.WriteString("final_hash", FinalHash);
             w.WriteEndObject();
         }
@@ -152,6 +166,10 @@ public sealed class MatchMeta
                     AiPreset = Num(r, "ai_preset"),
                     StartCredits = Num(r, "start_credits", 8000),
                     Seed = (ulong)Num(r, "seed", 2026),
+                    // Absent in every pre-P6 sidecar: default 0/0, the legacy
+                    // both-Directorate pairing those matches actually played.
+                    Faction = Num(r, "faction"),
+                    OppFaction = Num(r, "opp_faction"),
                 },
                 Tick = Num(r, "tick"),
                 Credits = Num(r, "credits"),

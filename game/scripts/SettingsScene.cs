@@ -136,6 +136,14 @@ public partial class SettingsScene : Control
             AudioBuses.SetVolume(AudioBuses.Ambient, val);
             SaveSoon();
         });
+        // TICKET-P6-MUSIC-01: the fifth bus slider, in the exact idiom of the
+        // four above it.
+        Slider(v, "MUSIC", () => Settings.MusicVolume, val =>
+        {
+            Settings.MusicVolume = val;
+            AudioBuses.SetVolume(AudioBuses.Music, val);
+            SaveSoon();
+        });
     }
 
     /// <summary>Coalesce a burst of changes into one write a short while after

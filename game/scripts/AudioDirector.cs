@@ -24,11 +24,26 @@ public partial class AudioDirector : Node
     private const int UiPoolSize = 4;
     private const int PositionalPoolSize = 8;
     private const float AmbientVolumeDb = -18.0f;
+    // TICKET-P6-MUSIC-01: the score's mix positions. The calm bed sits well
+    // under the effects (the score is atmosphere, not a lead line); the combat
+    // layer tops out a little above it and fades to silence at intensity 0.
+    private const float MusicCalmDb = -14.0f;
+    private const float MusicCombatMaxDb = -10.0f;
+    private const float MusicSilentDb = -60.0f;
+    private const float MusicDuckDb = 4.0f;         // calm bed duck at full intensity
+    private const float CrossfadeSeconds = 1.5f;    // level slew, so the swell is musical
 
     private readonly Dictionary<string, AudioStream> _streams = new();
     private readonly List<AudioStreamPlayer> _uiPool = new();
     private readonly List<AudioStreamPlayer3D> _positionalPool = new();
     private AudioStreamPlayer _ambientPlayer = null!;   // created in _Ready, like every scene field in this codebase
+    // TICKET-P6-MUSIC-01: the music player pair, both on the Music bus. The
+    // pair plays in lockstep (same length loops, started together) and the
+    // crossfade is a volume move, never a seek, so the beds stay bar-aligned.
+    private AudioStreamPlayer _musicCalm = null!;
+    private AudioStreamPlayer _musicCombat = null!;
+    private float _combatIntensity;   // target 0..1, written by the scene
+    private float _combatLevel;       // smoothed level actually on the fader
 
     // Round-robin cursors; stealing the oldest voice is acceptable for RTS SFX.
     private int _uiCursor;
@@ -59,19 +74,32 @@ public partial class AudioDirector : Node
 
         _ambientPlayer = new AudioStreamPlayer { Name = "AmbientVoice", Bus = AudioBuses.Ambient };
         AddChild(_ambientPlayer);
+
+        _musicCalm = new AudioStreamPlayer { Name = "MusicCalm", Bus = AudioBuses.Music };
+        AddChild(_musicCalm);
+        _musicCombat = new AudioStreamPlayer { Name = "MusicCombat", Bus = AudioBuses.Music };
+        AddChild(_musicCombat);
     }
 
     /// <summary>
-    /// Discover and preload every WAV in res://audio/. In exported builds the
-    /// directory listing shows .import stubs, so those are trimmed back to
-    /// their source names before loading.
+    /// Discover and preload every WAV in res://audio/, plus the VO set in
+    /// res://audio/vo/ (TICKET-P6-VO-01: the loader was flat and the voice
+    /// clips live in their own directory so a re-voicing is one folder swap).
+    /// In exported builds the directory listing shows .import stubs, so those
+    /// are trimmed back to their source names before loading.
     /// </summary>
     private void LoadStreams()
     {
-        using var dir = DirAccess.Open(AudioDir);
+        LoadStreamDir(AudioDir);
+        LoadStreamDir(AudioDir + "vo/");
+    }
+
+    private void LoadStreamDir(string dirPath)
+    {
+        using var dir = DirAccess.Open(dirPath);
         if (dir == null)
         {
-            GD.PushWarning($"AudioDirector: cannot open {AudioDir}; no sounds loaded.");
+            GD.PushWarning($"AudioDirector: cannot open {dirPath}; no sounds loaded from it.");
             return;
         }
 
@@ -91,11 +119,11 @@ public partial class AudioDirector : Node
             if (_streams.ContainsKey(key))
                 continue;
 
-            var stream = ResourceLoader.Load<AudioStream>(AudioDir + name);
+            var stream = ResourceLoader.Load<AudioStream>(dirPath + name);
             if (stream != null)
                 _streams[key] = stream;
             else
-                GD.PushWarning($"AudioDirector: failed to load {AudioDir}{name}");
+                GD.PushWarning($"AudioDirector: failed to load {dirPath}{name}");
         }
         dir.ListDirEnd();
     }
@@ -170,10 +198,87 @@ public partial class AudioDirector : Node
         _ambientPlayer?.Stop();
     }
 
+    // ---------------- TICKET-P6-MUSIC-01: the score ----------------
+
+    /// <summary>Loop a WAV whose import settings did not mark it as a loop -
+    /// the PlayAmbient rule, needed by both music beds.</summary>
+    private static void EnsureLooped(AudioStream stream)
+    {
+        if (stream is AudioStreamWav wav && wav.LoopMode == AudioStreamWav.LoopModeEnum.Disabled)
+        {
+            wav.LoopMode = AudioStreamWav.LoopModeEnum.Forward;
+            wav.LoopBegin = 0;
+            // 16-bit mono: two bytes per frame.
+            wav.LoopEnd = wav.Data.Length / 2;
+        }
+    }
+
+    /// <summary>Start the two-layer score: the calm bed at its resting level
+    /// and the combat layer silent underneath it, both looping, started
+    /// together so they stay bar-aligned (they are authored the same length).</summary>
+    public void PlayMusic()
+    {
+        if (!TryGetStream("music_calm", out var calm) || !TryGetStream("music_combat", out var combat))
+            return;
+        EnsureLooped(calm);
+        EnsureLooped(combat);
+        _combatIntensity = 0f;
+        _combatLevel = 0f;
+        _musicCalm.Stream = calm;
+        _musicCalm.VolumeDb = MusicCalmDb;
+        _musicCalm.Play();
+        _musicCombat.Stream = combat;
+        _musicCombat.VolumeDb = MusicSilentDb;
+        _musicCombat.Play();
+    }
+
+    public void StopMusic()
+    {
+        _musicCalm?.Stop();
+        _musicCombat?.Stop();
+    }
+
+    /// <summary>The scene's combat-intensity signal, 0..1. The director only
+    /// smooths it onto the faders; deciding what counts as combat is the
+    /// scene's job.</summary>
+    public void SetCombatIntensity(float v) => _combatIntensity = Mathf.Clamp(v, 0f, 1f);
+
+    /// <summary>The crossfade. Level slews toward the intensity target over
+    /// CrossfadeSeconds; the combat fader follows an equal-power-ish curve
+    /// (square root into dB) so a low intensity is already audible tension
+    /// rather than nothing, and the calm bed ducks a little as the combat
+    /// layer rises so the sum stays level.</summary>
+    public override void _Process(double delta)
+    {
+        if (_musicCombat is not { Playing: true }) return;
+        _combatLevel = Mathf.MoveToward(_combatLevel, _combatIntensity, (float)delta / CrossfadeSeconds);
+        _musicCombat.VolumeDb = _combatLevel <= 0.001f
+            ? MusicSilentDb
+            : Mathf.Max(MusicSilentDb, MusicCombatMaxDb + Mathf.LinearToDb(Mathf.Sqrt(_combatLevel)));
+        _musicCalm.VolumeDb = MusicCalmDb - MusicDuckDb * _combatLevel;
+    }
+
     /// <summary>Verification read (TICKET-P5-ALERT-02): did the loader find
     /// this cue? Play answers a missing name with a warning and silence, so a
     /// test that only calls Play proves nothing about the asset existing.</summary>
     public bool Has(string name) => _streams.ContainsKey(name);
+
+    // ---- TICKET-P6-MUSIC-01 / TICKET-P6-VO-01 verification reads: the state
+    // of the shipped players, never a recomputation of it.
+    public bool MusicCalmPlaying => _musicCalm is { Playing: true };
+    public bool MusicCombatPlaying => _musicCombat is { Playing: true };
+    public float MusicCombatVolumeDb => _musicCombat?.VolumeDb ?? MusicSilentDb;
+    public float MusicCalmVolumeDb => _musicCalm?.VolumeDb ?? MusicSilentDb;
+    /// <summary>Is a UI-pool player actually carrying this named stream right
+    /// now? This is the read that proves a VO line reached a live player with
+    /// the right clip, not merely that Play was called with a string.</summary>
+    public bool IsVoicePlaying(string name)
+    {
+        if (!_streams.TryGetValue(name, out var s)) return false;
+        foreach (var p in _uiPool)
+            if (p.Playing && p.Stream == s) return true;
+        return false;
+    }
 
     private bool TryGetStream(string name, [NotNullWhen(true)] out AudioStream? stream)
     {

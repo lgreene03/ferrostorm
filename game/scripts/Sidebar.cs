@@ -47,9 +47,16 @@ public partial class Sidebar : PanelContainer
         new("ROCKET SQUAD", 3, 300, "com_rocket_squad"),
         new("SENTINEL SCOUT", 6, 400, "dir_sentinel_scout"),
         new("ENGINEER", 11, 500, "com_engineer"),
+        // TICKET-P6-FACTION-01: the Sodality's two signature units, in the
+        // sim's catalogue since P3 and never buttoned until the faction
+        // picker made a Sodality player 0 reachable. Costs mirror the
+        // catalogue; the icon names follow the id convention and the Exists
+        // guard in MakeButton tolerates the sprites not being cut yet.
+        new("SHADE RAIDER", 5, 500, "sod_shade_raider"),
         new("VANGUARD CAR", 12, 450, "dir_vanguard_car"),
         new("CANNON TANK", 1, 600, "dir_cannon_tank"),
         new("HOWITZER", 8, 900, "dir_howitzer"),
+        new("PHANTOM TANK", 9, 900, "sod_phantom_tank"),
         new("HARVESTER", 4, 1400, "com_harvester"),
         new("BULWARK TANK", 10, 1600, "dir_bulwark_tank"),
         new("MCV", 7, 3000, "com_mcv"),
@@ -86,15 +93,21 @@ public partial class Sidebar : PanelContainer
     // side is a delegate too: a live match may register its own catalogue.
     private System.Func<int, int> _unitBuildTicks = _ => 0;
     private System.Func<int, World.StructureTypeDef> _structDef = World.DefaultStructureType;
+    // TICKET-P6-FACTION-01: the unit catalogue's faction column, by delegate
+    // for the same BD-02/BD-06 reason as the two reads above - the answer
+    // belongs to THIS match's catalogue, not the compiled defaults.
+    private System.Func<int, int> _unitFaction = _ => World.FactionCommon;
 
     private const float BarWidth = 174f;
 
     public void Init(SkirmishLive game, System.Func<int, int> unitBuildTicks,
-        System.Func<int, World.StructureTypeDef> structDef)
+        System.Func<int, World.StructureTypeDef> structDef,
+        System.Func<int, int> unitFaction)
     {
         _game = game;
         _unitBuildTicks = unitBuildTicks;
         _structDef = structDef;
+        _unitFaction = unitFaction;
         CustomMinimumSize = new Vector2(190, 0);
         AnchorLeft = 1; AnchorRight = 1; AnchorBottom = 1;
         OffsetLeft = -190;
@@ -157,7 +170,14 @@ public partial class Sidebar : PanelContainer
         foreach (var it in Units)
         {
             var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitBuildTicks(it.TypeId));
-            b.Visible = MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true;
+            // TICKET-P6-FACTION-01: the veil button's gate, generalised to the
+            // unit column. The visibility test mirrors the sim's own Produce
+            // refusal (World.cs: Faction must be common or the player's own),
+            // hidden not greyed, and the sim's check stays the authority - a
+            // hand-crafted wrong-faction Produce is still refused unchanged.
+            int fac = _unitFaction(it.TypeId);
+            b.Visible = (MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true)
+                && (fac == World.FactionCommon || fac == _game.FactionOf(0));
             _unitButtons[it.TypeId] = b;
             v.AddChild(b);
         }
@@ -360,6 +380,10 @@ public partial class Sidebar : PanelContainer
     /// lands, and this is the read that proves it flipped.</summary>
     public bool StructButtonHasIcon(int typeId) => _structButtons.TryGetValue(typeId, out var b) && b.Icon != null;
     public string UnitButtonText(int typeId) => _unitButtons.TryGetValue(typeId, out var b) ? b.Text : "";
+    /// <summary>TICKET-P6-FACTION-01: the unit-side twin of StructButtonVisible,
+    /// for the same reason - visibility IS the faction gate, so it is what a
+    /// test must read.</summary>
+    public bool UnitButtonVisible(int typeId) => _unitButtons.TryGetValue(typeId, out var b) && b.Visible;
     public string PowerText => _powerLabel.Text;
     public float PowerFillWidth => _powerFill.Size.X;
     public float PowerTickX => _powerTick.Position.X;

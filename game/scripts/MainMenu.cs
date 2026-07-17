@@ -15,6 +15,7 @@ public partial class MainMenu : Control
     private static readonly Color Bone = new(0.84f, 0.82f, 0.77f);
     private static readonly Color FerriteGold = new(0.79f, 0.63f, 0.36f);
 
+    private OptionButton _factionPick = null!;
     private OptionButton _mapPick = null!;
     private OptionButton _aiPick = null!;
     private OptionButton _creditPick = null!;
@@ -36,7 +37,8 @@ public partial class MainMenu : Control
             AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0.5f, AnchorBottom = 0.5f,
             // TICKET-P5-SAVE-01 grew the menu by two rows; the box grew with it.
             // TICKET-P5-SET-01 added LAN and SETTINGS, so it grew again.
-            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -292, OffsetBottom = 292,
+            // TICKET-P6-FACTION-01 added the FACTION row: one more growth.
+            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -308, OffsetBottom = 308,
         };
         var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
         style.SetBorderWidthAll(1);
@@ -59,6 +61,11 @@ public partial class MainMenu : Control
         v.AddChild(sub);
         v.AddChild(new HSeparator());
 
+        // TICKET-P6-FACTION-01: the side is the first choice, because that is
+        // where the classic genre puts it. Indices are World's own faction
+        // constants (0 Directorate, 1 Sodality), so Selected IS the faction.
+        _factionPick = Row(v, "FACTION");
+        _factionPick.AddItem("DIRECTORATE"); _factionPick.AddItem("SODALITY");
         _mapPick = Row(v, "THEATRE");
         foreach (var f in System.IO.Directory.GetFiles(System.IO.Path.GetFullPath(
             System.IO.Path.Combine(ProjectSettings.GlobalizePath("res://"), "..", "data", "maps")), "*.fmap"))
@@ -290,6 +297,12 @@ public partial class MainMenu : Control
             MatchConfig.MissionIndex = index;
             MatchConfig.AllowedStructures = allowedStructs;
             MatchConfig.AllowedUnits = allowedUnits;
+            // TICKET-P6-FACTION-01: a mission's map declares its own factions
+            // and BuildStartingWorld's mission branch never reads these, but a
+            // value left standing by an earlier skirmish would still be
+            // written into the mission's sidecar as if it meant something.
+            MatchConfig.Faction = 0;
+            MatchConfig.OppositionFaction = 0;
             LaunchBattle();
         }));
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
@@ -327,8 +340,17 @@ public partial class MainMenu : Control
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
+        // TICKET-P6-FACTION-01: the chosen side, and the opponent takes the
+        // other one (doc 24). Selected is the faction constant by construction.
+        MatchConfig.Faction = _factionPick.Selected;
+        MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
         LaunchBattle();
     }
+
+    /// <summary>Offscreen verification hooks (the RunSmokeForTest precedent):
+    /// drive the REAL row widget and the REAL start path, not a copy.</summary>
+    public void SelectFactionForTest(int faction) => _factionPick.Select(faction);
+    public void StartSkirmishForTest() => StartSkirmish();
 }
 
 /// <summary>Match options carried from the menu into the battle scene.</summary>
@@ -337,6 +359,11 @@ public static class MatchConfig
     public static string? MapPath;
     public static int AiPreset;         // 0 standard, 1 rusher, 2 turtle
     public static long StartCredits = 8000;
+    // TICKET-P6-FACTION-01: the sides. Defaults are the legacy pairing (both
+    // Directorate), which is what a scene-direct launch and every pre-P6
+    // sidecar mean; StartSkirmish overwrites both for a fresh menu match.
+    public static int Faction;
+    public static int OppositionFaction;
     public static string? MissionPath;  // set = campaign mission mode
     public static int MissionIndex;
     // Per-mission tech gates (client-side allow-lists per the campaign
@@ -364,6 +391,8 @@ public static class MatchConfig
             MissionIndex = MissionPath != null ? MissionIndex : 0,
             AiPreset = AiPreset,
             StartCredits = StartCredits,
+            Faction = Faction,
+            OppFaction = OppositionFaction,
         };
         return s;
     }
@@ -378,6 +407,10 @@ public static class MatchConfig
         AiPreset = s.AiPreset;
         StartCredits = s.StartCredits;
         MissionIndex = s.MissionIndex;
+        // TICKET-P6-FACTION-01: restore the recorded sides. A pre-P6 sidecar
+        // decodes to 0/0, the pairing its match actually played.
+        Faction = s.Faction;
+        OppositionFaction = s.OppFaction;
         if (s.IsMission)
         {
             MissionPath = GameFiles.Abs(s.MapPath);

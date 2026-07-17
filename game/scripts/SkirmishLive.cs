@@ -362,6 +362,12 @@ public partial class SkirmishLive : Node3D
         _audio = new AudioDirector();
         AddChild(_audio);
         _audio.PlayAmbient();
+        // TICKET-P6-MUSIC-01: the score starts with the battle, calm bed up,
+        // combat layer silent until the intensity signal raises it.
+        _audio.PlayMusic();
+        // TICKET-P6-CURSOR-01: battle scenes own the cursor; menus keep the
+        // OS default (nothing outside this scene ever sets one).
+        EnsureCursorsLoaded();
         _effects = new CombatEffects();
         AddChild(_effects);
         _effects.Camera = _cam;
@@ -417,6 +423,13 @@ public partial class SkirmishLive : Node3D
             return m;
         }
         var w = map.BuildWorld(setup.Seed, players: 2, out tags);
+        // TICKET-P6-FACTION-01: the sides, before any spawn and before tick 0.
+        // After BuildWorld on purpose: no shipped skirmish map declares
+        // factions (Q001), and if one ever does, the player's menu choice is
+        // the one that must win in a skirmish. The mission branch above stays
+        // untouched: a mission's map speaks for itself.
+        w.SetFaction(0, setup.Faction);
+        w.SetFaction(1, setup.OppFaction);
         w.GrantCredits(0, setup.StartCredits);
         w.GrantCredits(1, setup.StartCredits);
         w.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
@@ -564,8 +577,13 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Last-ditch finalisation: a window closed mid-match, or a scene
     /// changed by a path that forgot. A half-written recording is worth more
-    /// than none.</summary>
-    public override void _ExitTree() => FinishRecording();
+    /// than none. TICKET-P6-CURSOR-01: the custom cursor is battle furniture,
+    /// so leaving the scene hands the pointer back to the OS default.</summary>
+    public override void _ExitTree()
+    {
+        FinishRecording();
+        Input.SetCustomMouseCursor(null);
+    }
 
     public void TogglePause()
     {
@@ -856,7 +874,10 @@ public partial class SkirmishLive : Node3D
         // so both reads must come from THIS world: a match may register its own
         // catalogue before tick 0, and a sidebar reading compiled defaults would
         // quietly price the wrong game.
-        _sidebar.Init(this, t => _world.GetUnitType(t).BuildTicks, t => _world.GetStructureType(t));
+        // TICKET-P6-FACTION-01: the faction column joins the two catalogue
+        // reads, by delegate for the same reason they are delegates.
+        _sidebar.Init(this, t => _world.GetUnitType(t).BuildTicks, t => _world.GetStructureType(t),
+            t => _world.GetUnitType(t).Faction);
         // TICKET-P5-SAVE-01: the sidebar is a command surface, and playback takes
         // no commands - RunOneTick drops _pending outright. Leaving it up meant a
         // replay showed lit build buttons and a "PLACE >>" prompt that did
@@ -897,6 +918,7 @@ public partial class SkirmishLive : Node3D
     {
         BattlefieldView.TickWater(delta);
         RefreshDesyncNotice();
+        UpdateCursor();   // TICKET-P6-CURSOR-01: one resolve per frame
         if (_dust != null)
             _dust.GlobalPosition = new Vector3(_cam.Position.X, 2.5f, _cam.Position.Z - 8f);
         if (AutoStep && Running)
@@ -1065,7 +1087,29 @@ public partial class SkirmishLive : Node3D
                             + (_replay is null ? "  -  PLACE >>" : "")
                         : $"{(pe.UnitType > 0 && pe.UnitType < UnitNames.Length ? UnitNames[pe.UnitType] : "UNIT")} DEPLOYED";
                     ShowToast(msg);
+                    // TICKET-P6-VO-01: the battlefield voice, ALONGSIDE the
+                    // toast, never instead of it (doc 24's rule for every line).
+                    PlayVo(pe.Kind == EntityKind.ConstructionYard
+                        ? "vo_construction_complete" : "vo_unit_ready");
                 }
+            }
+            // TICKET-P6-MUSIC-01: the combat-intensity signal. Any exchange of
+            // fire INVOLVING player 0, as attacker or as target, snaps the
+            // signal to full; AfterTicks decays it over ~5 seconds of frame
+            // time. Post-Step entity reads, the established precedent.
+            if (ev.Type == GameEventType.Fired
+                && ((ev.A >= 0 && ev.A < _world.EntityCount && _world.Entities[ev.A].PlayerId == 0)
+                 || (ev.B >= 0 && ev.B < _world.EntityCount && _world.Entities[ev.B].PlayerId == 0)))
+                _combatIntensity = 1f;
+            // TICKET-P6-VO-01: a fallen own mobile speaks once per cooldown
+            // window, however many died in it - eleven walls falling is a
+            // structure problem and stays with the klaxon, so only units and
+            // harvesters are the "unit lost" of the classic genre.
+            if (ev.Type == GameEventType.Died && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var fallen = _world.Entities[ev.A];
+                if (fallen.PlayerId == 0 && Mobile(fallen.Kind))
+                    PlayVo("vo_unit_lost");
             }
             if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
             {
@@ -1109,6 +1153,7 @@ public partial class SkirmishLive : Node3D
                     _lastAttackAlert = now;
                     _audio.Play("alert_attack", -4);
                     ShowToast("BASE UNDER ATTACK");
+                    PlayVo("vo_base_under_attack");   // TICKET-P6-VO-01: with the klaxon, not instead
                     // W3-20: red minimap ping at the struck structure.
                     var basePos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
                     _minimap.Ping(basePos, new Color(0.85f, 0.25f, 0.2f));
@@ -1124,6 +1169,7 @@ public partial class SkirmishLive : Node3D
                     // it while alert_attack was the only alert asset is gone.
                     _audio.Play("alert_harvester", -4);
                     ShowToast("HARVESTER UNDER ATTACK");
+                    PlayVo("vo_harvester_under_attack");   // TICKET-P6-VO-01
                     // Amber rather than the base alert's red: the minimap should
                     // say which of the two alerts fired without the toast.
                     var harvPos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
@@ -1160,6 +1206,7 @@ public partial class SkirmishLive : Node3D
                 // exactly the "drop everything" register alert_attack owns.
                 _audio.Play("alert_attack", -4);
                 ShowToast("SUPERWEAPON LAUNCH DETECTED");
+                PlayVo("vo_superweapon_launch");   // TICKET-P6-VO-01
                 var sw = _world.Entities[ev.A];
                 // The impact ping's orange: launch and impact are two ends of
                 // the one weapon sequence, and the minimap should read them as
@@ -1210,6 +1257,11 @@ public partial class SkirmishLive : Node3D
     private void AfterTicks(double delta)
     {
         _renderTime = _world.Tick - 1 + _accumulator / TickSeconds;
+        // TICKET-P6-MUSIC-01: the intensity decays over ~5 seconds of frame
+        // time from wherever the last exchange of fire snapped it, and the
+        // director smooths whatever this hands it onto the faders.
+        _combatIntensity = Mathf.Max(0f, _combatIntensity - (float)delta / CombatDecaySeconds);
+        _audio.SetCombatIntensity(_combatIntensity);
         SyncActors((float)delta);
         int supply = 0, draw = 0;
         foreach (var e in _world.Entities)
@@ -1223,6 +1275,7 @@ public partial class SkirmishLive : Node3D
         {
             LowPowerAlerts++;
             ShowToast("LOW POWER");
+            PlayVo("vo_low_power");   // TICKET-P6-VO-01
             // GDD s7 line 85's "distinct audio": alert_low_power is its own
             // synthesised cue (a sagging descent, the sound of something
             // winding down - art/audio/synth.py), replacing the 0.82 pitch
@@ -1356,6 +1409,167 @@ public partial class SkirmishLive : Node3D
         _lastAlertPos = new Vector3(mapPos.X, 0, mapPos.Y);
         _lastAlertAt = at;
     }
+
+    // ---------------- TICKET-P6-MUSIC-01: the combat-intensity signal ----------------
+
+    private const float CombatDecaySeconds = 5f;
+    private float _combatIntensity;
+    /// <summary>Verification read: the live signal, not a recomputation.</summary>
+    public float CombatIntensity => _combatIntensity;
+
+    // ---------------- TICKET-P6-VO-01: the battlefield voice ----------------
+
+    /// <summary>Per-line cooldowns, seconds. The alert-cooldown idiom
+    /// (_lastAttackAlert), one entry per line, so a massacre says "unit lost"
+    /// once per window rather than once per casualty and the completion lines
+    /// cannot stack into a stutter when two producers finish together. The
+    /// launch line carries no cooldown: a launch happens at most once per
+    /// charge cycle, minutes apart (the ALERT-02 reasoning).</summary>
+    private static readonly Dictionary<string, double> VoCooldownSeconds = new()
+    {
+        ["vo_construction_complete"] = 1.5,
+        ["vo_unit_ready"] = 1.5,
+        ["vo_unit_lost"] = 8.0,
+        ["vo_base_under_attack"] = 12.0,
+        ["vo_harvester_under_attack"] = 12.0,
+        ["vo_low_power"] = 5.0,
+        ["vo_superweapon_launch"] = 0.0,
+        ["vo_mission_accomplished"] = 30.0,
+        ["vo_mission_failed"] = 30.0,
+    };
+    private readonly Dictionary<string, double> _voLastAt = new();
+    private readonly Dictionary<string, int> _voPlays = new();
+
+    /// <summary>One battlefield line, on the Ui bus, ALONGSIDE whatever toast
+    /// or cue its call site already raises - doc 24's rule is alongside, never
+    /// instead, so no existing sound moved to make room for the voice. Wall
+    /// time for the window, the _lastAttackAlert precedent, so the cooldown
+    /// means the same thing live and under stepped verification. The clips are
+    /// placeholder TTS pending the legal-review check recorded in doc 24.</summary>
+    private void PlayVo(string name)
+    {
+        double now = Time.GetTicksMsec() / 1000.0;
+        if (_voLastAt.TryGetValue(name, out double last)
+            && now - last < VoCooldownSeconds.GetValueOrDefault(name)) return;
+        if (!_audio.Has(name)) return;   // asset set absent: stay silent, the toasts still speak
+        _voLastAt[name] = now;
+        _voPlays[name] = _voPlays.GetValueOrDefault(name) + 1;
+        _audio.Play(name, -4);
+    }
+
+    /// <summary>Verification read: how many times a line ACTUALLY played, so a
+    /// test can prove the cooldown held under a massacre (the LowPowerAlerts
+    /// counting pattern).</summary>
+    public int VoPlays(string name) => _voPlays.GetValueOrDefault(name);
+
+    // ---------------- TICKET-P6-CURSOR-01: contextual cursors ----------------
+
+    private enum GameCursor { None, Select, Move, Attack, Harvest, Enter, Repair, Sell, Invalid }
+    private GameCursor _cursorShown = GameCursor.None;
+
+    /// <summary>Textures and hotspots, loaded once per process: the set is
+    /// eight small PNGs shared by every battle this client runs. Hotspot at
+    /// the arrow tip for select, at the shape centre for everything else.</summary>
+    private static readonly Dictionary<GameCursor, (Texture2D? Tex, Vector2 Hot)> CursorSet = new();
+    private static void EnsureCursorsLoaded()
+    {
+        if (CursorSet.Count > 0) return;
+        foreach (var (kind, name, hot) in new (GameCursor, string, Vector2)[]
+        {
+            (GameCursor.Select, "select", new Vector2(2, 2)),
+            (GameCursor.Move, "move", new Vector2(16, 16)),
+            (GameCursor.Attack, "attack", new Vector2(16, 16)),
+            (GameCursor.Harvest, "harvest", new Vector2(16, 16)),
+            (GameCursor.Enter, "enter", new Vector2(16, 16)),
+            (GameCursor.Repair, "repair", new Vector2(16, 16)),
+            (GameCursor.Sell, "sell", new Vector2(16, 16)),
+            (GameCursor.Invalid, "invalid", new Vector2(16, 16)),
+        })
+        {
+            string path = $"res://ui/cursors/cursor_{name}.png";
+            CursorSet[kind] = (ResourceLoader.Exists(path) ? GD.Load<Texture2D>(path) : null, hot);
+        }
+    }
+
+    /// <summary>
+    /// The one cursor decision, resolved from state this scene already
+    /// computes and mirroring what a click at that point would DO, so the
+    /// cursor never promises a verb the click would not deliver. Order: the
+    /// two armed modes own the pointer outright; the confirmation windows show
+    /// their verb while live; then the hover test runs the exact picks
+    /// IssueOrder runs (same radii, same filters). An all-engineer selection
+    /// over an enemy structure reads as the capture verb; any combat presence
+    /// reads as attack, because IssueOrder sends Attack for every selected
+    /// mobile alike.
+    /// </summary>
+    private GameCursor CursorFor(Vector2 screen)
+    {
+        if (_placingType > 0)
+        {
+            if (_wallDrag) return GameCursor.Select;   // the run ghosts carry the per-cell verdict
+            if (GroundPoint(screen) is not { } p) return GameCursor.Select;
+            return CanPlace(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z), _placingType)
+                ? GameCursor.Select : GameCursor.Invalid;
+        }
+        if (_attackMoveArmed) return GameCursor.Attack;
+        if (_now <= _sellConfirmUntil) return GameCursor.Sell;
+        if (_now <= _repairConfirmUntil) return GameCursor.Repair;
+        bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind))
+            {
+                anyMobile = true;
+                if (v.Kind == EntityKind.Harvester) anyHarvester = true;
+                else if (v.UnitType == EngineerUnitType) anyEngineer = true;
+                else anyCombat = true;
+            }
+        if (!anyMobile) return GameCursor.Select;
+        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == 1 && v.Kind != EntityKind.FerriteField);
+        if (enemy >= 0)
+        {
+            if (anyEngineer && !anyCombat && !anyHarvester
+                && _latest.TryGetValue(enemy, out var te) && !Mobile(te.Kind))
+                return GameCursor.Enter;
+            return GameCursor.Attack;
+        }
+        if (anyHarvester && PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField) >= 0)
+            return GameCursor.Harvest;
+        return GameCursor.Move;
+    }
+
+    /// <summary>The engineer's catalogue id (com_engineer), named for the same
+    /// reason McvUnitType is.</summary>
+    private const int EngineerUnitType = 11;
+
+    /// <summary>Resolve and apply. SetCustomMouseCursor is only called when
+    /// the resolved cursor CHANGES - it re-uploads the texture to the OS every
+    /// call, which is not a per-frame cost. A missing PNG falls back to the
+    /// OS default rather than a blank pointer.</summary>
+    private void UpdateCursor()
+    {
+        var want = CursorFor(GetViewport().GetMousePosition());
+        if (want == _cursorShown) return;
+        _cursorShown = want;
+        if (CursorSet.TryGetValue(want, out var c) && c.Tex != null)
+            Input.SetCustomMouseCursor(c.Tex, Input.CursorShape.Arrow, c.Hot);
+        else
+            Input.SetCustomMouseCursor(null);
+    }
+
+    // ---- TICKET-P6-CURSOR-01 verification surface: the resolver itself and
+    // what is actually applied, never a recomputation.
+    public string CursorNameAt(Vector2 screen) => CursorFor(screen).ToString();
+    public string CursorShownName => _cursorShown.ToString();
+    public bool CursorTextureLoaded(string kindName) =>
+        System.Enum.TryParse<GameCursor>(kindName, out var k)
+        && CursorSet.TryGetValue(k, out var c) && c.Tex != null;
+
+    // ---- TICKET-P6-MUSIC-01 / TICKET-P6-VO-01 verification surface: the
+    // director is private scene furniture, so its reads surface here.
+    public bool MusicCalmOn() => _audio.MusicCalmPlaying;
+    public float MusicCombatDb() => _audio.MusicCombatVolumeDb;
+    public bool AudioHas(string name) => _audio.Has(name);
+    public bool VoiceIsPlaying(string name) => _audio.IsVoicePlaying(name);
 
     /// <summary>DEF-08 clause 8: while drawing, the readout is the running cost
     /// and whether the cap refuses the run - the two numbers that decide
@@ -1510,6 +1724,10 @@ public partial class SkirmishLive : Node3D
         _banner.AddThemeColorOverride("font_color",
             _winner == 0 ? BattlefieldView.DirectorateMark : new Color(0.8f, 0.25f, 0.2f));
         _banner.Visible = true;
+        // TICKET-P6-VO-01: the closing line, beside the banner. One site
+        // covers skirmish and campaign both: a mission verdict arrives here
+        // through World.Winner exactly as an elimination does.
+        PlayVo(_winner == 0 ? "vo_mission_accomplished" : "vo_mission_failed");
     }
 
     private bool _paused;
@@ -2793,6 +3011,8 @@ public partial class SkirmishLive : Node3D
     /// <summary>The ghost-and-commit truth for the current placement type.</summary>
     public bool CanPlaceAt(int ax, int ay) => _placingType > 0 && CanPlace(ax, ay, _placingType);
     public bool SidebarStructVisible(int typeId) => _sidebar.StructButtonVisible(typeId);
+    /// <summary>TICKET-P6-FACTION-01: the unit-side twin.</summary>
+    public bool SidebarUnitVisible(int typeId) => _sidebar.UnitButtonVisible(typeId);
     /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
     public void PressStop() => IssueStop();
     public int WallMaskOf(int id) => _wallMask.TryGetValue(id, out int m) ? m : -1;

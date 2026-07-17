@@ -430,6 +430,124 @@ def ambient_wind():
 
 
 # ---------------------------------------------------------------------------
+# TICKET-P6-MUSIC-01: the placeholder score. Two beds of identical length so
+# the client's music player pair stays bar-aligned when both loop; the calm
+# bed is the room the battle happens in, the combat layer is additive
+# percussion and tension crossfaded in over it. A composed soundtrack is a
+# later art decision (doc 24 says so out loud); these exist so the SYSTEM
+# ships and nobody mistakes the placeholder for the destination.
+# ---------------------------------------------------------------------------
+
+MUSIC_LOOP_SECONDS = 64.0
+
+
+def _loop_crossfade(samples, dur, fade):
+    """The ambient_wind loop idiom, named once for the music beds: the
+    surplus tail is equal-power crossfaded into the head so the loop point is
+    inaudible. A drone that edge-fades to zero instead dips audibly."""
+    n, nf = int(SR * dur), int(SR * fade)
+    out = samples[:n]
+    for i in range(nf):
+        a = i / nf
+        up = math.sin(a * math.pi / 2.0)
+        down = math.cos(a * math.pi / 2.0)
+        out[i] = out[i] * up + samples[n + i] * down
+    return out
+
+
+def _check_loop_seam(name, samples, limit=0.02):
+    """The loop-point discipline VERIFIED rather than trusted: after
+    normalisation, the step from the final sample back to the first must be
+    no larger than an ordinary adjacent-sample step of a low drone. A failed
+    seam raises rather than shipping a click."""
+    normed = normalise(samples)
+    step = abs(normed[-1] - normed[0])
+    if step > limit:
+        raise AssertionError(
+            "%s loop seam steps %.4f (limit %.3f): the loop would click"
+            % (name, step, limit))
+    print("%-24s loop seam %.5f (limit %.3f)" % (name, step, limit))
+
+
+def _place(buf, samples, at):
+    """Add a hit into a loop buffer at `at` seconds, wrapping past the end:
+    a hit still decaying when the loop closes rings into the head, which is
+    exactly what it does on playback, so the seam is seamless by
+    construction."""
+    i0 = int(SR * at)
+    n = len(buf)
+    for i, s in enumerate(samples):
+        buf[(i0 + i) % n] += s
+
+
+def music_calm():
+    """The calm bed (64 s seamless loop): root-and-fifth drones low in the
+    register (D2 and A2 over a D1 sub), a faint minor-colour partial and a
+    whisper of filtered air. Each layer breathes on its own slow cycle and
+    none of the cycle lengths divides the loop, so the bed never audibly
+    repeats inside itself. Deliberately understated: low, slow, no melody."""
+    rng = random.Random(114)
+    dur, fade = MUSIC_LOOP_SECONDS, 4.0
+    total = dur + fade
+    root = sine(total, 73.42)     # D2
+    fifth = sine(total, 110.0)    # A2
+    sub = sine(total, 36.71)      # D1
+    colour = sine(total, 174.61)  # F3, the minor third two octaves up, faint
+    air = low_pass(brown_noise(total, rng), 420.0)
+    out = []
+    for i in range(len(root)):
+        t = i / SR
+        g_root = 0.80 + 0.20 * math.sin(2.0 * math.pi * t / 23.0)
+        g_fifth = 0.55 + 0.25 * math.sin(2.0 * math.pi * t / 31.0 + 1.1)
+        g_sub = 0.45 + 0.10 * math.sin(2.0 * math.pi * t / 41.0 + 2.3)
+        g_colour = 0.16 + 0.12 * math.sin(2.0 * math.pi * t / 53.0 + 0.4)
+        g_air = 0.10 + 0.05 * math.sin(2.0 * math.pi * t / 19.0 + 2.9)
+        out.append(root[i] * g_root + fifth[i] * g_fifth + sub[i] * g_sub
+                   + colour[i] * g_colour + air[i] * g_air)
+    out = _loop_crossfade(out, dur, fade)
+    _check_loop_seam("music_calm.wav", out)
+    return out
+
+
+def music_combat():
+    """The combat layer (64 s, the calm bed's exact length): a low war-drum
+    pattern with answering toms, a tight tick and a staccato tension pulse,
+    at 90 BPM so 24 four-beat bars close the loop exactly. Additive over the
+    calm bed, sharing its D root, never a replacement for it. Hits that are
+    still decaying when the loop closes wrap into the head (_place), so the
+    seam is silent by construction and the check proves it."""
+    rng = random.Random(115)
+    dur = MUSIC_LOOP_SECONDS
+    beat = 60.0 / 90.0
+    out = silence(dur)
+
+    drum = exp_decay(sine_sweep(0.30, 82.0, 44.0, curve=0.6), tau=0.075, attack=0.002)
+    tom = exp_decay(band_pass(white_noise(0.16, rng), 210.0, q=3.0), tau=0.050, attack=0.001)
+    tom2 = exp_decay(band_pass(white_noise(0.14, rng), 300.0, q=3.0), tau=0.042, attack=0.001)
+    tick = exp_decay(band_pass(white_noise(0.05, rng), 4200.0, q=5.0), tau=0.010, attack=0.0005)
+    pulse = exp_decay(sine_sweep(0.10, 110.0, 108.0), tau=0.030, attack=0.002)
+
+    bars = int(dur / (4.0 * beat))
+    for bar in range(bars):
+        t0 = bar * 4.0 * beat
+        _place(out, drum, t0)                              # the downbeat
+        _place(out, gain(drum, 0.8), t0 + 2.0 * beat)
+        _place(out, gain(tom, 0.7), t0 + 1.0 * beat)
+        _place(out, gain(tom2, 0.6), t0 + 3.0 * beat)
+        if bar % 4 == 3:                                   # a fill closes every fourth bar
+            _place(out, gain(tom, 0.5), t0 + 3.25 * beat)
+            _place(out, gain(tom2, 0.5), t0 + 3.5 * beat)
+            _place(out, gain(drum, 0.6), t0 + 3.75 * beat)
+        for eighth in range(8):
+            _place(out, gain(tick, 0.35 if eighth % 2 else 0.20), t0 + eighth * 0.5 * beat)
+        for q in range(4):
+            _place(out, gain(pulse, 0.5), t0 + q * beat + 0.5 * beat)
+    out = edge_fade(out, fade_in=0.002, fade_out=0.03)
+    _check_loop_seam("music_combat.wav", out)
+    return out
+
+
+# ---------------------------------------------------------------------------
 
 SOUNDS = [
     ("ui_click.wav", ui_click),
@@ -447,6 +565,8 @@ SOUNDS = [
     ("superweapon_charge.wav", superweapon_charge),
     ("superweapon_impact.wav", superweapon_impact),
     ("ambient_wind.wav", ambient_wind),
+    ("music_calm.wav", music_calm),
+    ("music_combat.wav", music_combat),
 ]
 
 
