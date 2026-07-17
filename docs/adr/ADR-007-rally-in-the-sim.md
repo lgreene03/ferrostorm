@@ -1,6 +1,6 @@
 # ADR-007: Rally points move into the simulation
 
-- Status: Proposed (Architect authored 2026-07-17; awaiting ratification by Luke)
+- Status: Ratified (Architect authored 2026-07-17; ratified by Luke 2026-07-17 under the directive "design out and build all these", covering this ADR as drafted)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s5 line 45, "per-structure rally points";

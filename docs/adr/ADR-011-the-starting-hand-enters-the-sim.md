@@ -1,6 +1,6 @@
 # ADR-011: The starting hand enters the sim
 
-- Status: Proposed (authored 2026-07-17; awaiting ratification by Luke)
+- Status: Ratified (authored 2026-07-17; ratified by Luke 2026-07-17 under the directive "design out and build all these", covering this ADR as drafted)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke, plus Balance co-sign on the placement
   centring (outcome-shifting, measured in Q005 and restated below)

@@ -1,6 +1,6 @@
 # ADR-006: /data becomes the runtime source of gameplay numbers
 
-- Status: Proposed (Architect authored 2026-07-17; awaiting ratification by Luke)
+- Status: Ratified (Architect authored 2026-07-17; ratified by Luke 2026-07-17 under the directive "design out and build all these", covering this ADR as drafted)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: TDD s11 (data-driven definitions); docs/design/01

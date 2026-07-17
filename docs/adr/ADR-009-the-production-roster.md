@@ -1,6 +1,6 @@
 # ADR-009: The production roster: the barracks split and the tech tree
 
-- Status: Proposed (Architect authored 2026-07-17; awaiting ratification by Luke)
+- Status: Ratified (Architect authored 2026-07-17; ratified by Luke 2026-07-17 under the directive "design out and build all these", covering this ADR as drafted)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke (plus Game Designer sign-off on the
   prerequisite table and Balance co-sign on the barracks price, recorded

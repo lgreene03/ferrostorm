@@ -1,6 +1,6 @@
 # ADR-008: Power gets teeth: the turret gate, honest draws and the radar blackout
 
-- Status: Proposed (Architect authored 2026-07-17; awaiting ratification by Luke)
+- Status: Ratified (Architect authored 2026-07-17; ratified by Luke 2026-07-17 under the directive "design out and build all these", covering this ADR as drafted)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke (plus Balance + Game Designer A11 co-sign
   on the draw numbers, recorded below)
