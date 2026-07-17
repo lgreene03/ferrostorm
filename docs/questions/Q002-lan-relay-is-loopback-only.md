@@ -44,3 +44,21 @@ Even with addresses, no networked match can be played until the battle scene's l
 
 - **netcode:** the ruling on both halves above, and the ticket if the answer is option 1.
 - **docs/design-review:** doc 18 s1's LAN sentence, either way.
+
+## Resolution so far (2026-07-17)
+
+The mechanical half is landed, in option 1's exact shape. `Relay` now takes
+`(int playerCount, int port = 0, IPAddress? bind = null)` and `LockstepClient`
+gains a trailing `IPAddress? address = null` on its constructor; both default
+to loopback, so every existing caller (the runner's `lan` and `lanchaos`
+gates, `LanSmoke`) compiles unchanged and runs the soak-tested configuration
+byte for byte. The LAN screen's HOST and JOIN buttons now name the one
+blocker that remains, doc 18 s1's sentence is corrected per this question,
+and the full battery still exits 0 with the goldens untouched.
+
+Still open, and still netcode's: the second half above. `AdvanceTick` blocks
+on a `Monitor.Wait` for up to ten seconds and SkirmishLive's 15 Hz
+accumulator cannot block the frame on a socket, so the battle scene needs a
+non-blocking poll or a buffering scheme, both of which carry a feel cost.
+Two-machine verification also remains open; no in-process test can provide
+it. This question stays open for that half.

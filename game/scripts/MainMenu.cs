@@ -175,12 +175,15 @@ public partial class MainMenu : Control
 
     /// <summary>
     /// HOST, JOIN, and the honest truth between them. The lockstep relay this
-    /// screen sits on is real and soak-tested, but it binds IPAddress.Loopback
-    /// (Lockstep.cs:93) and its client dials IPAddress.Loopback with a port and
-    /// no address (Lockstep.cs:241), so nothing off this machine can reach a
-    /// hosted game and JOIN has nowhere to dial. The screen says so, on the
-    /// screen, rather than offering a button that fails into a socket timeout
-    /// the player has to interpret.
+    /// screen sits on is real and soak-tested, and since Q002's first half
+    /// landed it can bind a LAN address and its client can dial one (both
+    /// default to loopback, so nothing shipped changes). What still blocks
+    /// these buttons is the battle scene itself: AdvanceTick blocks on a
+    /// Monitor.Wait until the relay's merged batch arrives, and SkirmishLive's
+    /// 15 Hz accumulator cannot block the frame on a socket. That frame-loop
+    /// integration is real design work (Q002, second half). The screen says
+    /// so, on the screen, rather than offering a button that fails into a
+    /// socket timeout the player has to interpret.
     /// </summary>
     private void ShowLan()
     {
@@ -188,11 +191,11 @@ public partial class MainMenu : Control
         var v = OverlayBox(overlay, "LAN", 380, 260);
 
         v.AddChild(UplinkUi.Note(
-            "the lockstep relay underneath this screen is real: it merges both players' orders per tick, compares their state hashes every 30 ticks, and the sim soaks 20 games against it with zero desyncs. what is NOT here is the wire to another machine. the relay listens on loopback only, so it cannot be reached across a network, and the join client takes a port with no address to dial. two-machine play is a netcode ticket and this screen will not pretend otherwise.", 12));
+            "the lockstep relay underneath this screen is real: it merges both players' orders per tick, compares their state hashes every 30 ticks, and the sim soaks 20 games against it with zero desyncs. the transport can now bind and dial a real address. what is NOT here is the battle scene driving its ticks from the lockstep client: advancing a tick blocks until the relay's merged batch arrives, and blocking the frame on a socket is how a dropped packet becomes a frozen window. that integration is real design work and this screen will not pretend otherwise.", 12));
         v.AddChild(new HSeparator());
 
-        v.AddChild(UplinkUi.MenuButton("HOST GAME   (needs the loopback bind lifted)", () => { }, enabled: false));
-        v.AddChild(UplinkUi.MenuButton("JOIN BY ADDRESS   (needs an address parameter on the client)", () => { }, enabled: false));
+        v.AddChild(UplinkUi.MenuButton("HOST GAME   (needs the lockstep frame loop in the battle scene)", () => { }, enabled: false));
+        v.AddChild(UplinkUi.MenuButton("JOIN BY ADDRESS   (needs the lockstep frame loop in the battle scene)", () => { }, enabled: false));
         v.AddChild(new HSeparator());
 
         // What CAN be honestly offered today: the transport, driven from inside

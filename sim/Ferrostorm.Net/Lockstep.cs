@@ -87,10 +87,17 @@ public sealed class Relay
     public int Port { get; private set; }
     public bool DesyncDetected { get; private set; }
 
-    public Relay(int playerCount, int port = 0)
+    /// <summary>
+    /// bind selects the local address the relay listens on. The default,
+    /// loopback, is the configuration every soak has run; pass
+    /// IPAddress.Any to accept players from another machine (Q002, first
+    /// half). No existing caller passes it, so behaviour is unchanged
+    /// everywhere until a host screen chooses to.
+    /// </summary>
+    public Relay(int playerCount, int port = 0, IPAddress? bind = null)
     {
         _playerCount = playerCount;
-        _listener = new TcpListener(IPAddress.Loopback, port);
+        _listener = new TcpListener(bind ?? IPAddress.Loopback, port);
     }
 
     public void Start()
@@ -234,10 +241,16 @@ public sealed class LockstepClient : IDisposable
     public int PlayerCount { get; private set; }
     public bool DesyncNotified { get; private set; }
 
-    public LockstepClient(int port, Func<ulong, World> worldFactory, ulong seed)
+    /// <summary>
+    /// address is the relay to dial. The default, loopback, is the
+    /// configuration every soak has run; a join screen passes the host's
+    /// address (Q002, first half). No existing caller passes it, so
+    /// behaviour is unchanged everywhere until one does.
+    /// </summary>
+    public LockstepClient(int port, Func<ulong, World> worldFactory, ulong seed, IPAddress? address = null)
     {
         _tcp = new TcpClient();
-        _tcp.Connect(IPAddress.Loopback, port);
+        _tcp.Connect(address ?? IPAddress.Loopback, port);
         _tcp.NoDelay = true;
         _stream = _tcp.GetStream();
 

@@ -67,12 +67,14 @@ public sealed class LanSmokeResult
 /// built by LanWorldFactory; this runs it against SkirmishLive.BuildStartingWorld
 /// on a committed .fmap, which is the world a player actually gets.
 ///
-/// WHAT IT DOES NOT PROVE: that two machines can play. They cannot, today, and
-/// the reason is one line rather than a shrug: Relay binds IPAddress.Loopback
-/// and LockstepClient connects to IPAddress.Loopback (Lockstep.cs:93 and :241),
-/// taking a port and no address, so nothing off this machine can reach the relay
-/// and JOIN BY IP has no address to dial. That is a netcode ticket, not a client
-/// one, and it is filed rather than quietly patched here.
+/// WHAT IT DOES NOT PROVE: that two machines can play. They cannot, today.
+/// The transport is no longer the reason: Relay takes a bind address and
+/// LockstepClient an address to dial (both defaulting to loopback, Q002's
+/// first half). What remains is the client frame loop: AdvanceTick blocks on
+/// a Monitor.Wait until the relay's merged batch arrives, and SkirmishLive's
+/// 15 Hz accumulator cannot block the frame on a socket. That integration is
+/// design work with a feel cost (Q002, second half), and it stays a netcode
+/// ticket rather than being quietly patched here.
 /// </summary>
 public static class LanSmoke
 {
