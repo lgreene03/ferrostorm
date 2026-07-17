@@ -5,12 +5,12 @@ cost: 2000
 build_time_ticks: 300
 hp: 2000
 power_supply: 0
-power_draw: 0
+power_draw: 40
 sight_range: 6
 footprint: 2
 weapon_ids: []
 notes: >
   Harvesters unload here; without one, a Harvest order is accepted and does
-  nothing (GDD s4). Draw 0 is the shipped value and is what makes power
-  decorative in the current economy; raising it is TICKET-P5-BD-07 and needs a
-  golden regeneration plus Balance sign-off, not an edit to this file.
+  nothing (GDD s4). Draw 40 is ADR-008 clause 3 (BD-07 rebased, A11 co-sign
+  recorded there): the economy pays for its power like everything else, which
+  is what turns a plant-snipe from a slowdown into a decision.

@@ -448,10 +448,14 @@ public sealed partial class World
     {
         1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4),
         2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5),
-        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, SightCells: 6),
-        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, SightCells: 6), // MCV-deployed, never queued
+        // Honest draws (ADR-008 clause 3, BD-07 rebased; A11 co-sign recorded
+        // in the ADR): the refinery 0 to 40, the yard 0 to 20, the superweapon
+        // 100 to 150. The opening base is then EXACTLY 100 supply against 100
+        // draw - the zero-margin boundary the ADR accepts explicitly.
+        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, PowerDraw: 40, SightCells: 6),
+        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, PowerDraw: 20, SightCells: 6), // MCV-deployed, never queued
         5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4),
-        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 100, SightCells: 4),
+        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction

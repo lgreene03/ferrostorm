@@ -5,7 +5,7 @@ cost: 3000
 build_time_ticks: 0
 hp: 3000
 power_supply: 0
-power_draw: 0
+power_draw: 20
 sight_range: 6
 footprint: 2
 weapon_ids: []
@@ -13,4 +13,7 @@ notes: >
   build_time_ticks 0 is load-bearing, not a placeholder: BuildStructure refuses
   anything with BuildTicks <= 0, which is what keeps the yard MCV-deployed
   rather than queueable. The cost is still real, because CancelProduce and
-  SellStructure both price it.
+  SellStructure both price it. Draw 20 is ADR-008 clause 3 (BD-07 rebased,
+  Balance + Game Designer A11 co-sign recorded there): the yard is part of the
+  opening base's exactly-100-against-100 curve, so the first plant is
+  mandatory rather than decorative.

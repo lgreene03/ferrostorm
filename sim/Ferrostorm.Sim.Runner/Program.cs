@@ -340,6 +340,12 @@ ulong ScenarioConstruction(ulong seed, Action<int, ulong>? cp = null, Action<str
     var world = new World(seed, 64, 64, players: 2);
     world.GrantCredits(0, 20000);
     int cy1 = world.SpawnConstructionYard(0, 8, 8);
+    // ADR-008 scenario surgery: the yard itself now draws 20, and a bare yard
+    // with no plant builds at the GDD s5 half-rate floor, which would slide
+    // every timing assertion below. This plant keeps the scenario at full
+    // power (supply 100 against a draw that never exceeds 80 here), so the
+    // phases keep testing the sidebar flow rather than the brown-out curve.
+    int scenarioPlant = world.SpawnPowerPlant(0, 4, 8);
     for (int y = 0; y < 64; y++) if (y is < 30 or > 31) world.Map.SetBlocked(30, y, true);
     int runner = world.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(31), Fix64.FromFraction(1, 4), 100, ArmourClass.Light, 0);
     var cmds = new List<Command>();
@@ -820,8 +826,15 @@ ulong ScenarioSuperweapon(ulong seed, Action<int, ulong>? cp = null, Action<stri
     world.GrantCredits(0, 1000);
     world.SpawnConstructionYard(0, 6, 6);
     int plant1 = world.SpawnPowerPlant(0, 10, 6);   // supply 100
-    int plant2 = world.SpawnPowerPlant(0, 14, 6);   // supply 200 total vs draw 100
-    _ = plant2;
+    int plant2 = world.SpawnPowerPlant(0, 14, 6);   // supply 200
+    // ADR-008 clause 6: under the honest draws this base draws 170 (the
+    // superweapon's 150 plus the yard's 20), and plants supply 100 each, so
+    // no whole-plant total can ever EQUAL 170 - and the equality IS the test
+    // below. The nullable supply override is the named escape: 100 + 100 + 70
+    // means selling plant1 lands the total at exactly 170 against 170, and
+    // the inclusive-boundary assertion survives without loosening anything.
+    int plant3 = world.SpawnPowerPlant(0, 18, 6, supply: 70); // supply 270 total vs draw 170
+    _ = plant2; _ = plant3;
     int super = world.SpawnSuperweapon(0, 6, 10, chargeTicks: 90);
     // Target cluster far away: two rifles at ground zero, a factory in the
     // outer ring, a bystander outside both rings.
@@ -833,11 +846,13 @@ ulong ScenarioSuperweapon(ulong seed, Action<int, ulong>? cp = null, Action<stri
     var cmds = new List<Command>();
     void StepN(int n) { for (int i = 0; i < n; i++) { world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
 
-    // Power-gated charge: kill a plant mid-charge -> draw 100+40(factory? p1) own draw: super 100 vs supply 200 -> after losing one plant supply 100 == draw 100: still charges (>=). Kill BOTH edge: use scripted attacker on plant1, dropping supply to 100 while draw is 100 (boundary charges), then verify boundary semantics by simply pausing via selling? Keep crisp: sell plant1 -> supply 100, draw 100: >= holds, still charging. Sell plant2? then dead. Test the PAUSE by selling one plant AND placing... simpler: sell plant1 (supply 100 vs draw 100: still charging, boundary inclusive), step to ready.
+    // Power-gated charge, the boundary INCLUSIVE: the charge runs at full
+    // supply, and selling plant1 drops the total to exactly equal the draw -
+    // World's `supply >= draw` must keep the charge running on the equality.
     StepN(40);
     int chargeMid = world.Entities[super].ChargeTicks;
     if (chargeMid != 50) throw new Exception($"superweapon: charge should be 50 after 40 ticks (got {chargeMid})");
-    cmds.Add(new(0, 0, CommandType.SellStructure, plant1, Fix64.Zero, Fix64.Zero)); // supply 200 -> 100, draw 100: boundary holds
+    cmds.Add(new(0, 0, CommandType.SellStructure, plant1, Fix64.Zero, Fix64.Zero)); // supply 270 -> 170, draw 170: boundary holds
     StepN(1);
     // Premature launch attempt must be refused while charging.
     cmds.Add(new(0, 0, CommandType.LaunchSuper, super, gz.X, gz.Y));
