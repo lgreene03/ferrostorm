@@ -25,7 +25,12 @@ the same commit.
 - ADR-009: DRAFTED to Proposed as ADR-009-the-production-roster.md.
 - ADR-010: RATIFIED 2026-07-17 - ADR-010-attack-move-arrival.md (attack-move
   arrival semantics; regenerated four golden hashes).
-- ADR-011: Lua sandbox implementation for map triggers (deterministic subset;
-  decide by Phase 3 start). Re-queued from the old ADR-004 line above.
+- ~~ADR-011~~ NUMBER TAKEN by ADR-011-the-starting-hand-enters-the-sim.md
+  (2026-07-17, Proposed; resolves Q005). The topic this line held (Lua
+  sandbox implementation for map triggers, deterministic subset, decide by
+  Phase 3 start) is still open and is re-queued below as ADR-013 so it
+  cannot collide again, exactly as the old ADR-004 line was.
 - ADR-012: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line).
+- ADR-013: Lua sandbox implementation for map triggers (deterministic
+  subset; decide by Phase 3 start). Re-queued from the ADR-011 line above.

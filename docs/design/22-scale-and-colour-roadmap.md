@@ -1434,6 +1434,8 @@ CHANGES SIM BEHAVIOUR => golden regeneration + Architect sign-off. GDD s5 line 4
 
 **Doc 22 CONFLICT, resolve before implementing:** this ticket claims `EntityKind.Radar = 11` and struct type 9. DEF-04 claims `EntityKind.Wall = 11` and struct type 9 for the wall. Both cannot be right. ADR-005 (DEF-02) owns the final numbering for the whole roster; whichever of Wave B and BD-09 lands second must take the next free numbers. Recommended allocation, to be ratified in ADR-005: EntityKind Wall = 11, Emplacement = 12, Bastion = 13, Radar = 14, Outpost = 15; struct types 9 wall, 10 emplacement, 11 bastion, 12 gate (reserved), 13 radar, 14 outpost. An EntityKind collision is silent in the hash and fatal in the save format.
 
+> **RESOLUTION (2026-07-17).** Settled in compiled code; the paragraph above is kept as history. The shipped enum (World.cs:46) runs Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, and the compiled struct types are 9 wall, 10 gate (reserved, deliberately no def), 11 barracks, 12 radar uplink (World.cs:447-459). The allocation recommended above was overtaken. ADR-009 (Proposed) carries the roster design and supersedes this site's numbering.
+
 - Acceptance: New scenario: player with CY+plant+refinery+factory queues type 9, places it, radar exists with draw 80. Full runner gate exits 0; goldens regenerated on both platforms. In-game: with no radar the minimap reads RADAR OFFLINE; building one restores it; selling the plants (supply < draw) blanks it again; a base-under-attack ping still shows while blanked. AI builds a radar before a superweapon in a 5000-tick ai-macro run.
 
 #### BD-10. Segmented power bar in the sidebar with brown-out state
@@ -1469,6 +1471,8 @@ Today there is no tech tree of any kind: `BuildStructure` checks only cost/ticks
 
 1. Add `int[] Prereqs` (structure type ids, default empty) to both `UnitTypeDef` (World.cs:278) and `StructureTypeDef` (World.cs:341) as a trailing defaulted parameter.
 2. Add a string->type-id map in UnitCatalogue: com_power_plant=1, com_factory=2, com_refinery=3, com_construction_yard=4, dir_turret=5, dir_superweapon=6, sod_veil_projector=7, com_service_depot=8, com_radar_uplink=9; throw FormatException on an unknown id, exactly as WeaponIdOf does (DataLoader.cs:142). Wire it through ToTypeDef.
+
+   **RESOLUTION (2026-07-17).** The type-id map above predates the shipped catalogue and its radar number is stale: com_radar_uplink compiled as struct type 12, not 9, alongside com_wall at 9 and com_barracks at 11 (World.cs:447-459); EntityKind is World.cs:46's enum. Rebuild this map against ADR-009 (Proposed), which carries the roster design.
 3. `private bool HasPrereqs(int player, int[] req)`: for each required type id, scan `_entities` in index order for a living entity with `PlayerId == player && IsStructure(Kind) && StructType == id`; all must be present. StructType is reliably set on all 8 spawns (verified World.cs:258/385/398/412/429/443/456/470). Iteration is index-ordered so it is deterministic.
 4. Gate both `Produce` (after the faction check, World.cs:707) and `BuildStructure` (after the veil check, World.cs:663) with `if (!HasPrereqs(c.PlayerId, def.Prereqs)) break;` - a silent refusal, matching every other invalid command (ADR-001: the sim must not gain a rejection event; doc 18 N9 assigns denial feedback to client-side pre-validation).
 5. Structure prereq table (GAME DESIGNER MUST SIGN OFF - this is the tech tree, not a mechanical value): power_plant [], refinery [power_plant], factory [refinery], turret [power_plant], service_depot [factory], veil_projector [power_plant], radar_uplink [factory], superweapon [radar_uplink].
@@ -2073,6 +2077,8 @@ Four tickets independently claim `EntityKind = 11` and three claim struct type 9
 | Outpost | 15 | 14 | P5-ECON-14 |
 
 `World.FootprintOf` returns 1 for struct types 9 and 12 only; everything else takes the `_ => 2` default. Whichever ticket lands second takes the ratified number and does not renumber the first.
+
+**RESOLUTION (2026-07-17).** The collision is settled in compiled code and the table above was overtaken; it is kept as history. The shipped enum (World.cs:46) runs Wall = 11, Barracks = 12 (which the table never anticipated), RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17; the compiled struct types are 9 wall, 10 gate (reserved, deliberately no def), 11 barracks and 12 radar uplink (World.cs:447-459). ADR-009 (Proposed) carries the roster design and owns any future additions to the numbering.
 
 ---
 
