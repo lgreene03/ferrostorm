@@ -30,7 +30,8 @@ public partial class ModelLibrary : Node
     //
     // WHICH mesh follows from the neighbour count alone and needs no axis
     // reasoning. WHICH YAW is derived below from DEF-07's orientation contract
-    // (art/3d/builder.py:499-511), and the derivation is recorded here because
+    // (the ORIENTATION CONTRACT block in art/3d/builder.py, above the six
+    // com_wall_* functions), and the derivation is recorded here because
     // a wrong entry is invisible until a corner faces the wrong way in a
     // screenshot, which is exactly what DEF-08's spec warns about.
     //

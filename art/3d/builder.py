@@ -504,11 +504,27 @@ def com_service_depot():
 #   com_wall_corner    TWO arms, +X and +Y
 #   com_wall_tee       THREE arms: +X, +Y and -Y. The -X arm is OMITTED.
 #   com_wall_cross     FOUR arms
-# SkirmishLive.cs:717-719 records the axis conversion (Blender +Y forward
-# becomes glTF -Z). DEF-08 owns the mask-to-yaw table and must derive it from
-# the contract above rather than from the draft table in doc 22: that draft's
-# tee row does not follow from this contract and is wrong twice over (see the
-# DEF-07 ledger entry for the derivation and the corrected row).
+# The axis conversion is Blender +Y forward becomes glTF -Z. DEF-08 owns the
+# mask-to-yaw table and must derive it from the contract above; the DEF-08
+# comment block above WallVariant in ModelLibrary.cs carries that derivation
+# and the shipped table, and doc 22's DEF-08 spec repeats it. Read either, but
+# treat THIS comment as the authority on which way each mesh points: the
+# tables are downstream of it.
+#
+# CORRECTION, and note the trap because it caught two readers already. The draft
+# table in doc 22 was wrong on TEN of its sixteen entries, not on its tee row
+# alone: it read the "+X" above as north and used the opposite rotation sense.
+# Through the client's mapping (sim X to world X, sim Y to world Z) Blender +X
+# is EAST and Blender +Y is NORTH, so the canonical cap is {E} and the canonical
+# tee is mask 7, omitting WEST. An earlier version of this comment said the
+# draft's tee row was "wrong twice over" and pointed at DEF-07's ledger finding
+# (d) for the corrected row. Both claims are WITHDRAWN: the tee row is in fact
+# the draft's soundest, with [7] and [14] already correct, and finding (d)'s
+# proposed row keeps the draft's two false premises and would break those two.
+# Doc 22 and the ledger have both been corrected to match the derivation,
+# and art/3d/wall-yaw-gate.py now machine-checks the whole chain (this
+# contract, the exported bytes, ModelLibrary.cs, doc 22, the ledger) so a
+# third reader cannot repeat the mistake silently.
 
 # Doc 16 as it currently stands, and it is the CURRENT text that governs here:
 # "team colour appears in exactly one place per silhouette (the band/slash),
