@@ -1,5 +1,6 @@
 using Godot;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;   // NotNullWhen: the out stream really is null on the false path
 using Ferrostorm.Client;   // AudioBuses (TICKET-P5-SET-01)
 
 namespace Ferrostorm;
@@ -27,7 +28,7 @@ public partial class AudioDirector : Node
     private readonly Dictionary<string, AudioStream> _streams = new();
     private readonly List<AudioStreamPlayer> _uiPool = new();
     private readonly List<AudioStreamPlayer3D> _positionalPool = new();
-    private AudioStreamPlayer _ambientPlayer;
+    private AudioStreamPlayer _ambientPlayer = null!;   // created in _Ready, like every scene field in this codebase
 
     // Round-robin cursors; stealing the oldest voice is acceptable for RTS SFX.
     private int _uiCursor;
@@ -174,7 +175,7 @@ public partial class AudioDirector : Node
     /// test that only calls Play proves nothing about the asset existing.</summary>
     public bool Has(string name) => _streams.ContainsKey(name);
 
-    private bool TryGetStream(string name, out AudioStream stream)
+    private bool TryGetStream(string name, [NotNullWhen(true)] out AudioStream? stream)
     {
         if (_streams.TryGetValue(name, out stream))
             return true;
