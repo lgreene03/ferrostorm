@@ -22,6 +22,31 @@ public partial class Minimap : Control
     private readonly List<(Vector2 Pos, Color C, double T0)> _pings = new();
     private Vector2[]? _frustum;
     private System.Action<Vector2>? _onNavigate;
+    // ADR-008 clause 4: the blackout. False until the scene says otherwise,
+    // because the classic rule is that the minimap must be EARNED: no living
+    // Radar Uplink with supply covering draw means no radar view.
+    private bool _radarLive;
+
+    /// <summary>ADR-008 clause 4, per doc 22 BD-09's sketch: while dark the
+    /// minimap renders only the cinder panel and centred bone RADAR OFFLINE
+    /// text - no terrain, no fog, no dots, no frustum. Pings still render,
+    /// deliberately: blanking the base-under-attack ping would make the
+    /// blackout a stealth nerf to the alert system (doc 22's LOW_POWER
+    /// integration note - the alert most likely to fire while dark must stay
+    /// visible). Clicks stop navigating while dark: a map the player cannot
+    /// see should not silently order the camera around, so the click is
+    /// swallowed rather than passed to the battlefield beneath.</summary>
+    public void SetRadarLive(bool live)
+    {
+        if (_radarLive == live) return;
+        _radarLive = live;
+        _baseRect.Visible = live;
+        _fogRect.Visible = live;
+        QueueRedraw();
+    }
+
+    /// <summary>Verification read: what the blackout gate is actually showing.</summary>
+    public bool RadarLiveShown => _radarLive;
 
     /// <summary>W3-20: drop an expanding alert ping at a world position.
     /// Pings pulse for 2.4s; Refresh's QueueRedraw animates them for free.</summary>
@@ -69,6 +94,11 @@ public partial class Minimap : Control
             ShowBehindParent = true,
         };
         AddChild(_fogRect);
+        // ADR-008: the map starts dark until the scene's first radar-live
+        // computation says otherwise - every shipped map opens radarless, and
+        // one lit frame before the first Refresh would flash the terrain.
+        _baseRect.Visible = _radarLive;
+        _fogRect.Visible = _radarLive;
     }
 
     /// <summary>camAt is retained for call-site stability; the W3-20 frustum
@@ -92,9 +122,19 @@ public partial class Minimap : Control
 
     public override void _Draw()
     {
+        if (!_radarLive)
+        {
+            // The blackout face: cinder panel, bone text, nothing else. The
+            // colours are doc 16 tokens (UplinkUi.Panel and UplinkUi.Bone).
+            DrawRect(new Rect2(Vector2.Zero, Size), UplinkUi.Panel);
+            var font = GetThemeDefaultFont();
+            if (font != null)
+                DrawString(font, new Vector2(0, Size.Y / 2 + 4), "RADAR OFFLINE",
+                    HorizontalAlignment.Center, Size.X, 12, UplinkUi.Bone);
+        }
         DrawRect(new Rect2(Vector2.Zero, Size), new Color(0.79f, 0.63f, 0.36f, 0.7f), false, 1f);
         // W3-20: alert pings - expanding rings cycling every 0.8s, fading
-        // over their 2.4s life.
+        // over their 2.4s life. Pings render in BOTH radar states (ADR-008).
         double now = Time.GetTicksMsec() / 1000.0;
         for (int i = _pings.Count - 1; i >= 0; i--)
         {
@@ -105,6 +145,7 @@ public partial class Minimap : Control
             float a = (1f - cyc) * (1f - (float)age / 2.4f);
             DrawArc(_pings[i].Pos, r, 0, Mathf.Tau, 20, _pings[i].C with { A = a }, 1.5f);
         }
+        if (!_radarLive) return; // no dots, no frustum: the radar view is earned
         foreach (var (pos, c) in _dots)
             DrawRect(new Rect2(pos - new Vector2(1.5f, 1.5f), new Vector2(3, 3)), c);
         if (_frustum is { Length: 4 } f)
@@ -113,6 +154,13 @@ public partial class Minimap : Control
 
     public override void _GuiInput(InputEvent ev)
     {
+        if (!_radarLive)
+        {
+            // Swallow rather than fall through: an unswallowed click on a dark
+            // minimap would reach the battlefield as a stray order.
+            if (ev is InputEventMouseButton or InputEventMouseMotion) AcceptEvent();
+            return;
+        }
         if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } mb)
             Navigate(mb.Position);
         else if (ev is InputEventMouseMotion mm && (mm.ButtonMask & MouseButtonMask.Left) != 0)

@@ -9,9 +9,9 @@ namespace Ferrostorm.Sim;
 ///
 /// Doctrine (deliberately simple; the point is a full closed loop, not
 /// brilliance): establish power -> refinery -> factory; keep one harvester
-/// working; alternate rifle/cannon production; add a defensive turret; when
-/// six combat units stand ready, attack-move the wave at the nearest enemy
-/// structure, and keep the waves coming.
+/// working; alternate rifle/cannon production; add a defensive turret, then
+/// the radar uplink (ADR-008); when six combat units stand ready, attack-move
+/// the wave at the nearest enemy structure, and keep the waves coming.
 /// </summary>
 public sealed class SkirmishAI
 {
@@ -35,7 +35,7 @@ public sealed class SkirmishAI
         if (w.Tick % _actEvery != 0) return;
 
         int cy = -1, factory = -1, refinery = -1;
-        bool hasPlant = false, hasTurret = false;
+        bool hasPlant = false, hasTurret = false, hasRadar = false;
         int harvesters = 0, army = 0, supply = 0, draw = 0;
         int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0;
         bool hasSuper = false;
@@ -60,6 +60,7 @@ public sealed class SkirmishAI
                     case EntityKind.Refinery: refinery = i; refineryCount++; break;
                     case EntityKind.PowerPlant: hasPlant = true; break;
                     case EntityKind.Turret: hasTurret = true; break;
+                    case EntityKind.RadarUplink: hasRadar = true; break;
                     case EntityKind.Superweapon:
                         hasSuper = true;
                         if (e.ChargeTicks == 0 && e.StrikeTicks < 0) readySuper = i;
@@ -97,6 +98,12 @@ public sealed class SkirmishAI
                    : supply < draw + 40 ? 1
                    : refineryCount < cyCount ? 3 // one refinery per base (TICKET-AI-03)
                    : !hasTurret ? 5
+                   // ADR-008 clause 4: the radar before the superweapon, at
+                   // BD-09's affordability threshold. Without this rung the AI
+                   // never lights its own minimap surrogate today, and the day
+                   // ADR-009's prerequisites land it queues a superweapon it
+                   // can never build and stalls forever.
+                   : !hasRadar && w.Credits(_player) >= 1500 ? 12
                    : !hasSuper && w.Credits(_player) >= 4500 ? 6 // war chest banked: reach for the sky (TICKET-AI-04)
                    : 0;
         int ready = w.Entities[cy].ReadyStructure;

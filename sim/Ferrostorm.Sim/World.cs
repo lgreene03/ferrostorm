@@ -40,10 +40,11 @@ public readonly struct Command
 // APPEND ONLY. The state hash stores (int)e.Kind and the save format writes
 // (byte)e.Kind, so appending a value is invisible to both for every existing
 // kind; renumbering one silently rewrites every golden hash and every replay.
-// Barracks and RadarUplink are catalogued (struct types 11 and 12) but not yet
-// spawnable; Airfield, Emplacement, Bastion and Outpost are reservations only
-// (doc 23 s4.1), taken now because reserving is free and a later collision
-// with a saved byte is silent and fatal.
+// RadarUplink (struct type 12) is spawnable since ADR-008; Barracks (struct
+// type 11) is catalogued but not yet spawnable (ADR-009's wave); Airfield,
+// Emplacement, Bastion and Outpost are reservations only (doc 23 s4.1),
+// taken because reserving is free and a later collision with a saved byte is
+// silent and fatal.
 public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
@@ -471,9 +472,11 @@ public sealed partial class World
         // Catalogued but not yet spawnable: no Spawn method, no PlaceStructure
         // arm, no sidebar entry until the barracks ticket lands.
         11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 }),
-        // Radar uplink (doc 23 s4.2 numbers): catalogued but not yet spawnable,
-        // exactly as the barracks. The minimap blackout it will one day gate is
-        // a Game Designer decision and is NOT smuggled in here.
+        // Radar uplink (doc 23 s4.2 numbers): buildable since ADR-008 clause 4.
+        // The client's minimap is lit only while a living uplink stands with
+        // supply covering draw; the sim itself gates nothing on it yet (the
+        // prerequisite tree is ADR-009's wave - the Prereqs value is carried,
+        // not read).
         12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 }),
         _ => default,
     };
@@ -687,6 +690,24 @@ public sealed partial class World
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.VeilProjector,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 7,
             Hp = vhp, MaxHp = vhp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>Radar Uplink (ADR-008 clause 4): the eye of the base. A living
+    /// uplink with supply covering draw is what lights the client's minimap;
+    /// inside the sim it is an ordinary structure - it sells, repairs,
+    /// captures, blocks and counts for the victory test via IsStructure.</summary>
+    public int SpawnRadarUplink(int player, int ax, int ay)
+    {
+        var def = GetStructureType(12);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.RadarUplink,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 12,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
     }
@@ -967,6 +988,7 @@ public sealed partial class World
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
                     case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
+                    case EntityKind.RadarUplink: SpawnRadarUplink(c.PlayerId, ax, ay); break;
                 }
                 break;
             }
@@ -1052,10 +1074,15 @@ public sealed partial class World
         _entities[c.EntityId] = e;
     }
 
+    // RadarUplink joined with ADR-008: omitting a new building here is the
+    // silent killer the ADR names - sell, repair, capture, rubble-unblock,
+    // placement adjacency and the VictorySystem short-game rule all hang off
+    // this predicate with no compile error to catch the omission.
     private static bool IsStructure(EntityKind k)
         => k is EntityKind.Refinery or EntityKind.Factory or EntityKind.PowerPlant
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
-             or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall;
+             or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall
+             or EntityKind.RadarUplink;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and

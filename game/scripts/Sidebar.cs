@@ -27,6 +27,12 @@ public partial class Sidebar : PanelContainer
         new("FACTORY", 2, "com_factory"),
         new("TURRET", 5, "dir_turret"),
         new("SERVICE DEPOT", 8, "com_service_depot"),
+        // ADR-008 clause 4: the Radar Uplink becomes reachable. Common
+        // faction (the com_ prefix and the data file agree; the sim gates
+        // only the veil projector), so no Init-time faction clause. The icon
+        // PNG is not cut yet; MakeButton's Exists guard tolerates that and
+        // flips on its own when the sprite lands.
+        new("RADAR UPLINK", 12, "com_radar_uplink"),
         // TICKET-P5-PROD-01: the Sodality's signature building, fully
         // implemented in the sim since P2 and never buildable by a person.
         // The button is gated on faction in Init - absent for the

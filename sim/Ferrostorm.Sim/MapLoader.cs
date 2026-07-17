@@ -181,6 +181,7 @@ public sealed class MapData
                 // spawnable kind needs an arm or a map carrying it throws here.
                 EntityKind.ServiceDepot => world.SpawnServiceDepot(st.Player, st.Ax, st.Ay),
                 EntityKind.Wall => world.SpawnWall(st.Player, st.Ax, st.Ay),
+                EntityKind.RadarUplink => world.SpawnRadarUplink(st.Player, st.Ax, st.Ay),
                 _ => throw new FormatException($"map structure: unknown struct type {st.StructType}"),
             };
             Tag(st.Tag, id);

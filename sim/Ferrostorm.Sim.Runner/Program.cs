@@ -342,9 +342,9 @@ ulong ScenarioConstruction(ulong seed, Action<int, ulong>? cp = null, Action<str
     int cy1 = world.SpawnConstructionYard(0, 8, 8);
     // ADR-008 scenario surgery: the yard itself now draws 20, and a bare yard
     // with no plant builds at the GDD s5 half-rate floor, which would slide
-    // every timing assertion below. This plant keeps the scenario at full
-    // power (supply 100 against a draw that never exceeds 80 here), so the
-    // phases keep testing the sidebar flow rather than the brown-out curve.
+    // every timing assertion below. This plant keeps the early phases at full
+    // power (100 supply against at most 60 draw before phase I), so they keep
+    // testing the sidebar flow rather than the brown-out curve.
     int scenarioPlant = world.SpawnPowerPlant(0, 4, 8);
     for (int y = 0; y < 64; y++) if (y is < 30 or > 31) world.Map.SetBlocked(30, y, true);
     int runner = world.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(31), Fix64.FromFraction(1, 4), 100, ArmourClass.Light, 0);
@@ -431,7 +431,7 @@ ulong ScenarioConstruction(ulong seed, Action<int, ulong>? cp = null, Action<str
     world.InvalidateFlowCache();
     cmds.Add(new(0, 0, CommandType.PathMove, runner, Fix64.FromInt(50), Fix64.FromInt(31)));
     StepN(30);
-    world.SpawnPowerPlant(0, 29, 30); // seals the near gap (scenario scripting)
+    int gapPlant = world.SpawnPowerPlant(0, 29, 30); // seals the near gap (scenario scripting)
     for (int t = 0; t < 900; t++)
     {
         world.Step(default);
@@ -465,7 +465,65 @@ ulong ScenarioConstruction(ulong seed, Action<int, ulong>? cp = null, Action<str
     if (world.Entities[cy1].ReadyStructure != 0) throw new Exception("construction: cancel should clear the ready slot");
     if (world.Credits(0) != paidCancel + 300) throw new Exception($"construction: ready cancel should refund the full 300 ({world.Credits(0) - paidCancel})");
     if (world.Credits(0) != beforeCancel) throw new Exception("construction: the cancelled building should cost net nothing");
-    report?.Invoke("construction: sidebar queue/ready/place flow exact (rejects retain readiness); chained adjacency and CY radius verified; sell-back refunded half; repair restored full hp at exact cost; corridor sealed mid-march and rerouted; MCV deployed into a radius-projecting CY; ready-cancel refunded in full");
+    // Phase I: the Radar Uplink is BUILDABLE (ADR-008 clause 4) and behaves as
+    // a full structure, and the radar-live predicate the client's minimap
+    // gates on - a living own uplink AND supply covering draw, GDD line 48's
+    // below-100 clause - crosses down on power loss, recovers on a rebuilt
+    // plant, and dies with the uplink. Computed here exactly as
+    // SkirmishLive.AfterTicks computes it, so the sim-side truth the client
+    // renders is pinned in the battery.
+    bool RadarLive()
+    {
+        int sup = 0, drw = 0; bool uplink = false;
+        foreach (var e in world.Entities)
+        {
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (e.Kind == EntityKind.RadarUplink) uplink = true;
+            sup += e.PowerSupply; drw += e.PowerDraw;
+        }
+        return uplink && sup >= drw;
+    }
+    if (RadarLive()) throw new Exception("construction: no uplink stands yet - the radar must be dark");
+    cmds.Add(new(0, 0, CommandType.BuildStructure, cy1, Fix64.Zero, Fix64.Zero, 12));
+    StepN(151); // 150 build ticks at full power
+    if (world.Entities[cy1].ReadyStructure != 12) throw new Exception($"construction: radar uplink not ready after 151 ticks (slot {world.Entities[cy1].ReadyStructure})");
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(12), Fix64.FromInt(12), 12));
+    StepN(1);
+    int radar = world.EntityCount - 1;
+    var rv = world.Entities[radar];
+    if (rv.Kind != EntityKind.RadarUplink || rv.StructType != 12 || rv.PowerDraw != 80)
+        throw new Exception($"construction: placed uplink wrong (kind {rv.Kind}, structType {rv.StructType}, draw {rv.PowerDraw})");
+    if (!RadarLive()) throw new Exception("construction: uplink standing and supply covering draw - the radar must be live");
+    // Sell plants until supply no longer covers draw: the blackout crossing.
+    // Two sells, counted against LIVE state rather than assumed inventory:
+    // the phase-B plant is already dead by now - the phase E raider spawns in
+    // auto-acquire range of it, stops to engage (the shipped hold-to-fire
+    // rule), and shells it down across phases F to H. That kill predates this
+    // wave and no assertion ever covered it; the supply arithmetic here
+    // learnt the hard way that live totals are the only honest probe (the
+    // same lesson B2's harness recorded about EntityCount). After the sells
+    // the gap-sealing plant's 100 stands against a draw of 140.
+    cmds.Add(new(0, 0, CommandType.SellStructure, scenarioPlant, Fix64.Zero, Fix64.Zero));
+    cmds.Add(new(0, 0, CommandType.SellStructure, plant1, Fix64.Zero, Fix64.Zero));
+    StepN(1);
+    if (RadarLive()) throw new Exception("construction: supply below draw must take the radar dark");
+    // Recovery: one rebuilt plant relights it.
+    cmds.Add(new(0, 0, CommandType.BuildStructure, cy1, Fix64.Zero, Fix64.Zero, 1));
+    StepN(202); // 100 build ticks at the half-rate floor (supply below draw), plus placement slack
+    cmds.Add(new(0, 0, CommandType.PlaceStructure, runner, Fix64.FromInt(12), Fix64.FromInt(16), 1));
+    StepN(1);
+    if (!RadarLive()) throw new Exception("construction: a rebuilt plant must relight the radar");
+    // And the uplink itself sells for exactly half of 900 - IsStructure
+    // membership proven by behaviour - taking the radar dark for good.
+    long beforeRadarSell = world.Credits(0);
+    cmds.Add(new(0, 0, CommandType.SellStructure, radar, Fix64.Zero, Fix64.Zero));
+    StepN(1);
+    if (world.Credits(0) != beforeRadarSell + 450)
+        throw new Exception($"construction: uplink sell-back should refund exactly 450 (got {world.Credits(0) - beforeRadarSell})");
+    if (world.Entities[radar].Alive || !world.ValidPlacement(0, 12, 12, 12))
+        throw new Exception("construction: a sold uplink must die and free its footprint");
+    if (RadarLive()) throw new Exception("construction: no uplink, no radar");
+    report?.Invoke("construction: sidebar queue/ready/place flow exact (rejects retain readiness); chained adjacency and CY radius verified; sell-back refunded half; repair restored full hp at exact cost; corridor sealed mid-march and rerouted; MCV deployed into a radius-projecting CY; ready-cancel refunded in full; radar uplink built, placed with draw 80, radar-live predicate crossed dark on plant sales, relit on a rebuilt plant, and died with its uplink at exactly 450 refund");
     return world.ComputeStateHash();
 }
 
@@ -948,7 +1006,7 @@ ulong ScenarioAiSuper(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     var ai = SkirmishAI.Standard(0);
     var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
     bool launched = false, impacted = false;
-    int superBuilt = -1;
+    int superBuilt = -1, radarBuilt = -1;
     const int ticks = 4500;
     for (int t = 0; t < ticks; t++)
     {
@@ -959,12 +1017,18 @@ ulong ScenarioAiSuper(ulong seed, Action<int, ulong>? cp = null, Action<string>?
         {
             if (ev.Type == GameEventType.StructurePlaced && superBuilt < 0
                 && world.Entities[ev.A].Kind == EntityKind.Superweapon) superBuilt = world.Tick;
+            if (ev.Type == GameEventType.StructurePlaced && radarBuilt < 0
+                && world.Entities[ev.A].Kind == EntityKind.RadarUplink) radarBuilt = world.Tick;
             if (ev.Type == GameEventType.SuperweaponLaunched) launched = true;
             if (ev.Type == GameEventType.SuperweaponImpact) impacted = true;
         }
         if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
     }
     if (superBuilt < 0) throw new Exception("aisuper: the AI never built its superweapon");
+    // ADR-008 clause 4: the ladder raises the radar before the superweapon,
+    // which is what keeps the AI alive the day prerequisites land (ADR-009).
+    if (radarBuilt < 0 || radarBuilt > superBuilt)
+        throw new Exception($"aisuper: the radar must stand before the superweapon (radar {radarBuilt}, super {superBuilt})");
     if (!launched) throw new Exception("aisuper: charged and never fired");
     if (!impacted) throw new Exception("aisuper: launch without impact");
     var target = world.Entities[enemyRefinery];

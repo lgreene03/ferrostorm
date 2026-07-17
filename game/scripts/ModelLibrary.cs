@@ -22,6 +22,12 @@ public partial class ModelLibrary : Node
         { 5, "com_factory" }, { 6, "com_construction_yard" }, { 7, "dir_turret" },
         { 8, "dir_superweapon" }, { 9, "sod_veil_projector" }, { 10, "com_service_depot" },
         { 3, "ferrite_cluster" },
+        // 13 = RadarUplink (ADR-008 clause 4). No com_radar_uplink.glb exists
+        // yet; doc 23 s4.2 prescribes the veil projector as the interim stand-in
+        // because its `dish` child already spins under ScanRig, which reads as
+        // a scanning antenna for free. The bespoke model is owed to
+        // art-pipeline (raised in the wave's delivery notes).
+        { 13, "sod_veil_projector" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit

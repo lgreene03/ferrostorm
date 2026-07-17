@@ -163,6 +163,28 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification read: how many enemy superweapon launches this
     /// client has alerted on (the LowPowerAlerts pattern).</summary>
     public int LaunchAlerts { get; private set; }
+    // ADR-008 clause 4 + ALERT-02's last clause ("radar goes dark"): the
+    // minimap is lit only while a living own Radar Uplink stands AND supply
+    // covers draw - GDD line 48's below-100 clause, deliberately NOT the 75
+    // per cent turret threshold: radar is the first thing a brown-out takes.
+    // Edge-triggered on the LOSS crossing only, the _wasBrownOut pattern with
+    // the flag starting false, so the radarless opening fires no alert: the
+    // alert marks LOSING the eye, not never having had one.
+    private bool _wasRadarLive;
+    private Vector2 _lastUplinkPos;
+    /// <summary>Verification read (the LowPowerAlerts pattern): how many times
+    /// the RADAR OFFLINE alert fired.</summary>
+    public int RadarAlerts { get; private set; }
+    /// <summary>Verification read: the radar-live predicate as last computed.</summary>
+    public bool RadarLive { get; private set; }
+    // ADR-008 clause 1's client face: per-owner brown-out (the sidebar's own
+    // divisionless 75 per cent test), recomputed each frame, driving the
+    // offline dim on turret actors and the selection readout. Both players
+    // deliberately: watching the enemy's guns go dark is the payoff of the
+    // plant-snipe pillar (doc 00 line 24), and the sim state it mirrors is
+    // already visible in the turret's refusal to fire.
+    private readonly bool[] _ownerBrownedOut = new bool[2];
+    private readonly HashSet<int> _offlineDimmed = new();
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
     private double _repairConfirmUntil = -1;
@@ -1349,6 +1371,50 @@ public partial class SkirmishLive : Node3D
             }
         }
         _wasBrownOut = brownOut;
+        // ADR-008 clause 4: the radar-live predicate. The uplink position is
+        // remembered while one stands so the OFFLINE ping and jump-to-event
+        // still have somewhere honest to point when the uplink itself is the
+        // thing that died.
+        bool hasUplink = false;
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.RadarUplink)
+            {
+                hasUplink = true;
+                // The rally-marker idiom for Fix64 to float (raw over 2^32).
+                _lastUplinkPos = new Vector2(
+                    (float)(e.X.Raw / 4294967296.0), (float)(e.Y.Raw / 4294967296.0));
+                break;
+            }
+        bool radarLive = hasUplink && supply >= draw;
+        if (!radarLive && _wasRadarLive)
+        {
+            // ALERT-02's last clause, through the standard alert plumbing:
+            // toast, its own synthesised cue (a carrier fracturing into
+            // static - signal loss, not a siren), the placeholder VO line,
+            // a gold ping at the uplink (the power-family colour), and the
+            // position recorded for the jump-to-event key.
+            RadarAlerts++;
+            ShowToast("RADAR OFFLINE");
+            PlayVo("vo_radar_offline");
+            _audio.Play("alert_radar", -4);
+            _minimap.Ping(_lastUplinkPos, new Color(0.79f, 0.63f, 0.36f));
+            RecordAlert(_lastUplinkPos, Time.GetTicksMsec() / 1000.0);
+        }
+        _wasRadarLive = radarLive;
+        RadarLive = radarLive;
+        // ADR-008 clause 1's client face: per-owner brown-out for the turret
+        // dim and readout, the same integer test as the bar.
+        {
+            int s0 = 0, d0 = 0, s1 = 0, d1 = 0;
+            foreach (var e in _world.Entities)
+            {
+                if (!e.Alive) continue;
+                if (e.PlayerId == 0) { s0 += e.PowerSupply; d0 += e.PowerDraw; }
+                else if (e.PlayerId == 1) { s1 += e.PowerSupply; d1 += e.PowerDraw; }
+            }
+            _ownerBrownedOut[0] = d0 > 0 && s0 * 4 < d0 * 3;
+            _ownerBrownedOut[1] = d1 > 0 && s1 * 4 < d1 * 3;
+        }
         // TICKET-P5-SAVE-01: the mode is on the status line because two of the
         // three modes change what the player's clicks do, and a replay that
         // silently ignores orders reads as a broken game.
@@ -1378,6 +1444,7 @@ public partial class SkirmishLive : Node3D
             if (GroundPoint(corners[i]) is { } g) fr[i] = new Vector2(g.X, g.Z);
             else { fr = null; break; }
         }
+        _minimap.SetRadarLive(radarLive);   // ADR-008: the blackout gate, at the refresh site the ADR names
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
         _selInfo.Text = _wallDrag ? WallDragSummary() : SelectionSummary();
         SyncRallyMarkers();   // ADR-007: markers mirror the sim's own RallyX/RallyY, selected producer only
@@ -1433,8 +1500,10 @@ public partial class SkirmishLive : Node3D
     // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
     // the entry exists for completeness rather than for a live code path.
     // TICKET-P5-PROD-01 named type 7: the Veil Projector has a button now, so
-    // its ready toast must name it.
-    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL" };
+    // its ready toast must name it. ADR-008 extended the table to type 12:
+    // index 10 is ADR-005's reserved gate (no def, never toasted), 11 the
+    // barracks (catalogued, unbuildable until ADR-009's wave), 12 the radar.
+    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL", "", "BARRACKS", "RADAR UPLINK" };
 
     /// <summary>W3-19: slide-and-fade production toast. A fresh completion
     /// retriggers the animation from the top.</summary>
@@ -1488,6 +1557,10 @@ public partial class SkirmishLive : Node3D
         ["vo_base_under_attack"] = 12.0,
         ["vo_harvester_under_attack"] = 12.0,
         ["vo_low_power"] = 5.0,
+        // ADR-008: the radar alert is edge-triggered on the loss crossing, so
+        // it cannot machine-gun; the short window only guards a sell-spam
+        // flicker across the exact boundary.
+        ["vo_radar_offline"] = 5.0,
         ["vo_superweapon_launch"] = 0.0,
         ["vo_mission_accomplished"] = 30.0,
         ["vo_mission_failed"] = 30.0,
@@ -1679,6 +1752,11 @@ public partial class SkirmishLive : Node3D
                     if (!Mobile(v.Kind) && v.PlayerId == 0
                         && sid >= 0 && sid < _world.EntityCount && _world.Entities[sid].Repairing)
                         rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
+                    // ADR-008: an unpowered turret says so out loud - the
+                    // readout twin of the actor's dark wash, the REP-04 idiom.
+                    string off = v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1
+                        && _ownerBrownedOut[v.PlayerId]
+                        ? "   OFFLINE - LOW POWER" : "";
                     string acts = !Mobile(v.Kind)
                         ? (v.Kind == EntityKind.Factory ? $"   right-click: rally   {kRepair} repair  {kSell} sell" : $"   {kRepair} repair  {kSell} sell")
                         // TICKET-P5-SPAWN-03: the MCV advertises its one
@@ -1688,7 +1766,7 @@ public partial class SkirmishLive : Node3D
                         : v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
                             ? $"   {Settings.KeyName(Settings.BindOf("deploy"))} deploy"
                             : "";
-                    return name + hp + rep + acts;
+                    return name + hp + off + rep + acts;
                 }
             return "";
         }
@@ -1846,6 +1924,29 @@ public partial class SkirmishLive : Node3D
     }
 
     private static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
+
+    // ADR-008: the powered-down wash. One shared unshaded material, built
+    // once (the GhostValidMat lifecycle precedent): near-black at partial
+    // alpha over every mesh via MaterialOverlay, so the model keeps its
+    // silhouette but reads dark and dead. Not applied to the actor's chrome -
+    // rings, smoke and blobs answer other questions and keep their colours.
+    private static readonly StandardMaterial3D OfflineDimMat = new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        AlbedoColor = new Color(0f, 0f, 0f, 0.62f),
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+    };
+    private static readonly HashSet<string> DimExempt = new()
+        { "SelRing", "RepairRing", "DmgSmoke", "Blob", "Stain" };
+
+    private static void SetOfflineDim(Node node, bool off)
+    {
+        if (node is GeometryInstance3D g && !DimExempt.Contains(node.Name.ToString()))
+            g.MaterialOverlay = off ? OfflineDimMat : null;
+        foreach (var c in node.GetChildren())
+            if (!DimExempt.Contains(((Node)c).Name.ToString()))
+                SetOfflineDim((Node)c, off);
+    }
 
     /// <summary>
     /// DEF-08: is this STRUCT type a barrier? ADR-005 reserves struct type 9 for
@@ -2144,6 +2245,21 @@ public partial class SkirmishLive : Node3D
                 fresh.Position = new Vector3(0, Mobile(v.Kind) ? 0.35f : 0.7f, 0);
                 node.AddChild(fresh);
             }
+            // ADR-008: a turret whose owner is browned out reads dark and
+            // inert - an unshaded near-black wash over its meshes (no new
+            // palette token: black at partial alpha is a shade of the
+            // existing materials, the ghost-tint precedent). Applied to both
+            // sides' turrets; the sim state it mirrors is already public in
+            // the turret's refusal to fire.
+            if (v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1)
+            {
+                bool off = _ownerBrownedOut[v.PlayerId];
+                if (off != _offlineDimmed.Contains(v.Id))
+                {
+                    SetOfflineDim(node, off);
+                    if (off) _offlineDimmed.Add(v.Id); else _offlineDimmed.Remove(v.Id);
+                }
+            }
             // TICKET-P5-REP-03: an amber pulsing ground ring on own structures
             // while the sim says they are repairing. Post-Step read of
             // Repairing (the rally precedent); the sim clears the flag itself
@@ -2267,6 +2383,7 @@ public partial class SkirmishLive : Node3D
                 _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
                 ForgetRally(id);              // TICKET-P5-BD-14: no orphan markers
                 _manuallyStopped.Remove(id);  // P5-ECON-07: ids are reused by nothing, but the set should not grow forever
+                _offlineDimmed.Remove(id);    // ADR-008: the dim state dies with the actor
             }
 
         _now += dt;

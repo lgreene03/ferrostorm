@@ -349,6 +349,27 @@ def alert_low_power():
     return edge_fade(out, fade_out=0.05)
 
 
+def alert_radar():
+    """Signal-loss cue (~750 ms): a steady high carrier with a whisper of
+    octave-up harmonic holds for a fifth of a second, snaps off, and
+    fractures into band-passed static that decays to nothing, with a soft
+    low thump under the break. The sound of a feed dropping out rather
+    than an alarm going off - deliberately the opposite register from
+    alert_low_power's sagging tone, because losing the radar picture and
+    losing production speed are different bad news. Completes GDD s7 line
+    85's alert set ("radar goes dark", ADR-008 clause 4 / ALERT-02's last
+    clause). Original synthesis; no resemblance to EVA-style audio."""
+    rng = random.Random(112)
+    carrier = mix(sine_sweep(0.20, 932.0, 932.0),
+                  gain(sine_sweep(0.20, 1864.0, 1864.0), 0.18))
+    carrier = envelope(carrier, [(0.0, 0.0), (0.08, 1.0), (0.9, 0.95), (1.0, 0.0)])
+    static = band_pass(white_noise(0.50, rng), 1500.0, q=0.9)
+    static = exp_decay(static, tau=0.140, attack=0.002)
+    thump = exp_decay(sine_sweep(0.16, 120.0, 60.0, curve=0.7), tau=0.050, attack=0.002)
+    tail = mix(static, gain(thump, 0.5))
+    return edge_fade(carrier + silence(0.015) + tail, fade_out=0.04)
+
+
 def production_done():
     """Pleasant confirmation chime (~400 ms): a struck bar around G5 with
     second and third harmonics decaying faster than the fundamental, plus a
@@ -561,6 +582,7 @@ SOUNDS = [
     ("alert_attack.wav", alert_attack),
     ("alert_harvester.wav", alert_harvester),
     ("alert_low_power.wav", alert_low_power),
+    ("alert_radar.wav", alert_radar),
     ("production_done.wav", production_done),
     ("superweapon_charge.wav", superweapon_charge),
     ("superweapon_impact.wav", superweapon_impact),
