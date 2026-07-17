@@ -284,17 +284,16 @@ report.AppendLine("buys 235 ticks, 7% of the siege. \"Artillery beats static def
 report.AppendLine("independently of barriers, so this section polices the turret's range and the wall's");
 report.AppendLine("hit points, and cannot police much else. See docs/balance/2026-07-15-turtle-gate.md.");
 report.AppendLine();
-report.AppendLine("Rifle and cannon rows are REPORTING ONLY, and the reason is a finding rather than a");
-report.AppendLine("hedge: neither the ticket's \"zero segments destroyed\" nor a yard-razed test measures");
-report.AppendLine("what it appears to. Segments lost is set by geometry, not by warhead - nothing at all");
-report.AppendLine("shoots a gapped wall, and against a sealed one massed rifles out-chew the howitzer");
-report.AppendLine("(8 segments to 3). Yard-razed inverts under a different order: told to Attack the yard");
-report.AppendLine("directly, rifles raze it at t=767 losing nothing while the howitzer walks into its own");
-report.AppendLine("3-cell dead zone and dies to the last unit. Under attack-move the negative controls");
-report.AppendLine("hold only because the stall-cancel at World.cs:1488 drops AMove for good and parks them");
-report.AppendLine("short of the yard. Gating on that would gate an artefact. These rows are recorded every");
-report.AppendLine("run so the trend is visible; promoting them to blocking is gated on attack-move");
-report.AppendLine("prosecuting a base to the finish, per the faction-war precedent below.");
+report.AppendLine("Rifle and cannon rows are REPORTING ONLY, and since ADR-010 the reason has inverted.");
+report.AppendLine("The ticket's \"MUST NOT breach\" expectation used to appear satisfied only because");
+report.AppendLine("attack-move quit before the yard (the arrival artefact ADR-010 removed); with the");
+report.AppendLine("stance prosecuting to the finish, massed rifles and cannons genuinely raze the");
+report.AppendLine("fortified base at equal credits. Promoting these rows to blocking would therefore");
+report.AppendLine("gate a claim that is measurably false today. Whether static defence is rebalanced");
+report.AppendLine("or the expectation is withdrawn is the Balance + Game Designer decision recorded in");
+report.AppendLine("ADR-010's consequences; the rows stay visible every run so the trend survives.");
+report.AppendLine("(The segments-lost caveat stands: it is set by geometry, not warhead - nothing");
+report.AppendLine("shoots a gapped wall, and against a sealed one massed rifles out-chew the howitzer.)");
 
 // COST EFFICIENCY (DEF-17 clause 3). The wall is deliberately the cheapest hit
 // points in the game - that is what a wall IS - and it is paid for by having no

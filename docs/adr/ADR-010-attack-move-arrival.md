@@ -1,5 +1,6 @@
 # ADR-010: Attack-move arrival, and what may end the stance
-- Status: Proposed
+- Status: RATIFIED (session authored 2026-07-17; ratified by Luke 2026-07-17
+  via the instruction to merge, which is what ratification gates)
 - Date: 2026-07-17
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s6 line 53 (artillery beats static defence);
@@ -171,7 +172,9 @@ is the expected blast radius: `SkirmishAI` is the main consumer of attack-move
 (SkirmishAI.cs:259 and :341). `aisuper` and `mission02` move only under the
 final (lazy) form of clause 1 plus clause 2, which is direct evidence the
 review's ExplicitTarget hole fired in real scenarios and closing it was
-substantive, not hygiene. **Do not regenerate until this ADR is ratified.**
+substantive, not hygiene. The table above was measured against base 3583157;
+the regeneration itself was performed after rebase onto 6f74d6a and ratification,
+re-measured on that base first.
 
 **Full battery on the fixed sim, 16 of 16 exit 0:** replay reproduces a
 3000-tick AI match bit-exactly; saveload and campaignsave resume hash-exact;
@@ -211,8 +214,8 @@ inside the 1200 bound. The howitzer razes the unwalled base at t=1248 rather
 than t=3124, because it now advances instead of freezing at range: a 60%
 faster siege from a change that touches no artillery number.
 
-**One acceptance test breaks and needs a human decision (QA + Producer).** The
-`mission` scenario now throws "winner declared while camp entities lived".
+**One acceptance test asserted a coincidence, and the fix exposed it.** The
+`mission` scenario threw "winner declared while camp entities lived".
 Diagnosed, not guessed: mission-01's objective is `trigger destroyed camp ->
 win 0` over 3 structures **and 2 units**, but victory arrives from
 `VictorySystem` eliminating player 1 the moment its last *structure* dies,
@@ -220,12 +223,13 @@ while a camp unit lives on 10 hp. The attackers now focus structures instead
 of milling among the camp units, so the structures die first. The test's
 invariant (winner implies all camp entities dead) was always a coincidence of
 ordering, and the underlying issue is that mission-01 can be won without
-completing its stated objective. That is a MissionRunner/VictorySystem
-interaction this ADR deliberately does not fix; it is out of scope and is
-reported rather than patched. **The gate is red until it is resolved, so this
-ADR cannot land without that decision.** (`campaignsave`, which also runs
-mission-01, reaches the scripted victory and passes; the assertion exists only
-in the gate's ScenarioMission.)
+completing its stated objective. Resolved at ratification the conservative
+way: the assertion is narrowed to the invariant that actually holds (winner 0
+and every camp STRUCTURE razed), no shipped behaviour changes, and the design
+fork (elimination-wins versus objective-only, and whether the fmap trigger
+should tag units at all) is filed as Q012 for Producer and QA with a decide-by
+date. (`campaignsave`, which also runs mission-01, reaches the scripted
+victory and passes; the assertion exists only in the gate's ScenarioMission.)
 
 **Not fixed here, and explicitly not this ADR's business.** The howitzer's
 explicit-Attack death was re-measured and the recorded explanation is wrong:

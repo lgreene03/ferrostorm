@@ -14,21 +14,18 @@ the same commit.
   re-queued below as ADR-011 so it cannot collide again.
 - ~~ADR-005: Tile size, grid resolution, footprint rules~~ CLOSED by
   docs/adr/ADR-005-footprints-and-barriers.md (RATIFIED 2026-07-15)
-- ADR-006: CONTESTED, needs Luke. Two claimants: this queue's original entry
-  (save format: snapshot vs command-log replay, decide by Phase 2) and doc 23
-  section 9 (data is the runtime source, file name
-  ADR-006-data-is-the-runtime-source.md). The save/load work on
-  feat/save-load-replays presumably wants the former. One of them must take
-  ADR-012.
-- ADR-007: RESERVED by doc 23 (rally and spawn: wire and save format, resolves
-  Q004). File name planned there: ADR-007-rally-and-spawn.md.
-- ADR-008: RESERVED by doc 23 (power's teeth plus radar; includes an ADR-005
-  amendment for the radar's struct-type numbering).
-- ADR-009: RESERVED by doc 23 (production roster and tech tree; supersedes
-  doc 22 lines 1435/1471/2062).
-- ADR-010: CLAIMED - attack-move arrival semantics, drafted as
-  ADR-010-attack-move-arrival.md on branch fix/amove-prosecute-base
-  (Proposed, awaiting Architect + Luke; moves 3 of 24 golden hashes).
+- ADR-006: DRAFTED to Proposed as ADR-006-data-is-the-runtime-source.md
+  (doc 23's claimant took the number). This queue's original topic for the
+  slot, the save format decision (snapshot vs command-log replay, decide by
+  Phase 2), was overtaken by events: the shipped save/load work and Q001's v2
+  format are snapshot-shaped in practice. If that choice is ever to be made
+  deliberately rather than inherited, it takes ADR-012.
+- ADR-007: DRAFTED to Proposed as ADR-007-rally-in-the-sim.md.
+- ADR-008: DRAFTED to Proposed as ADR-008-power-gets-teeth.md.
+- ADR-009: DRAFTED to Proposed as ADR-009-the-production-roster.md.
+- ADR-010: RATIFIED 2026-07-17 - ADR-010-attack-move-arrival.md (attack-move
+  arrival semantics; regenerated four golden hashes).
 - ADR-011: Lua sandbox implementation for map triggers (deterministic subset;
   decide by Phase 3 start). Re-queued from the old ADR-004 line above.
-- ADR-012: reserved for whichever ADR-006 claimant loses the number.
+- ADR-012: reserved for the deliberate save-format decision if it is ever
+  reopened (see the ADR-006 line).

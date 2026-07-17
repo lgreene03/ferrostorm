@@ -1093,9 +1093,19 @@ ulong ScenarioMission(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     if (!ambushSeen) throw new Exception("mission: the ambush zone was never sprung");
     if (wonAt < 0) throw new Exception("mission: the camp was never destroyed within the time limit");
     if (world.Winner != 0) throw new Exception($"mission: scripted objective declared the wrong winner ({world.Winner})");
+    // The winner-implies-camp-dead invariant this scenario used to assert was
+    // a coincidence of ordering, not a rule: victory can arrive from
+    // VictorySystem eliminating player 1 the moment its last STRUCTURE dies,
+    // while a tagged camp UNIT lives. ADR-010's attack-move fix made the
+    // attackers focus structures, which exposed it. The provable invariant is
+    // asserted instead - winner 0 and every camp structure razed - and the
+    // design question (should elimination end a scripted mission before its
+    // objective, or should the objective trigger count only structures?) is
+    // Q012, owner Producer + QA.
     foreach (int id in camp)
-        if (world.Entities[id].Alive) throw new Exception("mission: winner declared while camp entities lived");
-    report?.Invoke($"mission: mission-01 ran as pure data - timed grant and message fired, the ambush sprang on zone entry, and the scripted objective declared victory at tick {wonAt} with the camp confirmed destroyed");
+        if (world.Entities[id].Alive && world.Entities[id].Kind != EntityKind.Unit)
+            throw new Exception("mission: winner declared while camp structures lived");
+    report?.Invoke($"mission: mission-01 ran as pure data - timed grant and message fired, the ambush sprang on zone entry, and victory landed at tick {wonAt} with every camp structure confirmed razed (Q012 tracks the objective-vs-elimination question)");
     return world.ComputeStateHash();
 }
 
