@@ -41,3 +41,32 @@ The recommendation is 1 now and 2 with the netcode. What must not happen is the 
 - **Changed:** nothing. This is a question, not a decision.
 - **Assumed:** that shipping the quality of life in the client today beats shipping nothing while an ADR waits, given the replay guard makes it safe for the shipped modes.
 - **Needed next (from the Architect):** a ruling on 1 versus 3 for the auto-resume, and a sequencing call on 2 against the netcode plan.
+
+## Resolution, 2026-07-17: the rally half is RESOLVED by ADR-007 (Wave B2)
+
+Candidate 2 was taken, but NOT on this question's recommended sequencing.
+Q004 recommended folding SetRally in with the netcode; doc 23's Wave 4
+measurements inverted that (the spawn-occupancy fix bricks the factory
+after eleven units unless an exit move lands first), so ADR-007 was
+ratified and Wave B2 implemented it ahead of the netcode. As of commit
+history on ticket/p6-wave-b2:
+
+- `CommandType.SetRally = 16` is wire format; the client's `_rally`
+  dictionary is deleted and the right-click issues the command on the
+  ordinary path, which also closes SPAWN-D9 (player-0-only rally).
+- RallyX/RallyY/HasRally/Departing are Entity state, hashed and saved
+  (save format v4; the ADR carries a dated note on the v3-to-v4 shift).
+  A save now preserves rally points BY THE SIM: this question's opening
+  defect ("a save drops every rally point") is dead, and the spawngate
+  asserts the round trip plus the resumed-battle marker.
+- Replays and future netcode carry rally as ordinary commands; no client
+  dictionary needs replicating.
+
+**Still open, deliberately: the harvester auto-resume half.** ADR-007
+explicitly declines to rule on it (its sim-side fold is candidate 1,
+belongs with the doc 22 economy batch and that batch's own regeneration).
+The client-side auto-resume with its load-bearing `_replay != null` guard
+remains shipped behaviour, and this question stays open for that ruling
+alone. One interaction survived the wave intact: a rally still beats
+auto-harvest (a rallied factory's fresh harvester enrols as parked), now
+keyed off the sim's HasRally rather than the deleted dictionary.

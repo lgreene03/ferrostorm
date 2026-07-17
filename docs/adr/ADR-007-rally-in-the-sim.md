@@ -165,3 +165,22 @@ sign-off once ratified.
 Gates: TICKET-P5-SPAWN-03 implements this ADR; SPAWN-04 hard-depends on it
 and carries the zero-drain assertion; SPAWN-05 batches into the same
 regeneration. None of the three may start before ratification.
+
+## Implementation note, 2026-07-17 (Wave B2): the save magic is v4, not v3
+
+Decision point 4 names "Save format v3, SaveMagicV3 = 0x534C4133". Between
+this ADR's drafting and its implementation, Wave B1 (ADR-006, same
+ratification batch) shipped first and took that exact magic for the
+catalogue checksum, which now sits in World.Serialization.cs as the
+published on-disk v3 format. The rally bump therefore lands as **v4,
+SaveMagicV4 = 0x534C4134**, building on v3: the checksum stays, the four
+entity fields append exactly as this ADR orders them, and v1, v2 AND v3
+saves all load with rally unset and Departing false, which preserves this
+ADR's tolerant-load intent verbatim (one version deeper). Everything else
+in the Decision is implemented as written. The spawngate's downgrade
+surgery proves the v3 and v2 loads; `saveload` exiting 0 remains the
+serializer's contract. Wave B2 also applied Departing to the DEFAULT
+(no-rally) exit move, not only rally spawns: the default exit lands 2 to 3
+cells out, inside the same crowd-arrival radius, and without the flag the
+inverted-order trap this ADR documents would return for the no-rally
+default game.
