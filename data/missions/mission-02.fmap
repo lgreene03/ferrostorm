@@ -50,9 +50,12 @@ grid:
 unit 0 5 8 16
 unit 0 5 8 20
 unit 0 11 6 18 wrench
-# The Directorate depot compound
+# The Directorate depot compound. The plant is ADR-008 surgery: the camp
+# turret drew 20 against a supply of 0, which the turret gate would silence
+# for the whole mission - the compound's teeth must be powered to bite.
 structure 1 2 36 18 prize
 structure 1 5 32 14 camp
+structure 1 1 40 22 camp
 unit 1 2 34 22 camp
 unit 1 6 38 16 camp
 trigger elapsed 90 -> message the_wire_is_cut

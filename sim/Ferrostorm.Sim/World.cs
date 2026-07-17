@@ -1177,8 +1177,8 @@ public sealed partial class World
     /// GDD s7 line 85's 75 per cent threshold in integer maths with no
     /// division - the same expression the client's power bar already uses
     /// (Sidebar.cs), so the sim's notion of a brown-out and the UI's cannot
-    /// drift (PWR-D4). Unread by the sim until PWR-04's turret gate lands;
-    /// declared beside the tally so the gate arrives as one guard line.
+    /// drift (PWR-D4). Read by CombatSystem's turret gate (ADR-008 clause 1)
+    /// against the pre-combat tally; the boundary is inclusive.
     /// </summary>
     private static bool AtLeast75(int supply, int draw) => draw <= 0 || supply * 4 >= draw * 3;
 
@@ -1420,15 +1420,14 @@ public sealed partial class World
 
     private void CombatSystem()
     {
-        // TICKET-P5-PWR-02: the third tally. Nothing in this system reads it
-        // yet - PWR-04's turret gate is what will - but it exists now so the
-        // gate lands as one guard line rather than a restructure, and so the
-        // perf gate prices the extra O(n) pass today rather than discovering
-        // it later. Snapshot semantics, pinned deliberately: this tally runs
-        // BEFORE damage is applied, so the gate will see PRE-combat power (a
-        // plant destroyed on tick N disables its turrets on tick N+1), while
-        // ProductionSystem's own tally sees the post-combat total the same
-        // tick. Both are deterministic; they are different numbers.
+        // TICKET-P5-PWR-02 staged this third tally; ADR-008 clause 1 is what
+        // reads it: the turret gate below. Snapshot semantics, pinned by the
+        // ADR's clause 2: this tally runs BEFORE damage is applied, so the
+        // gate sees PRE-combat power (a plant destroyed on tick N disables
+        // its turrets on tick N+1), while ProductionSystem's own tally sees
+        // the post-combat total the same tick. Both are deterministic; they
+        // are different numbers, and the per-system rule (see ComputePower)
+        // is what keeps each system's instant honest.
         Span<int> combatSupply = stackalloc int[_players];
         Span<int> combatDraw = stackalloc int[_players];
         ComputePower(combatSupply, combatDraw);
@@ -1444,6 +1443,14 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.WeaponId == 0) continue;
+            // GDD s5 line 48: a browned-out base cannot power its guns
+            // (ADR-008 clause 1). Turret kind only - the GDD says defensive
+            // turrets, and doc 22's emplacement and bastion join by kind when
+            // they land. The continue sits ABOVE the cooldown decrement
+            // deliberately: a dead turret does not reload. Inclusive boundary
+            // via divisionless AtLeast75: supply 15 against draw 20 FIRES.
+            if (e.Kind == EntityKind.Turret && !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId]))
+            { _entities[i] = e; continue; }
             if (e.Cooldown > 0) { e.Cooldown--; _entities[i] = e; continue; }
 
             var w = Weapons.Get(e.WeaponId);

@@ -581,6 +581,11 @@ ulong ScenarioStealth(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     var cmds = new List<Command>();
     void StepN(int n) { for (int i = 0; i < n; i++) { world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
 
+    // ADR-008 scenario surgery: the turret must be POWERED from tick 0
+    // (supply 100 against draw 20 for the whole scenario) or rule 1 passes
+    // because the turret is dead rather than because stealth holds. The
+    // plant below at rule 2 keeps its geometry role unchanged.
+    world.SpawnPowerPlant(0, 10, 10);
     // Rule 1: undetected stealth is untargetable. A raider parks inside the
     // turret's range 5 but outside its OWN rifle range 3 (truly passive -
     // any closer and it would auto-engage, legitimately breaking stealth)
@@ -618,7 +623,7 @@ ulong ScenarioStealth(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     if (world.Entities[lurker].Alive && world.Entities[lurker].Hp == raiderDef.Hp)
         throw new Exception("stealth: detector coverage failed to make the lurker targetable");
     if (cp != null) cp(world.Tick, world.ComputeStateHash());
-    report?.Invoke("stealth: undetected raider untouchable in turret range; firing broke stealth and drew fire; detector arrival painted the passive lurker (all three rules verified)");
+    report?.Invoke("stealth: undetected raider untouchable in turret range; firing broke stealth and drew fire; detector arrival painted the passive lurker (all three rules verified; turret POWERED throughout, 100 supply vs 20 draw per ADR-008)");
     return world.ComputeStateHash();
 }
 
@@ -975,6 +980,10 @@ ulong ScenarioVeil(ulong seed, Action<int, ulong>? cp = null, Action<string>? re
     // the whole veil drops the instant the base loses full power.
     var world = new World(seed, 64, 64, players: 2);
     world.SpawnTurret(1, 20, 20); // enemy turret, range 5, centre (21,21)
+    // ADR-008 scenario surgery: the turret's OWNER needs power (100 supply
+    // against 20 draw) or the gate silences the gun and the baseline
+    // assertion throws - the good failure the ADR predicted.
+    world.SpawnPowerPlant(1, 50, 50);
     int plant = world.SpawnPowerPlant(0, 40, 40); // supply 100 vs projector draw 60
     var cmds = new List<Command>();
     void StepN(int n) { for (int i = 0; i < n; i++) { world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
@@ -998,7 +1007,7 @@ ulong ScenarioVeil(ulong seed, Action<int, ulong>? cp = null, Action<string>? re
     if (world.Entities[ghost].Hp == 100)
         throw new Exception("veil: power cut should have dropped the veil and exposed the rifle");
     if (cp != null) cp(world.Tick, world.ComputeStateHash());
-    report?.Invoke("veil: baseline rifle engaged; cloaked rifle untouchable for 100 ticks; selling the plant collapsed the veil and the turret opened fire (power coupling exact)");
+    report?.Invoke("veil: baseline rifle engaged; cloaked rifle untouchable for 100 ticks; selling the plant collapsed the veil and the turret opened fire (power coupling exact; turret owner POWERED throughout, 100 supply vs 20 draw per ADR-008)");
     return world.ComputeStateHash();
 }
 
@@ -1445,7 +1454,13 @@ ulong ScenarioWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? r
     worldG.ShortGameEnabled = false;
     var seg = new int[5];
     for (int k = 0; k < 5; k++) seg[k] = worldG.SpawnWall(1, 30, 28 + k);
-    worldG.SpawnTurret(1, 32, 29); // centre (33,30): 10.5 cells from the gun, hopelessly short
+    // ADR-008 clause 5, the amendment bound to the gate: player 1's turret
+    // must be POWERED (100 supply against 20 draw) or the assertion below
+    // that the gun "took nothing back" passes because the turret is dead
+    // rather than because it is out-ranged - and the hash would not move to
+    // tell anyone. The howitzer result is re-proven against a LIVE turret.
+    worldG.SpawnPowerPlant(1, 36, 29);
+    int gTurret = worldG.SpawnTurret(1, 32, 29); // centre (33,30): 10.5 cells from the gun, hopelessly short
     var gDef = worldG.GetUnitType(8);
     int gun = worldG.SpawnUnit(0, Fix64.FromInt(22) + Fix64.Half, Fix64.FromInt(30) + Fix64.Half,
         gDef.Speed, gDef.Hp, gDef.Armour, gDef.WeaponId, gDef.SightCells, unitType: 8);
@@ -1469,6 +1484,15 @@ ulong ScenarioWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? r
     }
     if (worldG.Entities[seg[2]].Alive)
         throw new Exception("walls: artillery must breach static defence (GDD s6 line 53)");
+    // ADR-008: assert the POWER, not just the outcome - the sentence "took
+    // nothing back" is only meaningful if the turret could have shot back.
+    {
+        int gSup = 0, gDrw = 0;
+        foreach (var e in worldG.Entities)
+            if (e.Alive && e.PlayerId == 1) { gSup += e.PowerSupply; gDrw += e.PowerDraw; }
+        if (!worldG.Entities[gTurret].Alive || gSup * 4 < gDrw * 3)
+            throw new Exception($"walls: phase G proves nothing unless the turret is alive and powered ({gSup} supply vs {gDrw} draw)");
+    }
     if (worldG.Entities[gun].Hp != gunHp)
         throw new Exception($"walls: the gun outranges the turret and must take nothing back (hp {worldG.Entities[gun].Hp}/{gunHp})");
 
@@ -1511,14 +1535,55 @@ ulong ScenarioWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? r
     if (Fix64.DistSq(arrived.X - aim.X, arrived.Y - aim.Y) > Fix64.FromInt(16))
         throw new Exception($"walls: the breacher must resume its march through the breach unordered (ended {arrived.X},{arrived.Y})");
 
+    // PHASE J: the turret gate itself (ADR-008 clauses 1 and 5), the other
+    // half of phase G's double truth. Phase G proves a POWERED turret is
+    // out-ranged; this proves an UNPOWERED turret is offline BECAUSE of
+    // power: in range, alive, loaded, and withholding fire. Plus the
+    // inclusive boundary made machine-checkable: supply 14 against draw 20
+    // (70 per cent) stays dark, supply 15 (exactly 75) fires on the very
+    // next tick the pre-combat tally sees it, and dropping back below the
+    // line freezes the reload mid-cycle (the continue sits above the
+    // cooldown decrement: a dead turret does not reload).
+    var worldJ = new World(seed + 5, 64, 64, players: 2);
+    worldJ.ShortGameEnabled = false;
+    int jTurret = worldJ.SpawnTurret(0, 20, 20); // draw 20, range 5, centre (21,21)
+    int jBait = worldJ.SpawnUnit(1, Fix64.FromInt(24), Fix64.FromInt(21), Fix64.Zero, 4000, ArmourClass.Heavy, 0); // unarmed, 3 cells out: every excuse to be shot
+    var jcmds = new List<Command>();
+    void StepJ(int n) { for (int i = 0; i < n; i++) { worldJ.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(jcmds)); jcmds.Clear(); } }
+    StepJ(60); // supply 0 against draw 20: 0 per cent
+    if (worldJ.Entities[jBait].Hp != 4000)
+        throw new Exception($"walls: an unpowered turret must withhold fire (bait hp {worldJ.Entities[jBait].Hp})");
+    if (worldJ.Entities[jTurret].Cooldown != 0)
+        throw new Exception("walls: an offline turret must not touch its cooldown");
+    worldJ.SpawnPowerPlant(0, 26, 26, supply: 14); // 14 against 20: 70 per cent, still dark
+    StepJ(60);
+    if (worldJ.Entities[jBait].Hp != 4000)
+        throw new Exception("walls: supply 14 against draw 20 is BELOW the boundary and must not fire");
+    int jTopUp = worldJ.SpawnPowerPlant(0, 26, 30, supply: 1); // 15 against 20: exactly 75 per cent
+    int hpAtBoundary = worldJ.Entities[jBait].Hp;
+    StepJ(1);
+    if (worldJ.Entities[jBait].Hp >= hpAtBoundary)
+        throw new Exception("walls: supply 15 against draw 20 is exactly 75 per cent and must FIRE on the next tick (inclusive boundary, one-tick restore)");
+    int jCd = worldJ.Entities[jTurret].Cooldown;
+    if (jCd <= 0) throw new Exception("walls: the boundary shot should have started the reload");
+    int hpAfterShot = worldJ.Entities[jBait].Hp;
+    jcmds.Add(new(0, 0, CommandType.SellStructure, jTopUp, Fix64.Zero, Fix64.Zero)); // back to 14: the gate freezes the reload
+    StepJ(10);
+    if (worldJ.Entities[jTurret].Cooldown != jCd)
+        throw new Exception($"walls: dropping below 75 must freeze the reload (cooldown {worldJ.Entities[jTurret].Cooldown} vs frozen {jCd})");
+    if (worldJ.Entities[jBait].Hp != hpAfterShot)
+        throw new Exception($"walls: a turret refrozen below the line must not land another shot (bait {worldJ.Entities[jBait].Hp} vs {hpAfterShot})");
+    cp?.Invoke(worldJ.Tick + 500000, worldJ.ComputeStateHash());
+
     report?.Invoke("walls: nine ADR-005 clauses held - (A) a segment landed with no ready slot and charged exactly 100 upfront while a real building with nothing ready stayed refused; " +
                    "(B) 99 credits bought nothing and charged nothing; (C) the chain carried a segment to Chebyshev 2 but not 3, never anchored a power plant, and the yard still anchored its own; " +
                    $"(D) the cap bit at exactly {World.MaxBarriersPerPlayer} per player and player 1's first segment still placed; (E) an engineer bounced off a fence and a player left holding one wall was still eliminated; " +
-                   "(F) auto-acquire ignored masonry at 2 cells but an explicit order bit; (G) a howitzer at range 8 dealt 60 direct and exactly 30 to each orthogonal neighbour, breached the line, and took nothing back from the turret; " +
+                   "(F) auto-acquire ignored masonry at 2 cells but an explicit order bit; (G) a howitzer at range 8 dealt 60 direct and exactly 30 to each orthogonal neighbour, breached the line, and took nothing back from a turret PROVEN ALIVE AND POWERED (100 supply vs 20 draw, ADR-008) - out-ranged, not dead; " +
                    "(H) a tank sealed out by one segment acquired it in under 30 ticks, destroyed it, and resumed its march unordered while a tank with a reachable objective never glanced at it; " +
-                   "(I) a sold segment refunded exactly 50 and freed its cell");
+                   "(I) a sold segment refunded exactly 50 and freed its cell; " +
+                   "(J) ADR-008's gate: an in-range turret at 0 supply withheld fire for 60 ticks with its cooldown untouched, 14/20 supply (70%) stayed dark, 15/20 (exactly 75%, inclusive) fired on the NEXT tick, and selling back below the line froze the reload mid-cycle");
     return world.ComputeStateHash() ^ worldE.ComputeStateHash() ^ worldF.ComputeStateHash()
-         ^ worldG.ComputeStateHash() ^ worldH.ComputeStateHash();
+         ^ worldG.ComputeStateHash() ^ worldH.ComputeStateHash() ^ worldJ.ComputeStateHash();
 }
 
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
@@ -2833,6 +2898,7 @@ int StDebug()
 {
     var world = new World(2026, 64, 64, players: 2);
     var rd = world.GetUnitType(5);
+    world.SpawnPowerPlant(0, 10, 10); // ADR-008: mirror ScenarioStealth's surgery - the turret must be powered to be a faithful repro rig
     int turret = world.SpawnTurret(0, 20, 20);
     int ghost = world.SpawnUnit(1, Fix64.FromInt(25), Fix64.FromInt(21), rd.Speed, rd.Hp, rd.Armour, rd.WeaponId, rd.SightCells, stealth: true, unitType: 5);
     var cmds = new List<Command>();
