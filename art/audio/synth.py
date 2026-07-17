@@ -318,6 +318,37 @@ def alert_attack():
     return edge_fade(out, fade_out=0.02)
 
 
+def alert_harvester():
+    """Rising two-blip motif (~400 ms): two gated pulses a perfect fifth
+    apart (A4 up to E5), each with a slight upward chirp inside it and a
+    touch of second harmonic. Urgent but lighter than alert_attack, and
+    shaped to be distinct at a glance: the klaxon alternates DOWN a minor
+    third four times, this steps UP a fifth once. GDD s7 line 85 wants
+    each alert audibly its own; the harvester alert leaned on a pitch
+    shift of the klaxon until this cue existed."""
+    def blip(f0, f1, dur):
+        tone = mix(sine_sweep(dur, f0, f1),
+                   gain(sine_sweep(dur, f0 * 2.0, f1 * 2.0), 0.20))
+        return envelope(tone, [(0.0, 0.0), (0.06, 1.0), (0.7, 0.85), (1.0, 0.0)])
+    first = blip(440.0, 466.0, 0.12)
+    second = blip(659.26, 698.0, 0.16)
+    return edge_fade(first + silence(0.055) + second, fade_out=0.02)
+
+
+def alert_low_power():
+    """Sagging descent (~900 ms): a tone that starts near 280 Hz, holds
+    briefly, then droops to 110 Hz with a detuned partner beating against
+    it and a quiet octave-down sub underneath - the sound of something
+    winding down rather than an alarm going off. Replaces the 0.82 pitch
+    shift of alert_attack that stood in for a real cue (GDD s7 line 85)."""
+    sag = sine_sweep(0.9, 280.0, 110.0, curve=1.7)
+    detune = sine_sweep(0.9, 285.0, 113.0, curve=1.7)
+    sub = sine_sweep(0.9, 140.0, 55.0, curve=1.7)
+    out = mix(sag, gain(detune, 0.55), gain(sub, 0.4))
+    out = envelope(out, [(0.0, 0.0), (0.05, 1.0), (0.65, 0.8), (1.0, 0.0)])
+    return edge_fade(out, fade_out=0.05)
+
+
 def production_done():
     """Pleasant confirmation chime (~400 ms): a struck bar around G5 with
     second and third harmonics decaying faster than the fundamental, plus a
@@ -410,6 +441,8 @@ SOUNDS = [
     ("explosion_small.wav", explosion_small),
     ("explosion_large.wav", explosion_large),
     ("alert_attack.wav", alert_attack),
+    ("alert_harvester.wav", alert_harvester),
+    ("alert_low_power.wav", alert_low_power),
     ("production_done.wav", production_done),
     ("superweapon_charge.wav", superweapon_charge),
     ("superweapon_impact.wav", superweapon_impact),

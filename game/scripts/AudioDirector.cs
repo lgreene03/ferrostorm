@@ -169,6 +169,11 @@ public partial class AudioDirector : Node
         _ambientPlayer?.Stop();
     }
 
+    /// <summary>Verification read (TICKET-P5-ALERT-02): did the loader find
+    /// this cue? Play answers a missing name with a warning and silence, so a
+    /// test that only calls Play proves nothing about the asset existing.</summary>
+    public bool Has(string name) => _streams.ContainsKey(name);
+
     private bool TryGetStream(string name, out AudioStream stream)
     {
         if (_streams.TryGetValue(name, out stream))

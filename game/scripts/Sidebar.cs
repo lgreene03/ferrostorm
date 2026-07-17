@@ -355,6 +355,10 @@ public partial class Sidebar : PanelContainer
     /// offer? Visibility is the gate (absent, not greyed), so it is what a
     /// test must read.</summary>
     public bool StructButtonVisible(int typeId) => _structButtons.TryGetValue(typeId, out var b) && b.Visible;
+    /// <summary>TICKET-P5-ALERT-02 wave: does the button carry a real icon
+    /// texture? The Exists guard in MakeButton flips on its own when the PNG
+    /// lands, and this is the read that proves it flipped.</summary>
+    public bool StructButtonHasIcon(int typeId) => _structButtons.TryGetValue(typeId, out var b) && b.Icon != null;
     public string UnitButtonText(int typeId) => _unitButtons.TryGetValue(typeId, out var b) ? b.Text : "";
     public string PowerText => _powerLabel.Text;
     public float PowerFillWidth => _powerFill.Size.X;

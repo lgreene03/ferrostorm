@@ -148,6 +148,17 @@ public partial class SkirmishLive : Node3D
     /// times the low-power alert actually fired, so a test can prove the edge
     /// trigger fires once per crossing rather than once per frame.</summary>
     public int LowPowerAlerts { get; private set; }
+    // TICKET-P5-ALERT-02: GDD s7 line 85's "jump-to-event key". Every alert
+    // site records the world position it pinged; the key flies the camera to
+    // the MOST RECENT one, which a plain overwrite gives for free. -1 means
+    // no alert has fired this match, and the key then does nothing and is
+    // deliberately not consumed (the deploy key's rule: an event that meant
+    // nothing is left to whatever else might answer the key after a rebind).
+    private Vector3 _lastAlertPos;
+    private double _lastAlertAt = -1;
+    /// <summary>Verification read: how many enemy superweapon launches this
+    /// client has alerted on (the LowPowerAlerts pattern).</summary>
+    public int LaunchAlerts { get; private set; }
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
     private double _repairConfirmUntil = -1;
@@ -765,7 +776,9 @@ public partial class SkirmishLive : Node3D
                 : $"click: select   right click: move / attack / harvest / rally   {K("attack_move")} attack-move  {K("stop")} stop  "
                   // TICKET-P5-REP-09: "repair bldgs", because R repairs
                   // structures and the old hint promised more than R could do.
-                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
+                  // TICKET-P5-ALERT-02: "last alert" advertises the jump key,
+                  // read from the live binding like every other key here.
+                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("jump_to_event")} last alert  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
@@ -1097,26 +1110,25 @@ public partial class SkirmishLive : Node3D
                     _audio.Play("alert_attack", -4);
                     ShowToast("BASE UNDER ATTACK");
                     // W3-20: red minimap ping at the struck structure.
-                    _minimap.Ping(
-                        new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
-                        new Color(0.85f, 0.25f, 0.2f));
+                    var basePos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
+                    _minimap.Ping(basePos, new Color(0.85f, 0.25f, 0.2f));
+                    RecordAlert(basePos, now);
                 }
                 else if (ownHarvester && now - _lastHarvesterAlert > 12.0)
                 {
                     _lastHarvesterAlert = now;
-                    // GDD s7 line 85 wants distinct audio per alert. There is
-                    // one alert asset (game/audio/alert_attack.wav), so this
-                    // leans on the pitch argument Play already takes to make the
-                    // two audibly different rather than shipping them identical.
-                    // A purpose-made cue is an audio-pipeline ticket, filed, not
-                    // faked here.
-                    _audio.Play("alert_attack", -4, 1.28f);
+                    // GDD s7 line 85's "distinct audio", honoured for real now:
+                    // alert_harvester is its own synthesised cue (a rising
+                    // two-blip motif against the klaxon's falling alternation,
+                    // art/audio/synth.py), so the pitch shift that stood in for
+                    // it while alert_attack was the only alert asset is gone.
+                    _audio.Play("alert_harvester", -4);
                     ShowToast("HARVESTER UNDER ATTACK");
                     // Amber rather than the base alert's red: the minimap should
                     // say which of the two alerts fired without the toast.
-                    _minimap.Ping(
-                        new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0)),
-                        new Color(0.95f, 0.62f, 0.15f));
+                    var harvPos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
+                    _minimap.Ping(harvPos, new Color(0.95f, 0.62f, 0.15f));
+                    RecordAlert(harvPos, now);
                 }
             }
             // W3-20: orange ping where the superweapon lands.
@@ -1124,6 +1136,40 @@ public partial class SkirmishLive : Node3D
                 _minimap.Ping(
                     new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
                     new Color(0.91f, 0.42f, 0.13f));
+            // TICKET-P5-ALERT-02: the DETECTION half of GDD s7 line 85's
+            // "superweapon detected/launched". The impact ping above tells the
+            // player what already happened; this one fires while the five
+            // seconds of warning (World.cs LaunchSuper, StrikeTicks = 75) can
+            // still be used. Event semantics where it is raised (World.cs
+            // ApplyCommandCore): A is the launching superweapon structure,
+            // B is -1, (X, Y) is the AIM point. The event carries no owner,
+            // so ownership is read from entity A - the established post-Step
+            // read. On fog: the sim emits this event identically to every
+            // client (the GameEvent header's own contract), already carrying
+            // the launcher id and the aim point, so a launch is global
+            // knowledge today - the classic-genre convention for
+            // superweapons - and pinging the launch site reveals nothing the
+            // event does not already carry. No cooldown: a launch happens at
+            // most once per charge cycle, minutes apart.
+            if (ev.Type == GameEventType.SuperweaponLaunched
+                && ev.A >= 0 && ev.A < _world.EntityCount
+                && _world.Entities[ev.A].PlayerId != 0)
+            {
+                LaunchAlerts++;
+                // The hard klaxon, not a new cue: an incoming superweapon is
+                // exactly the "drop everything" register alert_attack owns.
+                _audio.Play("alert_attack", -4);
+                ShowToast("SUPERWEAPON LAUNCH DETECTED");
+                var sw = _world.Entities[ev.A];
+                // The impact ping's orange: launch and impact are two ends of
+                // the one weapon sequence, and the minimap should read them as
+                // kin. The ping marks the LAUNCH SITE - where to retaliate -
+                // not the aim point; the aim point gets its ping when the
+                // strike lands, as it always has.
+                var launchPos = new Vector2((float)(sw.X.Raw / 4294967296.0), (float)(sw.Y.Raw / 4294967296.0));
+                _minimap.Ping(launchPos, new Color(0.91f, 0.42f, 0.13f));
+                RecordAlert(launchPos, Time.GetTicksMsec() / 1000.0);
+            }
         }
         // TICKET-P5-SPAWN-02: the sim refuses a Deploy on an obstructed
         // foundation by doing nothing at all (World.cs:874-891 - the rule is
@@ -1177,17 +1223,23 @@ public partial class SkirmishLive : Node3D
         {
             LowPowerAlerts++;
             ShowToast("LOW POWER");
-            // The one alert asset again (see the harvester alert in
-            // RunOneTick): a third pitch keeps the three alerts audibly
-            // apart. A purpose-made cue is owed from the audio pipeline;
-            // this does not pretend GDD s7 line 85's "distinct audio" is
-            // closed.
-            _audio.Play("alert_attack", -4, 0.82f);
+            // GDD s7 line 85's "distinct audio": alert_low_power is its own
+            // synthesised cue (a sagging descent, the sound of something
+            // winding down - art/audio/synth.py), replacing the 0.82 pitch
+            // shift of the klaxon that stood in while alert_attack was the
+            // only alert asset.
+            _audio.Play("alert_low_power", -4);
             // Gold ping at the primary Construction Yard: power is a base
-            // problem, and the yard is where the base is.
+            // problem, and the yard is where the base is. No yard, no ping
+            // and no recorded jump position: an alert about nowhere in
+            // particular must not overwrite one the player can still fly to.
             int yard = FindOwnStructure(EntityKind.ConstructionYard);
             if (yard >= 0 && _latest.TryGetValue(yard, out var yv))
-                _minimap.Ping(new Vector2((float)yv.X, (float)yv.Y), new Color(0.79f, 0.63f, 0.36f));
+            {
+                var yardPos = new Vector2((float)yv.X, (float)yv.Y);
+                _minimap.Ping(yardPos, new Color(0.79f, 0.63f, 0.36f));
+                RecordAlert(yardPos, Time.GetTicksMsec() / 1000.0);
+            }
         }
         _wasBrownOut = brownOut;
         // TICKET-P5-SAVE-01: the mode is on the status line because two of the
@@ -1292,6 +1344,17 @@ public partial class SkirmishLive : Node3D
         _toastTween.TweenInterval(2.2);
         _toastTween.TweenProperty(_toast, "modulate:a", 0f, 0.5f);
         _toastTween.TweenCallback(Callable.From(() => _toast.Visible = false));
+    }
+
+    /// <summary>TICKET-P5-ALERT-02: every alert site calls this with the map
+    /// position it pinged (the minimap's own coordinate space, world X and Z),
+    /// so the jump-to-event key always has the most recent alert to fly to.
+    /// One helper rather than four open-coded writes, because the invariant -
+    /// pinged and recorded are the SAME position - is the whole feature.</summary>
+    private void RecordAlert(Vector2 mapPos, double at)
+    {
+        _lastAlertPos = new Vector3(mapPos.X, 0, mapPos.Y);
+        _lastAlertAt = at;
     }
 
     /// <summary>DEF-08 clause 8: while drawing, the readout is the running cost
@@ -2178,6 +2241,16 @@ public partial class SkirmishLive : Node3D
         // something - a bare press with no MCV selected means nothing and is
         // left to whatever else might answer the key after a rebind.
         if (ev.IsActionPressed("deploy") && DeploySelectedMcvs()) return true;
+        // TICKET-P5-ALERT-02: the jump-to-event key (GDD s7 line 85). Flies
+        // the camera to the most recent alert through the exact minimap-jump
+        // idiom (RtsCamera.FlyTo). No alert yet this match: nothing to jump
+        // to, so the key is not consumed - the deploy key's rule.
+        if (ev.IsActionPressed("jump_to_event"))
+        {
+            if (_lastAlertAt < 0) return false;
+            _cam.FlyTo(_lastAlertPos);
+            return true;
+        }
         // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
         // keypress is a match-losing misclick and the sim has no cancel for
         // it, so past 8 structures the first press only asks. Repair carries
@@ -2679,6 +2752,7 @@ public partial class SkirmishLive : Node3D
     /// <summary>Drive one sim tick exactly as the accumulator does, so a test exercises the shipped loop.</summary>
     public void StepOneTick() { RunOneTick(); AfterTicks(0); }
     public string SidebarStructText(int typeId) => _sidebar.StructButtonText(typeId);
+    public bool SidebarStructHasIcon(int typeId) => _sidebar.StructButtonHasIcon(typeId);
     public string SidebarUnitText(int typeId) => _sidebar.UnitButtonText(typeId);
     public string SidebarPowerText => _sidebar.PowerText;
     public float SidebarPowerFillWidth => _sidebar.PowerFillWidth;
@@ -2775,6 +2849,13 @@ public partial class SkirmishLive : Node3D
     public bool AttackMoveArmed => _attackMoveArmed;
     public bool DesyncNoticeVisible => _desyncNotice.Visible;
     public string DesyncNoticeText => _desyncNotice.Text;
+
+    // TICKET-P5-ALERT-02 verification surface: what the alert record holds
+    // and where the camera actually is, not a recomputation of either.
+    // (ToastText already exists in the readout block above.)
+    public bool HasAlert => _lastAlertAt >= 0;
+    public Vector3 LastAlertPos => _lastAlertPos;
+    public Vector3 CameraPosition => _cam.Position;
 
     // TICKET-P5-SAVE-01 verification surface. StepTicks drives the SHIPPING
     // tick body, not a copy of it, so an offscreen run and a played match reach

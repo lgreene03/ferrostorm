@@ -101,6 +101,10 @@ public static class Settings
         ("repair", "REPAIR"),
         ("sell", "SELL"),
         ("deploy", "DEPLOY"),   // TICKET-P5-SPAWN-03: unpack the selected MCV
+        // TICKET-P5-ALERT-02: fly the camera to the most recent alert
+        // (GDD s7 line 85's "jump-to-event key"). Space, which the [input]
+        // block had free.
+        ("jump_to_event", "JUMP TO EVENT"),
         ("pause_menu", "OPERATIONS MENU"),
         ("cancel", "CANCEL / BACK"),
         ("camera_left", "CAMERA LEFT"),

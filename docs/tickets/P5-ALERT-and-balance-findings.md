@@ -38,23 +38,43 @@ battery exits 0 and all 24 golden hashes are byte-identical.
 labels: persona:commander gdd:s7-85 phase:5 owner:ux + audio
 
 GDD s7 line 85 specifies four alerts, "each with distinct audio and a
-jump-to-event key". Current state:
+jump-to-event key". State after the completion wave of 2026-07-17:
 
-- harvester under attack: DONE (ALERT-01)
-- base under attack: present
-- low power: NOT IMPLEMENTED. Nothing watches supply versus draw for an alert,
-  though the power bar exists (BD-10).
-- superweapon detected/launched: partial. There is an orange minimap ping on
-  `SuperweaponImpact` (W3-20) but no alert on detection or launch, which is the
-  half that would let a player react rather than be told what already happened.
-- distinct audio: NOT MET. `game/audio/` holds exactly one alert asset,
-  `alert_attack.wav`. ALERT-01 leans on `Play`'s pitch argument (1.28) to make
-  the two alerts audibly different, which is honest but is not "distinct audio".
-  Needs purpose-made cues from the audio pipeline.
-- jump-to-event key: NOT IMPLEMENTED. Would need a new InputMap action plus
-  last-alert-position tracking; `RtsCamera.FlyTo` already exists to do the move.
-  Note this lands in the 19-action rebindable set (TICKET-P5-SET-01), so it
-  must appear in the settings scene and the conflict detector.
+- harvester under attack: DONE (ALERT-01).
+- base under attack: present.
+- low power: DONE. P5-PWR-01 built the edge-triggered warning; this wave
+  gave it its own cue (below).
+- superweapon detected/launched: DONE (2026-07-17). The client alerts on
+  `SuperweaponLaunched` by an enemy: "SUPERWEAPON LAUNCH DETECTED" toast, the
+  hard klaxon, an orange minimap ping at the LAUNCH SITE, and the position
+  recorded for jump-to-event. The event names the launching structure and the
+  aim point and is emitted identically to every client, so a launch is global
+  knowledge today - the classic-genre convention for superweapons, said in a
+  comment at the handler. Verified live on skirmish-04: the STANDARD AI's
+  launch raised the toast and the ping at tick ~3210, five seconds before the
+  strike it warns of.
+- distinct audio: DONE (2026-07-17). Two purpose-made cues from the audio
+  pipeline (art/audio/synth.py): `alert_harvester`, a rising two-blip motif
+  (335 ms, RMS -9.1 dBFS), and `alert_low_power`, a sagging descent (900 ms,
+  RMS -11.7 dBFS), both peak-normalised to -3 dBFS like the rest of the set.
+  The pitch-shift stopgap (1.28 and 0.82 on `alert_attack`) is gone. Base
+  attack and launch detection deliberately share the hard klaxon: both mean
+  drop everything, and a fifth voice would dilute the register rather than
+  sharpen it.
+- jump-to-event key: DONE (2026-07-17). New rebindable InputMap action
+  `jump_to_event`, default Space (verified free in the [input] block), the
+  21st entry in Settings.Bindable, so the settings scene lists it and the
+  conflict detector covers it. Every alert site records the position it
+  pinged; the key flies the camera there via `RtsCamera.FlyTo` (the
+  minimap-jump idiom), the most recent alert wins, and with no alert yet
+  this match the key does nothing and is not consumed. Verified offscreen:
+  rebind round-trip Space to Home to Space through the shipping _Input path,
+  and the camera arrived at the recorded launch site to within a tenth of a
+  cell.
+
+What remains of GDD s7 line 85's alert set is ONLY "radar goes dark": the
+radar blackout is ADR-008's, and its alert belongs to the ticket that builds
+the blackout, not to this one.
 
 ## TICKET-P5-ALERT-03 - the toast is peripheral
 
@@ -133,4 +153,5 @@ the one genuinely structural finding of the investigation.
 expected to be watching an army they sent somewhere, whereas a harvester is sent
 away and forgotten. If Balance disagrees, ALERT-01's test is one line.
 **Needed next (from whom):** Architect on Q005; Balance and Game Designer on
-BAL-01/BAL-02; UX on ALERT-03; Audio on the ALERT-02 cues.
+BAL-01/BAL-02; UX on ALERT-03. (The ALERT-02 cues Audio owed were delivered
+2026-07-17; see the section above.)
