@@ -15,6 +15,16 @@ public partial class MainMenu : Control
     private static readonly Color Bone = new(0.84f, 0.82f, 0.77f);
     private static readonly Color FerriteGold = new(0.79f, 0.63f, 0.36f);
 
+    /// <summary>ADR-006 commitment 2: a battle that could not be assembled
+    /// (missing or malformed /data, a save or replay recorded against a
+    /// different catalogue) stands down to this menu and leaves its message
+    /// here. Static because the refusing scene is being torn down as it
+    /// writes; consumed and cleared by the next _Ready, so it describes one
+    /// refusal and nothing after it.</summary>
+    public static string? BattleRefusedNotice;
+    /// <summary>Verification surface: the last notice actually shown.</summary>
+    public string NoticeShownForTest { get; private set; } = "";
+
     private OptionButton _factionPick = null!;
     private OptionButton _mapPick = null!;
     private OptionButton _aiPick = null!;
@@ -88,6 +98,29 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("SETTINGS", () => GetTree().ChangeSceneToFile("res://scenes/Settings.tscn")));
         v.AddChild(MenuButton("REPLAY THEATRE", () => GetTree().ChangeSceneToFile("res://scenes/Battle3D.tscn")));
         v.AddChild(MenuButton("STAND DOWN", () => GetTree().Quit()));
+
+        // ADR-006: a refused battle explains itself here, in the overlay
+        // chrome everything else wears, and the menu behind it stays fully
+        // usable. The message names files, lines and checksums as the failure
+        // provides them; UNDERSTOOD dismisses and the player tries again.
+        if (BattleRefusedNotice is { } refused)
+        {
+            BattleRefusedNotice = null;
+            NoticeShownForTest = refused;
+            var overlay = FullOverlay();
+            var v2 = OverlayBox(overlay, "BATTLE REFUSED", 320, 190);
+            var text = new Label
+            {
+                Text = refused,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                CustomMinimumSize = new Vector2(560, 0),
+            };
+            text.AddThemeFontSizeOverride("font_size", 13);
+            text.AddThemeColorOverride("font_color", Bone);
+            v2.AddChild(text);
+            v2.AddChild(new HSeparator());
+            v2.AddChild(MenuButton("UNDERSTOOD", () => overlay.QueueFree()));
+        }
     }
 
     // ---------------- TICKET-P5-SAVE-01: saves and replays ----------------

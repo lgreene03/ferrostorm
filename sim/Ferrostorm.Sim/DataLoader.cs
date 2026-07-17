@@ -305,3 +305,85 @@ public static class StructureCatalogue
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
                PrereqIds(s.Prerequisites));
 }
+
+/// <summary>
+/// ADR-006: register the whole /data catalogue into a world before tick 0.
+/// This is the runner's own load path (Program.cs, the gate's reference
+/// implementation) made callable, so the shipped client and the gate walk one
+/// implementation instead of two that drift: a sorted ordinal walk (a
+/// directory listing is not a source of truth), registration through the same
+/// TypeIdOf and ToTypeDef maps the selftest proves, a duplicate claim refused,
+/// and EVERY compiled type demanded, because a partial /data silently mixing
+/// authored and compiled values is exactly the two-catalogue ambiguity the ADR
+/// exists to end. The compiled catalogue is NOT a fallback here; it remains
+/// the selftest's round-trip truth and the default for harness callers that
+/// never touch disk.
+/// Failures are messages, not crashes (ADR-006 commitment 2): a missing
+/// directory says /data is missing and what was expected; a parse failure
+/// names the file and carries the parser's own line number; a missing file
+/// names the compiled type it was meant to provide.
+/// </summary>
+public static class CatalogueFiles
+{
+    public static void RegisterAll(World w, string unitsDir, string buildingsDir)
+    {
+        if (!Directory.Exists(unitsDir) || !Directory.Exists(buildingsDir))
+            throw new IOException(
+                $"/data is missing: expected {unitsDir} and {buildingsDir}. " +
+                "Gameplay numbers live in /data (ADR-006) and a battle cannot start without them. " +
+                "Restore the data directory beside the game and try again.");
+
+        var seenUnits = new HashSet<int>();
+        var unitFiles = Directory.GetFiles(unitsDir, "*.yaml");
+        Array.Sort(unitFiles, StringComparer.Ordinal);
+        foreach (var f in unitFiles)
+        {
+            try
+            {
+                var u = DataLoader.LoadUnitFile(f);
+                int typeId = UnitCatalogue.TypeIdOf(u.Id);
+                if (!seenUnits.Add(typeId)) throw new FormatException($"unit type {typeId} is claimed twice");
+                w.RegisterUnitType(typeId, UnitCatalogue.ToTypeDef(u));
+            }
+            catch (FormatException e)
+            {
+                throw new FormatException($"{f}: {e.Message}", e);
+            }
+        }
+        // Unit types are dense from 1 (doc 23 s4.1): walk the compiled
+        // catalogue until it runs out, exactly as the selftest does.
+        for (int t = 1; w.GetUnitType(t).Cost > 0; t++)
+            if (!seenUnits.Contains(t))
+                throw new FormatException(
+                    $"{unitsDir}: no unit file provides compiled unit type {t}. " +
+                    "The compiled catalogue is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
+
+        var seenStructs = new HashSet<int>();
+        var structFiles = Directory.GetFiles(buildingsDir, "*.yaml");
+        Array.Sort(structFiles, StringComparer.Ordinal);
+        foreach (var f in structFiles)
+        {
+            try
+            {
+                var s = DataLoader.LoadStructureFile(f);
+                int typeId = StructureCatalogue.TypeIdOf(s.Id);
+                if (!seenStructs.Add(typeId)) throw new FormatException($"structure type {typeId} is claimed twice");
+                w.RegisterStructureType(typeId, StructureCatalogue.ToTypeDef(s));
+            }
+            catch (FormatException e)
+            {
+                throw new FormatException($"{f}: {e.Message}", e);
+            }
+        }
+        // Bounded by the catalogue's own constant, the gate skipped explicitly:
+        // type 10 is ADR-005's reservation, with no def and no file.
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            if (t == World.GateStructType) continue;
+            if (!seenStructs.Contains(t))
+                throw new FormatException(
+                    $"{buildingsDir}: no building file provides compiled structure type {t}. " +
+                    "The compiled catalogue is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
+        }
+    }
+}

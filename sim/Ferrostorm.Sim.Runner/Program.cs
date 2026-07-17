@@ -10,6 +10,7 @@ using Ferrostorm.Sim;
 //   golden [seed]      - print "scenario hash" lines (CI diffs vs sim/golden-hashes.txt)
 //   match [seed]       - run scenarios with perf reporting vs the 8ms/tick budget
 //   lan [games]        - relay + 2 lockstep clients over loopback TCP per game (TICKET-P1-08)
+//   catrefuse          - ADR-006: a mismatched catalogue refuses (LAN hello, saves, replays) rather than desyncs
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -527,7 +528,9 @@ int ReplayCheck()
     const int ticks = 3000;
     var world = BuildSkirmishWorld(seed);
     var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
-    var writer = new ReplayWriter(seed, "skirmish");
+    // ADR-006: the recording carries the catalogue checksum, as the client's
+    // BeginRecording now does; the round-trip below proves the carry.
+    var writer = new ReplayWriter(seed, "skirmish", world.CatalogueChecksum);
     var cmds = new List<Command>();
     for (int t = 0; t < ticks; t++)
     {
@@ -543,6 +546,9 @@ int ReplayCheck()
 
     var replay = Replay.Load(path);
     if (replay.Seed != seed || replay.Setup != "skirmish") return Fail("replay: header round-trip");
+    if (!replay.HasCatalogueChecksum || replay.CatalogueChecksum != world.CatalogueChecksum)
+        return Fail("replay: catalogue checksum did not round-trip (ADR-006)");
+    replay.AssertCatalogueMatches(world.CatalogueChecksum); // same catalogue: must pass silently
     var world2 = BuildSkirmishWorld(replay.Seed);
     var buf = new List<Command>();
     for (int t = 0; t < ticks; t++)
@@ -1826,6 +1832,197 @@ int DefenceLoadGate(ulong seed)
     return 0;
 }
 
+int CatalogueRefuse()
+{
+    // ADR-006's gate scenario: a deliberately mismatched catalogue REFUSES
+    // rather than desyncs, on every surface that carries the checksum - the
+    // LAN hello, the save format and the replay format - plus the readable
+    // error shapes the client's /data load must produce. Additive: not a
+    // golden scenario, so the 24 golden lines are untouched by construction.
+
+    // 1. The checksum itself: stable across worlds, sensitive to one def.
+    var wa = new World(1);
+    var wb = new World(2);
+    if (wa.CatalogueChecksum != wb.CatalogueChecksum)
+        return Fail("catrefuse: two compiled catalogues must produce one checksum");
+    ulong good = wa.CatalogueChecksum;
+    var wc = new World(3);
+    wc.RegisterUnitType(1, wc.GetUnitType(1) with { Cost = wc.GetUnitType(1).Cost + 1 });
+    ulong bad = wc.CatalogueChecksum;
+    if (bad == good)
+        return Fail("catrefuse: a one-credit def change must change the checksum");
+
+    // 2. The ADR's hash-impact argument, asserted rather than assumed: the
+    // /data files register to a catalogue identical to the compiled one, so
+    // adoption moves nothing. This is the equality the goldens rest on.
+    string unitsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units"));
+    string buildingsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/buildings"));
+    if (Directory.Exists(unitsDir) && Directory.Exists(buildingsDir))
+    {
+        var wd = new World(4);
+        CatalogueFiles.RegisterAll(wd, unitsDir, buildingsDir);
+        if (wd.CatalogueChecksum != good)
+            return Fail($"catrefuse: /data registers to 0x{wd.CatalogueChecksum:X16} but the compiled catalogue is 0x{good:X16} - the two sources have drifted");
+        Console.WriteLine($"catrefuse: /data and the compiled catalogue agree on 0x{good:X16} (ADR-006 hash-impact argument holds)");
+    }
+    else Console.WriteLine("catrefuse: data directories not found, /data equality untested this run");
+
+    // 3. The LAN hello: two lockstep clients, one bumped def, and the game
+    // must refuse before tick 0 with BOTH checksums named on both sides.
+    {
+        var relay = new Relay(playerCount: 2);
+        relay.Start();
+        new Thread(relay.Run) { IsBackground = true }.Start();
+        var errors = new Exception?[2];
+        var threads = new Thread[2];
+        for (int p = 0; p < 2; p++)
+        {
+            int pid = p;
+            threads[p] = new Thread(() =>
+            {
+                try
+                {
+                    World Mismatched(ulong seed)
+                    {
+                        var w = LanWorldFactory(seed);
+                        if (pid == 1) w.RegisterUnitType(1, w.GetUnitType(1) with { Cost = w.GetUnitType(1).Cost + 1 });
+                        return w;
+                    }
+                    using var client = new LockstepClient(relay.Port, Mismatched, 77);
+                    client.Prime();   // must never be reached
+                }
+                catch (Exception ex) { errors[pid] = ex; }
+            });
+            threads[p].Start();
+        }
+        foreach (var t in threads) t.Join();
+        for (int p = 0; p < 2; p++)
+        {
+            if (errors[p] is not InvalidDataException)
+                return Fail($"catrefuse: client {p} was not refused (got {(errors[p] == null ? "no error - the game would have desynced" : errors[p]!.GetType().Name + ": " + errors[p]!.Message)})");
+            string msg = errors[p]!.Message;
+            if (!msg.Contains($"0x{good:X16}") || !msg.Contains($"0x{bad:X16}"))
+                return Fail($"catrefuse: client {p}'s refusal must name both checksums, got: {msg}");
+        }
+        if (!relay.CatalogueRefused) return Fail("catrefuse: the relay must record the refusal");
+        if (relay.DesyncDetected) return Fail("catrefuse: a refusal must never register as a desync");
+    }
+
+    // 4. The save format: v3 records the checksum; a matching catalogue loads
+    // bit-exact; a foreign catalogue refuses naming both checksums; the same
+    // bytes wearing the v2 magic and no checksum load unchecked, because a
+    // MISSING checksum means do not check, never refuse.
+    {
+        var live = new World(2026, 32, 32, 2);
+        live.GrantCredits(0, 1234);
+        live.SpawnUnit(0, Fix64.FromInt(5), Fix64.FromInt(5), Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+        using var ms = new MemoryStream();
+        live.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != live.ComputeStateHash())
+            return Fail("catrefuse: a v3 save under the same catalogue must load bit-exact");
+        ms.Position = 0;
+        try
+        {
+            World.Load(ms, w => w.RegisterUnitType(1, w.GetUnitType(1) with { Cost = w.GetUnitType(1).Cost + 1 }));
+            return Fail("catrefuse: a save carrying a foreign checksum must refuse");
+        }
+        catch (InvalidDataException e)
+        {
+            if (!e.Message.Contains($"0x{good:X16}") || !e.Message.Contains($"0x{bad:X16}"))
+                return Fail($"catrefuse: the save refusal must name both checksums, got: {e.Message}");
+        }
+        // v2 surgery: [magic 4][checksum 8][rest] becomes [v2 magic][rest].
+        // 0x534C4132 is the published on-disk magic of every existing v2 save.
+        var v3 = ms.ToArray();
+        var v2 = new byte[v3.Length - 8];
+        BitConverter.GetBytes(0x534C4132u).CopyTo(v2, 0);
+        Array.Copy(v3, 12, v2, 4, v3.Length - 12);
+        var old = World.Load(new MemoryStream(v2), w => w.RegisterUnitType(1, w.GetUnitType(1) with { Cost = w.GetUnitType(1).Cost + 1 }));
+        if (old.ComputeStateHash() != live.ComputeStateHash())
+            return Fail("catrefuse: a v2 save must still load under any catalogue (no checksum, no check)");
+    }
+
+    // 5. The replay format: v3 carries a catalogue line that round-trips and
+    // refuses a foreign checksum naming both; a v2 stream has none and is
+    // never refused.
+    {
+        string path = Path.Combine(Path.GetTempPath(), "ferrostorm-catrefuse.frep");
+        var writer = new ReplayWriter(7, "gate", good);
+        writer.Record(new Command(0, 0, CommandType.Stop, 0, Fix64.Zero, Fix64.Zero));
+        writer.Finish(0xABCD, path);
+        var rep = Replay.Load(path);
+        if (!rep.HasCatalogueChecksum || rep.CatalogueChecksum != good)
+            return Fail("catrefuse: the replay catalogue line must round-trip");
+        rep.AssertCatalogueMatches(good);   // must not throw
+        try
+        {
+            rep.AssertCatalogueMatches(bad);
+            return Fail("catrefuse: a replay with a foreign checksum must refuse");
+        }
+        catch (InvalidDataException e)
+        {
+            if (!e.Message.Contains($"0x{good:X16}") || !e.Message.Contains($"0x{bad:X16}"))
+                return Fail($"catrefuse: the replay refusal must name both checksums, got: {e.Message}");
+        }
+        string v2Path = Path.Combine(Path.GetTempPath(), "ferrostorm-catrefuse-v2.frep");
+        File.WriteAllLines(v2Path, new[] { "ferrostorm-replay v2", "seed 7", "setup gate", "hash 000000000000ABCD" });
+        var oldRep = Replay.Load(v2Path);
+        if (oldRep.HasCatalogueChecksum) return Fail("catrefuse: a v2 replay must carry no checksum");
+        oldRep.AssertCatalogueMatches(bad);   // no checksum, no check, no throw
+    }
+
+    // 6. ADR-006 commitment 2, the readable error shapes, exercised on the
+    // shared loader the client calls: a missing /data says so; a malformed
+    // file is named with the parser's line; a file missing for a compiled
+    // type names that type rather than falling back to compiled values.
+    {
+        string scratch = Path.Combine(Path.GetTempPath(), "ferrostorm-catrefuse-data");
+        if (Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true);
+        Directory.CreateDirectory(Path.Combine(scratch, "units"));
+        Directory.CreateDirectory(Path.Combine(scratch, "buildings"));
+        try
+        {
+            CatalogueFiles.RegisterAll(new World(5), Path.Combine(scratch, "missing"), Path.Combine(scratch, "buildings"));
+            return Fail("catrefuse: a missing /data directory must refuse");
+        }
+        catch (IOException e)
+        {
+            if (!e.Message.Contains("/data is missing")) return Fail($"catrefuse: the missing-directory message must say so, got: {e.Message}");
+        }
+        string badFile = Path.Combine(scratch, "units", "dir_cannon_tank.yaml");
+        File.WriteAllText(badFile, "id: dir_cannon_tank\n  oops: indented\n");
+        try
+        {
+            CatalogueFiles.RegisterAll(new World(6), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
+            return Fail("catrefuse: a malformed data file must refuse");
+        }
+        catch (FormatException e)
+        {
+            if (!e.Message.Contains("dir_cannon_tank.yaml") || !e.Message.Contains("line 2"))
+                return Fail($"catrefuse: the parse error must name the file and the line, got: {e.Message}");
+        }
+        File.Delete(badFile);
+        try
+        {
+            CatalogueFiles.RegisterAll(new World(7), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
+            return Fail("catrefuse: an incomplete /data must refuse rather than mix catalogues");
+        }
+        catch (FormatException e)
+        {
+            if (!e.Message.Contains("compiled unit type 1"))
+                return Fail($"catrefuse: the incompleteness error must name the compiled type, got: {e.Message}");
+        }
+        Directory.Delete(scratch, recursive: true);
+    }
+
+    Console.WriteLine("catrefuse: a mismatched catalogue refuses on every surface - the LAN hello named both checksums on both clients with no desync, " +
+                      "a foreign-checksum save and replay both refused naming both values, a v2 save and a v2 replay still load unchecked, " +
+                      "and the /data loader fails readably for a missing directory, a malformed file (file and line) and a missing file (compiled type named)");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -1859,6 +2056,10 @@ int Match(ulong seed)
     ScenarioWalls(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
+    // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as
+    // the defence gate does, additively, so the golden list is untouched.
+    int catalogue = CatalogueRefuse();
+    if (catalogue != 0) return catalogue;
     return 0;
 }
 
@@ -2558,6 +2759,7 @@ return args.Length == 0
             jitterMs: args.Length > 3 ? int.Parse(args[3]) : 30,
             stallPerMille: 50, stallMs: 500,
             ticks: 150),
+        "catrefuse" => CatalogueRefuse(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

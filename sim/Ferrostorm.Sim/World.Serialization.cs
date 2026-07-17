@@ -12,17 +12,23 @@ namespace Ferrostorm.Sim;
 /// ComputeStateHash hashes it and a save that drops a hashed field cannot
 /// honour the contract above. v1 saves are still accepted and load with
 /// every faction defaulted to Directorate, exactly as v1 always behaved.
+/// Format v3 (ADR-006): the catalogue checksum rides immediately after the
+/// magic, because /data is now the runtime source and a save resumed under a
+/// different catalogue is a different game wearing the same entities. v1 and
+/// v2 carry no checksum; its ABSENCE means do not check, never refuse.
 /// </summary>
 public sealed partial class World
 {
     private const uint SaveMagicV1 = 0x534C4131; // original format: no faction array (Q001)
     private const uint SaveMagicV2 = 0x534C4132; // v2 adds the per-player faction array
+    private const uint SaveMagicV3 = 0x534C4133; // v3 adds the catalogue checksum (ADR-006)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV2);
+        w.Write(SaveMagicV3);
+        w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
         w.Write(ShortGameEnabled);
@@ -82,17 +88,37 @@ public sealed partial class World
         foreach (int k in keys) yield return (k, _queues[k]);
     }
 
-    public static World Load(Stream stream)
+    /// <summary>
+    /// registerCatalogue (ADR-006) lets the caller register its /data catalogue
+    /// into the loaded world. It runs while the world's Tick is still 0, so
+    /// RegisterUnitType's own Tick != 0 guard is honoured rather than bypassed.
+    /// A v3 save then asserts its recorded checksum against the world's and a
+    /// mismatch REFUSES the load with both checksums named: resuming a save
+    /// into a different catalogue is a silent divergence wearing a save file.
+    /// v1 and v2 saves recorded no checksum, so they are never refused.
+    /// </summary>
+    public static World Load(Stream stream, Action<World>? registerCatalogue = null)
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2) throw new InvalidDataException("not a ferrostorm save");
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3)
+            throw new InvalidDataException("not a ferrostorm save");
+        bool hasCatalogue = magic == SaveMagicV3;
+        ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
         bool shortGame = r.ReadBoolean();
         int players = r.ReadInt32();
         int mw = r.ReadInt32(), mh = r.ReadInt32();
-        var world = new World(0, mw, mh, players) { Tick = tick, Winner = winner, ShortGameEnabled = shortGame };
+        var world = new World(0, mw, mh, players) { Winner = winner, ShortGameEnabled = shortGame };
+        registerCatalogue?.Invoke(world); // Tick is still 0: the legal registration window
+        if (hasCatalogue && world.CatalogueChecksum != recordedCatalogue)
+            throw new InvalidDataException(
+                $"catalogue mismatch: this save was recorded with catalogue checksum 0x{recordedCatalogue:X16} " +
+                $"but the game is running catalogue 0x{world.CatalogueChecksum:X16}. " +
+                "The save is refused rather than resumed into a different game (ADR-006). " +
+                "Restore the /data files the save was made with, or start a fresh battle.");
+        world.Tick = tick;
         for (int y = 0; y < mh; y++)
             for (int x = 0; x < mw; x += 8)
             {
@@ -105,7 +131,8 @@ public sealed partial class World
         {
             // v1 saves predate the faction field; the constructor default
             // (everyone Directorate) is exactly what v1 always produced.
-            if (magic == SaveMagicV2) world._playerFaction[p] = r.ReadByte();
+            // v2 introduced the byte and every later format keeps it.
+            if (magic != SaveMagicV1) world._playerFaction[p] = r.ReadByte();
             world._credits[p] = r.ReadInt64();
             world._eliminatedAnnounced[p] = r.ReadBoolean();
             int words = r.ReadInt32();

@@ -492,6 +492,51 @@ public sealed partial class World
         _structTypes[typeId] = def;
     }
 
+    /// <summary>
+    /// ADR-006 commitment 1: the catalogue checksum. FNV-1a in the sim's own
+    /// StateHash idiom over the CANONICALISED registered defs, never over file
+    /// bytes: unit types first, then structure types, each walked in ascending
+    /// type id (dictionary iteration order must never leak into an artefact),
+    /// each def contributing every field in declaration order with the
+    /// prerequisite list length-prefixed. Two worlds agreeing here are playing
+    /// the same numbers; the LAN hello, saves and replays carry this value and
+    /// refuse a mismatch before tick 0. Deliberately NOT part of
+    /// ComputeStateHash: hashing the catalogue into state would move all 24
+    /// goldens for zero behavioural change (the ADR's rejected alternative).
+    /// </summary>
+    public ulong CatalogueChecksum
+    {
+        get
+        {
+            var h = StateHash.Create();
+            var unitIds = new List<int>(_unitTypes.Keys);
+            unitIds.Sort();
+            h.Add(unitIds.Count);
+            foreach (int id in unitIds)
+            {
+                var d = _unitTypes[id];
+                h.Add(id); h.Add(d.Cost); h.Add(d.BuildTicks); h.Add(d.Hp); h.Add((int)d.Armour);
+                h.Add(d.WeaponId); h.Add(d.Speed); h.Add((int)d.Kind); h.Add(d.Stealth); h.Add(d.Detector);
+                h.Add(d.Veterancy); h.Add(d.SightCells); h.Add(d.Faction); h.Add(d.ProducedAt);
+                h.Add(d.Prereqs?.Length ?? 0);
+                if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
+            }
+            var structIds = new List<int>(_structTypes.Keys);
+            structIds.Sort();
+            h.Add(structIds.Count);
+            foreach (int id in structIds)
+            {
+                var d = _structTypes[id];
+                h.Add(id); h.Add(d.Cost); h.Add((int)d.Kind); h.Add(d.BuildTicks); h.Add(d.Hp);
+                h.Add(d.PowerSupply); h.Add(d.PowerDraw); h.Add(d.SightCells); h.Add(d.Footprint);
+                h.Add(d.WeaponId);
+                h.Add(d.Prereqs?.Length ?? 0);
+                if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
+            }
+            return h.Value;
+        }
+    }
+
     /// <summary>The default footprint: every structure type except a barrier is 2x2.</summary>
     public const int FootprintSize = 2;
 

@@ -60,6 +60,10 @@ public partial class SkirmishLive : Node3D
     private ulong _replayFinalHash;
     private bool _resumed;
     private PauseMenu? _pauseMenu;
+    // ADR-006: match assembly failed (broken /data, foreign catalogue in a
+    // save or replay) and the scene is standing down to the menu. Guards the
+    // per-frame callbacks for the deferred frames between refusal and change.
+    private bool _refused;
 
     // HUD
     private CanvasLayer _hud = null!;
@@ -318,21 +322,41 @@ public partial class SkirmishLive : Node3D
         _models = new ModelLibrary();
         AddChild(_models);
 
-        _setup = MatchConfig.CurrentSetup();
-        MapData map = MapData.Load(GameFiles.Abs(_setup.MapPath));
-        _world = BuildStartingWorld(_setup, map, out var tags);
-        if (_setup.IsMission) _mission = new MissionRunner(map, tags);
-        else _enemy = _setup.AiPreset switch
+        // ADR-006 commitment 2: everything fallible about assembling a match
+        // (the map file, the /data catalogue, a save's or replay's recorded
+        // catalogue checksum) fails into a readable notice on the menu, never
+        // a crash. The battle does not start half-registered: one failure
+        // anywhere in this block and the scene stands down entirely.
+        MapData map;
+        try
         {
-            1 => SkirmishAI.Rusher(1),
-            2 => SkirmishAI.Turtle(1),
-            _ => SkirmishAI.Standard(1),
-        };
+            _setup = MatchConfig.CurrentSetup();
+            map = MapData.Load(GameFiles.Abs(_setup.MapPath));
+            _world = BuildStartingWorld(_setup, map, out var tags);
+            if (_setup.IsMission) _mission = new MissionRunner(map, tags);
+            else _enemy = _setup.AiPreset switch
+            {
+                1 => SkirmishAI.Rusher(1),
+                2 => SkirmishAI.Turtle(1),
+                _ => SkirmishAI.Standard(1),
+            };
 
-        // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
-        if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath);
-        else if (MatchConfig.ReplayPath is { } replayPath) BeginPlayback(replayPath);
-        else BeginRecording();
+            // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
+            if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath);
+            else if (MatchConfig.ReplayPath is { } replayPath) BeginPlayback(replayPath);
+            else BeginRecording();
+        }
+        catch (System.Exception e)
+        {
+            _refused = true;
+            MainMenu.BattleRefusedNotice = e.Message;
+            MatchConfig.LoadPath = null;
+            MatchConfig.ReplayPath = null;
+            // Deferred: tearing the scene down from inside its own _Ready is
+            // how a refusal becomes a crash of its own.
+            GetTree().CallDeferred(SceneTree.MethodName.ChangeSceneToFile, "res://scenes/MainMenu.tscn");
+            return;
+        }
         // Consumed. Both describe THIS scene change and nothing after it, and a
         // ReplayPath left standing would silently turn the next skirmish the
         // player starts into a playback of the last one they watched.
@@ -408,8 +432,10 @@ public partial class SkirmishLive : Node3D
         {
             // Campaign mission: the map places both sides' forces and the
             // triggers script the enemy - no skirmish AI. Per-mission setup
-            // mirrors the runner's gated scenarios.
-            var m = map.BuildWorld(setup.Seed, players: 2, out tags);
+            // mirrors the runner's gated scenarios. The catalogue registrar
+            // rides the configure hook so mission-placed forces spawn off
+            // /data values, not compiled ones (ADR-006).
+            var m = map.BuildWorld(setup.Seed, players: 2, out tags, RegisterCatalogue);
             switch (setup.MissionIndex)
             {
                 case 1:
@@ -422,7 +448,7 @@ public partial class SkirmishLive : Node3D
             }
             return m;
         }
-        var w = map.BuildWorld(setup.Seed, players: 2, out tags);
+        var w = map.BuildWorld(setup.Seed, players: 2, out tags, RegisterCatalogue);
         // TICKET-P6-FACTION-01: the sides, before any spawn and before tick 0.
         // After BuildWorld on purpose: no shipped skirmish map declares
         // factions (Q001), and if one ever does, the player's menu choice is
@@ -448,6 +474,22 @@ public partial class SkirmishLive : Node3D
         return w;
     }
 
+    /// <summary>
+    /// ADR-006: the client's half of "the client loads /data before tick 0,
+    /// exactly as the runner does". Resolution through GameFiles.RepoRoot is
+    /// the established pathing idiom (the ADR names it); the walk, the
+    /// registration and every failure message live in the sim's
+    /// CatalogueFiles, the runner's own load path made callable, so the gate
+    /// and the shipped game exercise ONE implementation. On any failure this
+    /// throws, _Ready catches, and the menu shows the message: the compiled
+    /// catalogue is deliberately NOT the fallback, because a silent fallback
+    /// would resurrect the two-catalogue ambiguity the ADR exists to end.
+    /// </summary>
+    public static void RegisterCatalogue(World w) =>
+        CatalogueFiles.RegisterAll(w,
+            Path.Combine(GameFiles.RepoRoot, "data", "units"),
+            Path.Combine(GameFiles.RepoRoot, "data", "buildings"));
+
     /// <summary>Replace the freshly built world with a saved one. The fresh
     /// build above is not waste: it is what produces the mission tags, which a
     /// save deliberately does not store (MissionRunner's own note - the mission
@@ -456,8 +498,12 @@ public partial class SkirmishLive : Node3D
     {
         // Read the whole file into memory first and drive both readers off the
         // one stream, which is the exact shape the campaignsave gate proves.
+        // ADR-006: the loaded world gets the /data catalogue registered inside
+        // its tick 0 window, and a v3 save whose recorded checksum disagrees
+        // refuses in World.Load with both checksums named; pre-v3 saves carry
+        // none and are never refused.
         var ms = new MemoryStream(File.ReadAllBytes(path));
-        _world = World.Load(ms);
+        _world = World.Load(ms, RegisterCatalogue);
         // The faction re-apply workaround that lived here is gone: the sim
         // round-trips _playerFaction itself as of the Q001 fix (save format
         // v2; the hardened saveload gate pins it). See docs/questions/
@@ -483,13 +529,20 @@ public partial class SkirmishLive : Node3D
     private void BeginPlayback(string path)
     {
         _replay = Replay.Load(path);
+        // ADR-006: a recording made against a different catalogue refuses
+        // before a single tick re-simulates, with both checksums named,
+        // rather than running to an inevitable DIVERGED verdict. Pre-v3
+        // recordings carry no checksum and play exactly as before.
+        _replay.AssertCatalogueMatches(_world.CatalogueChecksum);
         _replayTicks = MatchConfig.ReplayTicks;
         _enemy = null;   // the recorded stream already carries the AI's decisions
     }
 
     private void BeginRecording()
     {
-        _rec = new ReplayWriter(_setup.Seed, _setup.MapName);
+        // ADR-006: every fresh recording carries the catalogue it was played
+        // against, for the same reason saves do.
+        _rec = new ReplayWriter(_setup.Seed, _setup.MapName, _world.CatalogueChecksum);
         string stamp = Time.GetDatetimeStringFromSystem(utc: true).Replace(':', '-');
         string stem = $"{stamp}-{_setup.MapName}";
         _recPath = Path.Combine(GameFiles.ReplaysDir, stem + ".frep");
@@ -876,8 +929,10 @@ public partial class SkirmishLive : Node3D
         // quietly price the wrong game.
         // TICKET-P6-FACTION-01: the faction column joins the two catalogue
         // reads, by delegate for the same reason they are delegates.
+        // ADR-006: and the unit price column joins them, because the sidebar
+        // no longer carries a second copy of any cost.
         _sidebar.Init(this, t => _world.GetUnitType(t).BuildTicks, t => _world.GetStructureType(t),
-            t => _world.GetUnitType(t).Faction);
+            t => _world.GetUnitType(t).Faction, t => _world.GetUnitType(t).Cost);
         // TICKET-P5-SAVE-01: the sidebar is a command surface, and playback takes
         // no commands - RunOneTick drops _pending outright. Leaving it up meant a
         // replay showed lit build buttons and a "PLACE >>" prompt that did
@@ -916,6 +971,7 @@ public partial class SkirmishLive : Node3D
 
     public override void _Process(double delta)
     {
+        if (_refused) return;   // ADR-006: standing down; nothing here exists
         BattlefieldView.TickWater(delta);
         RefreshDesyncNotice();
         UpdateCursor();   // TICKET-P6-CURSOR-01: one resolve per frame
@@ -2369,6 +2425,7 @@ public partial class SkirmishLive : Node3D
 
     public override void _UnhandledInput(InputEvent ev)
     {
+        if (_refused) return;   // ADR-006: standing down; nothing here exists
         // TICKET-P5-SET-01: every key this scene answers to is an InputMap
         // action now, so the settings scene can rebind any of them and this
         // method never learns of it. Keys are dispatched before the mouse cases
@@ -3093,6 +3150,24 @@ public partial class SkirmishLive : Node3D
     public bool PauseOpen => _pauseMenu != null;
     public MatchSetup Setup => _setup;
     public int FactionOf(int player) => _world.FactionOf(player);
+    // ADR-006 verification surface: the live match's catalogue reads and the
+    // treasury, so an offscreen run can prove an edited YAML is what the sim
+    // charges. Reads, not recomputations.
+    public int UnitCostOf(int typeId) => _world.GetUnitType(typeId).Cost;
+    public int StructCostOf(int typeId) => _world.GetStructureType(typeId).Cost;
+    public long DebugCredits => _world.Credits(0);
+    public ulong DebugCatalogueChecksum => _world.CatalogueChecksum;
+    public int ReadyStructureTypeForTest
+    {
+        get
+        {
+            foreach (var e in _world.Entities)
+                if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.ConstructionYard && e.ReadyStructure > 0)
+                    return e.ReadyStructure;
+            return 0;
+        }
+    }
+    public Sidebar SidebarView => _sidebar;
     public int OwnCount(EntityKind kind)
     {
         int n = 0;

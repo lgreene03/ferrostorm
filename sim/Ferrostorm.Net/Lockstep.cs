@@ -18,11 +18,19 @@ namespace Ferrostorm.Net;
 //   msgType 3 = Merged (relay->client): int tick, int count, count * Command
 //   msgType 4 = Hash  (client->relay): int tick, ulong hash
 //   msgType 5 = Desync (relay->client): int tick
+//   msgType 6 = Check  (client->relay): ulong catalogue checksum (ADR-006)
+//   msgType 7 = Start  (relay->client): all catalogues agree; the game may begin
+//   msgType 8 = Refuse (relay->client): ulong yours, ulong theirs; the game is off
 // Command wire layout: int playerId, byte type, int entityId, int auxId, long x, long y
+//
+// ADR-006: the hello is a handshake, not a greeting. Each client sends its
+// world's catalogue checksum after building it; the relay compares all of
+// them BEFORE the first batch is accepted, so two machines with different
+// /data refuse the game before tick 0 instead of desyncing after it.
 
 public static class Wire
 {
-    public const byte Hello = 1, Batch = 2, Merged = 3, Hash = 4, Desync = 5;
+    public const byte Hello = 1, Batch = 2, Merged = 3, Hash = 4, Desync = 5, Check = 6, Start = 7, Refuse = 8;
     public const int CommandBytes = 4 + 1 + 4 + 4 + 8 + 8 + 1;
 
     public static void WriteCommand(BinaryWriter w, in Command c)
@@ -86,6 +94,10 @@ public sealed class Relay
     private readonly int _playerCount;
     public int Port { get; private set; }
     public bool DesyncDetected { get; private set; }
+    /// <summary>ADR-006: the hello found two catalogues that disagree and the
+    /// game was refused before tick 0. Distinct from DesyncDetected on
+    /// purpose: a refusal is the mitigation WORKING, a desync is it failing.</summary>
+    public bool CatalogueRefused { get; private set; }
 
     /// <summary>
     /// bind selects the local address the relay listens on. The default,
@@ -121,6 +133,56 @@ public sealed class Relay
         {
             int pid = p;
             Wire.SendFrame(streams[p], Wire.Hello, w => { w.Write(pid); w.Write(_playerCount); });
+        }
+
+        // ADR-006: gather every player's catalogue checksum before a single
+        // batch is accepted. The client's first frame after Hello is always
+        // its Check (the constructor sends it and blocks for the verdict), so
+        // a synchronous read per stream is safe and keeps the handshake out of
+        // the pump threads entirely.
+        var checksums = new ulong[_playerCount];
+        try
+        {
+            for (int p = 0; p < _playerCount; p++)
+            {
+                var (type, body) = Wire.ReadFrame(streams[p]);
+                if (type != Wire.Check) throw new InvalidDataException("expected catalogue Check in the hello");
+                checksums[p] = BitConverter.ToUInt64(body, 0);
+            }
+        }
+        catch (Exception)
+        {
+            // A client fell over before completing the hello (its world
+            // factory threw, or it disconnected). The match never starts; the
+            // relay stands down quietly rather than taking the process with it
+            // via an unhandled exception on this background thread.
+            foreach (var c in clients) c.Close();
+            _listener.Stop();
+            return;
+        }
+        bool allAgree = true;
+        for (int p = 1; p < _playerCount; p++) if (checksums[p] != checksums[0]) allAgree = false;
+        if (!allAgree)
+        {
+            CatalogueRefused = true;
+            for (int p = 0; p < _playerCount; p++)
+            {
+                // Name BOTH values for every player: yours, then the first one
+                // that disagrees with yours, so each side's message is about
+                // its own machine.
+                ulong yours = checksums[p], theirs = checksums[p];
+                foreach (ulong c in checksums) if (c != yours) { theirs = c; break; }
+                try { Wire.SendFrame(streams[p], Wire.Refuse, w => { w.Write(yours); w.Write(theirs); }); }
+                catch (Exception) { /* already gone; the refusal stands regardless */ }
+            }
+            foreach (var c in clients) c.Close();
+            _listener.Stop();
+            return;
+        }
+        foreach (var s in streams)
+        {
+            try { Wire.SendFrame(s, Wire.Start, _ => { }); }
+            catch (Exception) { /* a vanished client surfaces in its own pump below */ }
         }
 
         var pendingBatches = new Dictionary<int, List<byte[]>>();   // tick -> raw batch bodies received
@@ -259,6 +321,24 @@ public sealed class LockstepClient : IDisposable
         PlayerId = BitConverter.ToInt32(body, 0);
         PlayerCount = BitConverter.ToInt32(body, 4);
         World = worldFactory(seed);
+
+        // ADR-006: the catalogue checksum rides in the hello and the verdict
+        // is waited for HERE, before the constructor returns, so a mismatched
+        // game cannot reach tick 0 by construction. The checksum is the sim's
+        // own canonicalised-def hash, never file bytes.
+        ulong mine = World.CatalogueChecksum;
+        Wire.SendFrame(_stream, Wire.Check, w => w.Write(mine));
+        var (verdict, verdictBody) = Wire.ReadFrame(_stream);
+        if (verdict == Wire.Refuse)
+        {
+            ulong yours = BitConverter.ToUInt64(verdictBody, 0);
+            ulong theirs = BitConverter.ToUInt64(verdictBody, 8);
+            throw new InvalidDataException(
+                $"catalogue mismatch: this machine's catalogue checksum is 0x{yours:X16} " +
+                $"but another player's is 0x{theirs:X16}. " +
+                "Every player must run identical /data files; the game is refused before tick 0 (ADR-006).");
+        }
+        if (verdict != Wire.Start) throw new InvalidDataException("expected Start or Refuse after the catalogue Check");
 
         _reader = new Thread(ReadLoop) { IsBackground = true };
         _reader.Start();

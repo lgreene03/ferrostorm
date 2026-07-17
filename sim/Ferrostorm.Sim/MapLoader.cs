@@ -146,10 +146,16 @@ public sealed class MapData
     /// <summary>Construct a world from this map: terrain applied, fields spawned; the scenario places starting forces at Starts.</summary>
     public World BuildWorld(ulong seed, int players) => BuildWorld(seed, players, out _);
 
-    /// <summary>Full mission build: terrain, fields, tagged units and structures. Tags map to spawned entity ids for the trigger engine.</summary>
-    public World BuildWorld(ulong seed, int players, out Dictionary<string, List<int>> tags)
+    /// <summary>Full mission build: terrain, fields, tagged units and structures. Tags map to spawned entity ids for the trigger engine.
+    /// configure (ADR-006) runs after the World is constructed and BEFORE any
+    /// spawn, because the tagged units and structures below read the catalogue
+    /// at spawn time: registering /data after BuildWorld would hand mission
+    /// content compiled stats under an edited /data. No shipped caller that
+    /// omits it changes behaviour.</summary>
+    public World BuildWorld(ulong seed, int players, out Dictionary<string, List<int>> tags, Action<World>? configure = null)
     {
         var world = new World(seed, Width, Height, players) { ShortGameEnabled = ShortGame };
+        configure?.Invoke(world);
         foreach (var (p, f) in Factions) world.SetFaction(p, f);
         var tagMap = new Dictionary<string, List<int>>();
         foreach (var (cx, cy) in Blocked) world.Map.SetBlocked(cx, cy, true);

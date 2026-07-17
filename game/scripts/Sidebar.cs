@@ -13,27 +13,32 @@ namespace Ferrostorm.Client;
 /// </summary>
 public partial class Sidebar : PanelContainer
 {
-    public record BuildItem(string Label, int TypeId, int Cost, string Icon);
+    /// <summary>ADR-006: no Cost column. The tables carried a second copy of
+    /// every price, which under a runtime /data would show the player compiled
+    /// numbers while the sim charged authored ones. Prices are read from the
+    /// live catalogue delegates at Init, so an edited YAML is what the button
+    /// says and what the treasury pays, from one source.</summary>
+    public record BuildItem(string Label, int TypeId, string Icon);
 
     private static readonly BuildItem[] Structures =
     {
-        new("POWER PLANT", 1, 300, "com_power_plant"),
-        new("REFINERY", 3, 2000, "com_refinery"),
-        new("FACTORY", 2, 2000, "com_factory"),
-        new("TURRET", 5, 600, "dir_turret"),
-        new("SERVICE DEPOT", 8, 1200, "com_service_depot"),
+        new("POWER PLANT", 1, "com_power_plant"),
+        new("REFINERY", 3, "com_refinery"),
+        new("FACTORY", 2, "com_factory"),
+        new("TURRET", 5, "dir_turret"),
+        new("SERVICE DEPOT", 8, "com_service_depot"),
         // TICKET-P5-PROD-01: the Sodality's signature building, fully
         // implemented in the sim since P2 and never buildable by a person.
         // The button is gated on faction in Init - absent for the
         // Directorate, exactly as the sim itself refuses the command
         // (World.cs BuildStructure's faction check, which stays authoritative).
-        new("VEIL PROJECTOR", VeilType, 1500, "sod_veil_projector"),
-        new("SUPERWEAPON", 6, 4000, "dir_superweapon"),
+        new("VEIL PROJECTOR", VeilType, "sod_veil_projector"),
+        new("SUPERWEAPON", 6, "dir_superweapon"),
         // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
         // slot and no build time, so it is never queued at the yard - the button
         // enters placement directly and the treasury is charged per segment as
         // it lands.
-        new("WALL", BarrierType, 100, "com_wall_straight"),
+        new("WALL", BarrierType, "com_wall_straight"),
     };
     /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
     /// deferred gate).</summary>
@@ -43,23 +48,23 @@ public partial class Sidebar : PanelContainer
     private const int VeilType = 7;
     private static readonly BuildItem[] Units =
     {
-        new("RIFLE SQUAD", 2, 200, "com_rifle_squad"),
-        new("ROCKET SQUAD", 3, 300, "com_rocket_squad"),
-        new("SENTINEL SCOUT", 6, 400, "dir_sentinel_scout"),
-        new("ENGINEER", 11, 500, "com_engineer"),
+        new("RIFLE SQUAD", 2, "com_rifle_squad"),
+        new("ROCKET SQUAD", 3, "com_rocket_squad"),
+        new("SENTINEL SCOUT", 6, "dir_sentinel_scout"),
+        new("ENGINEER", 11, "com_engineer"),
         // TICKET-P6-FACTION-01: the Sodality's two signature units, in the
         // sim's catalogue since P3 and never buttoned until the faction
-        // picker made a Sodality player 0 reachable. Costs mirror the
-        // catalogue; the icon names follow the id convention and the Exists
-        // guard in MakeButton tolerates the sprites not being cut yet.
-        new("SHADE RAIDER", 5, 500, "sod_shade_raider"),
-        new("VANGUARD CAR", 12, 450, "dir_vanguard_car"),
-        new("CANNON TANK", 1, 600, "dir_cannon_tank"),
-        new("HOWITZER", 8, 900, "dir_howitzer"),
-        new("PHANTOM TANK", 9, 900, "sod_phantom_tank"),
-        new("HARVESTER", 4, 1400, "com_harvester"),
-        new("BULWARK TANK", 10, 1600, "dir_bulwark_tank"),
-        new("MCV", 7, 3000, "com_mcv"),
+        // picker made a Sodality player 0 reachable. The icon names follow
+        // the id convention and the Exists guard in MakeButton tolerates the
+        // sprites not being cut yet.
+        new("SHADE RAIDER", 5, "sod_shade_raider"),
+        new("VANGUARD CAR", 12, "dir_vanguard_car"),
+        new("CANNON TANK", 1, "dir_cannon_tank"),
+        new("HOWITZER", 8, "dir_howitzer"),
+        new("PHANTOM TANK", 9, "sod_phantom_tank"),
+        new("HARVESTER", 4, "com_harvester"),
+        new("BULWARK TANK", 10, "dir_bulwark_tank"),
+        new("MCV", 7, "com_mcv"),
     };
 
     private static readonly Color Cinder = new(0.086f, 0.094f, 0.102f);
@@ -97,17 +102,22 @@ public partial class Sidebar : PanelContainer
     // for the same BD-02/BD-06 reason as the two reads above - the answer
     // belongs to THIS match's catalogue, not the compiled defaults.
     private System.Func<int, int> _unitFaction = _ => World.FactionCommon;
+    // ADR-006: the unit price column, by delegate for the same reason. The
+    // structure side already rides _structDef.
+    private System.Func<int, int> _unitCost = _ => 0;
 
     private const float BarWidth = 174f;
 
     public void Init(SkirmishLive game, System.Func<int, int> unitBuildTicks,
         System.Func<int, World.StructureTypeDef> structDef,
-        System.Func<int, int> unitFaction)
+        System.Func<int, int> unitFaction,
+        System.Func<int, int> unitCost)
     {
         _game = game;
         _unitBuildTicks = unitBuildTicks;
         _structDef = structDef;
         _unitFaction = unitFaction;
+        _unitCost = unitCost;
         CustomMinimumSize = new Vector2(190, 0);
         AnchorLeft = 1; AnchorRight = 1; AnchorBottom = 1;
         OffsetLeft = -190;
@@ -146,8 +156,8 @@ public partial class Sidebar : PanelContainer
             // DEF-08 clause 9: a barrier bypasses the yard queue entirely, so
             // its button enters placement rather than queueing.
             var b = it.TypeId == BarrierType
-                ? MakeButton(it, () => _game.EnterPlacement(BarrierType), _structDef(it.TypeId).BuildTicks)
-                : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).BuildTicks);
+                ? MakeButton(it, () => _game.EnterPlacement(BarrierType), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks)
+                : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks);
             // Classic campaign tech gating: disallowed items are absent,
             // not greyed - progression should read as the tree growing.
             // TICKET-P5-PROD-01: the faction gate reads the same shape - the
@@ -161,7 +171,7 @@ public partial class Sidebar : PanelContainer
             _structButtons[it.TypeId] = b;
             v.AddChild(b);
         }
-        _placeButton = MakeButton(new BuildItem("PLACE >>", 0, 0, ""), () => _game.EnterPlacement(_readyType));
+        _placeButton = MakeButton(new BuildItem("PLACE >>", 0, ""), () => _game.EnterPlacement(_readyType));
         _placeButton.Visible = false;
         v.AddChild(_placeButton);
 
@@ -169,7 +179,7 @@ public partial class Sidebar : PanelContainer
         v.AddChild(_unitHeader);
         foreach (var it in Units)
         {
-            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitBuildTicks(it.TypeId));
+            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitCost(it.TypeId), _unitBuildTicks(it.TypeId));
             // TICKET-P6-FACTION-01: the veil button's gate, generalised to the
             // unit column. The visibility test mirrors the sim's own Produce
             // refusal (World.cs: Faction must be common or the player's own),
@@ -194,10 +204,11 @@ public partial class Sidebar : PanelContainer
     /// <summary>BD-02: the label carries cost AND build time. No build time was
     /// shown anywhere in the game, so the player could not tell a 6.7-second
     /// plant from a 20-second refinery except by watching one. Seconds, not
-    /// ticks: ticks are the sim's unit, seconds are the player's.</summary>
-    private Button MakeButton(BuildItem it, System.Action onPress, int buildTicks = 0)
+    /// ticks: ticks are the sim's unit, seconds are the player's. ADR-006: the
+    /// cost arrives from the live catalogue delegates, never from a table.</summary>
+    private Button MakeButton(BuildItem it, System.Action onPress, int cost = 0, int buildTicks = 0)
     {
-        string label = it.Cost > 0 ? $"{it.Label}  {it.Cost}" : it.Label;
+        string label = cost > 0 ? $"{it.Label}  {cost}" : it.Label;
         // A zero-tick item is not instant, it is not queued at all (the barrier
         // is bought and placed outright), so a "0s" readout would be a lie.
         if (buildTicks > 0) label += $"  {buildTicks / (float)World.TicksPerSecond:0.#}s";
