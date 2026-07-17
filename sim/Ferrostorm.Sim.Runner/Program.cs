@@ -11,6 +11,7 @@ using Ferrostorm.Sim;
 //   match [seed]       - run scenarios with perf reporting vs the 8ms/tick budget
 //   lan [games]        - relay + 2 lockstep clients over loopback TCP per game (TICKET-P1-08)
 //   catrefuse          - ADR-006: a mismatched catalogue refuses (LAN hello, saves, replays) rather than desyncs
+//   spawngate          - ADR-007: rally in the sim, the spawn exit move, save v4, occupancy and the zero-drain hold
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -1933,12 +1934,12 @@ int CatalogueRefuse()
             if (!e.Message.Contains($"0x{good:X16}") || !e.Message.Contains($"0x{bad:X16}"))
                 return Fail($"catrefuse: the save refusal must name both checksums, got: {e.Message}");
         }
-        // v2 surgery: [magic 4][checksum 8][rest] becomes [v2 magic][rest].
-        // 0x534C4132 is the published on-disk magic of every existing v2 save.
-        var v3 = ms.ToArray();
-        var v2 = new byte[v3.Length - 8];
-        BitConverter.GetBytes(0x534C4132u).CopyTo(v2, 0);
-        Array.Copy(v3, 12, v2, 4, v3.Length - 12);
+        // v2 surgery via the shared layout-aware helper: drop the checksum
+        // AND the ADR-007 rally tail from every entity record, leaving the
+        // published on-disk shape of every existing v2 save (magic
+        // 0x534C4132). The old inline surgery assumed the checksum was the
+        // only difference, which save format v4 made untrue.
+        var v2 = DowngradeSave(ms.ToArray(), 0x534C4132u);
         var old = World.Load(new MemoryStream(v2), w => w.RegisterUnitType(1, w.GetUnitType(1) with { Cost = w.GetUnitType(1).Cost + 1 }));
         if (old.ComputeStateHash() != live.ComputeStateHash())
             return Fail("catrefuse: a v2 save must still load under any catalogue (no checksum, no check)");
@@ -2023,6 +2024,237 @@ int CatalogueRefuse()
     return 0;
 }
 
+// Byte surgery for the backwards-compatibility gates: rebuild a CURRENT
+// (v4) save as an older format on disk. v4 -> v3 strips the ADR-007 rally
+// fields from every entity record; below v3 the ADR-006 catalogue checksum
+// goes too, and below v2 the per-player faction byte. The walk mirrors the
+// serializer's layout field by field; if that layout drifts, the load
+// assertions downstream fail loudly rather than blessing surgery on wrong
+// bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
+// the only difference was the checksum; the wider entity record made it a
+// shared, layout-aware helper.)
+byte[] DowngradeSave(byte[] v4, uint targetMagic)
+{
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u;
+    using var input = new BinaryReader(new MemoryStream(v4));
+    var outMs = new MemoryStream();
+    using var w = new BinaryWriter(outMs);
+    if (input.ReadUInt32() != magicV4)
+        throw new InvalidOperationException("save surgery expects a v4 stream");
+    w.Write(targetMagic);
+    ulong checksum = input.ReadUInt64();
+    if (targetMagic == magicV3) w.Write(checksum); // v3 keeps the checksum; v1/v2 never had one
+    w.Write(input.ReadInt32());   // tick
+    w.Write(input.ReadInt32());   // winner
+    w.Write(input.ReadBoolean()); // short game
+    int players = input.ReadInt32(); w.Write(players);
+    int mw = input.ReadInt32(), mh = input.ReadInt32(); w.Write(mw); w.Write(mh);
+    w.Write(input.ReadBytes((mw + 7) / 8 * mh)); // packed terrain rows
+    w.Write(input.ReadUInt64());  // rng state
+    for (int p = 0; p < players; p++)
+    {
+        byte faction = input.ReadByte();
+        if (targetMagic != magicV1) w.Write(faction); // v1 predates the faction byte (Q001)
+        w.Write(input.ReadInt64());   // credits
+        w.Write(input.ReadBoolean()); // eliminated flag
+        int words = input.ReadInt32(); w.Write(words);
+        for (int i = 0; i < words; i++) w.Write(input.ReadUInt64());
+    }
+    int count = input.ReadInt32(); w.Write(count);
+    // The entity record is fixed-width: 209 bytes through FieldCloaked, then
+    // the v4 rally tail (RallyX 8 + RallyY 8 + HasRally 1 + Departing 1).
+    const int v3EntityBytes = 209, rallyTailBytes = 18;
+    for (int i = 0; i < count; i++)
+    {
+        w.Write(input.ReadBytes(v3EntityBytes));
+        input.ReadBytes(rallyTailBytes); // dropped: older formats never carried rally
+    }
+    // Production queues, order queues and the trailer are format-identical.
+    w.Write(input.ReadBytes((int)(input.BaseStream.Length - input.BaseStream.Position)));
+    return outMs.ToArray();
+}
+
+int SpawnGate()
+{
+    // ADR-007 / doc 23 Wave 4: rally in the sim, the spawn exit move, save
+    // format v4, and (with SPAWN-04) occupancy and the hold that never
+    // charges. Additive, the catrefuse pattern: standalone mode and battery
+    // stage, never a golden scenario, so the golden list stays 24 lines by
+    // construction.
+    var cmds = new List<Command>();
+
+    // 1. SetRally validation: producing structures the commander owns, and
+    // nothing else. Clamped exactly as Move clamps; AuxId -1 clears back to
+    // the canonical unset state.
+    {
+        var w = new World(11, 64, 64, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 10000);
+        int factory = w.SpawnFactory(0, 10, 6);
+        int cy = w.SpawnConstructionYard(0, 14, 6);
+        int rifle = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+        int enemyFactory = w.SpawnFactory(1, 40, 40);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, rifle, Fix64.FromInt(30), Fix64.FromInt(30), 0));
+        cmds.Add(new Command(0, 0, CommandType.SetRally, enemyFactory, Fix64.FromInt(30), Fix64.FromInt(30), 0));
+        StepN(1);
+        if (w.Entities[rifle].HasRally) return Fail("spawngate: a unit must refuse SetRally (producing structures only)");
+        if (w.Entities[enemyFactory].HasRally) return Fail("spawngate: an enemy structure must refuse SetRally (ownership)");
+        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Fix64.FromInt(999), Fix64.FromInt(-9), 0));
+        cmds.Add(new Command(0, 0, CommandType.SetRally, cy, Fix64.FromInt(30), Fix64.FromInt(30), 0));
+        StepN(1);
+        var f = w.Entities[factory];
+        if (!f.HasRally) return Fail("spawngate: a factory must accept SetRally");
+        if (f.RallyX != Fix64.FromInt(64) - Fix64.Half || f.RallyY != Fix64.Zero)
+            return Fail($"spawngate: SetRally must clamp exactly as Move does (got {f.RallyX},{f.RallyY})");
+        if (!w.Entities[cy].HasRally) return Fail("spawngate: a Construction Yard must accept SetRally (ADR-007's predicate, ahead of ADR-009)");
+        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Fix64.FromInt(1), Fix64.FromInt(1), -1));
+        StepN(1);
+        f = w.Entities[factory];
+        if (f.HasRally || f.RallyX != Fix64.Zero || f.RallyY != Fix64.Zero)
+            return Fail("spawngate: AuxId -1 must clear back to the canonical unset state");
+    }
+
+    // 2. The exit move: produced units leave the mouth and settle at the
+    // rally; ProductionComplete still fires with C naming the producer.
+    {
+        var w = new World(12, 64, 64, 2);
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        var rallyX = Map.CellCentre(25); var rallyY = Map.CellCentre(11);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, rallyX, rallyY, 0));
+        for (int k = 0; k < 3; k++)
+            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        int completions = 0, wrongC = 0;
+        int preCount = w.EntityCount;
+        for (int t = 0; t < 3 * 75 + 200; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            foreach (var ev in w.Events)
+                if (ev.Type == GameEventType.ProductionComplete) { completions++; if (ev.C != factory) wrongC++; }
+        }
+        if (completions != 3) return Fail($"spawngate: expected 3 completions at the rallied factory, got {completions}");
+        if (wrongC != 0) return Fail("spawngate: ProductionComplete must carry the producer in C");
+        int settled = 0;
+        for (int i = preCount; i < w.EntityCount; i++)
+        {
+            var u = w.Entities[i];
+            if (!u.Alive) return Fail("spawngate: a produced unit died unprovoked");
+            if (u.Moving || u.Departing) return Fail("spawngate: produced units must settle (Departing cleared, walk ended)");
+            if (Fix64.DistSq(u.X - rallyX, u.Y - rallyY) > Fix64.FromInt(36))
+                return Fail($"spawngate: unit {i} settled {u.X},{u.Y}, not near the rally (crowd radius 4 plus follower spacing)");
+            settled++;
+        }
+        if (settled != 3) return Fail($"spawngate: expected 3 settled units, got {settled}");
+    }
+
+    // 3. SPAWN-D3 is dead: a rally TWO cells from the mouth still moves every
+    // unit off its spawn cell (the Departing guard suppresses the 4-cell
+    // crowd-arrival shortcut until the mouth is actually cleared).
+    {
+        var w = new World(13, 64, 64, 2);
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        // Factory centre cell is (11,11); the ring's first offset (0,2) makes
+        // the mouth (11,13). Two cells further down: (11,15).
+        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Map.CellCentre(11), Map.CellCentre(15), 0));
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        var spawnPos = new Dictionary<int, (Fix64 X, Fix64 Y)>();
+        int seen = w.EntityCount;
+        for (int t = 0; t < 75 + 120; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            while (w.EntityCount > seen) { spawnPos[seen] = (w.Entities[seen].X, w.Entities[seen].Y); seen++; }
+        }
+        if (spawnPos.Count != 1)
+            return Fail($"spawngate: close rally must not stall the mouth (got {spawnPos.Count}/1 spawns)");
+        foreach (var (id, at) in spawnPos)
+        {
+            var u = w.Entities[id];
+            if (u.Moving) return Fail("spawngate: close-rally units must settle");
+            if (Map.CellOf(u.X) == Map.CellOf(at.X) && Map.CellOf(u.Y) == Map.CellOf(at.Y))
+                return Fail($"spawngate: unit {id} never left its spawn cell - a 2-cell rally is still a silent no-op (SPAWN-D3)");
+            if (Fix64.DistSq(u.X - Map.CellCentre(11), u.Y - Map.CellCentre(15)) > Fix64.FromInt(16))
+                return Fail($"spawngate: the close-rallied unit settled at {u.X},{u.Y}, outside the crowd radius of its 2-cell rally");
+        }
+        // The multi-unit close-rally case (followers reusing the mouth) is
+        // asserted in the SPAWN-04 sections below: it needs the occupancy
+        // test, which is exactly doc 23's load-bearing ordering.
+    }
+
+    // 4. Save format v4: a world with live rally state round-trips bit-exact
+    // and resumes bit-exact; a v3 downgrade still loads with rally unset; a
+    // v2 downgrade additionally loses the checksum and is never refused.
+    {
+        var w = new World(14, 64, 64, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int f1 = w.SpawnFactory(0, 10, 10);
+        int f2 = w.SpawnFactory(0, 16, 10);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, f1, Map.CellCentre(30), Map.CellCentre(12), 0));
+        cmds.Add(new Command(0, 0, CommandType.SetRally, f2, Map.CellCentre(30), Map.CellCentre(20), 0));
+        cmds.Add(new Command(0, 0, CommandType.Produce, f1, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, f1, Fix64.Zero, Fix64.Zero, 2));
+        StepN(1);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, f2, Fix64.Zero, Fix64.Zero, -1)); // set then cleared
+        StepN(80); // first rifle is out and walking: Departing state is live somewhere in here
+        ulong hashMid = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != hashMid)
+            return Fail($"spawngate: v4 save must load bit-exact (0x{loaded.ComputeStateHash():X16} vs 0x{hashMid:X16})");
+        var lf1 = loaded.Entities[f1];
+        if (!lf1.HasRally || lf1.RallyX != Map.CellCentre(30) || lf1.RallyY != Map.CellCentre(12))
+            return Fail("spawngate: the rally must survive the save BY THE SIM (Q004's resolution)");
+        if (loaded.Entities[f2].HasRally)
+            return Fail("spawngate: a cleared rally must stay cleared through the round trip");
+        int countAtSave = loaded.EntityCount;
+        for (int t = 0; t < 200; t++) { w.Step(default); loaded.Step(default); }
+        if (loaded.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("spawngate: resumed run diverged from the uninterrupted one");
+        var v4Bytes = ms.ToArray();
+        var v3World = World.Load(new MemoryStream(DowngradeSave(v4Bytes, 0x534C4133u)));
+        if (v3World.EntityCount != countAtSave)
+            return Fail("spawngate: v3 downgrade lost entities");
+        foreach (var e in v3World.Entities)
+            if (e.HasRally || e.Departing || e.RallyX != Fix64.Zero || e.RallyY != Fix64.Zero)
+                return Fail("spawngate: a v3 save must load with rally unset and Departing false");
+        var v2World = World.Load(new MemoryStream(DowngradeSave(v4Bytes, 0x534C4132u)),
+            world => world.RegisterUnitType(1, world.GetUnitType(1) with { Cost = world.GetUnitType(1).Cost + 1 }));
+        if (v2World.EntityCount != countAtSave)
+            return Fail("spawngate: v2 downgrade lost entities (and must never be checksum-refused)");
+    }
+
+    // 5. The wire and replay formats carry SetRally as an ordinary command.
+    {
+        string path = Path.Combine(Path.GetTempPath(), "ferrostorm-spawngate.frep");
+        var writer = new ReplayWriter(7, "gate");
+        writer.Record(new Command(3, 0, CommandType.SetRally, 5, Fix64.FromInt(9), Fix64.FromInt(9), 0));
+        writer.Record(new Command(4, 0, CommandType.SetRally, 5, Fix64.Zero, Fix64.Zero, -1));
+        writer.Finish(0xABCD, path);
+        var rep = Replay.Load(path);
+        var c0 = rep.CommandsFor(3)[0];
+        var c1 = rep.CommandsFor(4)[0];
+        if (c0.Type != CommandType.SetRally || c0.AuxId != 0 || c0.X != Fix64.FromInt(9))
+            return Fail("spawngate: SetRally must round-trip the replay format");
+        if (c1.Type != CommandType.SetRally || c1.AuxId != -1)
+            return Fail("spawngate: the SetRally clear must round-trip the replay format");
+        File.Delete(path);
+    }
+
+    Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically); " +
+                      "3 rallied rifles left the mouth and settled at the rally with C naming the producer; a 2-cell rally moved every unit off its spawn cell (SPAWN-D3 dead); " +
+                      "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
+                      "SetRally round-trips the replay format");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -2060,6 +2292,9 @@ int Match(ulong seed)
     // the defence gate does, additively, so the golden list is untouched.
     int catalogue = CatalogueRefuse();
     if (catalogue != 0) return catalogue;
+    // ADR-007: the rally and spawn gate rides the battery the same way.
+    int spawn = SpawnGate();
+    if (spawn != 0) return spawn;
     return 0;
 }
 
@@ -2760,6 +2995,7 @@ return args.Length == 0
             stallPerMille: 50, stallMs: 500,
             ticks: 150),
         "catrefuse" => CatalogueRefuse(),
+        "spawngate" => SpawnGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

@@ -16,18 +16,27 @@ namespace Ferrostorm.Sim;
 /// magic, because /data is now the runtime source and a save resumed under a
 /// different catalogue is a different game wearing the same entities. v1 and
 /// v2 carry no checksum; its ABSENCE means do not check, never refuse.
+/// Format v4 (ADR-007): every entity carries RallyX/RallyY/HasRally/Departing
+/// appended after FieldCloaked in hash order, because rally is now sim state
+/// and a save that drops hashed fields cannot honour the contract above.
+/// v1/v2/v3 entities predate the fields and load with rally unset and
+/// Departing false, which is exactly what those saves meant: rally was client
+/// state and was already lost on every save. (The ADR as written named "v3"
+/// for this bump; Wave B1 took v3 for the catalogue checksum first, so this
+/// is v4 - see the dated deviation note on ADR-007.)
 /// </summary>
 public sealed partial class World
 {
     private const uint SaveMagicV1 = 0x534C4131; // original format: no faction array (Q001)
     private const uint SaveMagicV2 = 0x534C4132; // v2 adds the per-player faction array
     private const uint SaveMagicV3 = 0x534C4133; // v3 adds the catalogue checksum (ADR-006)
+    private const uint SaveMagicV4 = 0x534C4134; // v4 adds the per-entity rally fields (ADR-007)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV3);
+        w.Write(SaveMagicV4);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -101,9 +110,12 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4)
             throw new InvalidDataException("not a ferrostorm save");
-        bool hasCatalogue = magic == SaveMagicV3;
+        // v3 introduced the checksum and every later format keeps it (the
+        // B1-era regression was conditioning a v3+ field on one magic alone).
+        bool hasCatalogue = magic != SaveMagicV1 && magic != SaveMagicV2;
+        bool hasRallyFields = magic == SaveMagicV4; // ADR-007: v4 entities carry rally state
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -139,7 +151,7 @@ public sealed partial class World
             for (int i = 0; i < words; i++) world._explored[p][i] = r.ReadUInt64();
         }
         int count = r.ReadInt32();
-        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r));
+        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields));
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {
@@ -186,9 +198,27 @@ public sealed partial class World
         w.Write(e.Kills); w.Write(e.Rank); w.Write(e.VetEnabled); w.Write(e.UnitType);
         w.Write(e.ChargeTicks); w.Write(e.StrikeTicks); w.Write(e.StrikeX.Raw); w.Write(e.StrikeY.Raw);
         w.Write(e.FieldCloaked);
+        // v4 (ADR-007): the rally fields, appended after FieldCloaked in hash
+        // order exactly as ComputeStateHash appends them.
+        w.Write(e.RallyX.Raw); w.Write(e.RallyY.Raw); w.Write(e.HasRally); w.Write(e.Departing);
     }
 
-    private static Entity ReadEntity(BinaryReader r) => new()
+    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields)
+    {
+        var e = ReadEntityV3(r);
+        if (hasRallyFields)
+        {
+            // v4 fields in write order. Pre-v4 entities keep the struct
+            // defaults: no rally, not departing - what those saves meant.
+            e.RallyX = new Fix64(r.ReadInt64());
+            e.RallyY = new Fix64(r.ReadInt64());
+            e.HasRally = r.ReadBoolean();
+            e.Departing = r.ReadBoolean();
+        }
+        return e;
+    }
+
+    private static Entity ReadEntityV3(BinaryReader r) => new()
     {
         Id = r.ReadInt32(), Alive = r.ReadBoolean(), PlayerId = r.ReadInt32(), Kind = (EntityKind)r.ReadByte(),
         X = new Fix64(r.ReadInt64()), Y = new Fix64(r.ReadInt64()),

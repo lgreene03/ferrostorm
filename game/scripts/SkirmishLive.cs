@@ -180,12 +180,14 @@ public partial class SkirmishLive : Node3D
     private int _depotBay;
     private int _mapW, _mapH;
 
-    // Structure interaction: rally points per producer, selection readout.
+    // Structure interaction: rally markers per producer, selection readout.
     // TICKET-P5-BD-14: one marker per rallied structure, shown only while that
-    // structure is selected (the classic rule). A single shared marker meant
-    // only the most recent rally was ever visible, which read as the others
-    // having been forgotten.
-    private readonly Dictionary<int, Vector3> _rally = new();
+    // structure is selected (the classic rule). ADR-007 moved the rally POINT
+    // itself into the sim (RallyX/RallyY on the producer): the old `_rally`
+    // dictionary is gone, the click path issues CommandType.SetRally, and
+    // marker positions are written every frame from the sim's own fields, so
+    // the marker can never drift from the truth. _rallyMarkers survives as a
+    // node-lifetime cache only.
     private readonly Dictionary<int, MeshInstance3D> _rallyMarkers = new();
     private Label _selInfo = null!;
 
@@ -203,15 +205,14 @@ public partial class SkirmishLive : Node3D
     /// passes for the wrong reason. Same pattern as _wallRebuilds.</summary>
     private int _autoHarvestIssues;
 
-    /// <summary>Producers a rally point may be set on (TICKET-P5-BD-14 clause 5).
-    /// Factory only: rally fires on ProductionComplete carrying the producer in
-    /// ev.C, and the Factory is the only producer that completes units. The
-    /// Service Depot's old entry was a dead affordance - it produces nothing,
-    /// so its rally marker could be set and never fired (TICKET-P5-REP-10
-    /// retired it honestly). Construction Yards stay deliberately absent:
-    /// structures are placed, not rallied. This stays a predicate rather than
-    /// a compare because PROD-05 adds Barracks and Airfield here when those
-    /// producers exist.</summary>
+    /// <summary>Producers the CLIENT offers a rally click on (TICKET-P5-BD-14
+    /// clause 5). Factory only: it is the one producer that spawns units. The
+    /// sim's own SetRally predicate additionally accepts a Construction Yard
+    /// (ADR-007, ahead of ADR-009's producer split), but a CY's products are
+    /// placed rather than spawned, so offering the click would be the Service
+    /// Depot dead affordance again (TICKET-P5-REP-10 retired that honestly).
+    /// This stays a predicate rather than a compare because PROD-05 adds
+    /// Barracks and Airfield here when those producers exist.</summary>
     private static bool Ralliable(EntityKind k) => k is EntityKind.Factory;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
@@ -1103,27 +1104,21 @@ public partial class SkirmishLive : Node3D
                         foreach (var (d, home) in frig2.Doors)
                             frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
                     }
-            // TICKET-P5-BD-14: exact attribution. The sim now names the
-            // producing structure in ev.C, so the unit goes to ITS rally point.
-            // What this replaces was a guess: a scan for any rallied structure
-            // within four cells of the new unit, walking a Dictionary in
-            // nondeterministic order, which cross-wired two factories parked
-            // close together and picked between them arbitrarily.
+            // ADR-007: the sim owns the rally now. The produced unit already
+            // left the factory with its sim-side exit move, so the PathMove
+            // this block used to issue is gone with the `_rally` dictionary.
+            // The one client-side carry-over: a harvester produced by a
+            // rallied factory is still treated as parked (a rally beats
+            // auto-harvest, P5-ECON-07 clause 2a - a player who pointed a
+            // factory somewhere meant it), keyed off the sim's own HasRally
+            // on the producer named in ev.C.
             if (ev.Type == GameEventType.ProductionComplete
-                && ev.C >= 0 && _rally.TryGetValue(ev.C, out var rp)
+                && ev.C >= 0 && ev.C < _world.EntityCount && _world.Entities[ev.C].HasRally
                 && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var nu = _world.Entities[ev.A];
-                if (nu.Alive && nu.PlayerId == 0 && nu.Kind is EntityKind.Unit or EntityKind.Harvester)
-                {
-                    _pending.Add(new Command(0, 0, CommandType.PathMove, ev.A,
-                        Fix64.FromFraction((int)(rp.X * 100), 100),
-                        Fix64.FromFraction((int)(rp.Z * 100), 100)));
-                    // P5-ECON-07 clause 2a: a rally beats auto-harvest. A player
-                    // who pointed a factory somewhere meant it, so the new
-                    // harvester is treated as parked until it is told otherwise.
-                    if (nu.Kind == EntityKind.Harvester) _manuallyStopped.Add(ev.A);
-                }
+                if (nu.Alive && nu.PlayerId == 0 && nu.Kind == EntityKind.Harvester)
+                    _manuallyStopped.Add(ev.A);
             }
             // W3-19: flyout toast for own completions. For CY
             // completions ev.A is the yard and ev.B the structure
@@ -1382,7 +1377,7 @@ public partial class SkirmishLive : Node3D
         }
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
         _selInfo.Text = _wallDrag ? WallDragSummary() : SelectionSummary();
-        ShowRallyMarkers();   // TICKET-P5-BD-14: a rally is drawn for its own producer only
+        SyncRallyMarkers();   // ADR-007: markers mirror the sim's own RallyX/RallyY, selected producer only
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -1745,19 +1740,37 @@ public partial class SkirmishLive : Node3D
         return m;
     }
 
-    /// <summary>Classic rule: a rally point is drawn for the producer you have
-    /// selected and for no other. Called each frame; cheap, since the dictionary
-    /// holds one entry per rallied structure and there are never many.</summary>
-    private void ShowRallyMarkers()
+    /// <summary>ADR-007: markers are a THIN MIRROR of sim state. Every frame
+    /// this writes each marker's position from the producer's own
+    /// RallyX/RallyY (a post-Step read, the established pattern), shows it
+    /// only while that producer is selected (the classic rule), and reaps any
+    /// marker whose producer is dead or no longer carries a rally - so a
+    /// marker can neither drift from the truth nor outlive it. Cheap: one
+    /// pass over the snapshot and one over the handful of live markers.</summary>
+    private void SyncRallyMarkers()
     {
-        foreach (var (sid, node) in _rallyMarkers) node.Visible = _selection.Contains(sid);
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+        {
+            var e = ents[i];
+            if (!e.Alive || e.PlayerId != 0 || !e.HasRally) continue;
+            var m = RallyMarkerFor(i);
+            m.Position = new Vector3(
+                (float)(e.RallyX.Raw / 4294967296.0), 0.35f, (float)(e.RallyY.Raw / 4294967296.0));
+            m.Visible = _selection.Contains(i);
+        }
+        List<int>? stale = null;
+        foreach (var (sid, _) in _rallyMarkers)
+            if (sid < 0 || sid >= ents.Count || !ents[sid].Alive
+                || ents[sid].PlayerId != 0 || !ents[sid].HasRally)
+                (stale ??= new List<int>()).Add(sid);
+        if (stale != null) foreach (int sid in stale) ForgetRally(sid);
     }
 
-    /// <summary>A dead producer's rally point and marker die with it, or the
+    /// <summary>A dead producer's rally marker dies with it, or the
     /// scene accumulates gold pins pointing at nothing (BD-14 clause 4).</summary>
     private void ForgetRally(int structureId)
     {
-        _rally.Remove(structureId);
         if (!_rallyMarkers.Remove(structureId, out var node)) return;
         // QueueFree defers to the end of the frame, so rename first: until the
         // node is actually reaped it is still a child, and anything walking the
@@ -3018,7 +3031,9 @@ public partial class SkirmishLive : Node3D
     }
     public bool RallyMarkerVisible(int structureId) =>
         _rallyMarkers.TryGetValue(structureId, out var m) && m.Visible;
-    public bool HasRally(int structureId) => _rally.ContainsKey(structureId);
+    /// <summary>ADR-007: answered from the sim's own state, the only rally truth left.</summary>
+    public bool HasRally(int structureId) =>
+        structureId >= 0 && structureId < _world.EntityCount && _world.Entities[structureId].HasRally;
     public bool RefineryLive => HasLiveRefinery();
     public bool IsParked(int harvesterId) => _manuallyStopped.Contains(harvesterId);
     public int AutoHarvestIssues => _autoHarvestIssues;
@@ -3182,8 +3197,11 @@ public partial class SkirmishLive : Node3D
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
         if (gp is not { } p) return;
-        // Factory selected: right-click sets its rally point (client-side;
-        // fresh units get a PathMove there on ProductionComplete).
+        // Factory selected: right-click sets its rally point. ADR-007: the
+        // rally is a sim command on the ordinary path now (which closes
+        // SPAWN-D9: whatever player issues it, the stream carries it), not a
+        // client dictionary; fresh units leave the factory with a sim-side
+        // exit move toward it.
         bool onlyStructures = true;
         foreach (int sid in _selection)
             if (_latest.TryGetValue(sid, out var sv) && Mobile(sv.Kind)) { onlyStructures = false; break; }
@@ -3192,9 +3210,11 @@ public partial class SkirmishLive : Node3D
             foreach (int sid in _selection)
                 if (_latest.TryGetValue(sid, out var sv) && Ralliable(sv.Kind) && sv.PlayerId == 0)
                 {
-                    _rally[sid] = new Vector3(p.X, 0, p.Z);
-                    RallyMarkerFor(sid).Position = new Vector3(p.X, 0.35f, p.Z);
-                    // W3-17: rally clicks acknowledge in gold.
+                    _pending.Add(new Command(0, 0, CommandType.SetRally, sid,
+                        Fix64.FromFraction((int)(p.X * 100), 100),
+                        Fix64.FromFraction((int)(p.Z * 100), 100), 0)); // AuxId 0 = set; -1 clears
+                    // W3-17: rally clicks acknowledge in gold. The marker
+                    // itself appears next tick, from the sim's own fields.
                     _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 2);
                     _audio.Play("ui_confirm", -8);
                 }

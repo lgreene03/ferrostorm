@@ -18,6 +18,7 @@ public enum CommandType : byte
     Repair = 13,         // EntityId (own structure) toggles repair: 2 hp/tick for 1 credit/tick
     Deploy = 14,         // EntityId (MCV) unpacks into a Construction Yard on its own cell
     LaunchSuper = 15,    // EntityId (charged superweapon) fires at map position X/Y (TICKET-P2-SIM-15)
+    SetRally = 16,       // EntityId (own producing structure) rally point at X/Y; AuxId == -1 clears (ADR-007)
 }
 
 public readonly struct Command
@@ -141,6 +142,19 @@ public struct Entity
     // Area cloak (TICKET-P2-SIM-18): recomputed each tick from powered veil
     // projector coverage; combined with Stealth for targetability.
     public bool FieldCloaked;
+
+    // Rally in the sim (ADR-007), appended after FieldCloaked, never inserted:
+    // hash order and save order are this declaration order. Unset is
+    // HasRally false with RallyX/RallyY zero (SetRally's clear restores
+    // exactly that state, so cleared and never-rallied serialise identically).
+    // Departing marks a production exit move in flight: it suppresses the
+    // crowd-arrival shortcut so a rally (or the default exit) within 4 cells
+    // of the spawn cell still clears the factory mouth, and it lifts the tick
+    // the unit leaves its spawn cell or the walk ends. Units only; the
+    // shortcut is kind-gated, so harvesters never consult it.
+    public Fix64 RallyX, RallyY;
+    public bool HasRally;
+    public bool Departing;
 }
 
 /// <summary>
@@ -997,6 +1011,26 @@ public sealed partial class World
                 UnblockFootprint(AnchorOf(e.X, e.StructType), AnchorOf(e.Y, e.StructType), FootprintOf(e.StructType));
                 break;
             }
+            case CommandType.SetRally:
+            {
+                // ADR-007: only a producing structure the commanding player
+                // owns (ownership is the guard at the top of this method).
+                // AuxId == -1 clears, restoring the canonical unset state so a
+                // cleared structure serialises identically to a never-rallied
+                // one. X/Y clamp exactly as the Move case does.
+                if (!IsRallyable(e.Kind)) break;
+                if (c.AuxId == -1)
+                {
+                    e.HasRally = false;
+                    e.RallyX = Fix64.Zero;
+                    e.RallyY = Fix64.Zero;
+                    break;
+                }
+                e.HasRally = true;
+                e.RallyX = Fix64.Clamp(c.X, Fix64.Zero, Fix64.FromInt(Map.Width) - Fix64.Half);
+                e.RallyY = Fix64.Clamp(c.Y, Fix64.Zero, Fix64.FromInt(Map.Height) - Fix64.Half);
+                break;
+            }
             case CommandType.Produce:
             {
                 if (e.Kind != EntityKind.Factory) break;
@@ -1025,6 +1059,15 @@ public sealed partial class World
     /// auto-acquisition (ADR-005 clause 2). DEF-09 appends 'or EntityKind.Gate'.
     /// </summary>
     private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
+
+    /// <summary>
+    /// ADR-007: the structures SetRally accepts - producing structures only,
+    /// Factory or Construction Yard today. ADR-009's IsProducer widens this
+    /// same predicate when the barracks lands, so the wire format never
+    /// changes twice.
+    /// </summary>
+    private static bool IsRallyable(EntityKind k)
+        => k is EntityKind.Factory or EntityKind.ConstructionYard;
 
     /// <summary>Footprint physically clear (bounds, terrain, standing entities), ignoring adjacency - MCV deployment founds a base from nothing.</summary>
     /// <remarks>Fixed at FootprintSize by design (ADR-005 clause 1): only MCV deploy calls this, and a Construction Yard is always 2x2.</remarks>
@@ -1143,6 +1186,14 @@ public sealed partial class World
             if (!e.Alive || !e.Moving || e.Speed == Fix64.Zero) continue;
             e.PrevX = e.X; e.PrevY = e.Y;
             StepToward(ref e);
+            // ADR-007: Departing lifts the tick the unit's cell differs from
+            // its spawn cell or the walk ends. PrevX/PrevY hold the position
+            // at the top of this tick, and a departing unit starts in its
+            // spawn cell, so the first boundary crossing observed here is
+            // exactly "left the spawn cell".
+            if (e.Departing && (!e.Moving
+                || Map.CellOf(e.X) != Map.CellOf(e.PrevX) || Map.CellOf(e.Y) != Map.CellOf(e.PrevY)))
+                e.Departing = false;
             _entities[i] = e;
         }
     }
@@ -1159,7 +1210,11 @@ public sealed partial class World
             // fighting for one exact point. Never applies while executing an
             // attack order - attackers must close to weapon range, not to a
             // comfortable distance. Formation offsets are a P2 ticket.
-            if (e.Kind == EntityKind.Unit && e.ExplicitTarget < 0 && !e.AMove
+            // !e.Departing (ADR-007): a production exit move must actually
+            // leave the factory mouth - without the guard any rally (or
+            // default exit) within 4 cells of the spawn cell is a silent
+            // no-op and the spawn ring saturates (SPAWN-D3).
+            if (e.Kind == EntityKind.Unit && e.ExplicitTarget < 0 && !e.AMove && !e.Departing
                 && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16))
             { e.Moving = false; return; }
 
@@ -1970,6 +2025,7 @@ public sealed partial class World
                         ? SpawnHarvester(p, Map.CellCentre(nx), Map.CellCentre(ny))
                         : SpawnUnit(p, Map.CellCentre(nx), Map.CellCentre(ny), def.Speed, def.Hp, def.Armour, def.WeaponId,
                             def.SightCells, def.Stealth, def.Detector, def.Veterancy, queuedType);
+                    SetExitMove(spawned, in e, scx, scy, dx, dy);
                     // C = the factory that built it (TICKET-P5-BD-14): the rally
                     // attribution the client cannot recover from position alone.
                     _events.Add(new GameEvent(GameEventType.ProductionComplete, spawned, queuedType, C: i));
@@ -1978,6 +2034,38 @@ public sealed partial class World
             }
             _entities[i] = e;
         }
+    }
+
+    /// <summary>
+    /// ADR-007: a produced unit leaves the factory mouth. Toward the
+    /// producer's rally when one is set; otherwise toward a deterministic
+    /// default two further steps out along the chosen spawn offset (the same
+    /// offset logic every time), so the eleven-cell ring can never saturate
+    /// in the no-rally default game. Movement fields are written directly
+    /// rather than synthesising a Command: the sim queues no commands of its
+    /// own anywhere, and ADR-007 rejects inventing an internal command
+    /// channel. Harvesters honour the rally and the default exit equally;
+    /// Departing is set for units only (the crowd-arrival shortcut is
+    /// kind-gated, so harvesters never consult it).
+    /// </summary>
+    private void SetExitMove(int spawned, in Entity producer, int scx, int scy, int dx, int dy)
+    {
+        var nu = _entities[spawned];
+        Fix64 tx, ty;
+        if (producer.HasRally)
+        {
+            tx = producer.RallyX;
+            ty = producer.RallyY;
+        }
+        else
+        {
+            tx = Fix64.Clamp(Map.CellCentre(scx + 2 * dx), Fix64.Zero, Fix64.FromInt(Map.Width) - Fix64.Half);
+            ty = Fix64.Clamp(Map.CellCentre(scy + 2 * dy), Fix64.Zero, Fix64.FromInt(Map.Height) - Fix64.Half);
+        }
+        nu.TargetX = tx; nu.TargetY = ty;
+        nu.Moving = true; nu.UseFlow = true;
+        if (nu.Kind == EntityKind.Unit) nu.Departing = true;
+        _entities[spawned] = nu;
     }
 
     /// <summary>
@@ -2099,6 +2187,9 @@ public sealed partial class World
             h.Add(e.Kills); h.Add(e.Rank); h.Add(e.VetEnabled); h.Add(e.UnitType);
             h.Add(e.ChargeTicks); h.Add(e.StrikeTicks); h.Add(e.StrikeX); h.Add(e.StrikeY);
             h.Add(e.FieldCloaked);
+            // ADR-007: rally is sim state, so it is hashed state, appended
+            // after FieldCloaked in declaration order (the save order too).
+            h.Add(e.RallyX); h.Add(e.RallyY); h.Add(e.HasRally); h.Add(e.Departing);
             if (e.Kind == EntityKind.Factory && _queues.TryGetValue(e.Id, out var q))
             { h.Add(q.Count); foreach (int t in q) h.Add(t); }
         }
