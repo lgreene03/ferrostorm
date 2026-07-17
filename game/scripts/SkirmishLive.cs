@@ -189,6 +189,9 @@ public partial class SkirmishLive : Node3D
     // the marker can never drift from the truth. _rallyMarkers survives as a
     // node-lifetime cache only.
     private readonly Dictionary<int, MeshInstance3D> _rallyMarkers = new();
+    // SPAWN-04: factories currently toasted as EXIT BLOCKED, so one hold
+    // raises one toast rather than one per frame.
+    private readonly HashSet<int> _exitBlockedShown = new();
     private Label _selInfo = null!;
 
     // P5-ECON-07. A harvester the player parked on purpose stays parked: an
@@ -1378,6 +1381,7 @@ public partial class SkirmishLive : Node3D
         _minimap.Refresh(_fog.FogImage, dots, new Vector2(_cam.Position.X, _cam.Position.Z - _cam.Position.Y * 0.55f), fr);
         _selInfo.Text = _wallDrag ? WallDragSummary() : SelectionSummary();
         SyncRallyMarkers();   // ADR-007: markers mirror the sim's own RallyX/RallyY, selected producer only
+        CheckExitBlocked();   // SPAWN-04: a held factory says EXIT BLOCKED through the W3-19 toast path
 
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructure(EntityKind.Factory);
@@ -1765,6 +1769,31 @@ public partial class SkirmishLive : Node3D
                 || ents[sid].PlayerId != 0 || !ents[sid].HasRally)
                 (stale ??= new List<int>()).Add(sid);
         if (stale != null) foreach (int sid in stale) ForgetRally(sid);
+    }
+
+    /// <summary>SPAWN-04's client half, through the W3-19 toast path: a
+    /// factory holding a finished unit because every spawn cell is blocked
+    /// says so, once per hold, from a post-Step read of the held state
+    /// (progress pinned at total with a non-empty queue - a successful spawn
+    /// resets progress inside the same Step, so this read can never race a
+    /// normal completion). The sim needs no event for it: the hold is
+    /// ordinary hashed state, and the player sees the truthful stall.</summary>
+    private void CheckExitBlocked()
+    {
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+        {
+            var e = ents[i];
+            bool held = false;
+            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Factory)
+            {
+                var q = _world.QueueContents(i);
+                held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
+                if (held && _exitBlockedShown.Add(i))
+                    ShowToast($"EXIT BLOCKED  -  {(q[0] > 0 && q[0] < UnitNames.Length ? UnitNames[q[0]] : "UNIT")} WAITING");
+            }
+            if (!held) _exitBlockedShown.Remove(i);
+        }
     }
 
     /// <summary>A dead producer's rally marker dies with it, or the

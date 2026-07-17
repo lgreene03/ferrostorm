@@ -1893,6 +1893,29 @@ public sealed partial class World
 
     private readonly Dictionary<int, List<int>> _buckets = new(); // rebuilt per tick; keyed access only
 
+    /// <summary>
+    /// SPAWN-04's occupancy test: does any standing entity hold this cell?
+    /// ValidPlacement's own predicate, not a hand-rolled kind list: dead
+    /// entities and structures skip (structure cells are already blocked on
+    /// the terrain grid), anything else standing in the cell blocks it - so a
+    /// future EntityKind append is covered by construction. A direct
+    /// entity-index scan rather than a read of SeparationSystem's _buckets:
+    /// the buckets hold only Unit/Harvester kinds and were built before
+    /// ProductionSystem ran, so they would miss both the broader predicate
+    /// and anything an earlier factory spawned this same tick. Completions
+    /// are rare, so O(entities) here is negligible against the TDD s6 budget.
+    /// </summary>
+    private bool CellOccupied(int cx, int cy)
+    {
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var o = _entities[i];
+            if (!o.Alive || IsStructure(o.Kind)) continue;
+            if (Map.CellOf(o.X) == cx && Map.CellOf(o.Y) == cy) return true;
+        }
+        return false;
+    }
+
     // Deterministic ring of spawn offsets for completed units.
     private static readonly (int Dx, int Dy)[] SpawnOffsets =
         { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) };
@@ -2002,10 +2025,18 @@ public sealed partial class World
             e.BuildProgress = tentative;
             if (e.BuildProgress >= total)
             {
-                e.BuildProgress = 0;
-                e.BuildPaid = 0;
+                // TICKET-P5-SPAWN-04, THE MEASURED TRAP: the zeroing of
+                // BuildProgress and BuildPaid lives BELOW the hold decision,
+                // inside each success branch. At the top of this block - where
+                // it used to sit - every held tick re-entered with BuildPaid 0
+                // and the owed computation above recharged the FULL unit cost
+                // each tick: measured at ~3000 credits/second. With BuildPaid
+                // intact and progress pinned at total, owed is exactly zero
+                // for every held tick by the formula itself.
                 if (isCy)
                 {
+                    e.BuildProgress = 0;
+                    e.BuildPaid = 0;
                     // Sidebar flow: the finished structure waits for placement.
                     // C is the producing yard, which is A here too; set it anyway
                     // so a consumer can read C without asking which case it is.
@@ -2015,22 +2046,41 @@ public sealed partial class World
                     _entities[i] = e;
                     continue;
                 }
-                q.RemoveAt(0);
+                // Spawn-cell occupancy (SPAWN-04): terrain AND standing
+                // entities, via ValidPlacement's own predicate (CellOccupied).
                 int scx = Map.CellOf(e.X), scy = Map.CellOf(e.Y);
+                int sdx = 0, sdy = 0;
+                bool found = false;
                 foreach (var (dx, dy) in SpawnOffsets)
                 {
                     int nx = scx + dx, ny = scy + dy;
                     if (!Map.InBounds(nx, ny) || Map.IsBlocked(nx, ny)) continue;
-                    int spawned = def.Kind == EntityKind.Harvester
-                        ? SpawnHarvester(p, Map.CellCentre(nx), Map.CellCentre(ny))
-                        : SpawnUnit(p, Map.CellCentre(nx), Map.CellCentre(ny), def.Speed, def.Hp, def.Armour, def.WeaponId,
-                            def.SightCells, def.Stealth, def.Detector, def.Veterancy, queuedType);
-                    SetExitMove(spawned, in e, scx, scy, dx, dy);
-                    // C = the factory that built it (TICKET-P5-BD-14): the rally
-                    // attribution the client cannot recover from position alone.
-                    _events.Add(new GameEvent(GameEventType.ProductionComplete, spawned, queuedType, C: i));
+                    if (CellOccupied(nx, ny)) continue;
+                    sdx = dx; sdy = dy; found = true;
                     break;
                 }
+                if (!found)
+                {
+                    // Every offset blocked: the unit is HELD at 100 per cent,
+                    // fully paid, and retried next tick. The queue head is not
+                    // popped, so a paid unit can no longer vanish (SPAWN-D2 is
+                    // dead), the line behind the head stalls honestly, and a
+                    // cancel while held still refunds in full via BuildPaid.
+                    _entities[i] = e;
+                    continue;
+                }
+                e.BuildProgress = 0;
+                e.BuildPaid = 0;
+                q.RemoveAt(0);
+                int sx = scx + sdx, sy = scy + sdy;
+                int spawned = def.Kind == EntityKind.Harvester
+                    ? SpawnHarvester(p, Map.CellCentre(sx), Map.CellCentre(sy))
+                    : SpawnUnit(p, Map.CellCentre(sx), Map.CellCentre(sy), def.Speed, def.Hp, def.Armour, def.WeaponId,
+                        def.SightCells, def.Stealth, def.Detector, def.Veterancy, queuedType);
+                SetExitMove(spawned, in e, scx, scy, sdx, sdy);
+                // C = the factory that built it (TICKET-P5-BD-14): the rally
+                // attribution the client cannot recover from position alone.
+                _events.Add(new GameEvent(GameEventType.ProductionComplete, spawned, queuedType, C: i));
             }
             _entities[i] = e;
         }

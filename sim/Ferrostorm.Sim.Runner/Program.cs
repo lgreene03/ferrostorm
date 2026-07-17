@@ -2231,7 +2231,160 @@ int SpawnGate()
             return Fail("spawngate: v2 downgrade lost entities (and must never be checksum-refused)");
     }
 
-    // 5. The wire and replay formats carry SetRally as an ordinary command.
+    // 5. SPAWN-D1 is dead: ten units produced back to back, no rally, occupy
+    // ten DISTINCT cells (doc 23 SPAWN-04 acceptance). The default exit move
+    // plus the occupancy test spread them; nothing stacks, nothing vanishes.
+    {
+        var w = new World(15, 64, 64, 2);
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        for (int k = 0; k < 10; k++)
+            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        int preCount = w.EntityCount;
+        for (int t = 0; t < 10 * 75 + 400; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        if (w.EntityCount - preCount != 10)
+            return Fail($"spawngate: expected 10 produced units, got {w.EntityCount - preCount} (the ring must never saturate in the no-rally default game)");
+        var cells = new HashSet<int>();
+        for (int i = preCount; i < w.EntityCount; i++)
+        {
+            var u = w.Entities[i];
+            if (!u.Alive) return Fail("spawngate: a produced unit died unprovoked in the spread test");
+            if (u.Moving) return Fail("spawngate: all ten produced units must settle");
+            if (!cells.Add(w.Map.CellIndex(Map.CellOf(u.X), Map.CellOf(u.Y))))
+                return Fail($"spawngate: two of ten produced units share cell ({Map.CellOf(u.X)},{Map.CellOf(u.Y)}) - stacked-forever is back");
+        }
+    }
+
+    // 6. The walled-in hold: with every spawn cell blocked, a completed unit
+    // is HELD - never deleted, never re-charged. The factory spends EXACTLY
+    // ZERO credits over 100 held ticks (the 3000-credits-per-second trap's
+    // assertion), the queue stalls honestly behind the held head, and the
+    // instant a cell frees the unit spawns with ProductionComplete carrying C.
+    {
+        var w = new World(16, 64, 64, 2);
+        var events = new List<GameEvent>();
+        void StepN(int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                cmds.Clear();
+                events.AddRange(w.Events);
+            }
+        }
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        // Wall the whole ring: factory centre cell is (11,11); block every
+        // spawn candidate. The map, not units, blocks here - the walled-in
+        // case is the one that can persist forever and must stay honest.
+        foreach (var (dx, dy) in new[] { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) })
+            w.Map.SetBlocked(11 + dx, 11 + dy, true);
+        w.InvalidateFlowCache();
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        int preCount = w.EntityCount;
+        StepN(75 + 30); // the head completes at tick 75 and is now held
+        var f = w.Entities[factory];
+        if (f.BuildProgress != 75 * 100)
+            return Fail($"spawngate: the held factory must sit at 100 per cent (progress {f.BuildProgress})");
+        if (f.BuildPaid != 200)
+            return Fail($"spawngate: the held head must stay FULLY PAID (BuildPaid {f.BuildPaid}) or a cancel refunds nothing");
+        if (w.QueueLength(factory) != 2)
+            return Fail($"spawngate: the held head must not pop and the line must stall behind it (queue {w.QueueLength(factory)})");
+        if (w.EntityCount != preCount)
+            return Fail("spawngate: nothing may spawn while every cell is blocked");
+        foreach (var ev in events)
+            if (ev.Type == GameEventType.ProductionComplete)
+                return Fail("spawngate: ProductionComplete must not fire during the hold");
+        long heldCredits = w.Credits(0);
+        events.Clear();
+        StepN(100);
+        if (w.Credits(0) != heldCredits)
+            return Fail($"spawngate: a blocked factory spent {heldCredits - w.Credits(0)} credits over 100 held ticks - it must spend EXACTLY ZERO");
+        if (w.EntityCount != preCount)
+            return Fail("spawngate: the held unit must neither spawn nor vanish while blocked");
+        if (w.QueueLength(factory) != 2 || w.Entities[factory].BuildProgress != 75 * 100)
+            return Fail("spawngate: the hold must persist unchanged while blocked");
+        foreach (var ev in events)
+            if (ev.Type == GameEventType.ProductionComplete)
+                return Fail("spawngate: no completion event may fire across 100 held ticks");
+        // Free one cell: the mouth clears and the factory resumes THAT tick.
+        events.Clear();
+        w.Map.SetBlocked(11, 13, false);
+        w.InvalidateFlowCache();
+        StepN(2);
+        if (w.EntityCount != preCount + 1)
+            return Fail("spawngate: the held unit must spawn the instant a cell frees");
+        int freed = preCount;
+        if (Map.CellOf(w.Entities[freed].X) != 11 || Map.CellOf(w.Entities[freed].Y) != 13)
+            return Fail("spawngate: the released unit must spawn on the freed cell");
+        int completions = 0;
+        foreach (var ev in events)
+            if (ev.Type == GameEventType.ProductionComplete)
+            { completions++; if (ev.C != factory) return Fail("spawngate: the released completion must carry the producer in C"); }
+        if (completions != 1)
+            return Fail($"spawngate: expected exactly one completion on release, got {completions}");
+        if (w.QueueLength(factory) != 1)
+            return Fail("spawngate: the queue must pop on release and the second item must take the head");
+        StepN(75 + 60); // the second unit follows through the same freed mouth
+        if (w.EntityCount != preCount + 2)
+            return Fail("spawngate: the stalled second unit must build and spawn after the release");
+        if (w.Credits(0) != 20000 - 2 * 200)
+            return Fail($"spawngate: two rifles must cost exactly 400 across hold and release (spent {20000 - w.Credits(0)})");
+    }
+
+    // 7. The multi-unit close rally: with occupancy live, a rally two cells
+    // from the mouth neither bricks the ring nor stacks the crowd - four
+    // units spawn, settle at four DISTINCT POSITIONS (a rally crowd packs at
+    // separation spacing, so two positions may share a cell; identical
+    // positions would be the stacked-forever defect), one reaches the rally,
+    // and a fifth still spawns.
+    {
+        var w = new World(17, 64, 64, 2);
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Map.CellCentre(11), Map.CellCentre(15), 0));
+        for (int k = 0; k < 4; k++)
+            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        int preCount = w.EntityCount;
+        for (int t = 0; t < 4 * 75 + 300; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        if (w.EntityCount - preCount != 4)
+            return Fail($"spawngate: a close rally must not stall production under occupancy (got {w.EntityCount - preCount}/4)");
+        var positions = new HashSet<(long, long)>();
+        bool anyAtRally = false;
+        for (int i = preCount; i < w.EntityCount; i++)
+        {
+            var u = w.Entities[i];
+            if (!u.Alive) return Fail("spawngate: a close-rallied unit died unprovoked");
+            if (u.Moving) return Fail("spawngate: close-rallied units must settle");
+            if (!positions.Add((u.X.Raw, u.Y.Raw)))
+                return Fail("spawngate: two close-rallied units stacked on one exact position (SPAWN-D1 is back)");
+            if (Fix64.DistSq(u.X - Map.CellCentre(11), u.Y - Map.CellCentre(15)) <= Fix64.FromInt(4)) anyAtRally = true;
+        }
+        if (!anyAtRally)
+            return Fail("spawngate: no close-rallied unit ended within 2 cells of the rally point");
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        for (int t = 0; t < 75 + 120; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        if (w.EntityCount - preCount != 5)
+            return Fail("spawngate: the ring must still offer a cell for a fifth unit after the close-rally crowd settles");
+    }
+
+    // 8. The wire and replay formats carry SetRally as an ordinary command.
     {
         string path = Path.Combine(Path.GetTempPath(), "ferrostorm-spawngate.frep");
         var writer = new ReplayWriter(7, "gate");
@@ -2249,9 +2402,11 @@ int SpawnGate()
     }
 
     Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically); " +
-                      "3 rallied rifles left the mouth and settled at the rally with C naming the producer; a 2-cell rally moved every unit off its spawn cell (SPAWN-D3 dead); " +
+                      "3 rallied rifles left the mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
                       "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
-                      "SetRally round-trips the replay format");
+                      "ten units spread to ten distinct cells; a walled-in factory held its paid unit at 100 per cent spending EXACTLY ZERO over 100 ticks, " +
+                      "deleted nothing, stalled the line honestly, and released with C the instant a cell freed at exactly 400 credits for two rifles; " +
+                      "a 2-cell rally under occupancy spawned 4+1 units at distinct positions with one at the rally; SetRally round-trips the replay format");
     return 0;
 }
 
