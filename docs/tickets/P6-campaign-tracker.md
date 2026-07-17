@@ -12,7 +12,7 @@ lands; this file is the resume point if a session dies.
 
 | # | Wave | Authority | Hash impact | Status |
 |---|------|-----------|-------------|--------|
-| A | Doc 24 Tier 3: faction picker, music, VO, cursors | doc 24 tickets P6-FACTION-01, MUSIC-01, VO-01, CURSOR-01 | neutral | pending |
+| A | Doc 24 Tier 3: faction picker, music, VO, cursors | doc 24 tickets P6-FACTION-01, MUSIC-01, VO-01, CURSOR-01 | neutral | DONE (343c482) |
 | B1 | /data becomes the runtime source | ADR-006 (ratified) | neutral | pending |
 | B2 | Rally into the sim, THEN spawn occupancy and the refund | ADR-007 (ratified); doc 23 Wave 4 order is load-bearing | ONE regeneration | pending |
 | B3 | Power gets teeth: turret gate, draws, radar blackout | ADR-008 (ratified); walls-gate phase G amendment mandatory | regeneration | pending |
