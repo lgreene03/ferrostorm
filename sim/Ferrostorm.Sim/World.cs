@@ -41,7 +41,7 @@ public readonly struct Command
 // (byte)e.Kind, so appending a value is invisible to both for every existing
 // kind; renumbering one silently rewrites every golden hash and every replay.
 // RadarUplink (struct type 12) is spawnable since ADR-008; Barracks (struct
-// type 11) is catalogued but not yet spawnable (ADR-009's wave); Airfield,
+// type 11) is spawnable and produces the infantry since ADR-009; Airfield,
 // Emplacement, Bastion and Outpost are reservations only (doc 23 s4.1),
 // taken because reserving is free and a later collision with a saved byte is
 // silent and fatal.
@@ -469,8 +469,8 @@ public sealed partial class World
         // early, because that is what makes an infantry rush a real strategy
         // rather than a factory afterthought. Struct type 11 is the barracks;
         // UNIT type 11 is the engineer - different namespaces, no clash.
-        // Catalogued but not yet spawnable: no Spawn method, no PlaceStructure
-        // arm, no sidebar entry until the barracks ticket lands.
+        // Buildable since ADR-009 clause 5: it is the producer of every unit
+        // whose ProducedAt names struct type 11 (the infantry).
         11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 }),
         // Radar uplink (doc 23 s4.2 numbers): buildable since ADR-008 clause 4.
         // The client's minimap is lit only while a living uplink stands with
@@ -787,6 +787,27 @@ public sealed partial class World
         });
     }
 
+    /// <summary>Barracks (ADR-009 clause 5): the infantry production building,
+    /// SpawnFactory's shape for struct type 11. Cheap and early, because that
+    /// is what makes an infantry rush a real strategy rather than a factory
+    /// afterthought. Inside the sim it is an ordinary producer and an ordinary
+    /// structure: it queues, rallies, sells for half, repairs, captures,
+    /// blocks and counts for the victory test (all via IsProducer and
+    /// IsStructure membership).</summary>
+    public int SpawnBarracks(int player, int ax, int ay)
+    {
+        var def = GetStructureType(11);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Barracks,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 11,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
     /// <summary>
     /// Advance one tick, consuming the commands scheduled for it. The net layer
     /// must present commands pre-ordered (by PlayerId, then submission order);
@@ -916,7 +937,9 @@ public sealed partial class World
                     e.ReadyStructure = 0;
                     break;
                 }
-                if (e.Kind != EntityKind.Factory && e.Kind != EntityKind.ConstructionYard) break;
+                // ADR-009 clause 1, CancelProduce site: miss this and
+                // barracks orders are uncancellable, with no error to say so.
+                if (!IsProducer(e.Kind)) break;
                 if (!_queues.TryGetValue(e.Id, out var cq) || c.AuxId < 0 || c.AuxId >= cq.Count) break;
                 if (c.AuxId == 0)
                 {
@@ -988,6 +1011,7 @@ public sealed partial class World
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
                     case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
+                    case EntityKind.Barracks: SpawnBarracks(c.PlayerId, ax, ay); break;
                     case EntityKind.RadarUplink: SpawnRadarUplink(c.PlayerId, ax, ay); break;
                 }
                 break;
@@ -1059,7 +1083,13 @@ public sealed partial class World
             }
             case CommandType.Produce:
             {
-                if (e.Kind != EntityKind.Factory) break;
+                // ADR-009 clause 1: any producer may receive Produce. The CY
+                // is guarded out explicitly until the produced_at gate lands
+                // later in this same wave (its queue holds STRUCTURES, so a
+                // unit order routed into it would build the wrong catalogue's
+                // type); the gate replaces this line with the split proper.
+                if (!IsProducer(e.Kind)) break;
+                if (e.Kind == EntityKind.ConstructionYard) break;
                 if (GetUnitType(c.AuxId).Cost <= 0) break;
                 if (GetUnitType(c.AuxId).Faction != FactionCommon
                     && GetUnitType(c.AuxId).Faction != _playerFaction[c.PlayerId]) break; // not your side's hardware
@@ -1074,15 +1104,17 @@ public sealed partial class World
         _entities[c.EntityId] = e;
     }
 
-    // RadarUplink joined with ADR-008: omitting a new building here is the
-    // silent killer the ADR names - sell, repair, capture, rubble-unblock,
+    // RadarUplink joined with ADR-008, Barracks and Airfield with ADR-009
+    // clause 5 (the Airfield ahead of existing: membership is free and the
+    // omission is the failure mode): omitting a new building here is the
+    // silent killer the ADRs name - sell, repair, capture, rubble-unblock,
     // placement adjacency and the VictorySystem short-game rule all hang off
     // this predicate with no compile error to catch the omission.
     private static bool IsStructure(EntityKind k)
         => k is EntityKind.Refinery or EntityKind.Factory or EntityKind.PowerPlant
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
              or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall
-             or EntityKind.RadarUplink;
+             or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
@@ -1092,13 +1124,27 @@ public sealed partial class World
     private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
 
     /// <summary>
-    /// ADR-007: the structures SetRally accepts - producing structures only,
-    /// Factory or Construction Yard today. ADR-009's IsProducer widens this
-    /// same predicate when the barracks lands, so the wire format never
-    /// changes twice.
+    /// ADR-009 clause 1: the producer notion. Factory, Construction Yard and
+    /// Barracks; the Airfield joins when it exists (it is a slot-model
+    /// producer and waits on the air-layer ADR). Used at FOUR sites, three of
+    /// which fail silently if missed: Produce's kind test, ProductionSystem's
+    /// producer test (miss it and the barracks queue never advances with no
+    /// error), CancelProduce (miss it and barracks orders are uncancellable),
+    /// and the queue hash (which widens to all producer queues, closing
+    /// PROD-D5, inside PROD-04's regeneration).
     /// </summary>
-    private static bool IsRallyable(EntityKind k)
-        => k is EntityKind.Factory or EntityKind.ConstructionYard;
+    private static bool IsProducer(EntityKind k)
+        => k is EntityKind.Factory or EntityKind.ConstructionYard or EntityKind.Barracks;
+
+    /// <summary>
+    /// ADR-007: the structures SetRally accepts - producing structures only.
+    /// ADR-009 widened this predicate to IsProducer in place, exactly as B2's
+    /// delivery note said it would, so the wire format never changed twice:
+    /// the barracks rallies (infantry want it most) and the Construction Yard
+    /// keeps accepting the command as inert state (its products are placed,
+    /// not spawned; the client offers no affordance on it).
+    /// </summary>
+    private static bool IsRallyable(EntityKind k) => IsProducer(k);
 
     /// <summary>Footprint physically clear (bounds, terrain, standing entities), ignoring adjacency - MCV deployment founds a base from nothing.</summary>
     /// <remarks>Fixed at FootprintSize by design (ADR-005 clause 1): only MCV deploy calls this, and a Construction Yard is always 2x2.</remarks>
@@ -2037,7 +2083,9 @@ public sealed partial class World
                 continue;
             }
 
-            if (e.Kind != EntityKind.Factory && e.Kind != EntityKind.ConstructionYard) continue;
+            // ADR-009 clause 1, ProductionSystem site: miss this and the
+            // barracks queue never advances, with no error to say so.
+            if (!IsProducer(e.Kind)) continue;
             if (e.Kind == EntityKind.ConstructionYard && e.ReadyStructure != 0) continue; // placement pending pauses the line
             if (!_queues.TryGetValue(e.Id, out var q) || q.Count == 0) continue;
 

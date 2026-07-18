@@ -179,8 +179,12 @@ public sealed class MapData
                 EntityKind.VeilProjector => world.SpawnVeilProjector(st.Player, st.Ax, st.Ay),
                 // Shipped missing (PROD-D7, fixed by TICKET-P5-PROD-02): every
                 // spawnable kind needs an arm or a map carrying it throws here.
+                // ADR-009 clause 5 names this arm mandatory for the barracks
+                // for exactly that reason: the depot shipping without one is
+                // the proof this step gets skipped.
                 EntityKind.ServiceDepot => world.SpawnServiceDepot(st.Player, st.Ax, st.Ay),
                 EntityKind.Wall => world.SpawnWall(st.Player, st.Ax, st.Ay),
+                EntityKind.Barracks => world.SpawnBarracks(st.Player, st.Ax, st.Ay),
                 EntityKind.RadarUplink => world.SpawnRadarUplink(st.Player, st.Ax, st.Ay),
                 _ => throw new FormatException($"map structure: unknown struct type {st.StructType}"),
             };
