@@ -72,9 +72,17 @@ jump-to-event key". State after the completion wave of 2026-07-17:
   and the camera arrived at the recorded launch site to within a tenth of a
   cell.
 
-What remains of GDD s7 line 85's alert set is ONLY "radar goes dark": the
-radar blackout is ADR-008's, and its alert belongs to the ticket that builds
-the blackout, not to this one.
+What remained of GDD s7 line 85's alert set was ONLY "radar goes dark",
+and Wave B3 delivered it with the blackout it belongs to (2026-07-18,
+ADR-008 clause 4): the minimap blanks to RADAR OFFLINE when no living
+uplink stands with supply covering draw; the alert is edge-triggered on
+the LOSS crossing only (the low-power pattern, flag starting false, so
+the radarless opening is silent), with a toast, its own synthesised
+`alert_radar` cue (a carrier fracturing into static - signal loss, not a
+siren, audibly distinct from the whole set), the placeholder
+vo_radar_offline line, a gold ping at the uplink, and the jump-to-event
+record. Recovery relights the minimap. Verified live in the wave's
+offscreen run. GDD s7 line 85's alert set is now complete.
 
 ## TICKET-P5-ALERT-03 - the toast is peripheral
 

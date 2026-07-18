@@ -264,3 +264,32 @@ Gates: TICKET-P5-PWR-03, PWR-04 and PWR-05 (doc 23 Wave 5). PWR-04 depends on
 PWR-02, which landed in Wave 2 (commit 147f03b), and on PWR-03. Ratification
 unblocks the wave; none of the three tickets may start before it, and PWR-05
 additionally waits on Q008.
+
+## Implementation notes (dated, Wave B3, 2026-07-18)
+
+Implemented as ratified in P6 Wave B3 (branch ticket/p6-wave-b3; delivery
+notes in docs/tickets/P6-wave-b3-power-gets-teeth.md). Two findings of
+record, neither a deviation from the decision itself:
+
+1. **Clause 7's parenthetical on MapLoader.cs is half wrong, and the
+   mandated human re-read is what caught it.** "The shipped .fmap files
+   carry no structures today" is true of the four skirmish maps and FALSE
+   of the three mission files. mission-01's camp turret is powered (100
+   supply against 60 draw) and mission-03's turrets sit at 83 per cent
+   (100 against 120 under the new refinery draw, above the gate, below
+   full production). mission-02's camp turret drew 20 against a supply of
+   ZERO: clause 1 would have silenced the compound's only gun for the
+   whole mission, hash-invisibly - the walls-trap shape again, exactly why
+   this ADR made the re-read the acceptance criterion rather than the
+   golden diff. mission-02.fmap gained a plant for the camp in the same
+   change as the gate.
+
+2. **Q008 sequencing under the ratifying directive.** This ADR gates the
+   blackout on Q008; the P6 campaign tracker's authority (Luke's directive
+   of 2026-07-17, which also ratified this ADR) lists the radar blackout
+   in Wave B3's scope, and the wave instruction of 2026-07-17 assigns
+   ALERT-02's "radar goes dark" clause to the wave explicitly. The
+   blackout therefore shipped with the day-one rule as clause 4 wrote it
+   (every map and mission opens radarless); the CURATION half of Q008 -
+   whether missions grant or script radar coverage - remains open with the
+   Game Designer inside its decide-by date, recorded on Q008 itself.

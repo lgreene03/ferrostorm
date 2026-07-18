@@ -51,13 +51,31 @@ and mission?
    owned an uplink (loss aversion instead of a locked feature). Cheapest on
    the opening, weakest reading of the GDD sentence.
 
+## Status note (2026-07-18, Wave B3)
+
+The blackout MECHANICS shipped in Wave B3 under the P6 directive ("design
+out and build all these", the tracker's authority line, which lists the
+radar blackout in B3's scope) and the wave instruction assigning ALERT-02's
+radar clause there. What shipped is option 1's behaviour by default: every
+map and mission opens radarless until a 900-credit uplink stands with
+supply covering draw. What this question still owns, unchanged, is the
+CURATION half: whether the three missions grant, script, or keep the
+blackout as texture (option 1 versus option 2 above), with the .fmap and
+script edits that follow. The decide-by date stands. One input for the
+decision: mission-02.fmap now carries a plant for the CAMP (player 1),
+added by the turret gate's re-read; it powers the enemy compound and does
+nothing for the player's radar, so all three missions still play radarless
+for the human today.
+
 ## Changed / Assumed / Needed next
 
-- **Changed:** nothing. This is a question, not a decision.
+- **Changed:** the status note above; nothing else. The curation question
+  stays open.
 - **Assumed:** ADR-008's blackout mechanics (client-side gate at the minimap
   refresh, pings exempt, AI exempt) are settled by that ADR; this question
   is only about the opening experience and the mission content that follows
   from it.
-- **Needed next (from the Game Designer):** an option by the decide-by date.
-  TICKET-P5-PWR-05 ships the uplink and cannot ship the blackout without
-  this answer (ADR-008 gates it explicitly).
+- **Needed next (from the Game Designer):** the curation option by the
+  decide-by date; the shipped default is the purest reading and any
+  softening (scripted radar, grace period) is a data-plus-script edit on
+  top of the landed mechanics.

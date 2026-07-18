@@ -3247,6 +3247,12 @@ public partial class SkirmishLive : Node3D
     public Vector2 ScreenOf(float x, float z) => _cam.UnprojectPosition(new Vector3(x, 0.3f, z));
     public int OwnYardId => _yardId;
     public bool IsSelected(int id) => _selection.Contains(id);
+    // ---- Wave B3 verification surface (ADR-008), the same principle: read
+    // the shipped state, never a copy of it.
+    /// <summary>What the minimap's blackout gate is actually showing.</summary>
+    public bool MinimapRadarShown => _minimap.RadarLiveShown;
+    /// <summary>Is this turret actor wearing the offline wash right now?</summary>
+    public bool TurretDimmed(int id) => _offlineDimmed.Contains(id);
     /// <summary>Park the camera over a point at a chosen height, so a capture can
     /// be framed on the thing under test.</summary>
     public void FocusCameraOn(float x, float z, float height)
