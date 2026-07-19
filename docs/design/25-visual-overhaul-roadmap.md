@@ -1,9 +1,16 @@
 # 25. Visual Overhaul Roadmap: why it does not look as good, and the order to fix it
 
-Status: IN EXECUTION. **Wave V0 SHIPPED and Wave V1 SHIPPED**, branch
-`ticket/p6-visual-v0-v1`, delivery notes docs/tickets/P6-visual-v0-v1.md.
-Waves V2, V3 and V4 remain as written below. LOOK-03 is NOT done: correcting
-the three false ledger entries is a producer action and is still owed.
+Status: IN EXECUTION. **Waves V0 and V1 SHIPPED; V2 PART-SHIPPED.** V0/V1 on
+branch `ticket/p6-visual-v0-v1` (docs/tickets/P6-visual-v0-v1.md). Branch
+`ticket/p6-visual-v2` (docs/tickets/P6-visual-v2.md) ships the bake session's
+V2-01 (binary metallic) and V2-02 (kill the triple AO), the shroud-quality fix
+the previous wave uncovered, and the exposure retune this created, in one
+re-bake of all 27 models. **V2-03 (roughness octaves) and V2-04 (doc 22's C-06
+then C-05) were NOT in that session and remain**, and because the roadmap wants
+the whole bake to happen once, they now need their own re-bake; the pipeline is
+in the right state for them to land on the clean albedo V2-02 produced. Waves
+V3 and V4 remain as written below. LOOK-03 is NOT done: correcting the three
+false ledger entries is a producer action and is still owed.
 Date: 2026-07-19
 Owner: design-review, for execution by client-engineer + art-pipeline + tools agents
 

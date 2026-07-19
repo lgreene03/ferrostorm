@@ -90,7 +90,25 @@ public static class BattlefieldView
             // band. NOTE FOR C-10: it raises total directional energy by
             // fourteen per cent, so this number is the one to bring back down,
             // once, if the histogram then overshoots.
-            TonemapExposure = 2.9f,
+            //
+            // V2-03 retune (doc 25 wave V2). Brought down from 2.9 to 2.85,
+            // and the reason it comes down only that far is itself the finding.
+            // V1 raised exposure to replace the brightness the fog had added;
+            // V2's bake was expected to brighten the frame back and let this
+            // fall further. Measured, it did not. The AO-multiply removal and
+            // the false-specular removal brighten the baked UNITS, not the
+            // ground, because the ground is a runtime shader carrying no baked
+            // map, so whole-frame CAM-A luminance actually fell slightly
+            // (59.7 to 57.1). Exposure tracks the ground, which is the knob's
+            // ratified constraint: the new bake gives CAM-A open-ground
+            // luminance 92.0 at 2.9, 90.0 at 2.8 and 85.8 at 2.6, so anything
+            // below about 2.8 breaks doc 22 C-10's 90-to-135 floor. And it is
+            // the wrong tool for the units regardless: they read hot at 163
+            // mean, but AgX compresses them in its shoulder, so 2.9 to 2.6
+            // moves them only 163 to 155. 2.85 lands CAM-A ground at 91.0, a
+            // safe level inside the band, and trims the frame a touch. Taming
+            // the units belongs to doc 22's C-05 chroma pass, not to exposure.
+            TonemapExposure = 2.85f,
             AdjustmentEnabled = true,
             AdjustmentBrightness = 1.03f,
             AdjustmentContrast = 1.14f,
