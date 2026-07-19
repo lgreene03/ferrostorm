@@ -22,6 +22,13 @@ public partial class ModelLibrary : Node
         { 5, "com_factory" }, { 6, "com_construction_yard" }, { 7, "dir_turret" },
         { 8, "dir_superweapon" }, { 9, "sod_veil_projector" }, { 10, "com_service_depot" },
         { 3, "ferrite_cluster" },
+        // 12 = Barracks (ADR-009 clause 5). No com_barracks.glb exists yet, so
+        // it takes the established interim: the service depot, chosen over the
+        // factory because a player must be able to tell the two PRODUCERS
+        // apart at a glance, which is the whole point of the split. The
+        // bespoke model and the sidebar icon are owed to art-pipeline
+        // (TICKET-P6-ART-02).
+        { 12, "com_service_depot" },
         // 13 = RadarUplink (ADR-008 clause 4). No com_radar_uplink.glb exists
         // yet; doc 23 s4.2 prescribes the veil projector as the interim stand-in
         // because its `dish` child already spins under ScanRig, which reads as

@@ -85,7 +85,10 @@ public partial class SkirmishLive : Node3D
     // Structure placement mode
     private int _placingType;
     private MeshInstance3D _ghost = null!;
-    private int _yardId = -1, _factoryId = -1;
+    // ADR-009 clause 6: one cached producer id per unit-producing struct type.
+    // The barracks joins the factory because the sidebar's INFANTRY tab reads
+    // its queue, exactly as VEHICLES reads the factory's.
+    private int _yardId = -1, _factoryId = -1, _barracksId = -1;
     // DEF-01: the ghost's own range ring (a child of the ghost, so it tracks
     // the cursor for free) plus a dim ring on every own armed structure while
     // placing - the coverage-gap read that makes turret siting a decision.
@@ -231,14 +234,19 @@ public partial class SkirmishLive : Node3D
     private int _autoHarvestIssues;
 
     /// <summary>Producers the CLIENT offers a rally click on (TICKET-P5-BD-14
-    /// clause 5). Factory only: it is the one producer that spawns units. The
-    /// sim's own SetRally predicate additionally accepts a Construction Yard
-    /// (ADR-007, ahead of ADR-009's producer split), but a CY's products are
-    /// placed rather than spawned, so offering the click would be the Service
-    /// Depot dead affordance again (TICKET-P5-REP-10 retired that honestly).
-    /// This stays a predicate rather than a compare because PROD-05 adds
-    /// Barracks and Airfield here when those producers exist.</summary>
-    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory;
+    /// clause 5). The two that SPAWN units: the Factory and, since ADR-009
+    /// clause 5, the Barracks - infantry want a rally most of all. The
+    /// Airfield joins when it exists.
+    ///
+    /// The Construction Yard is deliberately still absent, which settles the
+    /// question B2 deferred to this wave. The sim's SetRally accepts a CY
+    /// (ADR-007, and ADR-009 widened that predicate to IsProducer rather than
+    /// narrowing it), but a yard's products are PLACED rather than spawned, so
+    /// a rally on one would be state that never moves anything: the Service
+    /// Depot dead affordance again, which TICKET-P5-REP-10 retired on purpose.
+    /// The sim keeps accepting the command because refusing it would be a
+    /// behaviour change for nothing; the client simply declines to offer it.</summary>
+    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.Barracks;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
     // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
@@ -694,6 +702,30 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
+    /// ADR-009 clause 6: the producer-routing seam. FindOwnStructure returns
+    /// the FIRST structure of a kind, which is why a second factory has been
+    /// inert scenery since the sim started keeping one queue per producer id
+    /// (PROD-D6): every order went to the same building however many stood.
+    /// This picks the live producer of a struct type with the SHORTEST queue,
+    /// ties breaking to the lower entity id so the choice is stable frame to
+    /// frame, which turns a second factory into a second line the way the sim
+    /// always allowed. It is also the seam a later primary-building ticket
+    /// (pick MY factory, not the least busy one) hangs off.
+    /// </summary>
+    private int FindOwnStructureByType(int structType)
+    {
+        int best = -1, bestQueue = int.MaxValue;
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.PlayerId != 0 || v.Id < 0 || v.Id >= _world.EntityCount) continue;
+            if (_world.Entities[v.Id].StructType != structType) continue;
+            int q = _world.QueueLength(v.Id);
+            if (q < bestQueue || (q == bestQueue && v.Id < best)) { bestQueue = q; best = v.Id; }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// TICKET-P5-ECON-06. A Harvest order with no refinery standing is accepted
     /// by the sim and accomplishes nothing: it sets FieldId, asks for the
     /// nearest refinery, gets -1 back, and leaves the harvester Idle without
@@ -707,6 +739,17 @@ public partial class SkirmishLive : Node3D
     {
         foreach (var e in _world.Entities)
             if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Refinery) return true;
+        return false;
+    }
+
+    /// <summary>ADR-009 clause 6: does player 0 own a living instance of this
+    /// structure type? The client's read of the same question World.HasPrereqs
+    /// asks of the same state, which is what keeps the panel and the gate from
+    /// disagreeing about what is buildable.</summary>
+    private bool OwnsStructType(int structType)
+    {
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == 0 && e.StructType == structType) return true;
         return false;
     }
 
@@ -789,9 +832,14 @@ public partial class SkirmishLive : Node3D
     public void QueueUnit(int unitType)
     {
         if (!(MatchConfig.AllowedUnits?.Contains(unitType) ?? true)) return;
-        if (_factoryId >= 0)
+        // ADR-009 clause 6: route by the unit's OWN produced_at, through the
+        // live catalogue the sim gates on. Sending every unit to the factory
+        // would now be sending the infantry somewhere that refuses them, and
+        // it would do it silently, which is REP-D1's sin.
+        int producer = FindOwnStructureByType(_world.GetUnitType(unitType).ProducedAt);
+        if (producer >= 0)
         {
-            _pending.Add(new Command(0, 0, CommandType.Produce, _factoryId, Fix64.Zero, Fix64.Zero, unitType));
+            _pending.Add(new Command(0, 0, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
             _audio.Play("ui_confirm", -6);
         }
     }
@@ -922,14 +970,17 @@ public partial class SkirmishLive : Node3D
         _objective.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
         hud.AddChild(_objective);
 
-        // W3-19: flyout toast just left of the 190px sidebar, below the top
-        // status row; ShowToast animates it in and fades it out.
+        // W3-19: flyout toast just left of the sidebar, below the top status
+        // row; ShowToast animates it in and fades it out. The offsets follow
+        // Sidebar.PanelWidth rather than a copied literal, so the toast cannot
+        // slide under the panel the next time it is resized (it nearly did
+        // when ADR-009's tab bar widened it).
         _toast = new Label
         {
             Name = "Toast",
             Visible = false,
             AnchorLeft = 1, AnchorRight = 1, AnchorTop = 0,
-            OffsetLeft = -520, OffsetRight = -205, OffsetTop = 84,
+            OffsetLeft = -(Sidebar.PanelWidth + 330f), OffsetRight = -(Sidebar.PanelWidth + 15f), OffsetTop = 84,
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         _toast.AddThemeFontSizeOverride("font_size", 15);
@@ -957,8 +1008,13 @@ public partial class SkirmishLive : Node3D
         // reads, by delegate for the same reason they are delegates.
         // ADR-006: and the unit price column joins them, because the sidebar
         // no longer carries a second copy of any cost.
+        // ADR-009 clause 6: produced_at decides which TAB a unit lives in and
+        // prerequisites decide whether it is on offer, both read from the live
+        // catalogue through the same delegates, so the tab a player finds a
+        // button under and the order the sim will accept cannot disagree.
         _sidebar.Init(this, t => _world.GetUnitType(t).BuildTicks, t => _world.GetStructureType(t),
-            t => _world.GetUnitType(t).Faction, t => _world.GetUnitType(t).Cost);
+            t => _world.GetUnitType(t).Faction, t => _world.GetUnitType(t).Cost,
+            t => _world.GetUnitType(t).ProducedAt, t => _world.GetUnitType(t).Prereqs);
         // TICKET-P5-SAVE-01: the sidebar is a command surface, and playback takes
         // no commands - RunOneTick drops _pending outright. Leaving it up meant a
         // replay showed lit build buttons and a "PLACE >>" prompt that did
@@ -1450,22 +1506,37 @@ public partial class SkirmishLive : Node3D
         SyncRallyMarkers();   // ADR-007: markers mirror the sim's own RallyX/RallyY, selected producer only
         CheckExitBlocked();   // SPAWN-04: a held factory says EXIT BLOCKED through the W3-19 toast path
 
+        // ADR-009 clause 6: one producer id per line, chosen by struct type
+        // through the routing seam, so a second factory is a second line
+        // rather than scenery (PROD-D6).
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
-        _factoryId = FindOwnStructure(EntityKind.Factory);
+        _factoryId = FindOwnStructureByType(World.FactoryStructType);
+        _barracksId = FindOwnStructureByType(World.BarracksStructType);
         int ready = _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
         // W3-15: hand the sidebar the full queue contents plus the head's
         // build fraction (BuildProgress counts percent-ticks, total is
         // BuildTicks * 100). Pure post-Step reads, the rally-code precedent.
+        Sidebar.ProducerLine UnitLine(int id)
+        {
+            if (id < 0) return Sidebar.ProducerLine.None;
+            var q = _world.QueueContents(id);
+            float p = q.Count > 0
+                ? _world.Entities[id].BuildProgress / (_world.GetUnitType(q[0]).BuildTicks * 100f) : 0f;
+            return new Sidebar.ProducerLine(true, q, p);
+        }
         var yardQ = _yardId >= 0 ? _world.QueueContents(_yardId) : System.Array.Empty<int>();
-        var facQ = _factoryId >= 0 ? _world.QueueContents(_factoryId) : System.Array.Empty<int>();
         float yardProg = _yardId >= 0 && yardQ.Count > 0
             ? _world.Entities[_yardId].BuildProgress / (_world.GetStructureType(yardQ[0]).BuildTicks * 100f) : 0f;
-        float facProg = _factoryId >= 0 && facQ.Count > 0
-            ? _world.Entities[_factoryId].BuildProgress / (_world.GetUnitType(facQ[0]).BuildTicks * 100f) : 0f;
         // BD-10 hands the sidebar the supply and draw already tallied above, so
         // the bar and the status line cannot disagree about the same numbers.
-        _sidebar.Refresh(_world.Credits(0), ready, _factoryId >= 0, _yardId >= 0, yardQ, facQ, yardProg, facProg,
-            supply, draw);
+        // The last argument is ADR-009 clause 6's live prerequisite read: does
+        // player 0 own a living instance of this struct type? It is the same
+        // question World.HasPrereqs asks, asked of the same state, so the
+        // panel and the gate cannot drift.
+        _sidebar.Refresh(_world.Credits(0), ready,
+            new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
+            UnitLine(_factoryId), UnitLine(_barracksId),
+            supply, draw, OwnsStructType);
 
         if (_placingType > 0)
         {
@@ -1758,7 +1829,11 @@ public partial class SkirmishLive : Node3D
                         && _ownerBrownedOut[v.PlayerId]
                         ? "   OFFLINE - LOW POWER" : "";
                     string acts = !Mobile(v.Kind)
-                        ? (v.Kind == EntityKind.Factory ? $"   right-click: rally   {kRepair} repair  {kSell} sell" : $"   {kRepair} repair  {kSell} sell")
+                        // ADR-009: the rally affordance follows Ralliable, so
+                        // a barracks advertises its rally exactly as a factory
+                        // does rather than the readout naming one producer by
+                        // hand and quietly forgetting the other.
+                        ? (Ralliable(v.Kind) ? $"   right-click: rally   {kRepair} repair  {kSell} sell" : $"   {kRepair} repair  {kSell} sell")
                         // TICKET-P5-SPAWN-03: the MCV advertises its one
                         // action the way the structures advertise repair,
                         // read from the live binding (the SET-01 rule) so a
@@ -1863,7 +1938,10 @@ public partial class SkirmishLive : Node3D
         {
             var e = ents[i];
             bool held = false;
-            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Factory)
+            // ADR-009: every unit producer can hold, not just the factory. A
+            // walled-in barracks that never says so is the same silent stall
+            // the toast exists to break.
+            if (e.Alive && e.PlayerId == 0 && e.Kind is EntityKind.Factory or EntityKind.Barracks)
             {
                 var q = _world.QueueContents(i);
                 held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
@@ -3196,6 +3274,50 @@ public partial class SkirmishLive : Node3D
     public Color SidebarPowerFillColour => _sidebar.PowerFillColour;
     public bool SidebarPowerPulsing => _sidebar.PowerPulsing;
     public string SidebarStructHeader => _sidebar.StructHeaderText;
+
+    // ---- ADR-009 verification surface (the same principle as everything
+    // above: read the shipped state, never a copy of it).
+    /// <summary>The live queue at a producer, which is how a test tells WHICH
+    /// building took an order - the whole point of the split.</summary>
+    public int QueueLengthOf(int producerId) => _world.QueueLength(producerId);
+    /// <summary>The first own living entity of a kind, for a test that needs
+    /// to select the barracks it just built.</summary>
+    public int FirstOwnOfKindForTest(EntityKind kind) => FindOwnStructure(kind);
+    /// <summary>The producer this client would route a unit order to, so a
+    /// test can prove PROD-D6's second-factory fix rather than infer it.</summary>
+    public int ProducerForUnitForTest(int unitType)
+        => FindOwnStructureByType(_world.GetUnitType(unitType).ProducedAt);
+    /// <summary>A screen point a few cells clear of a producer, projected
+    /// through the REAL camera, so a rally test drives the actual right-click
+    /// path rather than fabricating a command.</summary>
+    public Vector2 RallyScreenPointForTest(int structureId)
+    {
+        var e = _world.Entities[structureId];
+        // The rally-marker idiom for Fix64 to float (raw over 2^32), which is
+        // how every other position read in this file crosses the boundary.
+        var world = new Vector3(
+            (float)(e.X.Raw / 4294967296.0) + 6f, 0, (float)(e.Y.Raw / 4294967296.0) + 6f);
+        return _cam.UnprojectPosition(world with { Y = BattlefieldView.GroundHeight(world.X, world.Z) });
+    }
+    /// <summary>Did the most recently produced own unit end up at this
+    /// producer's rally? Read from sim positions against the sim's own rally.</summary>
+    public bool NewestUnitNearRallyOf(int structureId)
+    {
+        var p = _world.Entities[structureId];
+        if (!p.HasRally) return false;
+        int newest = -1;
+        for (int i = 0; i < _world.EntityCount; i++)
+        {
+            var e = _world.Entities[i];
+            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Unit) newest = i;
+        }
+        if (newest < 0) return false;
+        var u = _world.Entities[newest];
+        return Fix64.DistSq(u.X - p.RallyX, u.Y - p.RallyY) <= Fix64.FromInt(36);
+    }
+    /// <summary>Leave the battle the way the pause menu does, so a test can
+    /// start a second match through the real menu.</summary>
+    public void QuitToMenuForTest() => QuitToMenu();
     public int SelectionCount => _selection.Count;
     public void ClearSelection() => _selection.Clear();
     /// <summary>Select exactly one entity, as a single left-click on it would.</summary>
