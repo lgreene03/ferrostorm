@@ -18,7 +18,7 @@ def _node(nt, kind, x, y, **inputs):
         n.inputs[k].default_value = v
     return n
 
-def wmat(name, emit=0.0, rough=0.7, metal=0.25, wear=0.5, grime=0.5):
+def wmat(name, emit=0.0, rough=0.7, metal=0.0, wear=0.5, grime=0.5):
     """Weathered version of builder.mat(name). wear 0..1 = edge chipping
     amount; grime 0..1 = dust/roughness mottling amount."""
     key = (name, emit, wear, grime)
@@ -33,14 +33,66 @@ def wmat(name, emit=0.0, rough=0.7, metal=0.25, wear=0.5, grime=0.5):
         b.inputs["Emission Color"].default_value = base
         b.inputs["Emission Strength"].default_value = emit
 
-    # --- Edge wear: pointiness -> sharp ramp -> mix bare-metal chips ---
-    geo = nt.nodes.new('ShaderNodeNewGeometry'); geo.location = (-1000, 300)
+    # --- Edge wear: convexity -> sharp ramp -> mix bare-metal chips ---
+    #
+    # V2-01a, and this is a defect found while wiring the metallic channel to
+    # this mask rather than one anybody had filed. This chain used to read
+    # Geometry.Pointiness through a hard-coded window of 0.535 to 0.595, on
+    # the stated theory that "pointiness clusters tightly around 0.5". It does
+    # not. Pointiness is normalised over the mesh, so its flat-face value is a
+    # property of the topology, and baked across the whole roster it lands at
+    # 0.5725 on most of the common and Directorate models, 0.6039 to 0.6118 on
+    # the infantry, the scout dish and the vanguard wheels, and 0.30 to 0.33 on
+    # the Sodality vehicles. A flat face at 0.5725 sits SIXTY-TWO PER CENT of
+    # the way through the old window, so the mask was not an edge mask at all:
+    # it read about 0.6 across entire flat panels. Measured share of texels
+    # falling inside or above the window: 97 per cent on com_factory, 99.9 on
+    # com_wall_post and the vanguard car body, and 100 per cent on the vanguard
+    # wheels and the scout dish. The consequence shipped in every .glb: the
+    # bare-metal chip colour (0.50, 0.53, 0.56) was mixed over most of the
+    # surface of most of the roster instead of over its edges, which is a
+    # large part of why the units read pale, chalky and low-contrast, and it
+    # is why the Sodality vehicles, whose pointiness happens to fall BELOW the
+    # window, were measurably the darkest and least chalky models in the game.
+    # No single pair of constants can window a quantity whose flat value
+    # ranges from 0.30 to 0.61, so the quantity has to change.
+    #
+    # The replacement is absolute rather than relative: the angle between the
+    # bevel-shaded normal and the true geometric normal. On a flat face those
+    # are the same vector and the dot product is exactly 1.0 whatever the mesh
+    # looks like; inside the bevel radius of an edge they diverge. Baked over
+    # the roster the median is 0.00 to 0.043 on every single object, with the
+    # tail where the edges are, which is the separation the old mask never
+    # had. It is also scale-correct for free, because the radius is in world
+    # units, so a 0.4-unit infantryman and a two-unit structure get chips of
+    # the same physical size instead of the same UV size.
+    bevm = nt.nodes.new('ShaderNodeBevel'); bevm.location = (-1200, 300)
+    # 16 rather than 8: the Bevel node traces rays, so its normal is a random
+    # variable, and a threshold applied to a noisy input dithers the mask edge
+    # into intermediate values that the bake then averages. Raising the sample
+    # count is the cheapest way to keep the metallic channel binary; measured
+    # on dir_cannon_tank, the share of texels stranded in the invalid 0.10 to
+    # 0.85 middle band falls from 12.5 per cent at 8 samples to 7.7 at 16 and
+    # 5.3 at 32, for no change in any other statistic.
+    bevm.samples = 32
+    bevm.inputs['Radius'].default_value = 0.04
+    geo = nt.nodes.new('ShaderNodeNewGeometry'); geo.location = (-1200, 140)
+    dot = nt.nodes.new('ShaderNodeVectorMath'); dot.location = (-1000, 300)
+    dot.operation = 'DOT_PRODUCT'
+    nt.links.new(bevm.outputs['Normal'], dot.inputs[0])
+    nt.links.new(geo.outputs['Normal'], dot.inputs[1])
+    conv = nt.nodes.new('ShaderNodeMath'); conv.location = (-900, 300)
+    conv.operation = 'SUBTRACT'
+    conv.inputs[0].default_value = 1.0
+    nt.links.new(dot.outputs['Value'], conv.inputs[1])
     ramp = nt.nodes.new('ShaderNodeValToRGB'); ramp.location = (-800, 300)
-    # pointiness clusters tightly around 0.5; a narrow window right of it
-    # isolates convex edges only
-    ramp.color_ramp.elements[0].position = 0.535
-    ramp.color_ramp.elements[1].position = 0.565 + (1.0 - wear) * 0.06
-    nt.links.new(geo.outputs['Pointiness'], ramp.inputs['Fac'])
+    # Window chosen from the baked distribution above: the lower edge sits
+    # clear of every object's flat-face median and the upper edge lands inside
+    # the tail, which gives roughly ten to twenty per cent chip coverage on a
+    # bevelled hull and close to none on a flat panel such as a factory door.
+    ramp.color_ramp.elements[0].position = 0.20 - wear * 0.16
+    ramp.color_ramp.elements[1].position = 0.58 - wear * 0.16
+    nt.links.new(conv.outputs['Value'], ramp.inputs['Fac'])
     # break the wear line up with fine noise so chips look chipped, not airbrushed
     n1 = _node(nt, 'ShaderNodeTexNoise', -1000, 60)
     n1.inputs['Scale'].default_value = 34.0
@@ -49,6 +101,28 @@ def wmat(name, emit=0.0, rough=0.7, metal=0.25, wear=0.5, grime=0.5):
     mul.operation = 'MULTIPLY'
     nt.links.new(ramp.outputs['Color'], mul.inputs[0])
     nt.links.new(n1.outputs['Fac'], mul.inputs[1])
+
+    # --- V2-01: Metallic driven from the chip mask, not from a constant ---
+    # The metallic-roughness BRDF is a two-material model and the only two
+    # materials on any of these assets are painted steel, which is a
+    # dielectric at 0.0, and the bare metal exposed where the paint has
+    # chipped off, which is 1.0. Anything in between is not a material. The
+    # chip mask above is already the map of where paint is missing, so it is
+    # also, by construction, the map of where metal shows.
+    #
+    # It is pushed through a steep ramp rather than used raw because the mask
+    # is a mix FACTOR: it is fine for it to be 0.4 when blending toward the
+    # chip colour, but a metallic of 0.4 is the exact defect this ticket
+    # exists to remove. The narrow 0.08-to-0.20 window makes the channel
+    # binary everywhere except the transition texel at a chip edge, which is
+    # the one place a blend is physically legitimate. The window sits low
+    # because any paint loss at all exposes metal underneath.
+    mramp = nt.nodes.new('ShaderNodeValToRGB'); mramp.location = (-420, 380)
+    mramp.color_ramp.interpolation = 'CONSTANT'
+    mramp.color_ramp.elements[0].position = 0.0
+    mramp.color_ramp.elements[1].position = 0.14
+    nt.links.new(mul.outputs['Value'], mramp.inputs['Fac'])
+    nt.links.new(mramp.outputs['Color'], b.inputs['Metallic'])
 
     # --- Grime: large soft noise darkens colour and roughens surface ---
     n2 = _node(nt, 'ShaderNodeTexNoise', -1000, -180)

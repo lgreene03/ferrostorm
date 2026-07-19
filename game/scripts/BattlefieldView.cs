@@ -97,8 +97,15 @@ public static class BattlefieldView
             AdjustmentSaturation = 1.12f,
             SsaoEnabled = true,
             SsaoRadius = 1.5f,
-            SsaoIntensity = 2.5f,
-            SsaoPower = 1.8f,
+            // V2-02 (doc 25). 2.5 and 1.8, against Godot's defaults of 2.0
+            // and 1.5, were tuned to be visible against crevices that were
+            // ALREADY darkened: the bake multiplied ambient occlusion into the
+            // base colour at eighty-five per cent and shipped the same AO
+            // again in the ORM red channel. With that double count removed
+            // from the assets, the old values crush the crevices to black
+            // holes rather than shading them.
+            SsaoIntensity = 1.6f,
+            SsaoPower = 1.4f,
             SsaoDetail = 0.6f,
             SsaoHorizon = 0.06f,
             SsaoSharpness = 0.98f,

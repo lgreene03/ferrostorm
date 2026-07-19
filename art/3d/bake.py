@@ -58,11 +58,23 @@ def bake_pass(obj, bake_type, img_name, colorspace, size):
 
 def bake_value_pass(obj, img_name, size):
     # W4-06 value bridge: Metallic is not a bakeable pass, so temporarily
-    # drive each material's output from an Emission shader holding the
+    # drive each material's output from an Emission shader carrying the
     # metallic value, bake EMIT, then restore the original surface link.
     # Materials are cached and shared across slots/objects: swap each
     # unique material once or the second swap would capture the bridge
     # itself as the link to restore.
+    #
+    # V2-01 (doc 25): bake the NODE OUTPUT, not the default_value. Reading
+    # default_value is what put the constant 0.2 into the blue channel of all
+    # 27 shipped models: materials2.wmat drives Metallic from a node graph,
+    # and an unlinked socket's default_value is simply whatever was last
+    # assigned to it before the link was made, which is a number nothing in
+    # the render ever uses. When the socket is linked, the bridge is fed from
+    # the same socket the Principled BSDF is fed from, so what lands in the
+    # image is what the shader actually evaluates per texel. The constant path
+    # is kept for materials that genuinely do hold a flat value, which is the
+    # emissive family, since builder.mat only routes non-emissive parts
+    # through wmat.
     saved, seen = [], set()
     for slot in obj.material_slots:
         m = slot.material
@@ -73,9 +85,13 @@ def bake_value_pass(obj, img_name, size):
         outn = nt.nodes['Material Output']
         old = outn.inputs['Surface'].links[0].from_socket
         em = nt.nodes.new('ShaderNodeEmission')
-        v = (nt.nodes['Principled BSDF'].inputs['Metallic'].default_value
-             if 'Principled BSDF' in nt.nodes else 0.0)
-        em.inputs['Color'].default_value = (v, v, v, 1)
+        msock = (nt.nodes['Principled BSDF'].inputs['Metallic']
+                 if 'Principled BSDF' in nt.nodes else None)
+        if msock is not None and msock.links:
+            nt.links.new(msock.links[0].from_socket, em.inputs['Color'])
+        else:
+            v = msock.default_value if msock is not None else 0.0
+            em.inputs['Color'].default_value = (v, v, v, 1)
         nt.links.new(em.outputs['Emission'], outn.inputs['Surface'])
         saved.append((nt, outn, old, em))
     img = bake_pass(obj, 'EMIT', img_name, 'Non-Color', size)
@@ -83,6 +99,46 @@ def bake_value_pass(obj, img_name, size):
         nt.links.new(old, outn.inputs['Surface'])
         nt.nodes.remove(em)
     return img
+
+def mute_metallic(objs):
+    """Force Metallic to 0 on every unique material of objs, returning what is
+    needed to put it back.
+
+    V2-01: this is required the moment Metallic stops being a constant. The
+    glTF base colour of a metal is its reflectance tint and must not be black,
+    but the Cycles DIFFUSE pass returns the diffuse LOBE, and a Principled
+    BSDF at Metallic 1.0 has no diffuse lobe at all, so it bakes to black.
+    Verified on the first V2 test bake: driving Metallic from the chip mask
+    without this dropped dir_cannon_tank's baked base-colour luminance from
+    0.128 to 0.022, which is the map going dark exactly where the metal is.
+    Muting Metallic for the duration of the DIFFUSE bake makes that pass mean
+    what the pipeline has always used it to mean, which is base colour.
+    """
+    saved, seen = [], set()
+    for ob in objs:
+        for slot in ob.material_slots:
+            m = slot.material
+            if m is None or m.name in seen:
+                continue
+            seen.add(m.name)
+            nt = m.node_tree
+            if 'Principled BSDF' not in nt.nodes:
+                continue
+            s = nt.nodes['Principled BSDF'].inputs['Metallic']
+            link = s.links[0].from_socket if s.links else None
+            if link is not None:
+                nt.links.remove(s.links[0])
+            saved.append((nt, s, link, s.default_value))
+            s.default_value = 0.0
+    return saved
+
+
+def restore_metallic(saved):
+    for nt, s, link, dv in saved:
+        s.default_value = dv
+        if link is not None:
+            nt.links.new(link, s)
+
 
 def pixels_of(img):
     arr = np.empty(len(img.pixels), np.float32)
@@ -114,7 +170,9 @@ for name in names:
     any_glow = False
     for ob in objs:
         suffix = '' if ob is o else f'_{ob.name}'
+        muted = mute_metallic([ob])
         diff = bake_pass(ob, 'DIFFUSE', f'{name}{suffix}_diff', 'sRGB', size)
+        restore_metallic(muted)
         rough = bake_pass(ob, 'ROUGHNESS', f'{name}{suffix}_rough', 'Non-Color', size)
 
         # W4-01: real per-object emission map, dropped when the bake is black
@@ -125,18 +183,31 @@ for name in names:
         # W4-04: tangent normal map (bevel shader edges + seams + grain)
         norm = bake_pass(ob, 'NORMAL', f'{name}{suffix}_norm', 'Non-Color', size)
 
-        # W4-03: AO at raised quality, multiplied into the diffuse (glTF
-        # cannot export a Mix node, so compose pixels directly)
+        # W4-03: AO at raised quality. It goes into the ORM red channel below
+        # and NOWHERE ELSE.
+        #
+        # V2-02 (doc 25): the multiply into the diffuse that used to live here
+        # is deleted, not zeroed, so that a future reader cannot restore it by
+        # tuning a constant back up. It read `out = d * (1 - k + k * a)` at
+        # k = 0.85, which meant the exported base colour was the albedo with
+        # ambient occlusion burned into it at eighty-five per cent. The same
+        # AO is packed into the ORM red channel and exported as the glTF
+        # occlusion texture, which Godot wires into the material's AO slot
+        # automatically, and the environment then runs its own SSAO on top.
+        # Occlusion was being applied three times, and the copy in the base
+        # colour is the one that cannot be undone at runtime: a lighting term
+        # in an albedo map is not recoverable, it is just a darker albedo. The
+        # measured median of the shipped diffuse atlas was linear 0.037, which
+        # is most of why the game reads dark.
+        #
+        # NOT touched, deliberately: use_pass_direct and use_pass_indirect are
+        # already False above. Setting them was proposed as the fix for this
+        # and is a verified no-op; the 0.992 correlation offered as evidence
+        # for it was produced by the multiply on this line, by construction.
         sc.cycles.samples = 64
         ao = bake_pass(ob, 'AO', f'{name}{suffix}_ao', 'Non-Color', size)
         sc.cycles.samples = 16
-        d = pixels_of(diff)
         a = pixels_of(ao)
-        k = 0.85
-        out = d * (1.0 - k + k * a)
-        out[3::4] = 1.0
-        diff.pixels.foreach_set(out)
-        diff.update()
 
         # W4-06: pack AO/rough/metal into one ORM image
         metal = bake_value_pass(ob, f'{name}{suffix}_metal', size)

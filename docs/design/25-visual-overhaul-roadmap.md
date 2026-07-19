@@ -18,9 +18,10 @@ ticket regardless of its numeric criterion. The harness that makes that
 checkable is `tools/lookdev/capture.sh` and `tools/lookdev/contact.py`, both
 committed. There is no longer any excuse for a wave shipping unseen.
 
-**Four corrections to this document, all measured rather than argued.** They are
+**Five corrections to this document, all measured rather than argued.** They are
 recorded here in place because a later reader will otherwise implement the
-version that was wrong.
+version that was wrong. Corrections 1 to 4 were found by wave V0/V1, correction
+5 by wave V2.
 
 1. **LOOK-01 clause 4's headless invocation does not work.** Godot's
    `--headless` selects the dummy rasterizer and renders nothing, so a headless
@@ -48,6 +49,32 @@ version that was wrong.
    set by `SkyTopColor`, `SkyHorizonColor` and `SkyEnergyMultiplier` and by
    nothing else. V1-03's own acceptance measurement is also unmeasurable as
    written: at a fixed -50 pitch no downward-facing hull face is visible at all.
+
+5. **V2-01 clause 3 rests on a chip mask that does not work, and the broken
+   mask is itself one of the largest visual defects in the project.** The
+   clause says to drive the Metallic socket from "the existing pointiness chip
+   mask", which assumes that mask isolates convex edges. It does not.
+   `materials2.wmat` windowed `Geometry.Pointiness` between 0.535 and 0.595 on
+   the stated theory that pointiness "clusters tightly around 0.5". Baked and
+   measured across all 27 models, the flat-face value is 0.5725 on most of the
+   common and Directorate roster, 0.6039 to 0.6118 on the infantry, the scout
+   dish and the vanguard wheels, and 0.30 to 0.33 on the Sodality vehicles.
+   Pointiness is normalised over the mesh, so its flat value is a property of
+   the topology and no fixed window can serve a range that wide. A flat face at
+   0.5725 sits 62 per cent of the way through the old window, so the mask read
+   about 0.6 across entire flat panels. Share of texels inside or above the
+   window: 97 per cent on com_factory, 99.9 on com_wall_post and the vanguard
+   car body, 100 on the vanguard wheels and the scout dish. **The bare-metal
+   chip colour (0.50, 0.53, 0.56) was therefore mixed over most of the surface
+   of most of the roster rather than over its edges**, which is a large part of
+   the pale chalky low-contrast read, and it is why the Sodality vehicles,
+   whose pointiness happens to fall BELOW the window, measured as the darkest
+   and least chalky models in the game. Section 1 attributed the whole chalky
+   read to the metallic constant; the constant is real and is fixed, but it had
+   company. V2 replaces the quantity rather than the window: the mask is now
+   the angle between the bevel-shaded normal and the true geometric normal,
+   which is exactly 1.0 on any flat face whatever the topology, and which
+   measured a median of 0.00 to 0.043 on every object in the roster.
 
 **What the day-one experiments proved.** At CAM-A, setting `VolumetricFogDensity`
 to zero dropped mean frame luminance by 37.5/255, meaning the fog was ADDING

@@ -14,10 +14,19 @@ _mats = {}
 USE_WEATHERED = False  # set True (see lineup.py) to route every part through
                        # materials2.wmat - roster-wide weathering, one switch
 
-def mat(name, emit=0.0, rough=0.7, metal=0.15):
+def mat(name, emit=0.0, rough=0.7, metal=0.0):
+    # V2-01 (doc 25). The default was 0.15 and the line below floored it at
+    # 0.2, so the metallic channel of every one of the 27 shipped models was
+    # the literal constant 0.2 - byte 51 at the 5th, 50th and 95th percentiles
+    # alike. The metallic-roughness BRDF has no valid material there: it takes
+    # about a fifth of the diffuse albedo away and hands it to a specular lobe
+    # with a muddy F0, and that lobe reflects the sky. Nothing in this game is
+    # twenty per cent metal. Painted steel is a dielectric, so 0.0, and the
+    # bare metal showing through a chip is 1.0; materials2.wmat now drives the
+    # Metallic socket from the chip mask to get exactly that.
     if USE_WEATHERED and emit == 0:
         import materials2
-        return materials2.wmat(name, rough=rough, metal=max(metal, 0.2))
+        return materials2.wmat(name, rough=rough, metal=metal)
     key=(name,emit)
     if key in _mats: return _mats[key]
     m = bpy.data.materials.new(f"{name}_{emit}")
