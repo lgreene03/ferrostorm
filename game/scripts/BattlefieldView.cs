@@ -26,10 +26,16 @@ public static class BattlefieldView
             {
                 SkyMaterial = new ProceduralSkyMaterial
                 {
-                    SkyTopColor = new Color(0.015f, 0.02f, 0.032f),
-                    SkyHorizonColor = new Color(0.10f, 0.085f, 0.075f),
+                    // V1-03 (doc 25). ReflectedLightSource has always been Sky,
+                    // so the sky IS the specular environment of every surface
+                    // in the game, and at (0.015, 0.02, 0.032) that environment
+                    // was black. Every ORM bake the project paid for was
+                    // reflecting nothing. Lifting the sky is what makes those
+                    // bakes pay for themselves.
+                    SkyTopColor = new Color(0.060f, 0.080f, 0.130f),
+                    SkyHorizonColor = new Color(0.22f, 0.19f, 0.16f),
                     SkyCurve = 0.12f,
-                    SkyEnergyMultiplier = 1.0f,
+                    SkyEnergyMultiplier = 1.6f,
                     GroundBottomColor = new Color(0.01f, 0.012f, 0.016f),
                     GroundHorizonColor = new Color(0.09f, 0.075f, 0.065f),
                     GroundCurve = 0.14f,
@@ -38,11 +44,53 @@ public static class BattlefieldView
                 },
             },
             ReflectedLightSource = Godot.Environment.ReflectionSource.Sky,
-            AmbientLightSource = Godot.Environment.AmbientSource.Color,
-            AmbientLightColor = new Color(0.34f, 0.38f, 0.46f),
+            // V1-03 (doc 25). A constant ambient colour arrives identically
+            // from every direction, so every surface the key light misses
+            // receives the same value whatever way it faces, which is the
+            // literal definition of flat shading. Under Sky the ambient is
+            // directional and a hull's upward faces separate from its
+            // downward ones for free. AmbientLightColor is DELETED rather
+            // than left at its old value: it is unread under Sky and leaving
+            // it would invite a future reader to tune a dead number.
+            AmbientLightSource = Godot.Environment.AmbientSource.Sky,
+            AmbientLightSkyContribution = 1.0f,
+            // NOT lowered, and this is the clause three separate audits got
+            // wrong: the shipped diffuse atlas has a median of linear 0.037,
+            // so the frame is already too dark to cut ambient in the same
+            // change that lifts the sky.
+            //
+            // MEASURED, and worth knowing before anyone tunes this: under
+            // AmbientSource.Sky with AmbientLightSkyContribution at 1.0, this
+            // value is DEAD. Raising it from 0.4 to 1.0 moved mean open-ground
+            // luminance at CAM-A by 0.03 out of 255, which is nothing. The
+            // ambient level is now set by SkyTopColor, SkyHorizonColor and
+            // SkyEnergyMultiplier and by nothing else. It is left at 0.4 per
+            // V1-03 clause 4 rather than deleted, so that dropping sky
+            // contribution below 1.0 has something sensible to fall back on.
             AmbientLightEnergy = 0.4f,
             TonemapMode = Godot.Environment.ToneMapper.Agx,
-            TonemapExposure = 1.35f,
+            // V1-07 (doc 25), the single retune, chosen against captures and
+            // recorded here as the ticket requires. 1.35 was set when between
+            // forty-seven and seventy per cent of every pixel was in-scattered
+            // fog ADDING uniform brightness; V1-01 took that away, and the
+            // measured result was mean open-ground luminance at CAM-A falling
+            // from 78 to 55 out of 255 against doc 22's ratified 90 to 135
+            // band, which the baseline never met either.
+            //
+            // Exposure rather than ambient, fill or key, for three reasons.
+            // The clause above is the first: ambient energy does nothing in
+            // this configuration. The second is that exposure multiplies where
+            // the fog added, so it restores the level without re-flattening
+            // the contrast the fog cut just bought. The third is that doc 22's
+            // C-10 clause 6 already names TonemapExposure as the single
+            // permitted compensating knob and requires the value be recorded,
+            // and light COLOURS are C-10's business, not this ticket's.
+            //
+            // 1.9 gave 71, 2.4 gave 83, 2.9 gives 94, which is inside the
+            // band. NOTE FOR C-10: it raises total directional energy by
+            // fourteen per cent, so this number is the one to bring back down,
+            // once, if the histogram then overshoots.
+            TonemapExposure = 2.9f,
             AdjustmentEnabled = true,
             AdjustmentBrightness = 1.03f,
             AdjustmentContrast = 1.14f,
@@ -60,7 +108,15 @@ public static class BattlefieldView
             SsilIntensity = 1.2f,
             SsilSharpness = 0.98f,
             SsilNormalRejection = 1.0f,
-            SsrEnabled = true,
+            // V1-06 (doc 25): OFF. Screen-space reflections can only reflect
+            // what is already on screen, and at a fixed -50 pitch almost
+            // nothing is on screen to reflect onto the ground. Every terrain
+            // material in this file is roughness 0.85 to 1.0 and a rough
+            // surface returns nothing from SSR, so the full 56-step cost was
+            // being paid for one water slab, which keeps its sky reflection
+            // and at this camera was showing mostly that anyway. The settings
+            // stay so that turning it back on is one word.
+            SsrEnabled = false,
             SsrMaxSteps = 56,
             SsrFadeIn = 0.15f,
             SsrFadeOut = 2.0f,
@@ -71,13 +127,40 @@ public static class BattlefieldView
             GlowStrength = 1.05f,
             GlowHdrThreshold = 1.0f,
             GlowBlendMode = Godot.Environment.GlowBlendModeEnum.Screen,
+            // V1-01 (doc 25), and this is the largest single change in the
+            // wave. An RTS has no near field: the pitch is fixed at -50, so
+            // the nearest thing on screen is H/sin(50) away, which is 28.7 m
+            // at the start height and 54.8 m at maximum zoom. At the old
+            // density of 0.022 that put transmittance between 0.53 and 0.30,
+            // meaning between forty-seven and seventy per cent of the radiance
+            // of EVERY pixel was uniform in-scattered fog rather than the
+            // battlefield, and uniform because in a top-down view everything
+            // sits at roughly the same depth. Measured with the LOOK-01
+            // harness by setting this to zero: the fog was adding 37.5/255 of
+            // flat luminance at CAM-A and holding the whole frame inside an
+            // 18-degree hue span, which opened to 223 degrees without it.
+            //
+            // This is a DENSITY change, not a deletion. The fog is doing real
+            // atmospheric work at the far edge and the storm mood depends on
+            // it; 0.010 lifts transmittance at 28.7 m from 0.53 to 0.75.
             VolumetricFogEnabled = true,
-            VolumetricFogDensity = 0.022f,
-            VolumetricFogAlbedo = new Color(0.55f, 0.62f, 0.75f),
+            VolumetricFogDensity = 0.010f,
+            // Less saturated and darker, so what fog remains reads as distance
+            // rather than as a scrim laid over the lens.
+            VolumetricFogAlbedo = new Color(0.46f, 0.50f, 0.58f),
             VolumetricFogAnisotropy = 0.35f,
+            // The length is not the problem. The density over the unavoidable
+            // minimum distance is.
             VolumetricFogLength = 110f,
             VolumetricFogDetailSpread = 2.5f,
             VolumetricFogAmbientInject = 0.08f,
+            // Previously unset and therefore zero: the fog took no light from
+            // the scene at all, which is why it read as a uniform tint rather
+            // than as air. With this the explosions and the superweapon put
+            // coloured haze into the volume around them.
+            // Note the capitalisation: Godot's C# binding spells this
+            // VolumetricFogGIInject, not ...GiInject.
+            VolumetricFogGIInject = 0.6f,
             VolumetricFogSkyAffect = 0.1f,
             VolumetricFogTemporalReprojectionEnabled = true,
         };

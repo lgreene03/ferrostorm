@@ -49,7 +49,18 @@ public partial class FogOfWar : Node3D
                 if (world.IsVisible(player, x, y))
                     _img.SetPixel(x, y, new Color(0, 0, 0, 0));
                 else if (world.IsExplored(player, x, y))
-                    _img.SetPixel(x, y, new Color(0.012f, 0.018f, 0.030f, 0.38f));
+                    // C-08 (doc 22, ratified) scheduled as V1-02 (doc 25).
+                    // Most of the frame is explored-but-unseen at any moment in
+                    // a real match, so a 38 per cent near-black overlay was a
+                    // second uniform veil stacked on the volumetric fog's. The
+                    // lower alpha paints out less of the ground's already
+                    // scarce chroma and the stronger blue lift makes what
+                    // remains read as distance haze rather than as black paint.
+                    // Doc 25 raises this ticket's impact from LOW to HIGH; the
+                    // VALUES are doc 22's and are not re-derived here.
+                    // If MAP-07's byte-array rewrite ever lands, these become
+                    // bytes 5, 8, 13, 77 and the two must not disagree.
+                    _img.SetPixel(x, y, new Color(0.020f, 0.030f, 0.052f, 0.30f));
                 else
                     _img.SetPixel(x, y, new Color(0.008f, 0.012f, 0.022f, 0.985f));
             }

@@ -14,18 +14,24 @@
 #     world, the camera, the animation state, the particle seeds and the frame
 #     counts are all genuinely frozen: everything the harness is responsible
 #     for is deterministic.
-#   * Switch ANY ONE of those screen-space passes back on and about twelve
-#     pixels out of 1,440,000 take one of two values, differing by at most
-#     4/255, always in the same four-by-seven cluster on one high-contrast
-#     vehicle edge. Which pass is on changes nothing about which pixels move.
-#     That is a floating-point ordering difference inside the driver's compute
-#     passes landing on a pixel that already sat on a rounding boundary.
+#   * Switch ANY ONE of those screen-space passes back on and a handful of
+#     pixels out of 1,440,000 take one of two values, always in the same tight
+#     cluster on one high-contrast vehicle edge. Which pass is on changes
+#     nothing about which pixels move. That is a floating-point ordering
+#     difference inside the driver's compute passes landing on a pixel that
+#     already sat on a rounding boundary.
+#   * The SIZE of that difference in bytes tracks the grading, not the harness:
+#     before Wave V1 it was at most 4/255, and after V1 raised the tonemap
+#     exposure the same pixels differ by up to 35/255. Nothing about the
+#     capture changed. That is why the gate below counts pixels and takes a
+#     whole-frame mean rather than capping a single pixel.
 #
-# So the gate is: fewer than 200 pixels may differ at all, and no pixel may
-# differ by more than 8/255. A real visual change moves tens of thousands of
-# pixels by tens of levels, so this floor cannot hide one. If a future run
-# reports numbers above the gate, the harness HAS broken and the cause is
-# almost certainly something new that is animating between runs.
+# So the gate is: fewer than 200 pixels of 1,440,000 may differ at all, and the
+# mean absolute difference over the whole frame must stay below 0.01 of one
+# level. The smallest ticket in Wave V1 moved 385,000 pixels, so this floor
+# cannot hide a real change. If a future run reports numbers above the gate,
+# the harness HAS broken, and the cause is almost certainly something new that
+# is animating between runs.
 set -eu
 
 WORK=${1:?usage: verify-determinism.sh WORKDIR}

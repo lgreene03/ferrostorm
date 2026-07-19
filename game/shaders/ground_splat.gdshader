@@ -1,7 +1,19 @@
 shader_type spatial;
-uniform sampler2D noise_a : repeat_enable, filter_linear_mipmap;
-uniform sampler2D noise_b : repeat_enable, filter_linear_mipmap;
-uniform sampler2D detail_normal : hint_normal, repeat_enable, filter_linear_mipmap;
+// V1-04 (doc 25). These three samplers were declared filter_linear_mipmap,
+// which is trilinear and silently opts the ground out of the project-wide
+// anisotropic setting altogether. At a fixed -50 degree pitch the ground is
+// always at a grazing angle and always occupies most of the frame, which is
+// the exact case anisotropic filtering exists for.
+//
+// The shader-side hint and the project setting are TWO SEPARATE LEVERS and
+// both are needed: project.godot's textures/default_filters/anisotropic_
+// filtering_level reaches every StandardMaterial3D in the game and does not
+// reach this shader at all. An audit once ranked raising the project key as
+// the best sharpness-per-effort item in its whole list and justified it
+// entirely by the ground, which does not obey it.
+uniform sampler2D noise_a : repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D noise_b : repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D detail_normal : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
 uniform vec3 dust_dark : source_color = vec3(0.085, 0.09, 0.10);
 uniform vec3 dust_light : source_color = vec3(0.145, 0.15, 0.165);
 uniform vec3 rock_dark : source_color = vec3(0.105, 0.10, 0.095);

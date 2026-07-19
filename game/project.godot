@@ -26,6 +26,24 @@ environment/volumetric_fog/use_filter=1
 lights_and_shadows/directional_shadow/size=4096
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
 anti_aliasing/quality/msaa_3d=2
+; V1-05 (doc 25). The enum here is 0=Disabled, 1=2x, 2=4x, 3=8x, 4=16x, and
+; Godot 4's default is index 2, which is 4x. Two audits misstated that default
+; in opposite directions and one of them prescribed index 3 while calling it
+; 16x. The correct value for 16x is 4. This reaches every StandardMaterial3D
+; in the game and does NOT reach shaders/ground_splat.gdshader, which carries
+; its own filter hint.
+textures/default_filters/anisotropic_filtering_level=4
+; Off by default. A dark procedural sky and volumetric fog gradients are the
+; textbook banding case and this is the textbook fix.
+anti_aliasing/quality/use_debanding=true
+; FXAA, alongside the 4x MSAA above rather than instead of it. MSAA resolves
+; polygon edges only and does nothing for specular sparkle on normal-mapped
+; hulls, which is the aliasing an RTS camera shows most. TAA is deliberately
+; NOT enabled: this client interpolates 15 Hz snapshots into per-frame
+; transforms and drives turrets, wheels and hulls through tweened rigs, and
+; Godot's motion vectors are documented as incomplete for exactly that class
+; of motion, so the likely outcome is ghosting on every moving unit.
+anti_aliasing/quality/screen_space_aa=1
 
 
 [input]
