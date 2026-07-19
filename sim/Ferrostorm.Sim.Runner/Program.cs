@@ -196,16 +196,24 @@ ulong ScenarioProduction(ulong seed, Action<int, ulong>? cp = null, Action<strin
     world.GrantCredits(0, 1000);
     int plant = world.SpawnPowerPlant(0, 10, 10); // supply 100
     int factory = world.SpawnFactory(0, 14, 10);  // draw 40
+    // ADR-009 scenario surgery. Rifles are BARRACKS units now (produced_at
+    // com_barracks), so a factory refuses them and this scenario's three
+    // opening rifles need the building that makes them. Sited well clear of
+    // the phase 2 raider at (9,9) so nothing new comes under fire and the
+    // scenario keeps measuring production rather than combat. Draw is 60
+    // against supply 100, so every full-power timing assertion below is
+    // unchanged; phase 3's cannon stays at the factory, its true producer.
+    int barracks = world.SpawnBarracks(0, 18, 16); // draw 20
 
     var cmds = new List<Command>
     {
-        new(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2),
-        new(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2),
-        new(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2),
+        new(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2),
+        new(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2),
+        new(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2),
     };
 
     var spawnTicks = new List<int>();
-    int seen = 2; // plant + factory
+    int seen = 3; // plant + factory + barracks
     const int phase1Ticks = 300;
     for (int t = 0; t < phase1Ticks; t++)
     {
@@ -242,7 +250,7 @@ ulong ScenarioProduction(ulong seed, Action<int, ulong>? cp = null, Action<strin
         {
             plantDead = true;
             queuedAt = t + 1;
-            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+            cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         }
         while (world.EntityCount > seen) { lowPowerSpawns.Add(t + 1); seen++; }
         if (t % 100 == 99) cp?.Invoke(t + 1, world.ComputeStateHash());
@@ -346,6 +354,15 @@ ulong ScenarioConstruction(ulong seed, Action<int, ulong>? cp = null, Action<str
     // power (100 supply against at most 60 draw before phase I), so they keep
     // testing the sidebar flow rather than the brown-out curve.
     int scenarioPlant = world.SpawnPowerPlant(0, 4, 8);
+    // ADR-009 scenario surgery: phase I queues a Radar Uplink, whose tree
+    // prerequisite is a factory, and this scenario never had one. Spawned
+    // DIRECTLY rather than queued, which is the honest way to satisfy it -
+    // the gate is on queueing, so a scenario that spawns its prerequisites
+    // never runs the tree check at all and this phase keeps testing the radar
+    // rather than the tree. Sited far from phase C's radius assertions at
+    // (51,44) and (52,44), which only ever gain anchors, never lose them.
+    // Its 40 draw is counted in phase I's arithmetic below.
+    world.SpawnFactory(0, 4, 12);
     for (int y = 0; y < 64; y++) if (y is < 30 or > 31) world.Map.SetBlocked(30, y, true);
     int runner = world.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(31), Fix64.FromFraction(1, 4), 100, ArmourClass.Light, 0);
     var cmds = new List<Command>();
@@ -1229,14 +1246,25 @@ ulong ScenarioCapture(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     var f = world.Entities[factory];
     if (f.PlayerId != 0) throw new Exception($"capture: factory should fly flag 0 (flies {f.PlayerId})");
     if (world.Entities[eng].Alive) throw new Exception("capture: the engineer should be consumed by the act");
-    // The prize produces for its new owner.
-    cmds.Add(new(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+    // The prize produces for its new owner - and ADR-009's hash-impact clause
+    // named THIS line as the sharpest known case in the whole wave. It used to
+    // produce a rifle squad, which under the barracks split is infantry
+    // ordered from a factory and is refused outright. Rewritten to
+    // capture-appropriate production: a cannon tank, a vehicle, which is what
+    // a captured FACTORY can actually build. The prerequisite side is
+    // satisfied honestly too, because dir_cannon_tank authors none. The
+    // budget stretches from 200 to 400 ticks for a real reason: nobody in
+    // this scenario owns a power plant, so the 150-tick cannon builds at the
+    // GDD s5 half-rate floor, and 300 ticks is the honest number.
+    cmds.Add(new(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 1));
     int before = world.EntityCount;
-    for (int t = 0; t < 200 && world.EntityCount == before; t++)
+    for (int t = 0; t < 400 && world.EntityCount == before; t++)
     { world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); }
     if (world.EntityCount == before || world.Entities[before].PlayerId != 0)
         throw new Exception("capture: the captured factory should produce for its new owner");
-    report?.Invoke("capture: engineer converted the enemy factory on contact and was consumed; the prize produced a rifle squad under its new flag");
+    if (world.Entities[before].UnitType != 1)
+        throw new Exception($"capture: the prize should have built a cannon tank, got unit type {world.Entities[before].UnitType}");
+    report?.Invoke("capture: engineer converted the enemy factory on contact and was consumed; the prize built a cannon tank under its new flag (a FACTORY unit - ADR-009's split means the old rifle squad would now be refused there, which is exactly the case the ADR named)");
     return world.ComputeStateHash();
 }
 
@@ -2225,6 +2253,16 @@ int SpawnGate()
     // charges. Additive, the catrefuse pattern: standalone mode and battery
     // stage, never a golden scenario, so the golden list stays 24 lines by
     // construction.
+    //
+    // ADR-009 surgery: every stage below that PRODUCES A RIFLE now produces
+    // it at a BARRACKS, because that is the rifle's producer since the split
+    // and a factory refuses it. This is not a workaround, it is the gate
+    // being exercised end to end: the whole rally, exit-move, occupancy and
+    // hold machinery is re-proven against the new producer, which is where
+    // infantry rally matters most. Every number is untouched - the rifle
+    // still costs 200 and takes 75 ticks, the barracks is 2x2 like the
+    // factory so the spawn ring and its centre cell are identical, and the
+    // 20-point draw against a 100-supply plant is still full power.
     var cmds = new List<Command>();
 
     // 1. SetRally validation: producing structures the commander owns, and
@@ -2250,7 +2288,15 @@ int SpawnGate()
         if (!f.HasRally) return Fail("spawngate: a factory must accept SetRally");
         if (f.RallyX != Fix64.FromInt(64) - Fix64.Half || f.RallyY != Fix64.Zero)
             return Fail($"spawngate: SetRally must clamp exactly as Move does (got {f.RallyX},{f.RallyY})");
-        if (!w.Entities[cy].HasRally) return Fail("spawngate: a Construction Yard must accept SetRally (ADR-007's predicate, ahead of ADR-009)");
+        if (!w.Entities[cy].HasRally) return Fail("spawngate: a Construction Yard must accept SetRally (ADR-007's predicate, now ADR-009's IsProducer)");
+        // ADR-009 clause 5: the barracks joins the rallyable producers, which
+        // is B2's explicitly deferred question answered - IsRallyable became
+        // IsProducer in place, so the wire format never changed twice.
+        int barracks = w.SpawnBarracks(0, 18, 6);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, barracks, Fix64.FromInt(24), Fix64.FromInt(9), 0));
+        StepN(1);
+        if (!w.Entities[barracks].HasRally)
+            return Fail("spawngate: a Barracks must accept SetRally (ADR-009 clause 5 - infantry want a rally most)");
         cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Fix64.FromInt(1), Fix64.FromInt(1), -1));
         StepN(1);
         f = w.Entities[factory];
@@ -2264,11 +2310,11 @@ int SpawnGate()
         var w = new World(12, 64, 64, 2);
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int factory = w.SpawnFactory(0, 10, 10);
+        int barracks = w.SpawnBarracks(0, 10, 10);
         var rallyX = Map.CellCentre(25); var rallyY = Map.CellCentre(11);
-        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, rallyX, rallyY, 0));
+        cmds.Add(new Command(0, 0, CommandType.SetRally, barracks, rallyX, rallyY, 0));
         for (int k = 0; k < 3; k++)
-            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+            cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         int completions = 0, wrongC = 0;
         int preCount = w.EntityCount;
         for (int t = 0; t < 3 * 75 + 200; t++)
@@ -2276,9 +2322,9 @@ int SpawnGate()
             w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
             cmds.Clear();
             foreach (var ev in w.Events)
-                if (ev.Type == GameEventType.ProductionComplete) { completions++; if (ev.C != factory) wrongC++; }
+                if (ev.Type == GameEventType.ProductionComplete) { completions++; if (ev.C != barracks) wrongC++; }
         }
-        if (completions != 3) return Fail($"spawngate: expected 3 completions at the rallied factory, got {completions}");
+        if (completions != 3) return Fail($"spawngate: expected 3 completions at the rallied barracks, got {completions}");
         if (wrongC != 0) return Fail("spawngate: ProductionComplete must carry the producer in C");
         int settled = 0;
         for (int i = preCount; i < w.EntityCount; i++)
@@ -2300,11 +2346,12 @@ int SpawnGate()
         var w = new World(13, 64, 64, 2);
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int factory = w.SpawnFactory(0, 10, 10);
-        // Factory centre cell is (11,11); the ring's first offset (0,2) makes
-        // the mouth (11,13). Two cells further down: (11,15).
-        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Map.CellCentre(11), Map.CellCentre(15), 0));
-        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        int barracks = w.SpawnBarracks(0, 10, 10);
+        // Producer centre cell is (11,11) - a barracks is 2x2 exactly as the
+        // factory is - and the ring's first offset (0,2) makes the mouth
+        // (11,13). Two cells further down: (11,15).
+        cmds.Add(new Command(0, 0, CommandType.SetRally, barracks, Map.CellCentre(11), Map.CellCentre(15), 0));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         var spawnPos = new Dictionary<int, (Fix64 X, Fix64 Y)>();
         int seen = w.EntityCount;
         for (int t = 0; t < 75 + 120; t++)
@@ -2337,8 +2384,11 @@ int SpawnGate()
         void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int f1 = w.SpawnFactory(0, 10, 10);
-        int f2 = w.SpawnFactory(0, 16, 10);
+        // Two BARRACKS (the rifle's producer since ADR-009), which also keeps
+        // this stage proving what it always proved: two independent rallied
+        // producers, one set and one cleared, surviving a save.
+        int f1 = w.SpawnBarracks(0, 10, 10);
+        int f2 = w.SpawnBarracks(0, 16, 10);
         cmds.Add(new Command(0, 0, CommandType.SetRally, f1, Map.CellCentre(30), Map.CellCentre(12), 0));
         cmds.Add(new Command(0, 0, CommandType.SetRally, f2, Map.CellCentre(30), Map.CellCentre(20), 0));
         cmds.Add(new Command(0, 0, CommandType.Produce, f1, Fix64.Zero, Fix64.Zero, 2));
@@ -2382,9 +2432,9 @@ int SpawnGate()
         var w = new World(15, 64, 64, 2);
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int factory = w.SpawnFactory(0, 10, 10);
+        int barracks = w.SpawnBarracks(0, 10, 10);
         for (int k = 0; k < 10; k++)
-            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+            cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         int preCount = w.EntityCount;
         for (int t = 0; t < 10 * 75 + 400; t++)
         {
@@ -2423,24 +2473,25 @@ int SpawnGate()
         }
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int factory = w.SpawnFactory(0, 10, 10);
-        // Wall the whole ring: factory centre cell is (11,11); block every
-        // spawn candidate. The map, not units, blocks here - the walled-in
-        // case is the one that can persist forever and must stay honest.
+        int barracks = w.SpawnBarracks(0, 10, 10);
+        // Wall the whole ring: the producer's centre cell is (11,11); block
+        // every spawn candidate. The map, not units, blocks here - the
+        // walled-in case is the one that can persist forever and must stay
+        // honest.
         foreach (var (dx, dy) in new[] { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) })
             w.Map.SetBlocked(11 + dx, 11 + dy, true);
         w.InvalidateFlowCache();
-        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
-        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         int preCount = w.EntityCount;
         StepN(75 + 30); // the head completes at tick 75 and is now held
-        var f = w.Entities[factory];
+        var f = w.Entities[barracks];
         if (f.BuildProgress != 75 * 100)
-            return Fail($"spawngate: the held factory must sit at 100 per cent (progress {f.BuildProgress})");
+            return Fail($"spawngate: the held producer must sit at 100 per cent (progress {f.BuildProgress})");
         if (f.BuildPaid != 200)
             return Fail($"spawngate: the held head must stay FULLY PAID (BuildPaid {f.BuildPaid}) or a cancel refunds nothing");
-        if (w.QueueLength(factory) != 2)
-            return Fail($"spawngate: the held head must not pop and the line must stall behind it (queue {w.QueueLength(factory)})");
+        if (w.QueueLength(barracks) != 2)
+            return Fail($"spawngate: the held head must not pop and the line must stall behind it (queue {w.QueueLength(barracks)})");
         if (w.EntityCount != preCount)
             return Fail("spawngate: nothing may spawn while every cell is blocked");
         foreach (var ev in events)
@@ -2450,15 +2501,15 @@ int SpawnGate()
         events.Clear();
         StepN(100);
         if (w.Credits(0) != heldCredits)
-            return Fail($"spawngate: a blocked factory spent {heldCredits - w.Credits(0)} credits over 100 held ticks - it must spend EXACTLY ZERO");
+            return Fail($"spawngate: a blocked producer spent {heldCredits - w.Credits(0)} credits over 100 held ticks - it must spend EXACTLY ZERO");
         if (w.EntityCount != preCount)
             return Fail("spawngate: the held unit must neither spawn nor vanish while blocked");
-        if (w.QueueLength(factory) != 2 || w.Entities[factory].BuildProgress != 75 * 100)
+        if (w.QueueLength(barracks) != 2 || w.Entities[barracks].BuildProgress != 75 * 100)
             return Fail("spawngate: the hold must persist unchanged while blocked");
         foreach (var ev in events)
             if (ev.Type == GameEventType.ProductionComplete)
                 return Fail("spawngate: no completion event may fire across 100 held ticks");
-        // Free one cell: the mouth clears and the factory resumes THAT tick.
+        // Free one cell: the mouth clears and the producer resumes THAT tick.
         events.Clear();
         w.Map.SetBlocked(11, 13, false);
         w.InvalidateFlowCache();
@@ -2471,10 +2522,10 @@ int SpawnGate()
         int completions = 0;
         foreach (var ev in events)
             if (ev.Type == GameEventType.ProductionComplete)
-            { completions++; if (ev.C != factory) return Fail("spawngate: the released completion must carry the producer in C"); }
+            { completions++; if (ev.C != barracks) return Fail("spawngate: the released completion must carry the producer in C"); }
         if (completions != 1)
             return Fail($"spawngate: expected exactly one completion on release, got {completions}");
-        if (w.QueueLength(factory) != 1)
+        if (w.QueueLength(barracks) != 1)
             return Fail("spawngate: the queue must pop on release and the second item must take the head");
         StepN(75 + 60); // the second unit follows through the same freed mouth
         if (w.EntityCount != preCount + 2)
@@ -2493,10 +2544,10 @@ int SpawnGate()
         var w = new World(17, 64, 64, 2);
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
-        int factory = w.SpawnFactory(0, 10, 10);
-        cmds.Add(new Command(0, 0, CommandType.SetRally, factory, Map.CellCentre(11), Map.CellCentre(15), 0));
+        int barracks = w.SpawnBarracks(0, 10, 10);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, barracks, Map.CellCentre(11), Map.CellCentre(15), 0));
         for (int k = 0; k < 4; k++)
-            cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+            cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         int preCount = w.EntityCount;
         for (int t = 0; t < 4 * 75 + 300; t++)
         {
@@ -2518,7 +2569,7 @@ int SpawnGate()
         }
         if (!anyAtRally)
             return Fail("spawngate: no close-rallied unit ended within 2 cells of the rally point");
-        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         for (int t = 0; t < 75 + 120; t++)
         {
             w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
@@ -2545,12 +2596,311 @@ int SpawnGate()
         File.Delete(path);
     }
 
-    Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically); " +
-                      "3 rallied rifles left the mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
+    Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically) and a BARRACKS now accepts it too (ADR-009 clause 5, B2's deferred question answered); " +
+                      "3 rallied rifles left the barracks mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
                       "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
                       "ten units spread to ten distinct cells; a walled-in factory held its paid unit at 100 per cent spending EXACTLY ZERO over 100 ticks, " +
                       "deleted nothing, stalled the line honestly, and released with C the instant a cell freed at exactly 400 credits for two rifles; " +
                       "a 2-cell rally under occupancy spawned 4+1 units at distinct positions with one at the rally; SetRally round-trips the replay format");
+    return 0;
+}
+
+int ProdGate()
+{
+    // ADR-009 / doc 23 Wave 6: the barracks split and the tech tree made
+    // machine-checkable. Additive, the catrefuse and spawngate pattern:
+    // standalone mode and battery stage, never a golden scenario, so the
+    // golden list stays 24 lines by construction.
+    var cmds = new List<Command>();
+
+    // 1. produced_at REFUSAL, both directions, which is the split itself.
+    // A refusal must cost nothing: no queue entry, no credits.
+    {
+        var w = new World(21, 64, 64, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        w.SpawnRefinery(0, 6, 10);           // the harvester's prerequisite, so only produced_at is on trial
+        int factory = w.SpawnFactory(0, 10, 10);
+        int barracks = w.SpawnBarracks(0, 16, 10);
+        int cy = w.SpawnConstructionYard(0, 22, 10);
+        long before = w.Credits(0);
+        // Infantry ordered at the factory: rifle, rocket and engineer.
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 3));
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 11));
+        // Vehicles ordered at the barracks: cannon tank, harvester, MCV.
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 1));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 4));
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 7));
+        // And anything at all ordered at a Construction Yard, whose queue
+        // holds STRUCTURES: no unit names struct type 4 as its producer, so
+        // the same one line refuses it and a unit order can never land in
+        // the structure queue.
+        cmds.Add(new Command(0, 0, CommandType.Produce, cy, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, cy, Fix64.Zero, Fix64.Zero, 1));
+        StepN(2);
+        if (w.QueueLength(factory) != 0)
+            return Fail($"prodgate: a factory must refuse infantry (queue {w.QueueLength(factory)})");
+        if (w.QueueLength(barracks) != 0)
+            return Fail($"prodgate: a barracks must refuse vehicles (queue {w.QueueLength(barracks)})");
+        if (w.QueueLength(cy) != 0)
+            return Fail($"prodgate: a Construction Yard must refuse units outright (queue {w.QueueLength(cy)})");
+        if (w.Credits(0) != before)
+            return Fail($"prodgate: a refused order must charge nothing (spent {before - w.Credits(0)})");
+
+        // 2. produced_at ACCEPTANCE: each producer takes its own, and the
+        // unit really arrives on the spawn ring rather than merely queueing.
+        int preCount = w.EntityCount;
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 1));
+        StepN(1);
+        if (w.QueueLength(barracks) != 1 || w.QueueLength(factory) != 1)
+            return Fail("prodgate: each producer must accept its own produced_at");
+        StepN(200);
+        int rifles = 0, cannons = 0;
+        for (int i = preCount; i < w.EntityCount; i++)
+        {
+            if (w.Entities[i].UnitType == 2) rifles++;
+            if (w.Entities[i].UnitType == 1) cannons++;
+        }
+        if (rifles != 1) return Fail($"prodgate: the barracks must build the rifle squad (got {rifles})");
+        if (cannons != 1) return Fail($"prodgate: the factory must build the cannon tank (got {cannons})");
+    }
+
+    // 3. UNIT prerequisites: the harvester needs a refinery, and the gate is
+    // on the OWNER's own standing structures, not anybody's.
+    {
+        var w = new World(22, 64, 64, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        int factory = w.SpawnFactory(0, 10, 10);
+        w.SpawnRefinery(1, 30, 30); // the ENEMY's refinery must not satisfy it
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
+        StepN(1);
+        if (w.QueueLength(factory) != 0)
+            return Fail("prodgate: a harvester with no OWN refinery must be refused (an enemy's does not count)");
+        int refinery = w.SpawnRefinery(0, 14, 6);
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
+        StepN(1);
+        if (w.QueueLength(factory) != 1)
+            return Fail("prodgate: a harvester with an own refinery standing must be accepted");
+        // ADR-009 clause 4, the pinned semantic: the gate is on QUEUEING, so
+        // killing the prerequisite mid-build does NOT cancel what is already
+        // queued. Doc 22 line 1524 asked for this to be recorded rather than
+        // left emergent; here it is, as behaviour.
+        int preCount = w.EntityCount;
+        cmds.Add(new Command(0, 0, CommandType.SellStructure, refinery, Fix64.Zero, Fix64.Zero));
+        StepN(400);
+        if (w.EntityCount <= preCount)
+            return Fail("prodgate: a queued item must survive its prerequisite dying mid-build (the gate is on queueing)");
+        // Kind, not UnitType: SpawnHarvester sets no UnitType (harvesters are
+        // identified by kind), which is the sort of thing an assertion written
+        // from the catalogue rather than from the spawn code gets wrong.
+        if (w.Entities[preCount].Kind != EntityKind.Harvester)
+            return Fail($"prodgate: the surviving queued item should be the harvester (got {w.Entities[preCount].Kind})");
+        // But a FRESH order after the loss is refused, which is the other
+        // half of the same rule.
+        cmds.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
+        StepN(1);
+        if (w.QueueLength(factory) != 0)
+            return Fail("prodgate: a NEW harvester order after the refinery died must be refused");
+    }
+
+    // 4. The STRUCTURE tree, rung by rung, each refused then accepted the
+    // moment its prerequisite stands. This is the whole of ADR-009 clause 3
+    // walked in one world.
+    {
+        var w = new World(23, 96, 96, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 200000);
+        int cy = w.SpawnConstructionYard(0, 10, 10);
+        // Nothing but a yard: the refinery, the turret and the barracks all
+        // want a power plant, the factory wants a refinery, the depot and the
+        // radar want a factory, and the superweapon wants a radar.
+        foreach (int t in new[] { 3, 5, 11, 2, 8, 12, 6 })
+        {
+            cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, t));
+            StepN(1);
+            if (w.QueueLength(cy) != 0)
+                return Fail($"prodgate: struct type {t} must be refused with a bare Construction Yard standing");
+        }
+        // The plant itself needs nothing and is accepted immediately.
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1));
+        StepN(1);
+        if (w.QueueLength(cy) != 1) return Fail("prodgate: the power plant needs no prerequisite and must be accepted");
+        // 210 ticks, not 110: this yard has no plant yet and draws 20 against
+        // a supply of zero, so its first plant builds at the GDD s5 half-rate
+        // floor. That is the curve ADR-008's honest draws priced, and a test
+        // that assumed full power here would be reading the wrong game.
+        StepN(210);
+        cmds.Add(new Command(0, 0, CommandType.PlaceStructure, cy, Fix64.FromInt(14), Fix64.FromInt(10), 1));
+        StepN(1);
+        // With a plant: refinery, turret and barracks open; factory, depot,
+        // radar and superweapon still shut.
+        foreach (int t in new[] { 3, 5, 11 })
+        {
+            cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, t));
+            StepN(1);
+            if (w.QueueLength(cy) != 1)
+                return Fail($"prodgate: struct type {t} must open the moment a power plant stands");
+            cmds.Add(new Command(0, 0, CommandType.CancelProduce, cy, Fix64.Zero, Fix64.Zero, 0));
+            StepN(1);
+        }
+        foreach (int t in new[] { 2, 8, 12, 6 })
+        {
+            cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, t));
+            StepN(1);
+            if (w.QueueLength(cy) != 0)
+                return Fail($"prodgate: struct type {t} must stay shut behind a lone power plant");
+        }
+        // Refinery stands: the factory opens.
+        w.SpawnRefinery(0, 10, 14);
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 2));
+        StepN(1);
+        if (w.QueueLength(cy) != 1) return Fail("prodgate: the factory must open behind a refinery");
+        cmds.Add(new Command(0, 0, CommandType.CancelProduce, cy, Fix64.Zero, Fix64.Zero, 0));
+        StepN(1);
+        // Factory stands: depot and radar open, superweapon still shut.
+        w.SpawnFactory(0, 14, 14);
+        foreach (int t in new[] { 8, 12 })
+        {
+            cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, t));
+            StepN(1);
+            if (w.QueueLength(cy) != 1) return Fail($"prodgate: struct type {t} must open behind a factory");
+            cmds.Add(new Command(0, 0, CommandType.CancelProduce, cy, Fix64.Zero, Fix64.Zero, 0));
+            StepN(1);
+        }
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 6));
+        StepN(1);
+        if (w.QueueLength(cy) != 0) return Fail("prodgate: the superweapon must stay shut behind a factory alone");
+        // Radar stands: the superweapon opens. The full ladder is walked.
+        w.SpawnRadarUplink(0, 18, 14);
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 6));
+        StepN(1);
+        if (w.QueueLength(cy) != 1) return Fail("prodgate: the superweapon must open behind a radar uplink");
+        cmds.Add(new Command(0, 0, CommandType.CancelProduce, cy, Fix64.Zero, Fix64.Zero, 0));
+        StepN(1);
+        // The veil's faction gate is ORTHOGONAL to its new prerequisite: this
+        // Directorate player owns a plant and is still refused, and a
+        // Sodality player without a plant would be refused too.
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 7));
+        StepN(1);
+        if (w.QueueLength(cy) != 0)
+            return Fail("prodgate: the veil's faction gate must still refuse a Directorate player who has the plant");
+        var sod = new World(24, 64, 64, 2);
+        sod.SetFaction(0, World.FactionSodality);
+        sod.GrantCredits(0, 20000);
+        int sodCy = sod.SpawnConstructionYard(0, 10, 10);
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, sodCy, Fix64.Zero, Fix64.Zero, 7));
+        sod.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        if (sod.QueueLength(sodCy) != 0)
+            return Fail("prodgate: a Sodality player with no power plant must still be refused the veil (the tree is orthogonal to faction)");
+        sod.SpawnPowerPlant(0, 14, 10);
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, sodCy, Fix64.Zero, Fix64.Zero, 7));
+        sod.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        if (sod.QueueLength(sodCy) != 1)
+            return Fail("prodgate: a Sodality player WITH a power plant must be accepted for the veil");
+    }
+
+    // 5. The barracks end to end through the real flow: queued at a yard
+    // behind a plant, placed, producing all three infantry types, rallying,
+    // and cancelling with an exact refund.
+    {
+        var w = new World(25, 64, 64, 2);
+        void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
+        w.GrantCredits(0, 20000);
+        int cy = w.SpawnConstructionYard(0, 10, 10);
+        w.SpawnPowerPlant(0, 14, 10);
+        long beforeBuild = w.Credits(0);
+        cmds.Add(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 11));
+        StepN(101); // 100 build ticks at full power
+        if (w.Entities[cy].ReadyStructure != 11)
+            return Fail($"prodgate: the barracks must be ready after 101 ticks (slot {w.Entities[cy].ReadyStructure})");
+        if (beforeBuild - w.Credits(0) != 500)
+            return Fail($"prodgate: the barracks must cost exactly 500 (spent {beforeBuild - w.Credits(0)})");
+        cmds.Add(new Command(0, 0, CommandType.PlaceStructure, cy, Fix64.FromInt(10), Fix64.FromInt(14), 11));
+        StepN(1);
+        int barracks = w.EntityCount - 1;
+        var bv = w.Entities[barracks];
+        if (bv.Kind != EntityKind.Barracks || bv.StructType != 11 || bv.PowerDraw != 20 || bv.Hp != 800)
+            return Fail($"prodgate: the placed barracks is wrong (kind {bv.Kind}, type {bv.StructType}, draw {bv.PowerDraw}, hp {bv.Hp})");
+        // All three infantry types, and a rally they all honour.
+        var rallyX = Map.CellCentre(24); var rallyY = Map.CellCentre(20);
+        cmds.Add(new Command(0, 0, CommandType.SetRally, barracks, rallyX, rallyY, 0));
+        foreach (int t in new[] { 2, 3, 11 })
+            cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, t));
+        StepN(1);
+        if (w.QueueLength(barracks) != 3)
+            return Fail($"prodgate: the barracks must take rifle, rocket and engineer (queue {w.QueueLength(barracks)})");
+        int preCount = w.EntityCount;
+        StepN(75 + 100 + 120 + 300);
+        int built = w.EntityCount - preCount;
+        if (built != 3) return Fail($"prodgate: the barracks must build all three infantry types (built {built})");
+        var seenTypes = new HashSet<int>();
+        int atRally = 0;
+        for (int i = preCount; i < w.EntityCount; i++)
+        {
+            var u = w.Entities[i];
+            seenTypes.Add(u.UnitType);
+            if (Fix64.DistSq(u.X - rallyX, u.Y - rallyY) <= Fix64.FromInt(36)) atRally++;
+        }
+        if (!seenTypes.Contains(2) || !seenTypes.Contains(3) || !seenTypes.Contains(11))
+            return Fail("prodgate: rifle, rocket and engineer must all come out of the barracks");
+        if (atRally != 3)
+            return Fail($"prodgate: all three should have walked to the barracks rally ({atRally}/3)");
+        // Cancelling a barracks order refunds exactly what was drained.
+        cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
+        StepN(30);
+        long midBuild = w.Credits(0);
+        int paid = w.Entities[barracks].BuildPaid;
+        if (paid <= 0) return Fail("prodgate: the barracks build must be draining before the cancel");
+        cmds.Add(new Command(0, 0, CommandType.CancelProduce, barracks, Fix64.Zero, Fix64.Zero, 0));
+        StepN(1);
+        if (w.Credits(0) != midBuild + paid)
+            return Fail($"prodgate: cancelling a barracks order must refund exactly what it drained ({w.Credits(0) - midBuild} vs {paid})");
+        if (w.QueueLength(barracks) != 0)
+            return Fail("prodgate: the cancelled barracks order must leave the queue");
+    }
+
+    // 6. PROD-D5 shut. The queue hash covered FACTORY queues only, so a
+    // Construction Yard's queue was invisible to it - and the sharpest case
+    // is not a slow divergence but a permanently silent one: the factory and
+    // the refinery are both 2000 credits and 300 build ticks, so two yards
+    // queueing one each had bit-identical BuildProgress and BuildPaid every
+    // tick until ReadyStructure was finally written. Widening the hash to
+    // every producer closes it, and this is the test that would have caught
+    // it: two otherwise identical worlds must now hash DIFFERENTLY the tick
+    // the orders land.
+    {
+        World Yard(int queued)
+        {
+            var w = new World(26, 64, 64, 2);
+            w.GrantCredits(0, 20000);
+            int cy = w.SpawnConstructionYard(0, 10, 10);
+            w.SpawnPowerPlant(0, 14, 10);
+            w.SpawnRefinery(0, 10, 14); // the factory's prerequisite, so both orders are legal
+            var one = new List<Command> { new(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, queued) };
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(one));
+            return w;
+        }
+        var wFactory = Yard(2);
+        var wRefinery = Yard(3);
+        if (wFactory.ComputeStateHash() == wRefinery.ComputeStateHash())
+            return Fail("prodgate: a Construction Yard queueing a factory must hash differently from one queueing a refinery (PROD-D5)");
+    }
+
+    Console.WriteLine("prodgate: the split refuses both ways and costs nothing (factory refused rifle, rocket and engineer; barracks refused cannon, harvester and MCV; " +
+                      "a Construction Yard refused units outright) and accepts both ways (rifle out of the barracks, cannon out of the factory); " +
+                      "unit prerequisites bind to the OWNER's own structures (an enemy refinery bought the harvester nothing) and the gate is on QUEUEING, " +
+                      "so a queued harvester survived its refinery being sold mid-build while a fresh order was refused; the structure tree was walked rung by rung " +
+                      "(seven types refused at a bare yard, refinery/turret/barracks opening on the plant, factory on the refinery, depot and radar on the factory, " +
+                      "superweapon on the radar) with the veil's faction gate proven ORTHOGONAL in both directions; the barracks ran end to end at 500 credits and " +
+                      "100 ticks, built rifle, rocket and engineer, walked all three to its rally, and refunded a cancel exactly; and PROD-D5 is shut - a yard " +
+                      "queueing a factory now hashes differently from one queueing a same-cost, same-ticks refinery");
     return 0;
 }
 
@@ -2594,6 +2944,9 @@ int Match(ulong seed)
     // ADR-007: the rally and spawn gate rides the battery the same way.
     int spawn = SpawnGate();
     if (spawn != 0) return spawn;
+    // ADR-009: and so does the production and tech-tree gate.
+    int prod = ProdGate();
+    if (prod != 0) return prod;
     return 0;
 }
 
@@ -3296,6 +3649,7 @@ return args.Length == 0
             ticks: 150),
         "catrefuse" => CatalogueRefuse(),
         "spawngate" => SpawnGate(),
+        "prodgate" => ProdGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

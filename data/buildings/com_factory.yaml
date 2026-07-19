@@ -9,6 +9,9 @@ power_draw: 40
 sight_range: 5
 footprint: 2
 weapon_ids: []
+prerequisites: [com_refinery]
 notes: >
-  Produces the mobile roster. The sim keeps one queue per producer id, so a
-  second factory is a second independent line (GDD s5).
+  Produces the VEHICLE roster (ADR-009: every unit whose produced_at names
+  com_factory). The infantry moved to the barracks. The sim keeps one queue
+  per producer id, so a second factory is a second independent line (GDD s5).
+  Behind the refinery, so armour waits on an economy that can pay for it.

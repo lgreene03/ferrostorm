@@ -1,7 +1,7 @@
 # Barracks - the infantry production building (TICKET-P5-PROD-03, numbers per
 # doc 23 s4.3, Balance co-sign on file with the roadmap). Struct type 11; note
-# UNIT type 11 is the engineer - different namespaces, no clash. Catalogued
-# ahead of the production wiring: nothing is buildable from this file yet.
+# UNIT type 11 is the engineer - different namespaces, no clash. Buildable and
+# producing since ADR-009.
 id: com_barracks
 name: Barracks
 faction: common

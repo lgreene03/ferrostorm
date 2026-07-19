@@ -9,6 +9,7 @@ power_draw: 40
 sight_range: 6
 footprint: 2
 weapon_ids: []
+prerequisites: [com_power_plant]
 notes: >
   Harvesters unload here; without one, a Harvest order is accepted and does
   nothing (GDD s4). Draw 40 is ADR-008 clause 3 (BD-07 rebased, A11 co-sign

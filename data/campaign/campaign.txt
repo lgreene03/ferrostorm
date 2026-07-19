@@ -2,10 +2,20 @@
 #   mission file | player faction | title | allowed structure ids | allowed unit ids
 # The allow columns gate the client build sidebar per mission (classic
 # campaign tech progression). "-" means nothing buildable; absent columns
-# mean everything (skirmish rules). Structure ids per World.GetStructureType:
-# 1 power, 2 factory, 3 refinery, 5 turret, 6 superweapon, 7 veil, 8 depot.
+# mean everything (skirmish rules). Since ADR-009 the allow-list is an
+# INTERSECTION with the tech tree rather than a rival to it: the tree says
+# what is possible in the game, these columns say what this mission lets you
+# have, and a mission may legitimately allow fewer things.
+# Structure ids per World.GetStructureType, the full list including the two
+# this header used to omit: 1 power, 2 factory, 3 refinery, 4 construction
+# yard (MCV-deployed, never queued), 5 turret, 6 superweapon, 7 veil,
+# 8 depot, 9 wall, 11 barracks, 12 radar uplink. (10 is ADR-005's reserved
+# gate and has no definition.)
 # Unit ids per the catalogue: 1 cannon, 2 rifle, 3 rocket, 4 harvester,
 # 5 raider, 6 scout, 7 mcv, 8 howitzer, 9 phantom, 10 bulwark, 11 engineer.
-data/missions/mission-01.fmap | 0 | Ferrostorm Rising | 1,3,2,5 | 2,3,4,6
+# STRUCT type 11 is the barracks and UNIT type 11 is the engineer. They are
+# different namespaces and there is no clash, but the two columns below sit
+# side by side, so read the header for the column you are in.
+data/missions/mission-01.fmap | 0 | Ferrostorm Rising | 1,3,2,5,11 | 2,3,4,6
 data/missions/mission-02.fmap | 1 | Silent Salvage | - | -
-data/missions/mission-03.fmap | 0 | Hold the Line | 1,3,2,5,8 | 1,2,3,4,8,11
+data/missions/mission-03.fmap | 0 | Hold the Line | 1,3,2,5,8,11 | 1,2,3,4,8,11

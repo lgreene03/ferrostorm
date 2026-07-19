@@ -1,8 +1,7 @@
 # Radar uplink - struct type 12 (TICKET-P5-PROD-03, numbers per doc 23 s4.2;
 # BD-09's stale type 9 collided with the ratified wall and was moved here).
-# Catalogued ahead of the production wiring: nothing is buildable from this
-# file yet, and the minimap blackout this building will one day gate is a
-# separate Game Designer decision about the opening experience.
+# Buildable since ADR-008, and since ADR-009 it is the tier gate the
+# superweapon waits behind.
 id: com_radar_uplink
 name: Radar Uplink
 faction: common
@@ -16,6 +15,6 @@ footprint: 2
 weapon_ids: []
 prerequisites: [com_factory]
 notes: >
-  The eye of the base. When the blackout lands, losing power or losing this
-  building blanks the minimap; until then the entry exists so the number 12 is
-  claimed and the tech tree above it (superweapon, airfield) has an anchor.
+  The eye of the base: losing power or losing this building blanks the
+  minimap (ADR-008), and the tech tree above it (superweapon now, airfield
+  when the air layer lands) is anchored on it.

@@ -9,7 +9,11 @@ power_draw: 60
 sight_range: 6
 footprint: 2
 weapon_ids: []
+prerequisites: [com_power_plant]
 notes: >
   Sodality doctrine and the one structure the sim really does gate by faction.
+  The faction gate and this prerequisite are ORTHOGONAL (ADR-009 clause 3):
+  a Directorate player is refused it whatever they have built, and a Sodality
+  player without a plant is refused it too.
   Field-cloaks friendly mobiles within sight_range, and only at full power: a
   brown-out drops the whole veil. hp is overridable at the spawn site.

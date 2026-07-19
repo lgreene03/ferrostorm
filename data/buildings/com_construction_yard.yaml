@@ -9,7 +9,10 @@ power_draw: 20
 sight_range: 6
 footprint: 2
 weapon_ids: []
+prerequisites: []
 notes: >
+  Empty prerequisites because it is never queued: it arrives by MCV deploy,
+  which runs no tree check at all (ADR-009 clause 3).
   build_time_ticks 0 is load-bearing, not a placeholder: BuildStructure refuses
   anything with BuildTicks <= 0, which is what keeps the yard MCV-deployed
   rather than queueable. The cost is still real, because CancelProduce and

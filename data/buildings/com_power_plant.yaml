@@ -12,7 +12,10 @@ power_draw: 0
 sight_range: 4
 footprint: 2
 weapon_ids: []
+prerequisites: []
 notes: >
+  The root of the tech tree (ADR-009 clause 3): it needs nothing, and almost
+  everything needs it.
   The only supplier. Production rate, the superweapon charge, the veil and the
   service depot all degrade below full supply (GDD s5), so a sniped plant is
   felt everywhere at once. Supply and hp are overridable per scenario at the

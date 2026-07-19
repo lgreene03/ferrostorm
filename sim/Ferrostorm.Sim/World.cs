@@ -304,10 +304,11 @@ public sealed partial class World
     public const int FactionCommon = 2;
     /// <summary>
     /// Prereqs (structure type ids that must stand alive) and ProducedAt (the
-    /// structure type whose queue builds this unit; 2 = the factory) are
-    /// CARRIED, NOT READ this wave (TICKET-P5-PROD-03): no gate branches on
-    /// either until the tech-tree tickets land. Trailing and defaulted so the
-    /// twelve compiled entries keep compiling. Equality is declared by hand
+    /// structure type whose queue builds this unit; 2 = the factory) are READ
+    /// since ADR-009: ProducedAt IS the barracks split and Prereqs gates the
+    /// queue. They were carried unread from Wave 2 so that the data could
+    /// round-trip before the decision that reads it. Trailing and defaulted so
+    /// the twelve compiled entries keep compiling. Equality is declared by hand
     /// because the synthesized record comparison would test the Prereqs ARRAY
     /// REFERENCE, and the selftest round-trip (/data file == compiled def)
     /// compares defs built on both sides of that reference.
@@ -346,10 +347,15 @@ public sealed partial class World
     private readonly Dictionary<int, UnitTypeDef> _unitTypes = new()
     {
         // Prereqs/ProducedAt mirror the /data files verbatim (the round-trip
-        // selftest proves it) and are carried unread this wave: the infantry
+        // selftest proves it) and are ENFORCED since ADR-009: the infantry
         // trio names the barracks (struct type 11) as producer, everything
-        // else takes the factory default. The tech-tree cleanup of the
-        // prerequisite lists is a Game Designer ticket, not this one.
+        // else takes the factory default. The four [com_factory] entries that
+        // are tautologies under produced_at (mcv, howitzer, bulwark, phantom)
+        // are left AS AUTHORED and enforced honestly - they are trivially
+        // satisfied at the factory the unit already comes out of, so no
+        // behaviour hides behind them - because rewriting them is the Q006
+        // and Q007 curation ADR-009's gates clause holds for the Game
+        // Designer.
         { 1, new UnitTypeDef(600, 150, 300, ArmourClass.Heavy, 1, Fix64.FromFraction(1, 5), Faction: FactionDirectorate) },   // dir_cannon_tank
         { 2, new UnitTypeDef(200, 75, 100, ArmourClass.None, 2, Fix64.FromFraction(1, 4), ProducedAt: 11) },     // com_rifle_squad (common)
         { 3, new UnitTypeDef(300, 100, 80, ArmourClass.None, 3, Fix64.FromFraction(11, 50), ProducedAt: 11) },   // com_rocket_squad (common: the counter-triangle is shared, identity lives in the specials)
@@ -427,8 +433,9 @@ public sealed partial class World
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
-        // the /data round-trip on logically identical defs. Prereqs is carried
-        // unread this wave (TICKET-P5-PROD-03); no build gate consults it yet.
+        // the /data round-trip on logically identical defs. Prereqs is READ
+        // since ADR-009: BuildStructure refuses a structure whose tree the
+        // commanding player has not built.
         public bool Equals(StructureTypeDef other)
             => Cost == other.Cost && Kind == other.Kind && BuildTicks == other.BuildTicks
             && Hp == other.Hp && PowerSupply == other.PowerSupply && PowerDraw == other.PowerDraw
@@ -447,18 +454,27 @@ public sealed partial class World
     /// <summary>The compiled reference catalogue: the values a /data/buildings file must reproduce exactly. Static so that callers with no World (the Balance tool) can price a structure; a live match must read GetStructureType instead, which honours RegisterStructureType.</summary>
     public static StructureTypeDef DefaultStructureType(int typeId) => typeId switch
     {
+        // ADR-009 clause 3: the structure tech tree. Every Prereqs list here
+        // mirrors its /data/buildings file verbatim, and the selftest
+        // round-trip is what proves it: the files are the catalogue and these
+        // literals exist to be proved equal to them. The tree is the one doc
+        // 23 s4.3 sets out - the yard, the plant and the wall stand alone
+        // (the yard is MCV-deployed and the wall is never queued), everything
+        // cheap hangs off the plant, the factory waits on an economy, the
+        // tier-2 support buildings wait on the factory, and the superweapon
+        // waits on the radar.
         1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4),
-        2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5),
+        2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5, Prereqs: new[] { 3 }),
         // Honest draws (ADR-008 clause 3, BD-07 rebased; A11 co-sign recorded
         // in the ADR): the refinery 0 to 40, the yard 0 to 20, the superweapon
         // 100 to 150. The opening base is then EXACTLY 100 supply against 100
         // draw - the zero-margin boundary the ADR accepts explicitly.
-        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, PowerDraw: 40, SightCells: 6),
+        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, PowerDraw: 40, SightCells: 6, Prereqs: new[] { 1 }),
         4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, PowerDraw: 20, SightCells: 6), // MCV-deployed, never queued
-        5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4),
-        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4),
-        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6),
-        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4),
+        5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4, Prereqs: new[] { 1 }),
+        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 }),
+        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }),
+        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
         // Yard queue by the existing guard in BuildStructure, exactly as type 4 is
         // kept out: barriers are bought upfront at placement instead. SightCells 0
@@ -474,9 +490,8 @@ public sealed partial class World
         11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 }),
         // Radar uplink (doc 23 s4.2 numbers): buildable since ADR-008 clause 4.
         // The client's minimap is lit only while a living uplink stands with
-        // supply covering draw; the sim itself gates nothing on it yet (the
-        // prerequisite tree is ADR-009's wave - the Prereqs value is carried,
-        // not read).
+        // supply covering draw. Its Prereqs are READ since ADR-009: the radar
+        // waits on a factory, and the superweapon waits on the radar.
         12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 }),
         _ => default,
     };
@@ -1030,7 +1045,16 @@ public sealed partial class World
                 var bd = GetStructureType(c.AuxId);
                 if (bd.Cost <= 0 || bd.BuildTicks <= 0) break; // CYs are MCV-deployed, never queued
                 // The veil projector is Sodality doctrine; all other structures are common (for now).
+                // ADR-009 clause 3: the faction gate stays and is ORTHOGONAL
+                // to the tree - the veil now also needs a power plant, and a
+                // Directorate player is refused it either way.
                 if (c.AuxId == 7 && _playerFaction[c.PlayerId] != FactionSodality) break;
+                // ADR-009 clause 3: the structure tech tree, authored in
+                // /data/buildings and enforced here. Clause 4 pins the
+                // semantic: the gate is on QUEUEING, so killing a
+                // prerequisite mid-build does not cancel what is already in
+                // the queue.
+                if (!HasPrereqs(c.PlayerId, bd.Prereqs)) break;
                 if (!_queues.TryGetValue(e.Id, out var bq)) _queues[e.Id] = bq = new List<int>();
                 bq.Add(c.AuxId);
                 break;
@@ -1091,16 +1115,23 @@ public sealed partial class World
             }
             case CommandType.Produce:
             {
-                // ADR-009 clause 1: any producer may receive Produce. The CY
-                // is guarded out explicitly until the produced_at gate lands
-                // later in this same wave (its queue holds STRUCTURES, so a
-                // unit order routed into it would build the wrong catalogue's
-                // type); the gate replaces this line with the split proper.
+                // ADR-009 clause 1: any producer may receive Produce.
                 if (!IsProducer(e.Kind)) break;
-                if (e.Kind == EntityKind.ConstructionYard) break;
-                if (GetUnitType(c.AuxId).Cost <= 0) break;
-                if (GetUnitType(c.AuxId).Faction != FactionCommon
-                    && GetUnitType(c.AuxId).Faction != _playerFaction[c.PlayerId]) break; // not your side's hardware
+                var pdef = GetUnitType(c.AuxId);
+                if (pdef.Cost <= 0) break;
+                if (pdef.Faction != FactionCommon
+                    && pdef.Faction != _playerFaction[c.PlayerId]) break; // not your side's hardware
+                // ADR-009 clause 2, THE BARRACKS SPLIT, and it really is this
+                // one line: the producing structure must be the kind the unit
+                // is authored to come out of. A factory refuses infantry, a
+                // barracks refuses vehicles, and a Construction Yard refuses
+                // both (its StructType is 4 and no unit names it), which is
+                // what keeps a unit order out of the structure queue. `break`
+                // rather than `return` so the shared writeback epilogue below
+                // still runs, exactly as the ADR specifies.
+                if (e.StructType != pdef.ProducedAt) break;
+                // ADR-009 clause 2: and you must own what it is built behind.
+                if (!HasPrereqs(c.PlayerId, pdef.Prereqs)) break;
                 // Pay-as-you-build (GDD s5): credits drain as progress accrues,
                 // and progress halts while the treasury cannot cover the next
                 // slice - so queueing needs no upfront affordability check.
@@ -1143,6 +1174,31 @@ public sealed partial class World
     /// </summary>
     private static bool IsProducer(EntityKind k)
         => k is EntityKind.Factory or EntityKind.ConstructionYard or EntityKind.Barracks;
+
+    /// <summary>
+    /// ADR-009 clause 2: does this player own a LIVING instance of every
+    /// required structure type? An entity-index scan, which is deterministic
+    /// by construction and O(entities) per command rather than per tick, so it
+    /// is negligible against the TDD s6 budget. Null and empty both mean "no
+    /// prerequisites" and both pass. StructType is 0 on every non-structure,
+    /// and no required id is ever 0, so units can never satisfy a
+    /// prerequisite by accident.
+    /// </summary>
+    private bool HasPrereqs(int player, int[]? ids)
+    {
+        if (ids == null) return true;
+        for (int r = 0; r < ids.Length; r++)
+        {
+            bool found = false;
+            for (int i = 0; i < _entities.Count; i++)
+            {
+                var o = _entities[i];
+                if (o.Alive && o.PlayerId == player && o.StructType == ids[r]) { found = true; break; }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// ADR-007: the structures SetRally accepts - producing structures only.
@@ -2334,7 +2390,14 @@ public sealed partial class World
             // ADR-007: rally is sim state, so it is hashed state, appended
             // after FieldCloaked in declaration order (the save order too).
             h.Add(e.RallyX); h.Add(e.RallyY); h.Add(e.HasRally); h.Add(e.Departing);
-            if (e.Kind == EntityKind.Factory && _queues.TryGetValue(e.Id, out var q))
+            // ADR-009 clause 1, the fourth IsProducer site and PROD-D5's
+            // close: the queue hash covered FACTORY queues only, so a
+            // Construction Yard divergence between two same-cost, same-ticks
+            // structure types (factory and refinery are both 2000 credits and
+            // 300 ticks) was bit-identical every tick until ReadyStructure was
+            // written, and any new producer kind inherited the hole. Every
+            // producer's queue is hashed now.
+            if (IsProducer(e.Kind) && _queues.TryGetValue(e.Id, out var q))
             { h.Add(q.Count); foreach (int t in q) h.Add(t); }
         }
         if (_orderQueues.Count > 0)

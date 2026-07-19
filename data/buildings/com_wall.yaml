@@ -13,7 +13,11 @@ power_draw: 0
 sight_range: 0
 footprint: 1
 weapon_ids: []
+prerequisites: []
 notes: >
+  Empty prerequisites because it is never queued at a yard either (ADR-005
+  clause 3, ADR-009 clause 3): the placement path charges for it directly and
+  the tree check lives in BuildStructure, which a barrier never reaches.
   ADR-005: 1x1, bought upfront as each segment lands, no ready slot and no
   build time, which build_time_ticks 0 is what enforces. sight_range 0 is
   load-bearing rather than lazy: FogSystem skips zero-sight entities, so eighty

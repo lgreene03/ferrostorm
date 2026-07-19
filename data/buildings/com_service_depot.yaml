@@ -9,6 +9,7 @@ power_draw: 30
 sight_range: 4
 footprint: 2
 weapon_ids: []
+prerequisites: [com_factory]
 notes: >
   Repairs own units within radius 4 at 2 hp and 1 credit per tick each. The
   repair radius is a system constant rather than sight_range; do not assume the

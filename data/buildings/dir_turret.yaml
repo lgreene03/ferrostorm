@@ -9,6 +9,7 @@ power_draw: 20
 sight_range: 6
 footprint: 2
 weapon_ids: [wpn_turret_gun]
+prerequisites: [com_power_plant]
 notes: >
   The whole defensive roster at present. Anti-armour, so it loses per-cost to
   massed infantry by a hair. GDD s5 says a turret goes offline below 75 per

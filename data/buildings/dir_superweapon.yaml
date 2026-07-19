@@ -9,6 +9,7 @@ power_draw: 150
 sight_range: 4
 footprint: 2
 weapon_ids: []
+prerequisites: [com_radar_uplink]
 notes: >
   Charges over 1500 ticks, pausing while the base is underpowered, then throws
   an area strike with five seconds of warning. The charge length is a spawn
