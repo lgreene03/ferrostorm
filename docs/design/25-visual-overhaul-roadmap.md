@@ -1,8 +1,73 @@
 # 25. Visual Overhaul Roadmap: why it does not look as good, and the order to fix it
 
-Status: PROPOSED PLAN, implementation contract pending sign-off
+Status: IN EXECUTION. **Wave V0 SHIPPED and Wave V1 SHIPPED**, branch
+`ticket/p6-visual-v0-v1`, delivery notes docs/tickets/P6-visual-v0-v1.md.
+Waves V2, V3 and V4 remain as written below. LOOK-03 is NOT done: correcting
+the three false ledger entries is a producer action and is still owed.
 Date: 2026-07-19
 Owner: design-review, for execution by client-engineer + art-pipeline + tools agents
+
+---
+
+## Execution record, added 2026-07-19 after V0 and V1 shipped
+
+**The capture-verification rule is now in force, and it is enforceable.** A
+visual ticket is not closeable without a before-and-after contact sheet at the
+three reference cameras, and a change that is invisible at all three is a failed
+ticket regardless of its numeric criterion. The harness that makes that
+checkable is `tools/lookdev/capture.sh` and `tools/lookdev/contact.py`, both
+committed. There is no longer any excuse for a wave shipping unseen.
+
+**Four corrections to this document, all measured rather than argued.** They are
+recorded here in place because a later reader will otherwise implement the
+version that was wrong.
+
+1. **LOOK-01 clause 4's headless invocation does not work.** Godot's
+   `--headless` selects the dummy rasterizer and renders nothing, so a headless
+   capture writes a blank PNG. The harness runs windowed with `--audio-driver
+   Dummy`, which is the flag that actually matters offscreen, plus
+   `--fixed-fps 60`.
+2. **LOOK-01 clause 2's thirty-frame wait is not enough.** The volumetric fog's
+   temporal reprojection has not converged at thirty frames and the capture came
+   back byte-different between runs about half the time. 240 frames converges.
+   Separately, the fog's history is a property of every frame the PROCESS has
+   drawn, so the harness runs one process per camera; shooting three cameras in
+   one process and then returning to the first moved 16,592 pixels by up to
+   64/255 with the scene frozen.
+3. **V1-01's acceptance criterion "mean HSV saturation at CAM-A rises by at
+   least 0.03 absolute" points the wrong way.** The day-one fog experiment
+   measured mean HSV saturation COLLAPSING from 0.488 to 0.064 when the fog was
+   removed, because the frame's apparent saturation was the fog's uniform blue
+   cast rather than any chroma in the art. The metric that tracks what a viewer
+   sees is hue span, which went from 18.5 degrees to 222.7. Restate the
+   criterion against hue span.
+4. **V1-03 clause 4 is moot and V1-07's candidate knob does not exist.** Under
+   `AmbientSource.Sky` with `AmbientLightSkyContribution` at 1.0, which clause 3
+   mandates, `AmbientLightEnergy` is inert: raising it from 0.4 to 1.0 moved
+   mean open-ground luminance at CAM-A by 0.03 out of 255. The ambient level is
+   set by `SkyTopColor`, `SkyHorizonColor` and `SkyEnergyMultiplier` and by
+   nothing else. V1-03's own acceptance measurement is also unmeasurable as
+   written: at a fixed -50 pitch no downward-facing hull face is visible at all.
+
+**What the day-one experiments proved.** At CAM-A, setting `VolumetricFogDensity`
+to zero dropped mean frame luminance by 37.5/255, meaning the fog was ADDING
+that much uniform light to every pixel, and opened the frame's hue span from
+18.5 degrees to 222.7. Hiding the shroud plane was worth 7.5/255 and changed the
+hue span not at all. Section 1's proportioning was right about the order and
+understated the gap between the two.
+
+**Two defects the fog cut UNCOVERED**, neither of them caused by it, both owed
+onward and neither in scope for V1. The shroud image is one texel per map cell,
+so with the fog no longer smoothing it the visible-to-explored boundary is now
+plainly blocky at CAM-A and CAM-C. And the top eighteen to twenty-eight per cent
+of every frame is off-map void: at a 75-degree FOV and a -50 pitch the far edge
+of the frame is 99 metres away at CAM-A and 189 at CAM-B, and no shipped map is
+that deep. The second is V3-01's business and strengthens its case.
+
+**The project's first frame-time numbers**, at CAM-B with both bases in view at
+1600x900 with V-Sync off, over 240 rendered frames: 10.27 ms before V1 and
+9.86 ms after, at 117 draw calls either way. Section 5's prediction that V1 is
+net negative in cost holds.
 Inputs: six parallel lens audits (Godot Forward+ pipeline config; procedural asset and material quality; art direction and value structure; RTS readability at strategic camera distance; benchmarking against shipped Godot 4 titles; a literal audit of every captured render and the shipped bake data), each then attacked by three independent sceptics who re-measured the evidence rather than re-reading the prose. Judged against docs/design/16-visual-style.md, docs/design/20-visual-aaa-roadmap.md, docs/design/22-scale-and-colour-roadmap.md, docs/design/03-technical-design-document.md and docs/adr/ADR-001, at HEAD.
 
 This document answers one sentence Luke wrote after looking at other Godot games: "i have looked at other godot games and the graphics seem much better." He is right, and this document is not a defence of the existing work. It is written to be executed by a cheaper model, so every ticket carries its full mechanical specification, exact values and a measurable acceptance criterion.
