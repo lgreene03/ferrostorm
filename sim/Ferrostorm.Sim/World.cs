@@ -564,6 +564,14 @@ public sealed partial class World
     /// <summary>ADR-005 clause 6: type 10 is the gate, reserved and deferred. It has no def and no file, so its 1x1 footprint cannot be read from the catalogue and is stated here instead of being silently lost.</summary>
     public const int GateStructType = 10;
 
+    /// <summary>The two unit producers as STRUCT type ids (ADR-009): the
+    /// values a UnitTypeDef's ProducedAt carries. Named because the AI, the
+    /// client's tab membership and the sim's own split all compare against
+    /// them, and a literal 11 in four files is how the barracks and the
+    /// ENGINEER (unit type 11, a different namespace entirely) get confused.</summary>
+    public const int FactoryStructType = 2;
+    public const int BarracksStructType = 11;
+
     /// <summary>Cells per side of a structure type's square footprint (ADR-005), read from the def. Barriers are 1x1; everything else, including an unknown type (Footprint 0 on the default def), takes the 2x2 default that the placement path has always assumed.</summary>
     public int FootprintOf(int structType)
     {

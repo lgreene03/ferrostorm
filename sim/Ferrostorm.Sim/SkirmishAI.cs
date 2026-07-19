@@ -8,10 +8,21 @@ namespace Ferrostorm.Sim;
 /// own and updates deterministically from world state.
 ///
 /// Doctrine (deliberately simple; the point is a full closed loop, not
-/// brilliance): establish power -> refinery -> factory; keep one harvester
-/// working; alternate rifle/cannon production; add a defensive turret, then
-/// the radar uplink (ADR-008); when six combat units stand ready, attack-move
-/// the wave at the nearest enemy structure, and keep the waves coming.
+/// brilliance): establish power -> refinery -> barracks -> factory; keep one
+/// harvester working; alternate rifle/cannon production, each ROUTED TO ITS
+/// OWN PRODUCER (ADR-009); add a defensive turret, then the radar uplink
+/// (ADR-008); when six combat units stand ready, attack-move the wave at the
+/// nearest enemy structure, and keep the waves coming.
+///
+/// ADR-009 clause 7, the finding that inverts the intuitive risk: an AI that
+/// does not know about produced_at does not "still build tanks and look
+/// almost normal", it builds NOTHING. `lineHolds` opens both faction branches
+/// on rifles and rockets, which are barracks units; gate Produce on
+/// produced_at without teaching the ladder and the routing, and every one of
+/// them is refused at the factory, `army` stays 0 forever, lineHolds is never
+/// true, and the AI produces only refused infantry in perpetuity and never
+/// attacks. That is why the ladder, the routing and the per-producer queue
+/// guards below are not optional polish.
 /// </summary>
 public sealed class SkirmishAI
 {
@@ -34,7 +45,7 @@ public sealed class SkirmishAI
     {
         if (w.Tick % _actEvery != 0) return;
 
-        int cy = -1, factory = -1, refinery = -1;
+        int cy = -1, factory = -1, refinery = -1, barracks = -1;
         bool hasPlant = false, hasTurret = false, hasRadar = false;
         int harvesters = 0, army = 0, supply = 0, draw = 0;
         int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0;
@@ -57,6 +68,10 @@ public sealed class SkirmishAI
                         if (cy < 0) { cy = i; homeX = e.X; homeY = e.Y; }
                         break;
                     case EntityKind.Factory: factory = i; break;
+                    // ADR-009 clause 7: the barracks is tracked exactly as the
+                    // factory is, because it is now a producer the AI routes
+                    // to, not scenery.
+                    case EntityKind.Barracks: barracks = i; break;
                     case EntityKind.Refinery: refinery = i; refineryCount++; break;
                     case EntityKind.PowerPlant: hasPlant = true; break;
                     case EntityKind.Turret: hasTurret = true; break;
@@ -75,8 +90,13 @@ public sealed class SkirmishAI
                 supply += e.PowerSupply;
                 draw += e.PowerDraw;
             }
+            // ADR-009 clause 7: Barracks, RadarUplink and Airfield join the
+            // wave-target kinds, or the AI walks straight past the building
+            // this wave exists to add - an enemy barracks pumping infantry
+            // would never be picked as the nearest production structure.
             else if (e.PlayerId >= 0 && e.PlayerId != _player
-                     && e.Kind is EntityKind.ConstructionYard or EntityKind.Factory or EntityKind.Refinery or EntityKind.PowerPlant)
+                     && e.Kind is EntityKind.ConstructionYard or EntityKind.Factory or EntityKind.Refinery
+                        or EntityKind.PowerPlant or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield)
             {
                 if (e.Kind == EntityKind.Refinery && enemyRefinery < 0) enemyRefinery = i;
                 // Nearest enemy production structure is the wave target.
@@ -92,9 +112,33 @@ public sealed class SkirmishAI
 
         // --- Construction via the sidebar flow (TICKET-P2-SIM-05): place
         // whatever the yard has finished; otherwise queue the next need. ---
+        // ADR-009 clause 7 and doc 23 s4.3's ladder order. The barracks rung
+        // sits between the refinery and the factory: 500 credits of infantry
+        // production is the cheap early opening its price was signed for, and
+        // - load-bearing under the produced_at gate - rifles and rockets are
+        // the ONLY units both faction branches produce until a wave's worth of
+        // army stands, so an AI that reaches the factory first would have
+        // nothing it could legally build there.
         int wanted = !hasPlant ? 1
                    : refinery < 0 ? 3
+                   : barracks < 0 ? 11
                    : factory < 0 ? 2
+                   // ECONOMY BEFORE EVERYTHING ELSE, and this rung is not
+                   // decoration: the barracks above costs 500 credits the
+                   // opening did not previously spend, and MEASURED on
+                   // mission-01 that was enough to deadlock the commander
+                   // permanently. With the barracks inserted it bought plant,
+                   // refinery, barracks, factory, a plant top-up and a turret,
+                   // arrived at 16 credits with ZERO harvesters, and could
+                   // never afford the 1400-credit harvester that pays for all
+                   // of it: no income, no army, no wave, forever. The yard
+                   // ladder outbids the harvester because it queues cheaper
+                   // items first, so the rule is stated rather than left to
+                   // budget luck - build nothing more until something is
+                   // mining. It also covers the mid-game case honestly: lose
+                   // every harvester and the commander rebuys the economy
+                   // before it rebuys anything else.
+                   : harvesters == 0 ? 0
                    : supply < draw + 40 ? 1
                    : refineryCount < cyCount ? 3 // one refinery per base (TICKET-AI-03)
                    : !hasTurret ? 5
@@ -131,6 +175,13 @@ public sealed class SkirmishAI
             if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount < 2000) continue;
             if (Fix64.DistSq(f.X - homeX, f.Y - homeY) <= Fix64.FromInt(400)) { homeThin = false; break; }
         }
+        // ADR-009 clause 7's subtlest failure, addressed by keeping this gate
+        // exactly equal to the MCV's authored prerequisite. com_mcv.yaml still
+        // reads `prerequisites: [com_factory]` this wave (Q006 owns moving it
+        // behind the radar), so gating on the factory is gating on the data:
+        // the AI never saves 3500 credits for an MCV it cannot buy. The day
+        // Q006 moves that prerequisite, this line moves with it in the same
+        // change, or the saving-for-nothing failure appears here first.
         bool expansionDesired = homeThin && cyCount < 2 && ownMcv < 0 && factory >= 0;
         if (ownMcv >= 0)
         {
@@ -148,7 +199,10 @@ public sealed class SkirmishAI
             }
         }
         // --- Economy: one harvester per refinery, kept working; the MCV
-        // purchase fires the moment the war chest covers it ---
+        // purchase fires the moment the war chest covers it. Both are FACTORY
+        // units (produced_at com_factory), so these two guards already read
+        // the right producer's queue and need no generalisation; the army
+        // block below is the one that routes. ---
         if (factory >= 0 && refinery >= 0 && harvesters < refineryCount && w.QueueLength(factory) == 0)
             output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
         else if (expansionDesired && w.Credits(_player) >= 3500 && w.QueueLength(factory) == 0)
@@ -169,7 +223,7 @@ public sealed class SkirmishAI
         // or while the yard still wants a structure it cannot yet afford -
         // infrastructure before army, always ---
         if (factory >= 0 && harvesters >= 1 && !expansionDesired && ownMcv < 0
-            && wanted == 0 && w.QueueLength(factory) < 2)
+            && wanted == 0)
         {
             // Faction doctrine (TICKET-P3-FAC-04). Directorate: rifles and
             // cannons with a sentinel every fourth unit - eyes for the wall.
@@ -198,9 +252,22 @@ public sealed class SkirmishAI
                         4 => 8, // howitzer: splash shells are the answer to squad blobs
                         _ => scouts < 2 ? 6 : 2,
                     };
-            if (w.Credits(_player) >= w.GetUnitType(unitType).Cost)
+            // ADR-009 clause 7: route by the chosen type's OWN produced_at,
+            // here at the command site rather than in the selection switch
+            // above - the switch expresses doctrine, this expresses which
+            // building can legally take the order. Infantry go to the
+            // barracks, vehicles to the factory.
+            int producer = w.GetUnitType(unitType).ProducedAt == World.BarracksStructType ? barracks : factory;
+            // The queue-depth guard is PER PRODUCER, and that is load-bearing:
+            // routing rifles to a barracks while the guard still read the
+            // factory queue would leave the barracks queue unbounded and drain
+            // the treasury pay-as-you-build, which is the runaway ADR-009
+            // clause 7 names. A producer that does not stand yet takes no
+            // order at all.
+            if (producer >= 0 && w.QueueLength(producer) < 2
+                && w.Credits(_player) >= w.GetUnitType(unitType).Cost)
             {
-                output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, unitType));
+                output.Add(new Command(w.Tick, _player, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
                 _produced++;
             }
         }
