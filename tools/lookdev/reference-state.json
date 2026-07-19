@@ -1,0 +1,13 @@
+{
+  "map": "skirmish-03",
+  "map_path": "data/maps/skirmish-03.fmap",
+  "mission": 0,
+  "tick": 3600,
+  "saved_at": "2026-07-19 13:50:10",
+  "credits": 2105,
+  "ai_preset": 0,
+  "start_credits": 12000,
+  "seed": 2026,
+  "faction": 0,
+  "opp_faction": 1
+}

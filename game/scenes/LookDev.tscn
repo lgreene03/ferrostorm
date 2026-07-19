@@ -1,0 +1,11 @@
+[gd_scene load_steps=2 format=3]
+
+; LOOK-01: the look-development capture harness. NEVER set this as the main
+; scene and never reference it from another scene. It is launched by path,
+; explicitly, by tools/lookdev/capture.sh, and its script refuses to run
+; without --lookdev on the command line.
+
+[ext_resource type="Script" path="res://scripts/LookDev.cs" id="1"]
+
+[node name="LookDev" type="Node"]
+script = ExtResource("1")
