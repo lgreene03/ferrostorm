@@ -243,3 +243,55 @@ tabs and producer routing, client-only, hash-neutral) depends on it;
 PROD-06 (the AI) ships in the same release under its own regeneration. None
 may start before ratification, and the final prerequisite table additionally
 waits on Q006 and Q007.
+
+## Implementation notes (2026-07-19, P6 Wave B4)
+
+Recorded on the ADR itself, per the precedent ADR-007 and ADR-008 set, so the
+decision and what actually happened stay in one place. Full detail in
+docs/tickets/P6-wave-b4-barracks-and-the-tree.md.
+
+1. **Delivered as written, in four commits with the two regenerations the
+   hash-impact clause requires.** The AI shipped BEFORE the gate rather than
+   after it, which the ADR permits and which keeps the battery green at every
+   commit boundary: the commander cannot route to a barracks that is not
+   spawnable, and the gate must not land on a commander that does not know the
+   tree. Both regenerations carry a neutralisation proof.
+2. **The clause 7 AI change was necessary but NOT sufficient, and the gap was
+   measured.** Inserting the barracks rung deadlocked mission-01 permanently:
+   the extra 500 credits meant the commander bought its way to a turret and
+   arrived at 16 credits with zero harvesters, unable ever to afford the 1400
+   that funds everything. The ladder therefore also gained an ECONOMY-FIRST
+   rung - once the factory stands, want nothing more from the yard until
+   something is mining. This is scope beyond clause 7's list, forced by clause
+   7's own ladder change, and it is recorded here rather than absorbed
+   silently. It also fixes the mid-game case: a commander who loses every
+   harvester rebuys the economy before it rebuys defence.
+3. **The gate refuses the AI nothing**, proven twice: by neutralisation (the
+   four AI golden rows revert exactly when the queue-hash widening alone is
+   reverted, so the gate contributed no behaviour) and by direct instrumented
+   count over a 6000-tick two-faction run (zero refused Produce commands, zero
+   refused BuildStructure commands, both sides).
+4. **Clause 6's UX choice was honoured as written: ABSENT, not greyed.** The
+   implementing instruction floated greying infantry buttons with a reason;
+   this ADR's ratified text gates VISIBILITY on all three clauses, so absence
+   shipped, with an empty-tab note ("REQUIRES A BARRACKS") carrying the
+   honesty greying was meant to provide. AIRCRAFT is absent entirely and ships
+   with the air ADR alongside the airfield, per clause 10.
+5. **Clause 5's CY rally question, deferred here by ADR-007 and by Wave B2, is
+   settled:** the client offers a rally click on the Factory and the Barracks
+   only. The sim keeps ACCEPTING a Construction Yard rally (IsRallyable became
+   IsProducer, widening rather than narrowing) because refusing it would be a
+   behaviour change for nothing, but a yard's products are placed rather than
+   spawned, so offering the affordance would be the Service Depot dead
+   affordance again.
+6. **Clause 9's tautology cleanup is DEFERRED, not done.** The four
+   `[com_factory]` unit prerequisites ship as authored and are enforced
+   honestly (trivially satisfied at the producer the unit already comes out
+   of, so no behaviour hides behind them). The tier-2-behind-the-depot move
+   and the MCV's gate still want their Q006, Q007 and A11 sign-offs, exactly
+   as the Gates clause requires. Q007's warning has come true and is noted on
+   the question: the cheap window has closed, and moving the engineer is now a
+   behaviour change inside a regeneration.
+7. **Clause 10 held.** The airfield remains a reservation. It gained
+   IsStructure and wave-target membership only, which is free and prevents the
+   silent omission the ADR names, and it spawns nothing.

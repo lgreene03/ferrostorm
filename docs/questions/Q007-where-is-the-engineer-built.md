@@ -55,3 +55,25 @@ Factory. Does the engineer build at the Barracks or at the Factory?
   design claim for it.
 - **Needed next (from the Game Designer):** pick an option by the decide-by
   date; TICKET-P5-PROD-04's final unit table blocks on it (ADR-009 clause 5).
+
+## Status note, 2026-07-19 (P6 Wave B4)
+
+STILL OPEN, and THE CHEAP WINDOW HAS NOW CLOSED, exactly as the Context above
+predicted it would. ADR-009's implementing wave enforces produced_at, so
+com_engineer.yaml's authored `produced_at: com_barracks` is live: the engineer
+comes out of the barracks, appears under the sidebar's INFANTRY tab, and a
+factory refuses to build it. Reversing that is still one YAML line, but it is
+now a behaviour change inside a golden regeneration rather than a free edit,
+and it would move the engineer's sidebar tab with it.
+
+What shipped is option 1, and it shipped because it was the authored value and
+the mechanically enforceable reading, NOT because this question was answered.
+If the Game Designer prefers option 2 or option 3, the wave that applies it
+regenerates the goldens under ADR-009's existing sign-off; nothing about this
+wave forecloses the choice.
+
+Play-relevant consequence now live, for the decision: an engineer rush needs
+power plus a 500-credit barracks and nothing else, because the barracks sits
+early in the tree with only the power plant behind it. That is the classic
+cheese and the classic counterplay the Context describes, and it is now the
+shipped behaviour rather than a hypothetical.

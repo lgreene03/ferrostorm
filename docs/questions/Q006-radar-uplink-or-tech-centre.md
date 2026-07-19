@@ -56,3 +56,26 @@ future airfield. Does the Radar Uplink absorb the Tech Centre role GDD line
   not "a building literally named Tech Centre must exist".
 - **Needed next (from the Game Designer):** pick 1 or 2 by the decide-by
   date; ADR-009's prerequisite table and the AI ladder edit both block on it.
+
+## Status note, 2026-07-19 (P6 Wave B4)
+
+STILL OPEN, and now costlier to answer. ADR-009's implementing wave shipped
+the mechanically enforceable half and deliberately left this curation alone:
+com_mcv.yaml still reads `prerequisites: [com_factory]`, which under
+produced_at is the tautology this question exists to resolve. It is now
+ENFORCED rather than carried, which changes nothing about play (it is
+trivially satisfied at the factory the MCV comes out of) but does mean the
+answer arrives as a behaviour change inside a golden regeneration rather than
+as a free YAML edit.
+
+The AI's `expansionDesired` gate was left reading the factory ON PURPOSE and
+carries a comment binding it to this question, because gating on the data is
+what keeps the commander from saving 3500 credits for an MCV it cannot buy.
+Whichever option is chosen, that line moves in the same change as the
+prerequisite, or the subtlest failure mode ADR-009 clause 7 names appears
+immediately.
+
+One piece of new evidence for the decision: the Radar Uplink is now a real
+tier gate in the shipped tree (the superweapon waits behind it, and it waits
+behind the factory), so option 1 would place the MCV on an anchor that already
+carries mid-game weight rather than inventing one.
