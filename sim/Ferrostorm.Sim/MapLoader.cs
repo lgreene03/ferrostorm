@@ -203,4 +203,46 @@ public sealed class MapData
         tags = tagMap;
         return world;
     }
+
+    /// <summary>
+    /// ADR-011 (Wave B5): the skirmish opening hand, authored here in the sim's
+    /// MapLoader layer rather than in the client. Grants both players the
+    /// treasury, spawns a construction yard per player at this map's start
+    /// cells, and mirrors the classic opening force - one harvester and three
+    /// rifle squads each - around those cells. The runner's gated skirmish
+    /// scenario and the client both call this, so the golden covers the world
+    /// players actually play (ADR-001: a starting force is gameplay, not
+    /// presentation) and the corner-versus-centre split Q005 measured cannot
+    /// hide in an unhashed hole.
+    ///
+    /// Placement is Map.CellCentre (clause 3), decided in this same change: the
+    /// convention of every other spawn path in the sim (BuildWorld above for
+    /// map-authored units, World for everything production builds). The client
+    /// authored the harvester and squads with Fix64.FromInt cell corners; the
+    /// yards were always centred by the spawn function. Carrying the corners
+    /// into the sim would silently enshrine the inconsistency, so centres are
+    /// written here. This is outcome-shifting and Balance co-signs (Q005's
+    /// measured 550-tick shift on skirmish-04), which is why the golden moves.
+    ///
+    /// Faction-neutral (common hardware only), so the caller sets factions
+    /// itself: the runner leaves them at the default and the client applies the
+    /// player's menu choice (TICKET-P6-FACTION-01) before this call. Two-player
+    /// skirmish only, exactly as the branch this replaces was.
+    /// </summary>
+    public void PlaceSkirmishStart(World world, long startCredits)
+    {
+        world.GrantCredits(0, startCredits);
+        world.GrantCredits(1, startCredits);
+        world.SpawnConstructionYard(0, Starts[0].Cx, Starts[0].Cy);
+        world.SpawnConstructionYard(1, Starts[1].Cx, Starts[1].Cy);
+        for (int p = 0; p < 2; p++)
+        {
+            int sx = Starts[p].Cx, sy = Starts[p].Cy;
+            int side = p == 0 ? 1 : -1;
+            world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2));
+            for (int i = 0; i < 3; i++)
+                world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2),
+                    Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+        }
+    }
 }

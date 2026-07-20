@@ -559,10 +559,14 @@ World BuildSkirmishWorld(ulong seed)
     string mapPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/maps/skirmish-01.fmap"));
     var map = MapData.Load(mapPath);
     var world = map.BuildWorld(seed, players: 2);
-    world.GrantCredits(0, 8000);
-    world.GrantCredits(1, 8000);
-    world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-    world.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
+    // ADR-011 (Wave B5): the gated skirmish scenario now builds the SAME
+    // opening hand a real skirmish begins with - the two construction yards
+    // plus one harvester and three rifle squads per side at cell centres -
+    // through the shared MapLoader builder, so the golden covers the world
+    // players actually play rather than a bare two-yard world nobody plays.
+    // The 8000-credit treasury is unchanged (ADR-011 clause 2), so the
+    // golden's movement is attributable to the hand and the centring alone.
+    map.PlaceSkirmishStart(world, 8000);
     return world;
 }
 
