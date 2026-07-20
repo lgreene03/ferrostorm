@@ -162,7 +162,10 @@ def wmat(name, emit=0.0, rough=0.7, metal=0.0, wear=0.5, grime=0.5):
 
     # Base colour: base -> darkened by grime -> chipped to bare metal on edges
     dark = tuple(c * 0.42 for c in base[:3]) + (1,)
-    chip = (0.50, 0.53, 0.56, 1) if name not in ('rust', 'rustp', 'rustd') \
+    # doc 22 C-05 clause 3: the Directorate bare-metal chip was a neutral grey
+    # (0.50,0.53,0.56) that fights the new steel-blue body; a cool-tinted chip
+    # sits with it. The Sodality salvage chip stays dark (darker, not brighter).
+    chip = (0.42, 0.50, 0.60, 1) if name not in ('rust', 'rustp', 'rustd') \
         else (0.24, 0.13, 0.09, 1)  # sodality salvage chips darker, not brighter
     mix1 = nt.nodes.new('ShaderNodeMix'); mix1.location = (-420, 150)
     mix1.data_type = 'RGBA'

@@ -1,14 +1,46 @@
 # Ferrostorm 3D asset library - procedural low-poly, style guide faithful.
 import bpy, bmesh, math
 
+def srgb(h):
+    """Hex as seen on screen -> scene-linear, which is what Blender Base
+    Color slots hold. PAL is authored in linear; the hexes in doc 16 are the
+    rendered result of these triples, not the entry format. Call as
+    srgb('e8762c'). Provided per doc 22 C-05 clause 1 as the documented
+    encoding for any future palette entry; the table below is the ratified
+    result and is kept as literals so a reader can diff it against doc 16."""
+    def c(v):
+        v = int(h[v:v+2], 16) / 255.0
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    return (c(0), c(2), c(4), 1)
+
+# doc 22 C-05 (scheduled by doc 25 V2-04, landed in wave V4). The old PAL held
+# sRGB-looking fractions in scene-linear Base Color slots, so every model
+# rendered 50-60 sRGB units lighter and 30-40 per cent LESS saturated than doc
+# 16's hexes: gun rendered #95A2AC at HSV S 0.13 against doc 16's 0.19, rust
+# #B6866F at 0.39 against 0.62, teal #86DAD0 at 0.39 against 0.57. That
+# desaturation, under V2's brighter exposure, is the confirmed blown-tank read
+# V2 diagnosed and deferred here. This table holds the SHIPPED value (which is
+# fine) and restores the missing CHROMA. It is NOT doc 16's hexes read as
+# linear: doc 22 line 942 forbids that by name (rust would fall 62 per cent in
+# luminance and Sodality would vanish against the ground). The trailing comment
+# on each line is the sRGB hex it renders as.
 PAL = dict(
-    cinder=(0.055,0.06,0.065,1), gun=(0.30,0.36,0.41,1), plate=(0.44,0.50,0.54,1),
-    gundark=(0.17,0.20,0.23,1), orange=(0.91,0.42,0.13,1),
-    rust=(0.47,0.24,0.16,1), rustp=(0.60,0.32,0.21,1), rustd=(0.30,0.15,0.10,1), teal=(0.24,0.70,0.63,1),
-    olive=(0.39,0.37,0.32,1), olived=(0.25,0.24,0.20,1),
-    ferrite=(0.79,0.63,0.36,1), fhi=(0.92,0.78,0.50,1), bone=(0.83,0.81,0.75,1),
-    # W4-02: warm lamp glow (ferrite-adjacent, palette law kept) and red beacon
-    glow=(1.0,0.85,0.55,1), beacon=(1.0,0.16,0.10,1))
+    cinder=(0.048,0.052,0.062,1),   # #3E4046
+    gun=(0.20,0.34,0.50,1),         # #7C9EBC  S 0.34 (was 0.134), hue 208
+    plate=(0.34,0.48,0.66,1),       # #9EB8D4  S 0.26
+    gundark=(0.105,0.185,0.28,1),   # #5B7790  S 0.37
+    orange=(0.807,0.181,0.025,1),   # #E8762C  S 0.81 - doc 16 signal orange
+    rust=(0.55,0.185,0.075,1),      # #C4774D  S 0.61, hue 20, luminance -10%
+    rustp=(0.68,0.26,0.115,1),      # #D78B5F  S 0.56
+    rustd=(0.32,0.105,0.045,1),     # #995B3C  S 0.61
+    teal=(0.078,0.480,0.392,1),     # #4FB8A8  S 0.57 - doc 16 corroded teal
+    olive=(0.30,0.33,0.185,1),      # #959C77  S 0.24 - a real olive drab
+    olived=(0.185,0.205,0.105,1),   # #777D5B  S 0.27
+    ferrite=(0.82,0.55,0.175,1),    # #EAC474  S 0.50
+    fhi=(0.92,0.72,0.30,1),         # #F6DD95  S 0.39
+    bone=(0.83,0.81,0.75,1),        # unchanged
+    glow=(1.0,0.78,0.42,1),         # warmer lamp (W4-02 self-lit family)
+    beacon=(1.0,0.16,0.10,1))       # unchanged red beacon
 
 _mats = {}
 USE_WEATHERED = False  # set True (see lineup.py) to route every part through

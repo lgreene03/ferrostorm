@@ -145,6 +145,27 @@ def pixels_of(img):
     img.pixels.foreach_get(arr)
     return arr
 
+
+def emissive_scale(obj):
+    """Largest emission colour*strength product on this object (doc 22 C-06).
+    The EMIT bake target is an 8-bit buffer, so anything over 1.0 clips a
+    channel, and clipping one channel of a saturated colour is a hue shift, not
+    just a brightness cap. Scale every emissive material down by M before baking
+    so nothing clips, and hand M back to the exported emissive strength."""
+    m = 1.0
+    for slot in obj.material_slots:
+        if slot.material is None:
+            continue
+        nt = slot.material.node_tree
+        if 'Principled BSDF' not in nt.nodes:
+            continue
+        b = nt.nodes['Principled BSDF']
+        s = b.inputs['Emission Strength'].default_value
+        c = b.inputs['Emission Color'].default_value
+        m = max(m, s * max(c[0], c[1], c[2]))
+    return m
+
+
 for name in names:
     builder.scene_setup()
     o = builder.BUILDERS[name]()
@@ -168,6 +189,10 @@ for name in names:
     sc.render.bake.margin = max(8, size // 128)   # island dilation scales
     sc.render.bake.normal_space = 'TANGENT'
     any_glow = False
+    emit_scale_max = 1.0   # C-06 report: largest M applied on any object
+    emit_val_max = 0.0     # C-06 report: largest baked emit channel (should
+                           # end <= 1.0 with the hue preserved, vs a pre-change
+                           # clamp that pinned it at 1.0 by cutting a channel)
     for ob in objs:
         suffix = '' if ob is o else f'_{ob.name}'
         muted = mute_metallic([ob])
@@ -175,9 +200,33 @@ for name in names:
         restore_metallic(muted)
         rough = bake_pass(ob, 'ROUGHNESS', f'{name}{suffix}_rough', 'Non-Color', size)
 
+        # doc 22 C-06: normalise every emissive material down by M before the
+        # 8-bit EMIT bake so a saturated emissive keeps its hue instead of
+        # clipping toward white (the superweapon core baked yellow, the veil orb
+        # cyan-white, the ferrite tips pure white). The energy is put back at
+        # export via 2.0 * M below, so (colour/M) * 2M == colour * 2 exactly.
+        M = emissive_scale(ob)
+        emit_scale_max = max(emit_scale_max, M)
+        saved_es = []
+        if M > 1.0:
+            seen_es = set()
+            for slot in ob.material_slots:
+                mm = slot.material
+                if mm is None or mm.name in seen_es:
+                    continue
+                seen_es.add(mm.name)   # materials are shared: divide each once
+                nt = mm.node_tree
+                if 'Principled BSDF' not in nt.nodes:
+                    continue
+                inp = nt.nodes['Principled BSDF'].inputs['Emission Strength']
+                saved_es.append((inp, inp.default_value))
+                inp.default_value = inp.default_value / M
         # W4-01: real per-object emission map, dropped when the bake is black
         emit_img = bake_pass(ob, 'EMIT', f'{name}{suffix}_emit', 'sRGB', size)
+        for inp, v in saved_es:     # restore before any later pass reads them
+            inp.default_value = v
         earr = pixels_of(emit_img)
+        emit_val_max = max(emit_val_max, float(earr.reshape(-1, 4)[:, :3].max()))
         has_glow = earr.reshape(-1, 4)[:, :3].max() > 0.01
 
         # W4-04: tangent normal map (bevel shader edges + seams + grain)
@@ -265,7 +314,10 @@ for name in names:
             any_glow = True
             tex_e = nt.nodes.new('ShaderNodeTexImage'); tex_e.image = emit_img
             nt.links.new(tex_e.outputs['Color'], bsdf.inputs['Emission Color'])
-            bsdf.inputs['Emission Strength'].default_value = 2.0
+            # C-06: carry the normalisation back so the final look is unchanged
+            # while the baked map keeps full chroma. Exports as
+            # KHR_materials_emissive_strength, which Godot 4 imports.
+            bsdf.inputs['Emission Strength'].default_value = 2.0 * M
         else:
             bpy.data.images.remove(emit_img)
             bsdf.inputs['Emission Strength'].default_value = 0.0
@@ -278,5 +330,6 @@ for name in names:
     o.select_set(True)
     path = os.path.join(OUT, f'{name}.glb')
     bpy.ops.export_scene.gltf(filepath=path, use_selection=True)
-    print(f'BAKED {name} -> {path} ({size}px, glow={any_glow})')
+    print(f'BAKED {name} -> {path} ({size}px, glow={any_glow}, '
+          f'emit_scale={emit_scale_max:.3f}, emit_max={emit_val_max:.3f})')
 print('BAKE PIPELINE DONE')
