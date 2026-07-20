@@ -24,9 +24,24 @@ the previous wave uncovered, and the exposure retune this created, in one
 re-bake of all 27 models. **V2-03 (roughness octaves) and V2-04 (doc 22's C-06
 then C-05) were NOT in that session and remain**, and because the roadmap wants
 the whole bake to happen once, they now need their own re-bake; the pipeline is
-in the right state for them to land on the clean albedo V2-02 produced. Waves
-V3 and V4 remain as written below. LOOK-03 is NOT done: correcting the three
-false ledger entries is a producer action and is still owed.
+in the right state for them to land on the clean albedo V2-02 produced. **Wave
+V3 SHIPPED (branch `ticket/p6-visual-v3`, docs/tickets/P6-visual-v3.md):**
+V3-01's FOV 50 removes the off-map void (gone at CAM-A, much reduced at CAM-B
+where a residual band at max zoom is inherent to the finite map); V3-02 removes
+the far DOF rather than keeping it; the section-6 deferred unit up-scale is taken
+at a modest 1.3 for mobiles only, presentation-only with the sim footprint,
+collision and pick radius untouched; V3-04 range-culls the rubble and tuft
+scatter at max zoom. **V3-03 was delivered early by V-TERRAIN and needed no work
+in this wave:** `ground_biome.gdshader` (which replaced the `ground_splat.gdshader`
+V3-03's file line still names) already carries the exact distance fade V3-03
+specified, at its lines 105 to 107, citing "V3-03's lesson"; that stale file
+reference is the only correction V3 makes to this document, and it is a case of
+V-TERRAIN overtaking the ticket rather than a measured error like corrections 1
+to 5. MSAA was considered and left at 4x (an 8x probe was free on the M4 but is
+real cost on the min-spec target and showed no visible edge gain). Frame time at
+CAM-B fell 10.80 to 10.37 ms, net negative as section 5 predicted. **Wave V4
+remains as written below.** LOOK-03 is NOT done: correcting the three false
+ledger entries is a producer action and is still owed.
 Date: 2026-07-19
 Owner: design-review, for execution by client-engineer + art-pipeline + tools agents
 
@@ -208,7 +223,7 @@ Wave summary:
 | V0 | The look-development loop | 3 | none | no |
 | V1 | The veils and the free one-liners | 7 | none | no |
 | V2 | The one bake session | 4 | none | yes, once |
-| V3 | Camera, scale and the aliasing | 4 | none | no |
+| V3 | Camera, scale and the aliasing (SHIPPED; V3-03 delivered by V-TERRAIN) | 4 | none | no |
 | V4 | Faction identity and first impression | 4 | none | no |
 | V-TERRAIN | Natural terrain: grass, trees, water, sand, rocks, texture (subsumes doc 22 Wave A.5 + the ground half of Wave C) | 1 | none | no (procedural, no Blender) |
 
@@ -491,7 +506,16 @@ Verified, and this corrects two audits that contradicted each other. `DofBlurFar
 
 - Labels: `persona:client-engineer` `gdd:none` `phase:6` `owner:client-engineer`
 - Impact: HIGH | Effort: S | cheapModelSafe: true | touchesSim: false | client-only: yes
-- Files: game/shaders/ground_splat.gdshader
+- **DELIVERED EARLY by V-TERRAIN, verified in wave V3.** The file below,
+  `ground_splat.gdshader`, no longer exists: V-TERRAIN replaced it with
+  `game/shaders/ground_biome.gdshader`, which already carries the exact distance
+  fade this ticket specifies (`float ndfade = 1.0 - smoothstep(30.0, 90.0,
+  length(VERTEX));` multiplied into `NORMAL_MAP_DEPTH`, lines 105 to 107) with the
+  detail normal at a low `wpos.xz * 0.06`, citing "V3-03's lesson". Clause 2's
+  separate gravel-grain normal is moot in the biome shader (there is no separate
+  gravel normal). No code change was needed in V3; the spec below is the original,
+  kept for the record.
+- Files: game/shaders/ground_splat.gdshader (now game/shaders/ground_biome.gdshader)
 - Spec:
 
 The detail normal is a runtime-generated 512-pixel four-octave noise texture sampled at `wpos.xz * 0.15`, which is one tile per 6.67 world metres. At the 28.7-metre minimum camera distance that tile covers roughly 71 screen pixels, an undersample of about seven times, with `NORMAL_MAP_DEPTH` up to 0.95 and no distance fade at all. Undersampled normal detail shimmers as the camera pans, and this is aliasing inside triangles, which MSAA provably cannot resolve. It is very likely the largest single contributor to the impression that the game looks noisy and cheap in motion.
