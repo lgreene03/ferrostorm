@@ -40,9 +40,26 @@ V-TERRAIN overtaking the ticket rather than a measured error like corrections 1
 to 5. MSAA was considered and left at 4x (an 8x probe was free on the M4 but is
 real cost on the min-spec target and showed no visible edge gain). Frame time at
 CAM-B fell 10.80 to 10.37 ms, net negative as section 5 predicted. **Wave V4
-remains as written below.** LOOK-03 is NOT done: correcting the three false
-ledger entries is a producer action and is still owed.
-Date: 2026-07-19
+PART-SHIPPED (branch `ticket/p6-visual-v4`, docs/tickets/P6-visual-v4.md):** its
+colour-and-faction spine landed, which is the confirmed blown-tank fix V2
+deferred here (doc 22's C-06 emissive normalise-and-carry then C-05's PAL chroma
+pass, one re-bake of all 27 models) plus C-07's second team-colour location
+(structure footprint strips and a widened unit ring) so the shared com_
+structures tell the factions apart. Judged on captures at the three cameras: the
+bridge vehicle reads as a formed coloured object rather than a white-pink blob,
+the two factions read apart, and the terrain, killed void and unit scale all
+still hold; frame time is neutral (10.345 to 10.340 ms) and the goldens did not
+move. **What remains of the visual overhaul, stated honestly:** V4-02's
+palette-tuning polish (doc 22's C-01 scatter jitter, C-10 warm/cool light rig,
+C-11 grading LUT) was held out to avoid disturbing the just-validated exposure
+balance and because C-11 needs Luke's ramp sign-off; V4-03 (the HUD theme,
+main-menu backdrop and loading screen) and V4-04 (authored VFX textures) are the
+menu/HUD/effects "first impression" half and are unstarted; V2-03 (roughness
+octaves) is still owed. The colour and faction identity Luke's original sentence
+was about is done; the front-end presentation is the remaining work. LOOK-03 is
+NOT done: correcting the three false ledger entries is a producer action and is
+still owed.
+Date: 2026-07-19 (V4 part-shipped 2026-07-20)
 Owner: design-review, for execution by client-engineer + art-pipeline + tools agents
 
 ---
@@ -224,7 +241,7 @@ Wave summary:
 | V1 | The veils and the free one-liners | 7 | none | no |
 | V2 | The one bake session | 4 | none | yes, once |
 | V3 | Camera, scale and the aliasing (SHIPPED; V3-03 delivered by V-TERRAIN) | 4 | none | no |
-| V4 | Faction identity and first impression | 4 | none | no |
+| V4 | Faction identity and first impression (colour+faction PART-SHIPPED; C-01/C-10/C-11 palette polish + menu/HUD/VFX owed) | 4 | none | no |
 | V-TERRAIN | Natural terrain: grass, trees, water, sand, rocks, texture (subsumes doc 22 Wave A.5 + the ground half of Wave C) | 1 | none | no (procedural, no Blender) |
 
 Twenty-two tickets, five waves. Doc 22's Wave C tickets C-01, C-05, C-06, C-07, C-08, C-10 and C-11 are **not restated here**. They are ratified and they stand. This document schedules them and folds two additional fixes into C-05's bake session; where a ticket below interacts with one, the interaction is named in place.
