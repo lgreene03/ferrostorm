@@ -18,7 +18,7 @@ lands; this file is the resume point if a session dies.
 | B3 | Power gets teeth: turret gate, draws, radar blackout | ADR-008 (ratified); walls-gate phase G amendment mandatory | ONE regeneration | DONE (52004ee) |
 | B4 | Barracks split, tabbed sidebar, tech tree, AI learns barracks | ADR-009 (ratified); doc 23 Wave 6 | regenerations per doc 23 s6 | DONE (2fbfcc0) |
 | B5 | Starting hand into the sim + CellCentre decision | ADR-011 (ratified); Balance note on the 550-tick shift | regeneration (skirmish golden) | pending |
-| B6 | Ferrite regrowth | ADR-012: formalise from doc 24 sketch, then implement | regeneration | pending |
+| B6 | Ferrite regrowth | ADR-012: formalise from doc 24 sketch, then implement | regeneration | DONE (d7ff34c) |
 | C1 | Unit command layer: hold-fire, guard, patrol, formations | new ADR required (resolves Q003, P4-PORT-01, P4-PORT-05) | regeneration | pending |
 | C2 | Repair vehicle | GDD line 62; data-driven, post-B1 | depends on design | pending |
 | C3 | Four-queue sidebar (GDD line 45 in full) | post-B4 design | likely neutral (client) | pending |
