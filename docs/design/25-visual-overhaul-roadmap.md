@@ -1,6 +1,22 @@
 # 25. Visual Overhaul Roadmap: why it does not look as good, and the order to fix it
 
-Status: IN EXECUTION. **Waves V0 and V1 SHIPPED; V2 PART-SHIPPED.** V0/V1 on
+Status: IN EXECUTION. **Waves V0 and V1 SHIPPED; V2 PART-SHIPPED; a new terrain
+wave V-TERRAIN SHIPPED alongside.** V-TERRAIN (branch
+`ticket/p6-visual-terrain`, docs/tickets/P6-visual-terrain.md) is the natural
+terrain pass the owner asked for directly, in these words: "i want grass, trees,
+water, sand, rocks, proper texture". It SUBSUMES and delivers the terrain half of
+doc 22 Wave A.5 (the biome ground, ratified and never started) and the ground
+half of Wave C: a base biome per map (temperate if the map has water, arid if
+not) plus within-map variation driven by height, macro noise and proximity to
+water, expressed as a CPU biome control map that the biome ground shader, the
+grass, the trees and the rock formations all read. It adds a biome ground shader
+(grass/sand/rock, replacing the single arid splat), a depth-and-fresnel water
+shader with ripples and shore foam, MultiMesh grass with wind, procedural tree
+copses on the water banks and map edges, and rock formations on the rocky biome
+and cliff feet. It is client-and-art only: `git diff sim/` empty, goldens
+unmoved, and every decorative mesh is presentation that never gates the sim's
+passability. It does NOT do doc 22 Wave C's unit-chroma tickets (C-01, C-05
+etc.), which are the roster's colour and belong to the bake waves. V0/V1 on
 branch `ticket/p6-visual-v0-v1` (docs/tickets/P6-visual-v0-v1.md). Branch
 `ticket/p6-visual-v2` (docs/tickets/P6-visual-v2.md) ships the bake session's
 V2-01 (binary metallic) and V2-02 (kill the triple AO), the shroud-quality fix
@@ -194,6 +210,7 @@ Wave summary:
 | V2 | The one bake session | 4 | none | yes, once |
 | V3 | Camera, scale and the aliasing | 4 | none | no |
 | V4 | Faction identity and first impression | 4 | none | no |
+| V-TERRAIN | Natural terrain: grass, trees, water, sand, rocks, texture (subsumes doc 22 Wave A.5 + the ground half of Wave C) | 1 | none | no (procedural, no Blender) |
 
 Twenty-two tickets, five waves. Doc 22's Wave C tickets C-01, C-05, C-06, C-07, C-08, C-10 and C-11 are **not restated here**. They are ratified and they stand. This document schedules them and folds two additional fixes into C-05's bake session; where a ticket below interacts with one, the interaction is named in place.
 
