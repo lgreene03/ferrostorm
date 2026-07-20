@@ -1489,9 +1489,11 @@ public partial class SkirmishLive : Node3D
             dots.Add(((float)v.X, (float)v.Y, c));
         }
         // W3-20: project the four viewport corners onto the ground for the
-        // minimap frustum trapezoid. Pitch is fixed at -50 with a ~37 degree
-        // vertical half-FOV, so all four rays hit the ground in practice; the
-        // null branch is a safety.
+        // minimap frustum trapezoid. GroundPoint casts through the camera's own
+        // ProjectRayNormal, so this trapezoid tracks the lens automatically:
+        // V3-01 narrowed the vertical FOV to 50 (a 25 degree half-FOV), which
+        // only steepens the corner rays, so all four still hit the ground in
+        // practice and the null branch stays a safety.
         var vs = GetViewport().GetVisibleRect().Size;
         var corners = new[] { new Vector2(0, 0), new Vector2(vs.X, 0), new Vector2(vs.X, vs.Y), new Vector2(0, vs.Y) };
         Vector2[]? fr = new Vector2[4];

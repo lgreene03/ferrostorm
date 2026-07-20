@@ -29,15 +29,36 @@ public partial class RtsCamera : Camera3D
     public override void _Ready()
     {
         RotationDegrees = new Vector3(-50, 0, 0);
+        // V3-01 (doc 25): the vertical FOV was never set, so Camera3D ran at
+        // Godot's 75 default. At a fixed -50 pitch and 75, the far edge of the
+        // frame is ~99 m away at the play height of 22 and ~189 m at the max
+        // zoom of 42, beyond the depth of any shipped map, so the top ~20 to 35
+        // per cent of every frame was empty off-map void (measured in V0/V1, the
+        // single biggest compositional flaw in the frame). 50 pulls the horizon
+        // down to fill the frame with battlefield and roughly doubles the pixels
+        // per world unit at CAM-A (about 18 to about 27), without reading
+        // telephoto-flat. This is a gameplay-visible change, since it shows less
+        // ground per height; MinHeight and MaxHeight are deliberately left as
+        // they are (V3-01 clause 2). MAP-05's height-driven shadow distance has
+        // not landed, so BuildLightRig's DirectionalShadowMaxDistance stays a
+        // constant 90 m, which the narrower frame only covers more completely.
+        // The minimap frustum is projected from this camera's own rays
+        // (SkirmishLive.GroundPoint uses ProjectRayNormal), so it tracks the new
+        // FOV with no separate edit.
+        Fov = 50f;
         _target = Position;
-        // W1-10: tilt-shift far DOF, strongest zoomed in; auto-exposure
-        // explicitly off so muzzle flashes never pump the frame.
+        // V3-02 (doc 25): the far tilt-shift DOF is removed rather than kept.
+        // At 75 FOV its blur fell on the off-map void at the top of the frame
+        // and cost a little for nothing; with V3-01 that region is now real
+        // battlefield, and softening the far units and structures the player
+        // must read is the same mistake V3-02 forbids in the near field. This is
+        // the "DofBlurFarEnabled = false and reclaim the cost" branch. The dead
+        // DofBlurFarDistance = 55f initialiser (overwritten every frame by the
+        // old _Process) went with it. Auto-exposure stays off so muzzle flashes
+        // never pump the frame.
         _attrs = new CameraAttributesPractical
         {
-            DofBlurFarEnabled = true,
-            DofBlurFarDistance = 55f,
-            DofBlurFarTransition = 25f,
-            DofBlurAmount = 0.05f,
+            DofBlurFarEnabled = false,
             AutoExposureEnabled = false,
         };
         Attributes = _attrs;
@@ -97,7 +118,8 @@ public partial class RtsCamera : Camera3D
         float zOff = _target.Y * 0.55f;
         _target.Z = Mathf.Clamp(_target.Z, BoundsMin.Y + zOff, BoundsMax.Y + zOff);
         Position = Position.Lerp(_target, 1f - Mathf.Exp(-Damping * (float)delta));
-        _attrs.DofBlurFarDistance = Position.Y * 2.2f + 12f;
+        // V3-02: the per-frame far-DOF distance update went with the effect. The
+        // camera no longer runs a depth of field, so there is nothing to drive.
 
         // W3-13: trauma decays linearly; shake is trauma squared, applied as
         // layered sines through H/VOffset (never fights the smoothing state).
