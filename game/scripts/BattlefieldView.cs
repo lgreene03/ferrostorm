@@ -237,8 +237,7 @@ public static class BattlefieldView
         });
     }
 
-    // W1-06: the water scrolls; W1-11: shared contact-shadow blob texture.
-    private static StandardMaterial3D? _waterMat;
+    // W1-11: shared contact-shadow blob texture.
     private static GradientTexture2D? _blobTex;
 
     // W4-10: heightfield undulation. GroundHeight is the single sampler the
@@ -450,8 +449,6 @@ public static class BattlefieldView
     public static void TickWater(double delta)
     {
         _windPhase += (float)delta;
-        if (_waterMat != null)
-            _waterMat.Uv1Offset += new Vector3(0.010f, 0.014f, 0f) * (float)delta;
         if (_waterShader != null)
             _waterShader.SetShaderParameter("wave_time", _windPhase);
         foreach (var m in _windShaders)
@@ -748,25 +745,23 @@ public static class BattlefieldView
             Roughness = 0.92f,
             Uv1Scale = new Vector3(3, 3, 3),
         };
-        // Shared dressing materials. Water is OPAQUE (W1-06): SSR skips
-        // transparent geometry, and the slab sits below the ground lip so
-        // opacity changes no silhouette. The static field lets TickWater
-        // scroll the normals.
-        _waterMat = new StandardMaterial3D
+        // V-TERRAIN: the river is a real water surface now, not a dark slab.
+        // A custom shader gives it depth colour, a fresnel edge, scrolling
+        // ripple normals and a shore foam line (game/shaders/water.gdshader).
+        // The basin geometry (the sunken per-cell slabs below) is unchanged;
+        // only the material is replaced. It is TRANSPARENT so the shader can
+        // read the scene depth behind it, which is what SSR being off (V1-06)
+        // now allows without cost. wave_time is pushed by TickWater so it
+        // freezes under the look-dev pause and captures stay byte-identical.
+        var waterShader = new ShaderMaterial
         {
-            AlbedoColor = new Color(0.03f, 0.055f, 0.085f),
-            Metallic = 0.85f, Roughness = 0.08f,
-            MetallicSpecular = 0.7f,
-            NormalEnabled = true,
-            NormalTexture = GrainTex(53, 0.08f, normalMap: true),
-            NormalScale = 0.35f,
-            Uv1Scale = new Vector3(6, 6, 6),
-            // W4-14 Part A: per-cell slabs share one continuous world-space
-            // pattern, so the per-cell UV seam disappears.
-            Uv1Triplanar = true,
-            Uv1WorldTriplanar = true,
+            Shader = GD.Load<Shader>("res://shaders/water.gdshader"),
         };
-        var waterMat = _waterMat;
+        waterShader.SetShaderParameter("ripple_normal", GrainTex(53, 0.09f, normalMap: true));
+        _waterShader = waterShader;
+        // One seamless surface over every water cell at the waterline, so the
+        // transparent shader has no per-tile seam to double-blend.
+        BuildWaterSurface(parent, waterCells, waterShader);
         // W4-14 Part B/C: wet shore ramps and the foam line at the lip.
         var shoreMat = new StandardMaterial3D
         {
@@ -878,8 +873,10 @@ public static class BattlefieldView
                 case 'w':
                     // Water: a sunken reflective slab; the shore lip is the
                     // ground plane edge reading against it.
-                    Emit(waterMat, new Vector3(1.02f, 0.1f, 1.02f),
-                        new Vector3(bx + 0.5f, -0.12f, by + 0.5f), Vector3.Zero);
+                    // V-TERRAIN: the water surface is now ONE seamless mesh
+                    // (BuildWaterSurface, below), not a per-cell slab, so the
+                    // transparent material has no tile seams to double-blend.
+                    // This 'w' case keeps only the shore dressing.
                     // W4-14 Part B/C: on each edge that meets ground, a wet
                     // ramp descending from the ground lip to the waterline,
                     // and a faint foam line just inside the water cell.
@@ -1160,6 +1157,46 @@ public static class BattlefieldView
     /// factor is exactly 1.0 and every count is its shipped value.</summary>
     private static int Scaled(int baseCount, float densityScale)
         => Mathf.RoundToInt(baseCount * densityScale);
+
+    /// <summary>V-TERRAIN: one seamless water surface over every water cell at
+    /// the waterline (y = -0.07, the old slab's top). It replaces the per-cell
+    /// slabs so the transparent water shader has no overlapping tile edges to
+    /// double-blend into a grid of dark seams. Adjacent cell quads share exact
+    /// corner coordinates, so the surface has no gap and no overlap. The basin
+    /// (the sunken ground under the water, GroundHeight -0.22) is unchanged, so
+    /// the shader still reads a real depth beneath the surface.</summary>
+    private static void BuildWaterSurface(Node3D parent, HashSet<(int, int)> waterCells,
+        ShaderMaterial mat)
+    {
+        if (waterCells.Count == 0) return;
+        const float y = -0.07f;
+        var st = new SurfaceTool();
+        st.Begin(Mesh.PrimitiveType.Triangles);
+        st.SetNormal(Vector3.Up);
+        st.SetTangent(new Plane(1, 0, 0, 1)); // +X tangent; NORMAL_MAP needs one
+        foreach (var (cx, cy) in waterCells)
+        {
+            var a = new Vector3(cx, y, cy);
+            var b = new Vector3(cx + 1, y, cy);
+            var c = new Vector3(cx, y, cy + 1);
+            var d = new Vector3(cx + 1, y, cy + 1);
+            // Clockwise front-face winding, matching the ground mesh so the top
+            // faces up (Godot front faces wind clockwise, the ground's own note).
+            st.SetUV(new Vector2(cx, cy)); st.AddVertex(a);
+            st.SetUV(new Vector2(cx + 1, cy)); st.AddVertex(b);
+            st.SetUV(new Vector2(cx, cy + 1)); st.AddVertex(c);
+            st.SetUV(new Vector2(cx + 1, cy)); st.AddVertex(b);
+            st.SetUV(new Vector2(cx + 1, cy + 1)); st.AddVertex(d);
+            st.SetUV(new Vector2(cx, cy + 1)); st.AddVertex(c);
+        }
+        parent.AddChild(new MeshInstance3D
+        {
+            Mesh = st.Commit(),
+            MaterialOverride = mat,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Name = "Water",
+        });
+    }
 
     /// <summary>W4-15: prop variety scatter - dead-grass tufts, low rock
     /// clusters hugging ridge feet, flat plate debris around ruins. Three
