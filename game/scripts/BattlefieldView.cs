@@ -1222,6 +1222,12 @@ public static class BattlefieldView
         foreach (var (cell, k) in visual)
             if (k == 'r') ruins.Add(cell);
 
+        // V-TERRAIN: real grass blades on the grassy biome. Reads BiomeAt so it
+        // lands where the ground shader already shows grass. Own rng stream
+        // (2028), so it does not perturb the tuft/rock/plate scatter's 2027
+        // order.
+        BuildGrass(parent, w, h, blockedSet, visual, densityScale);
+
         // (1) TUFTS: two crossed vertical quads, alpha-scissored noise.
         var st = new SurfaceTool();
         st.Begin(Mesh.PrimitiveType.Triangles);
@@ -1266,7 +1272,11 @@ public static class BattlefieldView
         {
             float rx = (float)rng.NextDouble() * w, rz = (float)rng.NextDouble() * h;
             var cell = ((int)rx, (int)rz);
+            // V-TERRAIN: these are DEAD-straw tufts, so keep them off grassy
+            // ground (the live grass MultiMesh owns that) and let them dress the
+            // dry, sandy and rocky biome instead.
             if (blockedSet.Contains(cell) || visual.GetValueOrDefault(cell, '.') == 'w'
+                || BiomeAt(rx, rz).Grass > 0.45f
                 || density.GetNoise2D(rx * 2.2f, rz * 2.2f) <= 0.05f)
             {
                 tufts.SetInstanceTransform(i, zeroScale);
@@ -1400,6 +1410,151 @@ public static class BattlefieldView
             Multimesh = plates,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Name = "Plates",
+        });
+    }
+
+    // V-TERRAIN: a procedurally drawn blade card - a handful of tapering
+    // vertical blades with a soft root-to-tip shade baked into RGB and the blade
+    // shape in alpha. Deterministic (fixed seed), cached. UV.y = 1 is the root
+    // (the Quad helper puts UV (0,1) at the bottom verts), so the image bottom
+    // rows are the roots and the top rows are the tips.
+    private static ImageTexture? _bladeTex;
+
+    public static ImageTexture GrassBladeTex()
+    {
+        if (_bladeTex != null) return _bladeTex;
+        const int W = 48, H = 48;
+        var img = Image.CreateEmpty(W, H, false, Image.Format.Rgba8);
+        img.Fill(new Color(0, 0, 0, 0));
+        var r = new System.Random(4801);
+        for (int b = 0; b < 6; b++)
+        {
+            float cx = (float)r.NextDouble() * W;
+            float topFrac = 0.55f + (float)r.NextDouble() * 0.45f; // blade height as a fraction of H
+            float baseW = 2.0f + (float)r.NextDouble() * 2.4f;     // half-width at the root, px
+            float lean = ((float)r.NextDouble() - 0.5f) * W * 0.22f;
+            int topRow = (int)((1f - topFrac) * H);
+            for (int row = H - 1; row >= topRow; row--)
+            {
+                float up = (H - 1 - row) / (float)(H - 1);         // 0 root .. 1 image top
+                float frac = Mathf.Clamp(up / topFrac, 0f, 1f);    // 0 root .. 1 this blade's tip
+                float halfW = baseW * (1f - frac);
+                float centre = cx + lean * frac;
+                float shade = 0.60f + 0.48f * up;
+                for (int col = (int)(centre - halfW); col <= (int)(centre + halfW); col++)
+                {
+                    if (col < 0 || col >= W) continue;
+                    img.SetPixel(col, row, new Color(shade, shade, shade, 1f));
+                }
+            }
+        }
+        _bladeTex = ImageTexture.CreateFromImage(img);
+        return _bladeTex;
+    }
+
+    /// <summary>
+    /// V-TERRAIN: real grass. Crossed blade cards, MultiMesh-instanced only
+    /// where the biome grass weight is high, thinned by a density noise, stopped
+    /// at sand, rock, water and blocked cells. Three species tints jittered per
+    /// instance so it is grain and colour, not flat green. Shadows off (a blade
+    /// casts nothing legible at this camera) and range-culled so the field
+    /// exists only when the camera is close enough to resolve it - at the
+    /// maximum zoom it would be sub-pixel shimmer, which is exactly the case
+    /// V3-04 range-culls the other scatter for. Seeded (2028), deterministic.
+    /// Presentation only: it reads BiomeAt and the map, never the sim.
+    /// </summary>
+    private static void BuildGrass(Node3D parent, int w, int h,
+        HashSet<(int, int)> blockedSet, IReadOnlyDictionary<(int, int), char> visual,
+        float densityScale)
+    {
+        if (!_temperate) return; // arid maps carry dead tufts, not live grass
+        const float bh = 0.40f;
+        // Three crossed blade cards at 0/60/120 degrees for a fuller clump.
+        var st = new SurfaceTool();
+        st.Begin(Mesh.PrimitiveType.Triangles);
+        for (int p = 0; p < 3; p++)
+        {
+            float ang = p * Mathf.Pi / 3f;
+            float dx = Mathf.Cos(ang) * 0.15f, dz = Mathf.Sin(ang) * 0.15f;
+            var n = new Vector3(-Mathf.Sin(ang), 0, Mathf.Cos(ang));
+            var a = new Vector3(-dx, 0, -dz);
+            var b = new Vector3(dx, 0, dz);
+            var c = new Vector3(dx, bh, dz);
+            var d = new Vector3(-dx, bh, dz);
+            st.SetNormal(n); st.SetUV(new Vector2(0, 1)); st.AddVertex(a);
+            st.SetNormal(n); st.SetUV(new Vector2(1, 1)); st.AddVertex(b);
+            st.SetNormal(n); st.SetUV(new Vector2(1, 0)); st.AddVertex(c);
+            st.SetNormal(n); st.SetUV(new Vector2(0, 1)); st.AddVertex(a);
+            st.SetNormal(n); st.SetUV(new Vector2(1, 0)); st.AddVertex(c);
+            st.SetNormal(n); st.SetUV(new Vector2(0, 0)); st.AddVertex(d);
+        }
+        var grassMesh = st.Commit();
+        var grassMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/grass.gdshader") };
+        grassMat.SetShaderParameter("blade_tex", GrassBladeTex());
+        grassMat.SetShaderParameter("blade_height", bh);
+        _windShaders.Add(grassMat);
+        grassMesh.SurfaceSetMaterial(0, grassMat);
+
+        // Three grass species, authored as the sRGB the eye should see and
+        // converted to linear so they sit with the source_color ground grass.
+        var tints = new[]
+        {
+            new Color(0.34f, 0.44f, 0.20f).SrgbToLinear(), // fresh green
+            new Color(0.42f, 0.44f, 0.18f).SrgbToLinear(), // dry yellow-green
+            new Color(0.24f, 0.37f, 0.16f).SrgbToLinear(), // deep green
+        };
+
+        var rng = new System.Random(2028);
+        var density = _groundNoise!;
+        int grassN = Scaled(6400, densityScale);
+        var mm = new MultiMesh
+        {
+            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+            UseColors = true,
+            Mesh = grassMesh,
+            InstanceCount = grassN,
+        };
+        var zeroScale = new Transform3D(Basis.Identity.Scaled(Vector3.Zero), Vector3.Zero);
+        for (int i = 0; i < grassN; i++)
+        {
+            float rx = (float)rng.NextDouble() * w, rz = (float)rng.NextDouble() * h;
+            var cell = ((int)rx, (int)rz);
+            var bm = BiomeAt(rx, rz);
+            if (blockedSet.Contains(cell) || visual.GetValueOrDefault(cell, '.') == 'w'
+                || bm.Grass < 0.42f
+                || density.GetNoise2D(rx * 1.7f, rz * 1.7f) <= -0.32f)
+            {
+                mm.SetInstanceTransform(i, zeroScale);
+                mm.SetInstanceColor(i, Colors.White);
+                continue;
+            }
+            float sc = 0.75f + (float)rng.NextDouble() * 0.7f;
+            // Grass thins toward the biome edges (weaker weight = shorter, sparser).
+            sc *= Mathf.Lerp(0.6f, 1.0f, Mathf.Clamp(bm.Grass, 0f, 1f));
+            var basis = Basis.FromEuler(new Vector3(0, (float)rng.NextDouble() * Mathf.Tau, 0))
+                .Scaled(new Vector3(sc, sc * (0.85f + (float)rng.NextDouble() * 0.4f), sc));
+            mm.SetInstanceTransform(i, new Transform3D(basis,
+                new Vector3(rx, GroundHeight(rx, rz), rz)));
+            var t = tints[rng.Next(tints.Length)];
+            float v = 0.82f + (float)rng.NextDouble() * 0.32f;
+            mm.SetInstanceColor(i, new Color(t.R * v, t.G * v, t.B * v));
+        }
+        parent.AddChild(new MultiMeshInstance3D
+        {
+            Multimesh = mm,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            // Range-cull: full grass at play height and closer, gone by the time
+            // the camera is at max zoom (height 42) where a blade is sub-pixel
+            // and the ground shader's own green already carries the grassland
+            // read. The AABB spans the map, so this culls the whole field by
+            // camera height, which is the intended "close enough to resolve it"
+            // behaviour (V3-04's rationale). Measured: the fade band at CAM-B was
+            // costing ~2.3 ms for grass too small to see; culling it there
+            // reclaims that for the trees and rocks.
+            VisibilityRangeEnd = 40f,
+            VisibilityRangeEndMargin = 6f,
+            VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self,
+            Name = "Grass",
         });
     }
 
