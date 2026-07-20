@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ferrite field definition",
+  "description": "ADR-012. The regrowth tuning for ferrite fields, in the same shape and spirit as schema.unit.json and schema.structure.json: CLAUDE.md forbids hand-editing stats in code, so this file is the runtime source and World's compiled defaults (DefaultRegrowAmount, DefaultRegrowIntervalTicks) exist only to be proved equal to it by the selftest round-trip. Fields are map-placed rather than catalogue-driven, so the spawn amount (the regrowth cap) is a per-instance value carried on the entity and is deliberately NOT authored here; only the global regrowth rate is.",
+  "type": "object",
+  "required": ["id", "name", "regrow_amount", "regrow_interval_ticks"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
+    "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
+    "regrow_amount": { "type": "integer", "minimum": 0, "description": "Ferrite units restored each interval. 0 disables regrowth. Set by Balance under A11." },
+    "regrow_interval_ticks": { "type": "integer", "minimum": 1, "description": "Sim ticks at 15Hz between regrowth steps. The placeholder is 75 (5 seconds). Must be at least 1; a field only regrows while its own remaining amount is above zero." },
+    "notes": { "type": "string", "description": "Design intent and GDD/ADR traceback." }
+  }
+}

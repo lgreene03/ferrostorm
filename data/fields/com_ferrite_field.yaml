@@ -1,0 +1,17 @@
+id: com_ferrite_field
+name: Ferrite Field
+regrow_amount: 1
+regrow_interval_ticks: 75
+notes: >
+  ADR-012: a ferrite field regrows regrow_amount every regrow_interval_ticks,
+  up to its spawn amount, but ONLY while its remaining amount is above zero. A
+  field stripped to zero is dead ground forever, so strip-to-deny stays a real
+  choice and harvesting territory to exhaustion carries a cost. The placeholder
+  is a deliberate trickle set by Balance under A11: 1 unit per 5 seconds
+  (75 ticks at 15Hz) against harvest rates an order of magnitude higher, so
+  regrowth extends the late game without funding a turtle. These are the /data
+  runtime values; World.DefaultRegrowAmount and DefaultRegrowIntervalTicks are
+  the compiled reference twin the selftest proves this file reproduces. The
+  field's spawn amount itself is not authored here: fields are map-placed
+  (MapData 'F' cells at the standard deposit, or a scenario's own amount), so
+  the cap is per-instance and travels on the entity, not on this definition.
