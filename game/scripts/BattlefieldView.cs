@@ -1222,11 +1222,14 @@ public static class BattlefieldView
         foreach (var (cell, k) in visual)
             if (k == 'r') ruins.Add(cell);
 
-        // V-TERRAIN: real grass blades on the grassy biome. Reads BiomeAt so it
-        // lands where the ground shader already shows grass. Own rng stream
-        // (2028), so it does not perturb the tuft/rock/plate scatter's 2027
-        // order.
+        // V-TERRAIN: real grass on the grassy biome, tree copses on the water
+        // banks and map edges, and rock formations on the rocky biome and cliff
+        // feet. Each reads BiomeAt so it lands where the ground shows its biome.
+        // Own rng streams (2028/2029/2030), so they do not perturb the
+        // tuft/rock/plate scatter's 2027 order.
         BuildGrass(parent, w, h, blockedSet, visual, densityScale);
+        BuildTrees(parent, w, h, blockedSet, visual);
+        BuildRockFormations(parent, w, h, blockedSet, visual, densityScale);
 
         // (1) TUFTS: two crossed vertical quads, alpha-scissored noise.
         var st = new SurfaceTool();
@@ -1555,6 +1558,315 @@ public static class BattlefieldView
             VisibilityRangeEndMargin = 6f,
             VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self,
             Name = "Grass",
+        });
+    }
+
+    // ---- V-TERRAIN procedural mesh helpers (trees, rock formations) ----
+    //
+    // These build their geometry the same way every other terrain form in this
+    // file does: procedural Godot primitives, not Blender assets. The Blender
+    // pipeline is for the 27 UNIT models; hills, ruins, fences, cliffs and the
+    // rock scatter are all procedural here, and trees and rock formations join
+    // them, which keeps them inside the deterministic seeded-scatter
+    // architecture and touches no .glb and no bake.
+
+    /// <summary>Append a smooth low-poly ellipsoid blob (centre c, radii rad)
+    /// to a SurfaceTool, with radial (smooth) normals so it reads as a rounded
+    /// mass. Used for tree canopies and, displaced, for boulders.</summary>
+    private static void AddBlob(SurfaceTool st, Vector3 c, Vector3 rad,
+        int rings, int sectors, System.Func<Vector3, Vector3>? warp = null)
+    {
+        var p = new Vector3[rings + 1, sectors + 1];
+        for (int i = 0; i <= rings; i++)
+        {
+            float phi = i / (float)rings * Mathf.Pi;
+            for (int j = 0; j <= sectors; j++)
+            {
+                float th = j / (float)sectors * Mathf.Tau;
+                var dir = new Vector3(Mathf.Sin(phi) * Mathf.Cos(th), Mathf.Cos(phi),
+                    Mathf.Sin(phi) * Mathf.Sin(th));
+                var v = c + new Vector3(dir.X * rad.X, dir.Y * rad.Y, dir.Z * rad.Z);
+                if (warp != null) v = warp(v);
+                p[i, j] = v;
+            }
+        }
+        void Tri(Vector3 a, Vector3 b, Vector3 d)
+        {
+            st.SetNormal((a - c).Normalized()); st.AddVertex(a);
+            st.SetNormal((b - c).Normalized()); st.AddVertex(b);
+            st.SetNormal((d - c).Normalized()); st.AddVertex(d);
+        }
+        for (int i = 0; i < rings; i++)
+            for (int j = 0; j < sectors; j++)
+            {
+                Tri(p[i, j], p[i, j + 1], p[i + 1, j + 1]);
+                Tri(p[i, j], p[i + 1, j + 1], p[i + 1, j]);
+            }
+    }
+
+    /// <summary>Append a tapered cylinder (bark trunk) to a SurfaceTool, radial
+    /// normals, from y=0 to y=height.</summary>
+    private static void AddTrunk(SurfaceTool st, float r0, float r1, float height, int sides)
+    {
+        for (int s = 0; s < sides; s++)
+        {
+            float a0 = s / (float)sides * Mathf.Tau, a1 = (s + 1) / (float)sides * Mathf.Tau;
+            var b0 = new Vector3(Mathf.Cos(a0) * r0, 0, Mathf.Sin(a0) * r0);
+            var b1 = new Vector3(Mathf.Cos(a1) * r0, 0, Mathf.Sin(a1) * r0);
+            var t0 = new Vector3(Mathf.Cos(a0) * r1, height, Mathf.Sin(a0) * r1);
+            var t1 = new Vector3(Mathf.Cos(a1) * r1, height, Mathf.Sin(a1) * r1);
+            var n0 = new Vector3(Mathf.Cos(a0), 0.15f, Mathf.Sin(a0)).Normalized();
+            var n1 = new Vector3(Mathf.Cos(a1), 0.15f, Mathf.Sin(a1)).Normalized();
+            st.SetNormal(n0); st.AddVertex(b0);
+            st.SetNormal(n1); st.AddVertex(b1);
+            st.SetNormal(n1); st.AddVertex(t1);
+            st.SetNormal(n0); st.AddVertex(b0);
+            st.SetNormal(n1); st.AddVertex(t1);
+            st.SetNormal(n0); st.AddVertex(t0);
+        }
+    }
+
+    /// <summary>
+    /// V-TERRAIN: TREES. A procedural low-poly tree (bark trunk plus an
+    /// irregular three-lobe canopy, two surfaces on one mesh), MultiMesh-
+    /// instanced and CLUSTERED into copses seeded on the land cells that border
+    /// water and on the map edges, so it reads as woodland along the river and
+    /// the frame rather than a uniform sprinkle. Per-instance scale, yaw and
+    /// canopy tint give variety from one mesh; the canopy sways in the wind.
+    ///
+    /// Presentation only, and clustered by design onto banks and edges so a
+    /// decorative tree rarely lands on an open play cell. It never gates on the
+    /// sim, so a unit may walk through a tree on open ground; the brief accepts
+    /// that. It reads BiomeAt and the map, never the sim, and changes no cell's
+    /// passability. Seeded (2029), deterministic.
+    /// </summary>
+    private static void BuildTrees(Node3D parent, int w, int h,
+        HashSet<(int, int)> blockedSet, IReadOnlyDictionary<(int, int), char> visual)
+    {
+        // Candidate copse centres: land cells that border water, plus open cells
+        // near the map edge. Both are places a copse belongs and a unit seldom
+        // fights over.
+        var centres = new List<(int, int)>();
+        for (int cy = 0; cy < h; cy++)
+            for (int cx = 0; cx < w; cx++)
+            {
+                if (blockedSet.Contains((cx, cy))) continue;
+                bool bank = false;
+                foreach ((int dx, int dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1) })
+                    if (visual.GetValueOrDefault((cx + dx, cy + dy), '.') == 'w') { bank = true; break; }
+                bool edge = cx < 4 || cy < 4 || cx >= w - 4 || cy >= h - 4;
+                if (bank || edge) centres.Add((cx, cy));
+            }
+        if (centres.Count == 0) return;
+
+        // The tree mesh: trunk (surface 0) then canopy (surface 1).
+        var stTrunk = new SurfaceTool();
+        stTrunk.Begin(Mesh.PrimitiveType.Triangles);
+        AddTrunk(stTrunk, 0.11f, 0.05f, 1.05f, 6);
+        var treeMesh = stTrunk.Commit();
+
+        var stLeaf = new SurfaceTool();
+        stLeaf.Begin(Mesh.PrimitiveType.Triangles);
+        AddBlob(stLeaf, new Vector3(0f, 1.35f, 0f), new Vector3(0.62f, 0.58f, 0.62f), 4, 6);
+        AddBlob(stLeaf, new Vector3(-0.28f, 1.15f, 0.14f), new Vector3(0.46f, 0.44f, 0.46f), 3, 6);
+        AddBlob(stLeaf, new Vector3(0.26f, 1.20f, -0.16f), new Vector3(0.42f, 0.42f, 0.42f), 3, 6);
+        treeMesh = stLeaf.Commit(treeMesh);
+
+        var barkMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(311, 0.5f,
+                dark: new Color(0.10f, 0.075f, 0.055f),
+                light: new Color(0.20f, 0.15f, 0.11f)),
+            Uv1Triplanar = true,
+            Uv1WorldTriplanar = true,
+            Metallic = 0f,
+            Roughness = 0.95f,
+            CullMode = BaseMaterial3D.CullModeEnum.Disabled,
+        };
+        var canopyMat = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/foliage.gdshader") };
+        canopyMat.SetShaderParameter("noise_tex", RawNoise(313, 0.04f));
+        _windShaders.Add(canopyMat);
+        treeMesh.SurfaceSetMaterial(0, barkMat);
+        treeMesh.SurfaceSetMaterial(1, canopyMat);
+
+        var canopyTints = new[]
+        {
+            new Color(1.02f, 1.00f, 0.86f), // warm
+            new Color(0.90f, 1.00f, 0.92f), // cool
+            new Color(1.00f, 0.96f, 0.78f), // dry
+        };
+
+        var rng = new System.Random(2029);
+        // A set of copse centres, then trees scattered around each. Fewer, fuller
+        // copses read as woodland; a flat sprinkle does not.
+        int copseCount = Mathf.Clamp(centres.Count / 14, 6, 40);
+        var chosen = new List<(int, int)>();
+        for (int i = 0; i < copseCount; i++) chosen.Add(centres[rng.Next(centres.Count)]);
+
+        int treeN = copseCount * 6;
+        var mm = new MultiMesh
+        {
+            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+            UseColors = true,
+            Mesh = treeMesh,
+            InstanceCount = treeN,
+        };
+        var zeroScale = new Transform3D(Basis.Identity.Scaled(Vector3.Zero), Vector3.Zero);
+        for (int i = 0; i < treeN; i++)
+        {
+            var (ccx, ccy) = chosen[i / 6];
+            float rx = ccx + 0.5f + (float)(rng.NextDouble() - 0.5) * 5.0f;
+            float rz = ccy + 0.5f + (float)(rng.NextDouble() - 0.5) * 5.0f;
+            var cell = ((int)rx, (int)rz);
+            if (rx < 0 || rz < 0 || rx >= w || rz >= h
+                || blockedSet.Contains(cell) || visual.GetValueOrDefault(cell, '.') == 'w')
+            {
+                mm.SetInstanceTransform(i, zeroScale);
+                mm.SetInstanceColor(i, Colors.White);
+                continue;
+            }
+            float sc = 0.8f + (float)rng.NextDouble() * 0.7f;
+            var basis = Basis.FromEuler(new Vector3(0, (float)rng.NextDouble() * Mathf.Tau, 0))
+                .Scaled(new Vector3(sc, sc * (0.9f + (float)rng.NextDouble() * 0.35f), sc));
+            mm.SetInstanceTransform(i, new Transform3D(basis,
+                new Vector3(rx, GroundHeight(rx, rz) - 0.05f, rz)));
+            var t = canopyTints[rng.Next(canopyTints.Length)];
+            float v = 0.82f + (float)rng.NextDouble() * 0.3f;
+            mm.SetInstanceColor(i, new Color(t.R * v, t.G * v, t.B * v));
+        }
+        parent.AddChild(new MultiMeshInstance3D
+        {
+            Multimesh = mm,
+            // Shadows OFF. Measured: with the double-sided canopies casting into
+            // the 4096 atlas, CAM-B (whole map, every copse in the shadow
+            // cascade at once) collapsed to about 1.5 fps - the exact "cost more
+            // than they show" case the brief names. At RTS distance the tree's
+            // own form and the SSAO contact darkening carry it; a per-tree cast
+            // shadow over the whole map is not the depth cue that survives here.
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Name = "Trees",
+        });
+    }
+
+    /// <summary>
+    /// V-TERRAIN: ROCK FORMATIONS. Larger irregular boulders (a low-poly blob
+    /// displaced by a deterministic per-vertex warp for a real lumpy silhouette),
+    /// MultiMesh-instanced on the rocky biome, the feet of hills/ruins/ridges,
+    /// and a few at the water banks so a boulder reads at the shore. Distinct
+    /// from the sub-pixel debris scatter (BuildScatter's "Rocks"): these have
+    /// silhouette. The material is noise-driven grey-brown albedo AND roughness
+    /// with a detail normal and, per the V2 lesson, metallic 0 (no constant
+    /// metallic, no chalky specular). Seeded (2030), deterministic, presentation
+    /// only; it reads BiomeAt and the map, never the sim.
+    /// </summary>
+    private static void BuildRockFormations(Node3D parent, int w, int h,
+        HashSet<(int, int)> blockedSet, IReadOnlyDictionary<(int, int), char> visual,
+        float densityScale)
+    {
+        // One lumpy boulder mesh, reused; per-instance scale and yaw vary it.
+        var warpNoise = new FastNoiseLite
+        {
+            Seed = 5150, Frequency = 1.4f, FractalOctaves = 2,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+        };
+        var st = new SurfaceTool();
+        st.Begin(Mesh.PrimitiveType.Triangles);
+        AddBlob(st, Vector3.Zero, new Vector3(0.55f, 0.42f, 0.5f), 4, 7, v =>
+        {
+            float d = 1f + warpNoise.GetNoise3D(v.X * 3f, v.Y * 3f, v.Z * 3f) * 0.35f;
+            return new Vector3(v.X * d, Mathf.Max(v.Y * d, -0.02f), v.Z * d);
+        });
+        var rockMesh = st.Commit();
+        rockMesh.SurfaceSetMaterial(0, new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            // Grey-brown, light enough to catch the warm key and read as lit
+            // rock rather than a black lump (the first capture baked too dark).
+            AlbedoTexture = GrainTex(519, 0.09f,
+                dark: new Color(0.19f, 0.175f, 0.155f),
+                light: new Color(0.42f, 0.385f, 0.335f)),
+            Uv1Triplanar = true, Uv1WorldTriplanar = true,
+            NormalEnabled = true,
+            NormalTexture = GrainTex(521, 0.14f, normalMap: true),
+            NormalScale = 1.0f,
+            RoughnessTexture = GrainTex(523, 0.18f), // noise-driven roughness
+            Roughness = 1.0f,
+            Metallic = 0f,
+            VertexColorUseAsAlbedo = true,
+        });
+
+        // Candidate cells: rocky-biome open cells, cliff-foot boundaries, and
+        // water banks (for a shore boulder).
+        var rocky = new List<(int, int)>();
+        var banks = new List<(int, int)>();
+        for (int cy = 0; cy < h; cy++)
+            for (int cx = 0; cx < w; cx++)
+            {
+                if (blockedSet.Contains((cx, cy))) continue;
+                if (BiomeAt(cx, cy).Rock > 0.5f) rocky.Add((cx, cy));
+                foreach ((int dx, int dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                    if (visual.GetValueOrDefault((cx + dx, cy + dy), '.') == 'w') { banks.Add((cx, cy)); break; }
+            }
+        var feet = new List<(int, int)>();
+        foreach (var (cx, cy) in blockedSet)
+        {
+            char k = visual.GetValueOrDefault((cx, cy), '#');
+            if (k is 'w' or 'f') continue;
+            foreach ((int dx, int dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                if (!blockedSet.Contains((cx + dx, cy + dy))) { feet.Add((cx + dx, cy + dy)); break; }
+        }
+
+        var rng = new System.Random(2030);
+        int rockN = Scaled(220, densityScale);
+        var mm = new MultiMesh
+        {
+            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+            UseColors = true,
+            Mesh = rockMesh,
+            InstanceCount = rockN,
+        };
+        var zeroScale = new Transform3D(Basis.Identity.Scaled(Vector3.Zero), Vector3.Zero);
+        for (int i = 0; i < rockN; i++)
+        {
+            (int, int)? src;
+            double pick = rng.NextDouble();
+            if (pick < 0.42 && feet.Count > 0) src = feet[rng.Next(feet.Count)];
+            else if (pick < 0.72 && rocky.Count > 0) src = rocky[rng.Next(rocky.Count)];
+            else if (banks.Count > 0) src = banks[rng.Next(banks.Count)];
+            else if (rocky.Count > 0) src = rocky[rng.Next(rocky.Count)];
+            else src = null;
+            if (src == null) { mm.SetInstanceTransform(i, zeroScale); mm.SetInstanceColor(i, Colors.White); continue; }
+            var (scx, scy) = src.Value;
+            float rx = scx + 0.5f + (float)(rng.NextDouble() - 0.5) * 1.8f;
+            float rz = scy + 0.5f + (float)(rng.NextDouble() - 0.5) * 1.8f;
+            var cell = ((int)rx, (int)rz);
+            if (rx < 0 || rz < 0 || rx >= w || rz >= h
+                || blockedSet.Contains(cell) || visual.GetValueOrDefault(cell, '.') == 'w')
+            {
+                mm.SetInstanceTransform(i, zeroScale);
+                mm.SetInstanceColor(i, Colors.White);
+                continue;
+            }
+            float sc = 0.5f + (float)rng.NextDouble() * 0.9f;
+            var basis = Basis.FromEuler(new Vector3(
+                ((float)rng.NextDouble() - 0.5f) * 0.3f,
+                (float)rng.NextDouble() * Mathf.Tau,
+                ((float)rng.NextDouble() - 0.5f) * 0.3f))
+                .Scaled(new Vector3(sc * (0.8f + (float)rng.NextDouble() * 0.6f), sc, sc));
+            mm.SetInstanceTransform(i, new Transform3D(basis,
+                new Vector3(rx, GroundHeight(rx, rz) + sc * 0.12f, rz)));
+            float shv = 0.82f + (float)rng.NextDouble() * 0.28f;
+            mm.SetInstanceColor(i, new Color(shv, shv * 0.98f, shv * 0.95f));
+        }
+        parent.AddChild(new MultiMeshInstance3D
+        {
+            Multimesh = mm,
+            // Shadows OFF for the same reason as the trees and the rest of the
+            // scatter: a few hundred boulders casting into the atlas over the
+            // whole map at max zoom costs more than it shows. SSAO grounds them.
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Name = "RockFormations",
         });
     }
 
