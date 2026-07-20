@@ -1119,7 +1119,11 @@ public static class BattlefieldView
                 mm.SetInstanceColor(i, Colors.White);
                 continue;
             }
-            float s = 0.05f + (float)rng.NextDouble() * 0.16f;
+            // V3-04 (doc 25): the minimum rubble scale rises from 0.05 to 0.12
+            // so no instance is a sub-pixel fleck that flickers in and out of
+            // sample coverage as the camera pans. The 0.16 spread is kept, so
+            // the range is now 0.12 to 0.28.
+            float s = 0.12f + (float)rng.NextDouble() * 0.16f;
             var basis = Basis.FromEuler(new Vector3(
                 ((float)rng.NextDouble() - 0.5f) * 0.6f,
                 (float)rng.NextDouble() * Mathf.Tau,
@@ -1146,6 +1150,20 @@ public static class BattlefieldView
             Multimesh = mm,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Name = "Rubble",
+            // V3-04 (doc 25): range-cull the whole field rather than deleting
+            // instances (MAP-03 scaled the count up on purpose). Godot measures
+            // the visibility range from the camera to the node's AABB centre,
+            // which for a map-spanning MultiMesh is the map centre, so with the
+            // three frozen cameras roughly 25 m from that centre at CAM-A/CAM-C
+            // and 47 m at CAM-B this shows the field at play height and close in
+            // and hides it at max zoom, where each fleck is sub-pixel and only
+            // contributes pan shimmer. This is the shipped grass pattern
+            // (BuildGrass uses End 40); 38 with a 6 m Self fade band is the same
+            // idea a touch tighter. The FOV change does not move the cameras, so
+            // it does not disturb these distances.
+            VisibilityRangeEnd = 38f,
+            VisibilityRangeEndMargin = 6f,
+            VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self,
         });
 
         BuildScatter(parent, w, h, blockedSet, visual, densityScale);
@@ -1299,6 +1317,12 @@ public static class BattlefieldView
             Multimesh = tufts,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             Name = "Tufts",
+            // V3-04 (doc 25): the dead-straw tufts are half a pixel to two
+            // pixels each at max zoom, so range-cull them exactly as the rubble
+            // above and the live grass already do.
+            VisibilityRangeEnd = 38f,
+            VisibilityRangeEndMargin = 6f,
+            VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self,
         });
 
         // (2) ROCKS: low-poly squashed boulders, 60 percent hugging ridge feet.
