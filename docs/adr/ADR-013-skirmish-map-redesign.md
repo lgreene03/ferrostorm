@@ -1,8 +1,9 @@
 # ADR-013: Skirmish map redesign and regeneration
 
-- Status: Proposed (authored by tools + game-designer under the owner's directive
-  of 2026-07-20; awaiting Architect + Luke ratification, per CLAUDE.md the golden
-  move requires it)
+- Status: Ratified (authored by tools + game-designer under the owner's directive
+  of 2026-07-20 to redesign the skirmish maps like the classic RTS games of the
+  90s; ratified by Luke 2026-07-20 under that same directive, which is the
+  authority for the one skirmish golden move it records)
 - Date: 2026-07-20
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD (doc 02) pillars 2 and 4 (games resolve in 15 to 30
