@@ -131,8 +131,16 @@ ulong ScenarioEconomy(ulong seed, Action<int, ulong>? cp = null, Action<string>?
         if (t % 100 == 99) cp?.Invoke(t + 1, world.ComputeStateHash());
     }
     long credits = world.Credits(0);
-    if (credits != 4000)
-        throw new Exception($"economy: expected all 4000 ferrite delivered as credits, got {credits}");
+    // ADR-012 (Wave B6): the two 2000-unit fields still deliver their full
+    // 4000, plus exactly 14 that regrew while they were alive and below cap
+    // before exhaustion (1 unit per 75 ticks; f1's two harvesters strip it
+    // faster and it collects fewer ticks than the single-harvester f2, summing
+    // to 14). Seed-independent: the harvest of these fixed fields is
+    // deterministic across every seed, so this stays an exact assertion the way
+    // the pre-regrowth 4000 was, not a band. A stripped field would deliver its
+    // spawn amount and no more; the surplus IS regrowth, proven in RegrowthGate.
+    if (credits != 4014)
+        throw new Exception($"economy: expected 4000 delivered plus 14 regrown (ADR-012), got {credits}");
 
     // Flee phase (TICKET-P2-SIM-08): a rifle camps a fresh field; a harvester
     // sent in must abandon loading under fire and run its part-load home.
@@ -151,7 +159,7 @@ ulong ScenarioEconomy(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     }
     if (!fledWithPartLoad) throw new Exception("economy: harvester never fled the camped field with a part-load");
     if (!world.Entities[harvesters[0]].Alive) throw new Exception("economy: harvester died instead of fleeing (700 hp vs rifle should survive easily)");
-    report?.Invoke($"economy: 3 harvesters exhausted 2 fields, credits {credits}/4000 exact; camped harvester fled mid-load and survived (flee-on-damage live)");
+    report?.Invoke($"economy: 3 harvesters exhausted 2 fields, credits {credits} (4000 spawn + 14 regrown, ADR-012) exact; camped harvester fled mid-load and survived (flee-on-damage live)");
     return world.ComputeStateHash();
 }
 
@@ -1883,6 +1891,37 @@ int SelfTest()
     }
     else Console.WriteLine("selftest: data/buildings not found, structure catalogue untested this run");
 
+    // Ferrite field regrowth (ADR-012): the committed /data/fields file must
+    // reproduce World's compiled reference twin exactly, the same round-trip
+    // discipline the unit and structure catalogues hold. This is the equality
+    // the goldens rest on: the scenarios build compiled worlds, so if the file
+    // and the twin ever drift, the shipped client (which loads the file) and
+    // the battery (which loads the twin) would silently play different numbers.
+    string fieldsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/fields"));
+    if (Directory.Exists(fieldsDir) && Directory.GetFiles(fieldsDir, "*.yaml").Length > 0)
+    {
+        var fieldFiles = Directory.GetFiles(fieldsDir, "*.yaml");
+        Array.Sort(fieldFiles, StringComparer.Ordinal);
+        bool sawFerrite = false;
+        foreach (var f in fieldFiles)
+        {
+            var fd = DataLoader.LoadFieldFile(f);
+            if (fd.Id != "com_ferrite_field") continue;
+            if (fd.Name != "Ferrite Field") return Fail("field: name");
+            if (fd.RegrowAmount != World.DefaultRegrowAmount)
+                return Fail($"field: regrow_amount {fd.RegrowAmount} != compiled twin {World.DefaultRegrowAmount}");
+            if (fd.RegrowIntervalTicks != World.DefaultRegrowIntervalTicks)
+                return Fail($"field: regrow_interval_ticks {fd.RegrowIntervalTicks} != compiled twin {World.DefaultRegrowIntervalTicks}");
+            // The registration path applies the file to a world before tick 0.
+            var fw = new World(0);
+            CatalogueFiles.RegisterFields(fw, fieldsDir);
+            sawFerrite = true;
+        }
+        if (!sawFerrite) return Fail("field: no com_ferrite_field definition in /data/fields");
+        Console.WriteLine($"selftest: /data/fields reproduces the compiled ferrite regrowth twin exactly ({World.DefaultRegrowAmount} per {World.DefaultRegrowIntervalTicks} ticks)");
+    }
+    else Console.WriteLine("selftest: data/fields not found, regrowth tuning untested this run");
+
     // Map loader (TICKET-P2-DATA-03): the committed skirmish map round-trips.
     string mapFile = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/maps/skirmish-01.fmap"));
     if (File.Exists(mapFile))
@@ -2209,17 +2248,17 @@ int CatalogueRefuse()
 // bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
 // the only difference was the checksum; the wider entity record made it a
 // shared, layout-aware helper.)
-byte[] DowngradeSave(byte[] v4, uint targetMagic)
+byte[] DowngradeSave(byte[] v5, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u;
-    using var input = new BinaryReader(new MemoryStream(v4));
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u;
+    using var input = new BinaryReader(new MemoryStream(v5));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    if (input.ReadUInt32() != magicV4)
-        throw new InvalidOperationException("save surgery expects a v4 stream");
+    if (input.ReadUInt32() != magicV5)
+        throw new InvalidOperationException("save surgery expects a v5 stream");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic == magicV3) w.Write(checksum); // v3 keeps the checksum; v1/v2 never had one
+    if (targetMagic == magicV3 || targetMagic == magicV4) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2238,12 +2277,16 @@ byte[] DowngradeSave(byte[] v4, uint targetMagic)
     }
     int count = input.ReadInt32(); w.Write(count);
     // The entity record is fixed-width: 209 bytes through FieldCloaked, then
-    // the v4 rally tail (RallyX 8 + RallyY 8 + HasRally 1 + Departing 1).
-    const int v3EntityBytes = 209, rallyTailBytes = 18;
+    // the v4 rally tail (RallyX 8 + RallyY 8 + HasRally 1 + Departing 1), then
+    // the v5 ferrite cap (int 4). A v4 target keeps the rally tail and drops
+    // only the cap; v3 and below drop both.
+    const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4;
+    bool keepRally = targetMagic == magicV4;
     for (int i = 0; i < count; i++)
     {
         w.Write(input.ReadBytes(v3EntityBytes));
-        input.ReadBytes(rallyTailBytes); // dropped: older formats never carried rally
+        if (keepRally) w.Write(input.ReadBytes(rallyTailBytes)); else input.ReadBytes(rallyTailBytes);
+        input.ReadBytes(ferriteCapBytes); // dropped: no format below v5 carried the cap
     }
     // Production queues, order queues and the trailer are format-identical.
     w.Write(input.ReadBytes((int)(input.BaseStream.Length - input.BaseStream.Position)));
@@ -2380,9 +2423,12 @@ int SpawnGate()
         // test, which is exactly doc 23's load-bearing ordering.
     }
 
-    // 4. Save format v4: a world with live rally state round-trips bit-exact
+    // 4. Save format v5: a world with live rally state round-trips bit-exact
     // and resumes bit-exact; a v3 downgrade still loads with rally unset; a
-    // v2 downgrade additionally loses the checksum and is never refused.
+    // v2 downgrade additionally loses the checksum and is never refused. The
+    // save is v5 now (ADR-012's ferrite cap), which DowngradeSave strips along
+    // with the rally tail for a pre-v4 target; the ferrite-cap resume is proven
+    // in RegrowthGate against a world that actually has fields.
     {
         var w = new World(14, 64, 64, 2);
         void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
@@ -2416,14 +2462,14 @@ int SpawnGate()
         for (int t = 0; t < 200; t++) { w.Step(default); loaded.Step(default); }
         if (loaded.ComputeStateHash() != w.ComputeStateHash())
             return Fail("spawngate: resumed run diverged from the uninterrupted one");
-        var v4Bytes = ms.ToArray();
-        var v3World = World.Load(new MemoryStream(DowngradeSave(v4Bytes, 0x534C4133u)));
+        var v5Bytes = ms.ToArray();
+        var v3World = World.Load(new MemoryStream(DowngradeSave(v5Bytes, 0x534C4133u)));
         if (v3World.EntityCount != countAtSave)
             return Fail("spawngate: v3 downgrade lost entities");
         foreach (var e in v3World.Entities)
             if (e.HasRally || e.Departing || e.RallyX != Fix64.Zero || e.RallyY != Fix64.Zero)
                 return Fail("spawngate: a v3 save must load with rally unset and Departing false");
-        var v2World = World.Load(new MemoryStream(DowngradeSave(v4Bytes, 0x534C4132u)),
+        var v2World = World.Load(new MemoryStream(DowngradeSave(v5Bytes, 0x534C4132u)),
             world => world.RegisterUnitType(1, world.GetUnitType(1) with { Cost = world.GetUnitType(1).Cost + 1 }));
         if (v2World.EntityCount != countAtSave)
             return Fail("spawngate: v2 downgrade lost entities (and must never be checksum-refused)");
@@ -2908,6 +2954,116 @@ int ProdGate()
     return 0;
 }
 
+int RegrowthGate()
+{
+    // ADR-012 gate. Additive, the catrefuse/spawngate/prodgate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so
+    // the golden list stays 24 lines by construction. Proves the four things
+    // ADR-012's consequences demand: a below-cap field recovers at the
+    // placeholder rate, a field stripped to zero stays dead, regrowth never
+    // overflows the cap, and the whole thing round-trips save/load (v5) with
+    // pre-v5 saves resuming sanely.
+
+    // --- 1. Recovery at the placeholder rate, proven differentially ---------
+    // The identical harvest sequence run twice, once with regrowth live and
+    // once disabled (regrow_amount 0). The field is huge, so it never nears
+    // depletion and the per-tick take is LoadPerTick in BOTH runs: the two
+    // sequences are byte-identical except for regrowth's own additions. The
+    // field is below its cap from the first load (well before tick 75) and
+    // never returns to it, so every regrow tick in the window fires. The
+    // difference in remaining ferrite is therefore EXACTLY the number of
+    // intervals in the window times regrow_amount - the rate, measured.
+    const int cap = 1_000_000, window = 1000;
+    (long amount, long credits, long carry) Drain(int regrowAmount)
+    {
+        var w = new World(700, 64, 64, players: 2);
+        if (regrowAmount != World.DefaultRegrowAmount) w.ConfigureRegrowth(regrowAmount, World.DefaultRegrowIntervalTicks);
+        w.SpawnRefinery(0, 10, 10);
+        int fld = w.SpawnFerriteField(Fix64.FromInt(12), Fix64.FromInt(12), cap);
+        int hv = w.SpawnHarvester(0, Fix64.FromInt(12), Fix64.FromInt(12));
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, hv, Fix64.Zero, Fix64.Zero, fld) };
+        for (int t = 0; t < window; t++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); }
+        var f = w.Entities[fld];
+        return (f.FerriteAmount, w.Credits(0), w.Entities[hv].Carry);
+    }
+    var on = Drain(World.DefaultRegrowAmount);
+    var off = Drain(0);
+    int expectedRegrown = (window - 1) / World.DefaultRegrowIntervalTicks * World.DefaultRegrowAmount;
+    if (on.credits != off.credits || on.carry != off.carry)
+        return Fail($"regrowth: the harvest sequence must be identical with regrowth on and off (credits {on.credits}/{off.credits}, carry {on.carry}/{off.carry})");
+    if (on.amount - off.amount != expectedRegrown)
+        return Fail($"regrowth: expected the below-cap field to recover exactly {expectedRegrown} over {window} ticks ({World.DefaultRegrowAmount} per {World.DefaultRegrowIntervalTicks}), got {on.amount - off.amount}");
+    if (off.amount != cap - off.credits - off.carry)
+        return Fail("regrowth: conservation broke (off-run remaining must be spawn amount minus everything harvested)");
+
+    // --- 2. The cap is a ceiling: an untouched field at cap never overflows --
+    {
+        var w = new World(701, 64, 64, players: 2);
+        int fld = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(30), 5000);
+        for (int t = 0; t < 400; t++) w.Step(default); // several regrow intervals, no harvester
+        if (w.Entities[fld].FerriteAmount != 5000)
+            return Fail($"regrowth: a field at cap must not overflow (expected 5000, got {w.Entities[fld].FerriteAmount})");
+    }
+
+    // --- 3. Denial: a field stripped to zero is dead ground forever ----------
+    {
+        var w = new World(702, 64, 64, players: 2);
+        w.SpawnRefinery(0, 10, 10);
+        int fld = w.SpawnFerriteField(Fix64.FromInt(12), Fix64.FromInt(12), 30); // tiny: dead well before tick 75
+        int hv = w.SpawnHarvester(0, Fix64.FromInt(12), Fix64.FromInt(12));
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, hv, Fix64.Zero, Fix64.Zero, fld) };
+        int diedAt = -1;
+        for (int t = 0; t < 60 && diedAt < 0; t++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); if (!w.Entities[fld].Alive) diedAt = w.Tick; }
+        if (diedAt < 0 || diedAt >= World.DefaultRegrowIntervalTicks)
+            return Fail($"regrowth: the denial field should be stripped to zero before the first regrow tick (died at {diedAt})");
+        // A window spanning several regrow intervals: it must never come back.
+        for (int t = 0; t < 300; t++)
+        {
+            w.Step(default);
+            var f = w.Entities[fld];
+            if (f.Alive || f.FerriteAmount != 0)
+                return Fail($"regrowth: DENIAL BROKEN - a stripped field regrew (alive {f.Alive}, amount {f.FerriteAmount} at tick {w.Tick})");
+        }
+    }
+
+    // --- 4. Save/load (v5) round-trips regrowth, and a pre-v5 save resumes ---
+    {
+        var w = new World(703, 64, 64, players: 2);
+        w.SpawnRefinery(0, 10, 10);
+        int fld = w.SpawnFerriteField(Fix64.FromInt(12), Fix64.FromInt(12), cap);
+        int hv = w.SpawnHarvester(0, Fix64.FromInt(12), Fix64.FromInt(12));
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, hv, Fix64.Zero, Fix64.Zero, fld) };
+        for (int t = 0; t < 500; t++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } // mid-regrowth
+        ulong hashMid = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != hashMid)
+            return Fail($"regrowth: v5 save must load bit-exact (0x{loaded.ComputeStateHash():X16} vs 0x{hashMid:X16})");
+        if (loaded.Entities[fld].FerriteCap != cap)
+            return Fail($"regrowth: the ferrite cap must survive the v5 round trip (got {loaded.Entities[fld].FerriteCap})");
+        for (int t = 0; t < 500; t++) { w.Step(default); loaded.Step(default); }
+        if (loaded.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("regrowth: the resumed run diverged - regrowth state did not round-trip");
+        // A pre-v5 (v4) downgrade drops the cap; it must load with the cap
+        // defaulted to the stored amount, hash-identically (the cap is unhashed).
+        using var ms2 = new MemoryStream();
+        w.Save(ms2); // w has advanced another 500 ticks: save its CURRENT state for the downgrade check
+        var v4World = World.Load(new MemoryStream(DowngradeSave(ms2.ToArray(), 0x534C4134u)));
+        var lf = v4World.Entities[fld];
+        if (lf.FerriteCap != lf.FerriteAmount)
+            return Fail($"regrowth: a pre-v5 save must default the cap to the stored amount (cap {lf.FerriteCap} vs amount {lf.FerriteAmount})");
+        if (v4World.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("regrowth: a v4 downgrade must be hash-identical (the cap is unhashed)");
+    }
+
+    Console.WriteLine($"regrowthgate: a below-cap field recovered exactly {expectedRegrown} over {window} ticks ({World.DefaultRegrowAmount} per {World.DefaultRegrowIntervalTicks}) with the harvest sequence unchanged; " +
+                      "a field at cap never overflowed; a field stripped to zero stayed dead across 300 ticks and four regrow intervals; " +
+                      "a v5 save round-tripped regrowth and the cap bit-exact and resumed identically; a v4 downgrade loaded with the cap defaulted to the stored amount, hash-identical");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -2951,6 +3107,9 @@ int Match(ulong seed)
     // ADR-009: and so does the production and tech-tree gate.
     int prod = ProdGate();
     if (prod != 0) return prod;
+    // ADR-012: and the ferrite regrowth gate.
+    int regrowth = RegrowthGate();
+    if (regrowth != 0) return regrowth;
     return 0;
 }
 
@@ -3654,6 +3813,7 @@ return args.Length == 0
         "catrefuse" => CatalogueRefuse(),
         "spawngate" => SpawnGate(),
         "prodgate" => ProdGate(),
+        "regrowthgate" => RegrowthGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),
