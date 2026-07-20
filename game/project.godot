@@ -30,7 +30,7 @@ anti_aliasing/quality/msaa_3d=2
 ; Godot 4's default is index 2, which is 4x. Two audits misstated that default
 ; in opposite directions and one of them prescribed index 3 while calling it
 ; 16x. The correct value for 16x is 4. This reaches every StandardMaterial3D
-; in the game and does NOT reach shaders/ground_splat.gdshader, which carries
+; in the game and does NOT reach shaders/ground_biome.gdshader, which carries
 ; its own filter hint.
 textures/default_filters/anisotropic_filtering_level=4
 ; Off by default. A dark procedural sky and volumetric fog gradients are the

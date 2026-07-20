@@ -266,10 +266,196 @@ public static class BattlefieldView
         return _groundNoise.GetNoise2D(x, z) * 0.075f;
     }
 
+    // V-TERRAIN: the biome field. Grass, sand and rock blend weights plus a
+    // wetness band, one entry per map cell, generated once from the map and
+    // read by BOTH the ground shader (as a texture) AND the grass, tree and
+    // rock-formation placement (through BiomeAt), so every layer agrees on
+    // where each biome is. Presentation only: it is derived from blockedCells
+    // and the visual legend, which are read, never written, and it feeds no
+    // sim path. It cannot change passability.
+    private static float[]? _biomeGrass, _biomeSand, _biomeRock, _biomeWet;
+    private static int _biomeW, _biomeH;
+    private static bool _temperate;
+
+    /// <summary>The blend weights and wetness at a world XZ, for seeding grass,
+    /// trees and rock formations. Weights are raw (the shader renormalises);
+    /// callers compare them or threshold them. Presentation only.</summary>
+    public readonly record struct Biome(float Grass, float Sand, float Rock, float Wet);
+
+    public static Biome BiomeAt(float x, float z)
+    {
+        if (_biomeGrass == null || _biomeSand == null || _biomeRock == null || _biomeWet == null)
+            return new Biome(0f, 1f, 0f, 0f);
+        int cx = Mathf.Clamp((int)x, 0, _biomeW - 1);
+        int cz = Mathf.Clamp((int)z, 0, _biomeH - 1);
+        int i = cz * _biomeW + cx;
+        return new Biome(_biomeGrass[i], _biomeSand[i], _biomeRock[i], _biomeWet[i]);
+    }
+
+    /// <summary>Is the base biome temperate (grass) rather than arid (sand)?
+    /// A map with any water is temperate; a map with none is arid. This is the
+    /// only "per-map biome" input and it needs no new map metadata and no sim
+    /// change.</summary>
+    public static bool IsTemperate => _temperate;
+
+    /// <summary>
+    /// Build the biome control map from the map alone (deterministic, no RNG,
+    /// no sim coupling). Channels: R grass weight, G sand weight, B rock weight,
+    /// A wetness. The base biome is temperate if the map has water, else arid;
+    /// within the map, sand forms beaches in a band around water and dry patches
+    /// by macro noise, rock forms on the feet of hills/ruins/ridges and by macro
+    /// outcrop noise, grass fills the rest of a temperate map. One light blur
+    /// pass smooths the biome boundaries before the shader's linear filter.
+    /// </summary>
+    private static ImageTexture BuildBiomeMap(int w, int h,
+        HashSet<(int, int)> blockedSet, HashSet<(int, int)> waterCells,
+        IReadOnlyDictionary<(int, int), char> visual)
+    {
+        _biomeW = w; _biomeH = h;
+        _temperate = waterCells.Count > 0;
+        int n = w * h;
+        _biomeGrass = new float[n];
+        _biomeSand = new float[n];
+        _biomeRock = new float[n];
+        _biomeWet = new float[n];
+
+        // Chebyshev distance to the nearest water cell (for beaches and the wet
+        // band) and to the nearest rock-seeding blocker: hills 'h', ruins 'r'
+        // and blocked '#' feet, but not water and not fences. Bounded BFS.
+        int[] Bfs(IEnumerable<(int, int)> seeds, int cap)
+        {
+            var d = new int[n];
+            for (int i = 0; i < n; i++) d[i] = 99;
+            var q = new Queue<(int, int)>();
+            foreach (var (sx, sy) in seeds)
+                if (sx >= 0 && sx < w && sy >= 0 && sy < h && d[sy * w + sx] != 0)
+                { d[sy * w + sx] = 0; q.Enqueue((sx, sy)); }
+            while (q.Count > 0)
+            {
+                var (cx, cy) = q.Dequeue();
+                int cd = d[cy * w + cx];
+                if (cd >= cap) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        int nx = cx + dx, ny = cy + dy;
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                        if (d[ny * w + nx] > cd + 1) { d[ny * w + nx] = cd + 1; q.Enqueue((nx, ny)); }
+                    }
+            }
+            return d;
+        }
+
+        var rockSeeds = new List<(int, int)>();
+        foreach (var cell in blockedSet)
+        {
+            char k = visual.GetValueOrDefault(cell, '#');
+            if (k == 'w' || k == 'f') continue;
+            rockSeeds.Add(cell);
+        }
+        int[] distWater = Bfs(waterCells, 4);
+        int[] distRock = Bfs(rockSeeds, 3);
+
+        // Macro fields: rocky outcrops and dry (sand) patches, fixed seeds.
+        var outcrop = new FastNoiseLite
+        {
+            Seed = 911, Frequency = 0.05f, FractalOctaves = 3,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+        };
+        var dry = new FastNoiseLite
+        {
+            Seed = 733, Frequency = 0.035f, FractalOctaves = 3,
+            NoiseType = FastNoiseLite.NoiseTypeEnum.SimplexSmooth,
+        };
+
+        for (int cy = 0; cy < h; cy++)
+            for (int cx = 0; cx < w; cx++)
+            {
+                int i = cy * w + cx;
+                float grass, sand, rock;
+                if (_temperate) { grass = 1.0f; sand = 0.05f; rock = 0.05f; }
+                else { grass = 0.05f; sand = 0.75f; rock = 0.28f; }
+
+                // Rock: the feet of blockers, plus macro outcrops.
+                int dr = distRock[i];
+                if (dr <= 2) rock = Mathf.Max(rock, 1.0f - dr * 0.4f);
+                float on = outcrop.GetNoise2D(cx, cy) * 0.5f + 0.5f;
+                rock = Mathf.Max(rock, Mathf.SmoothStep(0.60f, 0.84f, on) * (_temperate ? 0.85f : 1.0f));
+
+                // Sand: beaches in a band around water, plus dry patches.
+                int dw = distWater[i];
+                if (dw >= 1 && dw <= 3) sand = Mathf.Max(sand, Mathf.Clamp(1.0f - (dw - 1) * 0.42f, 0f, 1f));
+                float dn = dry.GetNoise2D(cx, cy) * 0.5f + 0.5f;
+                sand = Mathf.Max(sand, Mathf.SmoothStep(0.58f, 0.84f, dn) * (_temperate ? 0.55f : 0.95f));
+
+                // Wetness: the shore land just outside the water (dw 1..3), 0 on
+                // the water itself (that cell shows the slab, not ground).
+                float wet = dw == 0 ? 0f : Mathf.Clamp((3f - dw) / 2f, 0f, 1f);
+
+                // Grass recedes where sand or rock dominates.
+                grass *= (1f - 0.9f * sand) * (1f - 0.9f * rock);
+
+                _biomeGrass[i] = grass;
+                _biomeSand[i] = sand;
+                _biomeRock[i] = rock;
+                _biomeWet[i] = wet;
+            }
+
+        // One separable-ish 3x3 box blur so the biome boundaries feather before
+        // the shader's bilinear filter, and so grass/tree/rock placement reading
+        // BiomeAt sees the same smoothed field the ground shows.
+        float[] Blur(float[] src)
+        {
+            var dst = new float[n];
+            for (int cy = 0; cy < h; cy++)
+                for (int cx = 0; cx < w; cx++)
+                {
+                    float s = 0f; int c = 0;
+                    for (int dx = -1; dx <= 1; dx++)
+                        for (int dy = -1; dy <= 1; dy++)
+                        {
+                            int nx = cx + dx, ny = cy + dy;
+                            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                            s += src[ny * w + nx]; c++;
+                        }
+                    dst[cy * w + cx] = s / c;
+                }
+            return dst;
+        }
+        _biomeGrass = Blur(_biomeGrass);
+        _biomeSand = Blur(_biomeSand);
+        _biomeRock = Blur(_biomeRock);
+        _biomeWet = Blur(_biomeWet);
+
+        var img = Image.CreateEmpty(w, h, false, Image.Format.Rgba8);
+        for (int cy = 0; cy < h; cy++)
+            for (int cx = 0; cx < w; cx++)
+            {
+                int i = cy * w + cx;
+                img.SetPixel(cx, cy, new Color(
+                    _biomeGrass[i], _biomeSand[i], _biomeRock[i], _biomeWet[i]));
+            }
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    // V-TERRAIN: the wind/wave phase. TickWater used to scroll only the water
+    // UV; it now advances one phase and pushes it to the ground-adjacent shaders
+    // that animate (water ripples, grass sway). Driven from _Process, so it
+    // FREEZES when the look-dev harness pauses the tree, which is what keeps two
+    // captures byte-identical. TIME would keep advancing while paused.
+    private static ShaderMaterial? _waterShader;
+    private static readonly List<ShaderMaterial> _windShaders = new();
+    private static float _windPhase;
+
     public static void TickWater(double delta)
     {
+        _windPhase += (float)delta;
         if (_waterMat != null)
             _waterMat.Uv1Offset += new Vector3(0.010f, 0.014f, 0f) * (float)delta;
+        if (_waterShader != null)
+            _waterShader.SetShaderParameter("wave_time", _windPhase);
+        foreach (var m in _windShaders)
+            m.SetShaderParameter("wind_phase", _windPhase);
     }
 
     private static GradientTexture2D BlobTex()
@@ -442,6 +628,10 @@ public static class BattlefieldView
         IReadOnlyDictionary<(int, int), char>? visual = null)
     {
         visual ??= new Dictionary<(int, int), char>();
+        // V-TERRAIN: a rebuild starts a fresh set of animated shaders, so drop
+        // any references the previous build left in the wind/wave tick.
+        _windShaders.Clear();
+        _waterShader = null;
         // W4-13: the full blocked set, hoisted before any loop so ridge
         // cells can classify their neighbours.
         var blockedSet = new HashSet<(int, int)>(blockedCells);
@@ -477,15 +667,20 @@ public static class BattlefieldView
                 _flatCells.Add((cx, cy));
         }
 
-        // W4-11: three-layer splat shader (dust/rock/gravel by world-space
-        // noise masks) replaces the single colour-ramped noise material.
+        // V-TERRAIN: the biome control map (grass/sand/rock/wetness), generated
+        // deterministically from the map itself, and the biome ground shader
+        // that blends the three real biomes it drives. Replaces the old
+        // single-arid-material splat shader (dust/rock/gravel, all grey-brown).
+        var biomeTex = BuildBiomeMap(w, h, blockedSet, waterCells, visual);
         var groundShader = new ShaderMaterial
         {
-            Shader = GD.Load<Shader>("res://shaders/ground_splat.gdshader"),
+            Shader = GD.Load<Shader>("res://shaders/ground_biome.gdshader"),
         };
         groundShader.SetShaderParameter("noise_a", RawNoise(101, 0.02f));
         groundShader.SetShaderParameter("noise_b", RawNoise(103, 0.02f));
         groundShader.SetShaderParameter("detail_normal", GrainTex(11, 0.05f, normalMap: true));
+        groundShader.SetShaderParameter("biome_map", biomeTex);
+        groundShader.SetShaderParameter("map_size", new Vector2(w, h));
 
         // W4-10: heightfield ground - generated ArrayMesh at 2 verts per
         // cell, displaced by GroundHeight, normals by central difference.
