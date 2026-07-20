@@ -2252,17 +2252,17 @@ int CatalogueRefuse()
 // bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
 // the only difference was the checksum; the wider entity record made it a
 // shared, layout-aware helper.)
-byte[] DowngradeSave(byte[] v5, uint targetMagic)
+byte[] DowngradeSave(byte[] v6, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u;
-    using var input = new BinaryReader(new MemoryStream(v5));
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u;
+    using var input = new BinaryReader(new MemoryStream(v6));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    if (input.ReadUInt32() != magicV5)
-        throw new InvalidOperationException("save surgery expects a v5 stream");
+    if (input.ReadUInt32() != magicV6)
+        throw new InvalidOperationException("save surgery expects a v6 stream");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic == magicV3 || targetMagic == magicV4) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2282,15 +2282,19 @@ byte[] DowngradeSave(byte[] v5, uint targetMagic)
     int count = input.ReadInt32(); w.Write(count);
     // The entity record is fixed-width: 209 bytes through FieldCloaked, then
     // the v4 rally tail (RallyX 8 + RallyY 8 + HasRally 1 + Departing 1), then
-    // the v5 ferrite cap (int 4). A v4 target keeps the rally tail and drops
-    // only the cap; v3 and below drop both.
-    const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4;
-    bool keepRally = targetMagic == magicV4;
+    // the v5 ferrite cap (int 4), then the v6 no-progress tail (NearestApproachSq
+    // 8 + NoProgressTicks 4 = 12, Q013/ADR-014). A target keeps the tails its
+    // format carried and drops the rest: v5 keeps rally+cap, v4 keeps rally
+    // only, v3 and below drop all three; v6 is dropped for every target here.
+    const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4, noProgressTailBytes = 12;
+    bool keepRally = targetMagic == magicV4 || targetMagic == magicV5;
+    bool keepCap = targetMagic == magicV5;
     for (int i = 0; i < count; i++)
     {
         w.Write(input.ReadBytes(v3EntityBytes));
         if (keepRally) w.Write(input.ReadBytes(rallyTailBytes)); else input.ReadBytes(rallyTailBytes);
-        input.ReadBytes(ferriteCapBytes); // dropped: no format below v5 carried the cap
+        if (keepCap) w.Write(input.ReadBytes(ferriteCapBytes)); else input.ReadBytes(ferriteCapBytes);
+        input.ReadBytes(noProgressTailBytes); // dropped: no format below v6 carried the backstop state
     }
     // Production queues, order queues and the trailer are format-identical.
     w.Write(input.ReadBytes((int)(input.BaseStream.Length - input.BaseStream.Position)));
@@ -2427,12 +2431,13 @@ int SpawnGate()
         // test, which is exactly doc 23's load-bearing ordering.
     }
 
-    // 4. Save format v5: a world with live rally state round-trips bit-exact
-    // and resumes bit-exact; a v3 downgrade still loads with rally unset; a
-    // v2 downgrade additionally loses the checksum and is never refused. The
-    // save is v5 now (ADR-012's ferrite cap), which DowngradeSave strips along
-    // with the rally tail for a pre-v4 target; the ferrite-cap resume is proven
-    // in RegrowthGate against a world that actually has fields.
+    // 4. Save format round-trip: a world with live rally state round-trips
+    // bit-exact and resumes bit-exact; a v3 downgrade still loads with rally
+    // unset; a v2 downgrade additionally loses the checksum and is never
+    // refused. The save is v6 now (Q013/ADR-014's no-progress backstop atop
+    // ADR-012's ferrite cap), which DowngradeSave strips along with the rally
+    // tail for a pre-v4 target; the ferrite-cap resume is proven in
+    // RegrowthGate against a world that actually has fields.
     {
         var w = new World(14, 64, 64, 2);
         void StepN(int n) { for (int i = 0; i < n; i++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); } }
@@ -2466,14 +2471,14 @@ int SpawnGate()
         for (int t = 0; t < 200; t++) { w.Step(default); loaded.Step(default); }
         if (loaded.ComputeStateHash() != w.ComputeStateHash())
             return Fail("spawngate: resumed run diverged from the uninterrupted one");
-        var v5Bytes = ms.ToArray();
-        var v3World = World.Load(new MemoryStream(DowngradeSave(v5Bytes, 0x534C4133u)));
+        var v6Bytes = ms.ToArray();
+        var v3World = World.Load(new MemoryStream(DowngradeSave(v6Bytes, 0x534C4133u)));
         if (v3World.EntityCount != countAtSave)
             return Fail("spawngate: v3 downgrade lost entities");
         foreach (var e in v3World.Entities)
             if (e.HasRally || e.Departing || e.RallyX != Fix64.Zero || e.RallyY != Fix64.Zero)
                 return Fail("spawngate: a v3 save must load with rally unset and Departing false");
-        var v2World = World.Load(new MemoryStream(DowngradeSave(v5Bytes, 0x534C4132u)),
+        var v2World = World.Load(new MemoryStream(DowngradeSave(v6Bytes, 0x534C4132u)),
             world => world.RegisterUnitType(1, world.GetUnitType(1) with { Cost = world.GetUnitType(1).Cost + 1 }));
         if (v2World.EntityCount != countAtSave)
             return Fail("spawngate: v2 downgrade lost entities (and must never be checksum-refused)");

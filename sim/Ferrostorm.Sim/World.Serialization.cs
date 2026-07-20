@@ -33,6 +33,15 @@ namespace Ferrostorm.Sim;
 /// pre-v5 field never regrows above where it was saved. That is regrowth
 /// resuming sanely on an old save rather than inventing a ceiling the save
 /// never held.
+/// Format v6 (Q013, ADR-014): every entity carries NearestApproachSq and
+/// NoProgressTicks appended after the ferrite cap, because the no-progress
+/// settle backstop is now hashed sim state and a save that drops hashed fields
+/// cannot honour the resume-bit-identical contract above. v1..v5 entities
+/// predate the fields and load with both zero, which is the "unseeded" sentinel:
+/// the first eligible tick after the resume reseeds NearestApproachSq from the
+/// live distance, so a mid-walk pre-v6 save resumes with the backstop simply
+/// re-armed rather than mid-count, which is the sane meaning of a save that
+/// never recorded the counter.
 /// </summary>
 public sealed partial class World
 {
@@ -41,12 +50,13 @@ public sealed partial class World
     private const uint SaveMagicV3 = 0x534C4133; // v3 adds the catalogue checksum (ADR-006)
     private const uint SaveMagicV4 = 0x534C4134; // v4 adds the per-entity rally fields (ADR-007)
     private const uint SaveMagicV5 = 0x534C4135; // v5 adds the per-entity ferrite cap (ADR-012)
+    private const uint SaveMagicV6 = 0x534C4136; // v6 adds the no-progress backstop state (Q013, ADR-014)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV5);
+        w.Write(SaveMagicV6);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -120,15 +130,20 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
         bool hasCatalogue = magic != SaveMagicV1 && magic != SaveMagicV2;
-        // ADR-007: v4 AND v5 entities carry rally state (the B1-era regression
-        // was conditioning a later field on one magic alone; do not repeat it).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5;
-        bool hasFerriteCap = magic == SaveMagicV5; // ADR-012: v5 entities carry the cap
+        // ADR-007: v4 and every later format carry rally state (the B1-era
+        // regression was conditioning a later field on one magic alone; do not
+        // repeat it - v6 was added for the no-progress backstop and MUST be
+        // listed here too or the rally tail misreads and the record misaligns).
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6;
+        // ADR-012: v5 AND v6 entities carry the cap (do not condition a later
+        // field on one magic alone - the B1-era regression this comment guards).
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6;
+        bool hasNoProgress = magic == SaveMagicV6; // Q013/ADR-014: v6 entities carry the backstop state
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -164,7 +179,7 @@ public sealed partial class World
             for (int i = 0; i < words; i++) world._explored[p][i] = r.ReadUInt64();
         }
         int count = r.ReadInt32();
-        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap));
+        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap, hasNoProgress));
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {
@@ -217,9 +232,12 @@ public sealed partial class World
         // v5 (ADR-012): the ferrite cap, appended after the rally tail. Not
         // hashed, so a save is the only channel that carries it.
         w.Write(e.FerriteCap);
+        // v6 (Q013, ADR-014): the no-progress backstop state, appended after the
+        // ferrite cap in hash order exactly as ComputeStateHash appends it.
+        w.Write(e.NearestApproachSq.Raw); w.Write(e.NoProgressTicks);
     }
 
-    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields, bool hasFerriteCap)
+    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields, bool hasFerriteCap, bool hasNoProgress)
     {
         var e = ReadEntityV3(r);
         if (hasRallyFields)
@@ -237,6 +255,16 @@ public sealed partial class World
         // sane resume ADR-012's save-compat clause names). A non-field entity's
         // cap is meaningless and stays zero, matching a fresh spawn.
         e.FerriteCap = hasFerriteCap ? r.ReadInt32() : e.FerriteAmount;
+        // v6 fields in write order. A pre-v6 entity has neither, so both default
+        // to zero: NearestApproachSq zero is the "unseeded" sentinel the backstop
+        // reseeds on the next eligible tick, and NoProgressTicks zero is a fresh
+        // count. That resumes an old save with the backstop re-armed rather than
+        // mid-count, which is exactly what a save that never held the counter meant.
+        if (hasNoProgress)
+        {
+            e.NearestApproachSq = new Fix64(r.ReadInt64());
+            e.NoProgressTicks = r.ReadInt32();
+        }
         return e;
     }
 

@@ -165,6 +165,20 @@ public struct Entity
     // golden (including the no-ferrite scenarios ADR-012 requires stay still)
     // for zero behavioural change. Zero on every non-field entity.
     public int FerriteCap;
+
+    // No-progress settle backstop (Q013, ADR-014), appended after FerriteCap,
+    // never inserted. NearestApproachSq is the closest squared distance to the
+    // current flow destination this walk has achieved; NoProgressTicks counts
+    // ticks since it last improved. A flow-pathing unit that fails to better its
+    // nearest approach for NoProgressDeadline ticks is orbiting a crowd rim and
+    // is benched where it stands. Both are mutable per-tick sim state that gates
+    // when a unit stops moving, so - unlike the immutable FerriteCap above -
+    // they ARE hashed and serialized (save v6), following the rally-fields
+    // precedent for mutable movement state. A Raw-zero NearestApproachSq is the
+    // "unseeded" sentinel: the first eligible tick after a fresh order seeds it
+    // from the live distance, so a re-order re-arms simply by zeroing it.
+    public Fix64 NearestApproachSq;
+    public int NoProgressTicks;
 }
 
 /// <summary>
@@ -203,6 +217,15 @@ public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 
 public sealed partial class World
 {
     public const int TicksPerSecond = 15;
+
+    // Q013 / ADR-014: the no-progress settle backstop deadline. A flow-pathing
+    // unit that has not bettered its nearest approach to the destination for
+    // this many ticks is benched where it stands. 210 ticks (14s) is 3.5x the
+    // 60-tick (4s) StallTicks net and sits comfortably above the 132-tick
+    // worst-case legitimate queue plateau measured across the five soak seeds,
+    // so it only ever catches a genuine limit-cycle orbit, never a unit that is
+    // still filtering through a chokepoint. Measurement recorded on Q013.
+    public const int NoProgressDeadline = 14 * TicksPerSecond;
 
     /// <summary>Winner player id once decided, -1 while the match is live (TICKET-P2-SIM-12). The sim keeps stepping after; presentation decides what "game over" means.</summary>
     public int Winner { get; private set; } = -1;
@@ -967,6 +990,14 @@ public sealed partial class World
                 e.AMoveX = e.TargetX; e.AMoveY = e.TargetY;
                 e.HState = HarvestState.Idle;
                 e.StallTicks = 0;
+                // Q013 / ADR-014: a fresh destination re-arms the no-progress
+                // backstop. Zeroing NearestApproachSq is the "unseeded" sentinel
+                // so the next eligible tick reseeds it from the new distance;
+                // without this a unit that reaches one point then is re-ordered
+                // to a far one would carry a stale tiny nearest-approach and be
+                // benched mid-march.
+                e.NearestApproachSq = Fix64.Zero;
+                e.NoProgressTicks = 0;
                 break;
             case CommandType.Stop:
                 e.Moving = false; e.HState = HarvestState.Idle; e.ExplicitTarget = -1; e.AMove = false;
@@ -2107,6 +2138,38 @@ public sealed partial class World
                     if (e.AMove && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16)) e.AMove = false;
                     e.Moving = false; e.StallTicks = 0;
                 }
+
+                // Q013 / ADR-014: the monotone no-progress backstop. The leaky
+                // StallTicks net above rides out rim churn, but a unit whose
+                // blocked and progressing ticks balance evenly - a persistent
+                // two- or three-tick orbit at a crowd rim - holds StallTicks
+                // below its 4s threshold forever and never settles. That is the
+                // seed-900913 soak failure: two units orbit ~20 cells short of
+                // the target while 498 pack cleanly. This watchdog tracks the
+                // NEAREST approach to the destination, which a genuine orbit can
+                // never better once locked, and benches the unit after
+                // NoProgressDeadline ticks without a new best - catching any
+                // period of orbit regardless of its per-tick churn, where the
+                // leaky net's balance point hides it. Runs only if StallTicks
+                // did not already settle the unit this tick.
+                if (e.Moving)
+                {
+                    Fix64 curSq = Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y);
+                    if (e.NearestApproachSq.Raw == 0 || curSq < e.NearestApproachSq)
+                    {
+                        e.NearestApproachSq = curSq;
+                        e.NoProgressTicks = 0;
+                    }
+                    else if (++e.NoProgressTicks >= NoProgressDeadline)
+                    {
+                        // Same near-destination rule as the StallTicks path: drop
+                        // the attack-move stance only if this IS the objective.
+                        if (e.AMove && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16)) e.AMove = false;
+                        e.Moving = false;
+                        e.NoProgressTicks = 0;
+                        e.NearestApproachSq = Fix64.Zero;
+                    }
+                }
             }
 
             _entities[i] = e; // persists arrival state even with zero push
@@ -2464,6 +2527,11 @@ public sealed partial class World
             // ADR-007: rally is sim state, so it is hashed state, appended
             // after FieldCloaked in declaration order (the save order too).
             h.Add(e.RallyX); h.Add(e.RallyY); h.Add(e.HasRally); h.Add(e.Departing);
+            // Q013 / ADR-014: the no-progress backstop state. Unlike FerriteCap
+            // below these are MUTABLE and gate when a unit stops moving, so they
+            // are hashed (and serialized, save v6) following the rally precedent
+            // for mutable movement state. Appended after the rally tail.
+            h.Add(e.NearestApproachSq); h.Add(e.NoProgressTicks);
             // ADR-012: FerriteCap is deliberately NOT hashed here. Like Sight
             // it is immutable spawn-time state, identical on every client and
             // reconstructed exactly on load (save v5), so it needs no desync
