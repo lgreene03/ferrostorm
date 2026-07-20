@@ -502,21 +502,17 @@ public partial class SkirmishLive : Node3D
         // untouched: a mission's map speaks for itself.
         w.SetFaction(0, setup.Faction);
         w.SetFaction(1, setup.OppFaction);
-        w.GrantCredits(0, setup.StartCredits);
-        w.GrantCredits(1, setup.StartCredits);
-        w.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-        w.SpawnConstructionYard(1, map.Starts[1].Cx, map.Starts[1].Cy);
-        // Mirrored starting force (common hardware only, so faction-neutral):
-        // a harvester and three rifle squads each - the classic opening hand.
-        for (int p = 0; p < 2; p++)
-        {
-            int sx = map.Starts[p].Cx, sy = map.Starts[p].Cy;
-            int side = p == 0 ? 1 : -1;
-            w.SpawnHarvester(p, Fix64.FromInt(sx + 3 * side), Fix64.FromInt(sy + 2));
-            for (int i = 0; i < 3; i++)
-                w.SpawnUnit(p, Fix64.FromInt(sx + (2 + i) * side), Fix64.FromInt(sy - 2),
-                    Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
-        }
+        // ADR-011 (Wave B5): the opening hand - start credits, two construction
+        // yards, and a harvester with three rifle squads per side, mirrored and
+        // now placed at cell centres - is authored in the sim's MapLoader layer,
+        // which the gated skirmish scenario builds identically. The client asks
+        // the sim for that world rather than authoring it: a starting force is
+        // gameplay, not presentation (ADR-001), so it belongs in the sim and a
+        // future renderer swap (ADR-004) inherits it rather than reimplementing
+        // it into a desync. Factions stay set above, not in the builder: they
+        // are the player's menu choice and the hand is faction-neutral common
+        // hardware, so the shared builder neither reads nor writes the sides.
+        map.PlaceSkirmishStart(w, setup.StartCredits);
         return w;
     }
 
