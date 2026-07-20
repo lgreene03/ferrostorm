@@ -40,6 +40,18 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, Vector3> _targets = new();
     private readonly Dictionary<int, SnapshotInterpolator.ViewEntity> _latest = new();
     private ModelLibrary _models = null!;
+    // V3 (doc 25): the presentation up-scale for mobile units, the classic RTS
+    // trick of drawing units a little larger than true terrain scale for
+    // readability. Section 6 deferred unit oversizing behind V3-01's FOV change
+    // and a measurement rather than refusing it; with FOV 50 landed (a vehicle
+    // already grew from ~15 to ~27 pixels at CAM-A), a modest 1.3 is the top-up
+    // that reads as a chunky RTS piece without the wreckage the audit's 1.6/2.2
+    // against the old wide FOV would have caused. It is a pure Node3D.Scale on
+    // the presentation actor: the sim footprint, collision, PickEntity's radii
+    // (0.8 to 1.4 world units) and the .glb meshes are untouched, so at 1.3 the
+    // drawn silhouette still sits close to the fixed click target and a unit
+    // occupies exactly its sim cell. Applied to mobiles only (see SyncActors).
+    private const float UnitVisualScale = 1.3f;
     private RtsCamera _cam = null!;
     private double _accumulator;
     private double _renderTime;
@@ -2265,6 +2277,17 @@ public partial class SkirmishLive : Node3D
                 }
                 else node = _models.Instantiate((int)v.Kind, v.UnitType);
                 node.Position = pos;
+                // V3 (doc 25): presentation up-scale, mobiles only. Set once at
+                // creation and it persists, because the per-frame actor update
+                // only ever writes node.Position and node.Rotation, never Basis
+                // or Transform, so interpolation, hull yaw, hull pitch and bob
+                // all leave Scale intact. Structures are excluded: they rise-
+                // tween to Vector3.One (which would fight this) and walls sit
+                // edge to edge (which would interpenetrate above 1.0). Ferrite
+                // drives its own Scale from remaining yield, also excluded by
+                // the Mobile gate. Nothing here reaches the sim.
+                if (Mobile(v.Kind))
+                    node.Scale = Vector3.One * UnitVisualScale;
                 if (Mobile(v.Kind) && v.PlayerId >= 0)
                     BattlefieldView.DressMobile(node, v.PlayerId,
                         v.Kind == EntityKind.Harvester ? 1.7f : 1.15f);
