@@ -531,10 +531,17 @@ public partial class SkirmishLive : Node3D
     /// catalogue is deliberately NOT the fallback, because a silent fallback
     /// would resurrect the two-catalogue ambiguity the ADR exists to end.
     /// </summary>
-    public static void RegisterCatalogue(World w) =>
+    public static void RegisterCatalogue(World w)
+    {
         CatalogueFiles.RegisterAll(w,
             Path.Combine(GameFiles.RepoRoot, "data", "units"),
             Path.Combine(GameFiles.RepoRoot, "data", "buildings"));
+        // ADR-012: the ferrite regrowth tuning is /data too, so the client loads
+        // it on the same pre-tick-0 path rather than running the compiled twin
+        // silently. A caller (the runner's scenarios, Main.cs's demo) that skips
+        // this keeps the placeholder the selftest proves this file reproduces.
+        CatalogueFiles.RegisterFields(w, Path.Combine(GameFiles.RepoRoot, "data", "fields"));
+    }
 
     /// <summary>Replace the freshly built world with a saved one. The fresh
     /// build above is not waste: it is what produces the mission tags, which a

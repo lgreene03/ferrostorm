@@ -176,6 +176,40 @@ public static class DataLoader
     }
 
     public static StructureData LoadStructureFile(string path) => ParseStructure(File.ReadAllText(path));
+
+    /// <summary>ADR-012: a ferrite field's regrowth tuning as authored in
+    /// /data/fields, validated against schema.field.json. Global rate numbers
+    /// only; the per-instance spawn amount (the regrowth cap) is map/scenario
+    /// data carried on the entity, not on this definition.</summary>
+    public sealed record FieldData(string Id, string Name, int RegrowAmount, int RegrowIntervalTicks, string Notes);
+
+    /// <summary>
+    /// ADR-012. Same flat-YAML and integer-only primitives as ParseUnit and
+    /// ParseStructure, run at match setup and never per tick. regrow_amount 0 is
+    /// legal and disables regrowth; regrow_interval_ticks must be at least 1 so
+    /// the per-tick modulo the sim derives the schedule from never divides by
+    /// zero.
+    /// </summary>
+    public static FieldData ParseField(string yamlText)
+    {
+        var m = ParseFlatYaml(yamlText);
+        string id = ReqStr(m, "id");
+        if (!(id.StartsWith("dir_") || id.StartsWith("sod_") || id.StartsWith("com_")))
+            throw new FormatException($"id '{id}' violates the dir_/sod_/com_ prefix convention (CLAUDE.md)");
+
+        int amount = ReqInt(m, "regrow_amount");
+        int interval = ReqInt(m, "regrow_interval_ticks");
+        if (interval < 1) throw new FormatException("regrow_interval_ticks must be at least 1");
+
+        return new FieldData(
+            Id: id,
+            Name: ReqStr(m, "name"),
+            RegrowAmount: amount,
+            RegrowIntervalTicks: interval,
+            Notes: m.TryGetValue("notes", out var n) ? n : "");
+    }
+
+    public static FieldData LoadFieldFile(string path) => ParseField(File.ReadAllText(path));
 }
 
 /// <summary>Bridges loaded /data unit definitions into the sim's producible catalogue (TICKET-P2-DATA-02).</summary>
@@ -385,5 +419,48 @@ public static class CatalogueFiles
                     $"{buildingsDir}: no building file provides compiled structure type {t}. " +
                     "The compiled catalogue is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
         }
+    }
+
+    /// <summary>
+    /// ADR-012: register the ferrite field regrowth tuning from /data/fields
+    /// into a world before tick 0, the same opt-in load step RegisterAll is for
+    /// the unit and structure catalogues. Kept separate rather than folded into
+    /// RegisterAll's signature so the four existing RegisterAll call sites and
+    /// their gates are untouched; a caller that never registers fields runs the
+    /// compiled placeholder (World.DefaultRegrowAmount / DefaultRegrowIntervalTicks),
+    /// which the selftest proves this file reproduces exactly. A sorted ordinal
+    /// walk (a directory listing is not a source of truth) that demands the
+    /// compiled ferrite field id, because a missing file must fail loudly rather
+    /// than silently leave the placeholder standing for edited data.
+    /// </summary>
+    public static void RegisterFields(World w, string fieldsDir)
+    {
+        if (!Directory.Exists(fieldsDir))
+            throw new IOException(
+                $"/data is missing: expected {fieldsDir}. " +
+                "Ferrite regrowth numbers live in /data (ADR-006/ADR-012) and a battle cannot start without them. " +
+                "Restore the data directory beside the game and try again.");
+
+        var files = Directory.GetFiles(fieldsDir, "*.yaml");
+        Array.Sort(files, StringComparer.Ordinal);
+        bool applied = false;
+        foreach (var f in files)
+        {
+            try
+            {
+                var fd = DataLoader.LoadFieldFile(f);
+                if (fd.Id != "com_ferrite_field") continue; // the only field type today
+                w.ConfigureRegrowth(fd.RegrowAmount, fd.RegrowIntervalTicks);
+                applied = true;
+            }
+            catch (FormatException e)
+            {
+                throw new FormatException($"{f}: {e.Message}", e);
+            }
+        }
+        if (!applied)
+            throw new FormatException(
+                $"{fieldsDir}: no field file provides com_ferrite_field. " +
+                "The compiled defaults are not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
     }
 }

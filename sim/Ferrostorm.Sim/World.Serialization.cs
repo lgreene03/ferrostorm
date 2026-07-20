@@ -24,6 +24,15 @@ namespace Ferrostorm.Sim;
 /// state and was already lost on every save. (The ADR as written named "v3"
 /// for this bump; Wave B1 took v3 for the catalogue checksum first, so this
 /// is v4 - see the dated deviation note on ADR-007.)
+/// Format v5 (ADR-012): every entity carries FerriteCap appended after the
+/// rally tail, because a field harvested below its spawn amount must know that
+/// amount to regrow towards it. FerriteCap is not hashed (it is immutable
+/// spawn-time state, like Sight), so a save is the only channel that carries
+/// it. v1..v4 entities predate the field: they load with FerriteCap defaulted
+/// to their stored FerriteAmount, which treats the saved level as the cap so a
+/// pre-v5 field never regrows above where it was saved. That is regrowth
+/// resuming sanely on an old save rather than inventing a ceiling the save
+/// never held.
 /// </summary>
 public sealed partial class World
 {
@@ -31,12 +40,13 @@ public sealed partial class World
     private const uint SaveMagicV2 = 0x534C4132; // v2 adds the per-player faction array
     private const uint SaveMagicV3 = 0x534C4133; // v3 adds the catalogue checksum (ADR-006)
     private const uint SaveMagicV4 = 0x534C4134; // v4 adds the per-entity rally fields (ADR-007)
+    private const uint SaveMagicV5 = 0x534C4135; // v5 adds the per-entity ferrite cap (ADR-012)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV4);
+        w.Write(SaveMagicV5);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -110,12 +120,15 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
         bool hasCatalogue = magic != SaveMagicV1 && magic != SaveMagicV2;
-        bool hasRallyFields = magic == SaveMagicV4; // ADR-007: v4 entities carry rally state
+        // ADR-007: v4 AND v5 entities carry rally state (the B1-era regression
+        // was conditioning a later field on one magic alone; do not repeat it).
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5;
+        bool hasFerriteCap = magic == SaveMagicV5; // ADR-012: v5 entities carry the cap
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -151,7 +164,7 @@ public sealed partial class World
             for (int i = 0; i < words; i++) world._explored[p][i] = r.ReadUInt64();
         }
         int count = r.ReadInt32();
-        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields));
+        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap));
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {
@@ -201,9 +214,12 @@ public sealed partial class World
         // v4 (ADR-007): the rally fields, appended after FieldCloaked in hash
         // order exactly as ComputeStateHash appends them.
         w.Write(e.RallyX.Raw); w.Write(e.RallyY.Raw); w.Write(e.HasRally); w.Write(e.Departing);
+        // v5 (ADR-012): the ferrite cap, appended after the rally tail. Not
+        // hashed, so a save is the only channel that carries it.
+        w.Write(e.FerriteCap);
     }
 
-    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields)
+    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields, bool hasFerriteCap)
     {
         var e = ReadEntityV3(r);
         if (hasRallyFields)
@@ -215,6 +231,12 @@ public sealed partial class World
             e.HasRally = r.ReadBoolean();
             e.Departing = r.ReadBoolean();
         }
+        // v5 field in write order. A pre-v5 entity has no stored cap: default it
+        // to the loaded FerriteAmount so the field is treated as full at its
+        // saved level and never regrows above where the old save left it (the
+        // sane resume ADR-012's save-compat clause names). A non-field entity's
+        // cap is meaningless and stays zero, matching a fresh spawn.
+        e.FerriteCap = hasFerriteCap ? r.ReadInt32() : e.FerriteAmount;
         return e;
     }
 

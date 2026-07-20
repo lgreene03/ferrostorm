@@ -156,6 +156,15 @@ public struct Entity
     public Fix64 RallyX, RallyY;
     public bool HasRally;
     public bool Departing;
+
+    // Ferrite regrowth cap (ADR-012), appended after Departing, never inserted.
+    // A FerriteField's spawn amount, the ceiling regrowth restores towards. Set
+    // once at spawn and never mutated, so like Sight it is SERIALIZED (save v5)
+    // but deliberately NOT part of ComputeStateHash: it is immutable spawn-time
+    // provenance, identical on every client, and hashing it would move every
+    // golden (including the no-ferrite scenarios ADR-012 requires stay still)
+    // for zero behavioural change. Zero on every non-field entity.
+    public int FerriteCap;
 }
 
 /// <summary>
@@ -216,6 +225,30 @@ public sealed partial class World
     public const int HarvesterCapacity = 700;
     public const int LoadPerTick = 10;                       // 70 ticks to fill
     public const int UnloadTicks = 8 * TicksPerSecond;       // refinery processes a load in 8s
+
+    // Ferrite regrowth (ADR-012). The compiled reference twin of the /data
+    // field definition (data/fields/com_ferrite_field.yaml): 1 unit every 75
+    // ticks (5 seconds at 15Hz), a deliberate trickle against harvest rates an
+    // order of magnitude higher. Every new World starts on these; a caller that
+    // loads /data overrides them via ConfigureRegrowth, and the selftest proves
+    // the file reproduces these exactly. Not hashed and not serialized: they are
+    // pre-tick-0 config, re-supplied on load exactly as the catalogue is.
+    public const int DefaultRegrowAmount = 1;
+    public const int DefaultRegrowIntervalTicks = 75;
+    private int _regrowAmount = DefaultRegrowAmount;
+    private int _regrowIntervalTicks = DefaultRegrowIntervalTicks;
+
+    /// <summary>ADR-012 / ADR-006: Balance's regrowth numbers from /data, applied
+    /// before tick 0, mirroring RegisterUnitType. After tick 0 the numbers are
+    /// frozen: a mid-match change would be a silent replay divergence. An interval
+    /// below 1 is refused so the per-tick schedule modulo never divides by zero.</summary>
+    public void ConfigureRegrowth(int amount, int intervalTicks)
+    {
+        if (Tick != 0) throw new InvalidOperationException("regrowth numbers are fixed once the match starts");
+        if (intervalTicks < 1) throw new ArgumentOutOfRangeException(nameof(intervalTicks), "regrow interval must be at least 1 tick");
+        _regrowAmount = amount;
+        _regrowIntervalTicks = intervalTicks;
+    }
 
     private readonly List<Entity> _entities = new();
     private readonly DeterministicRandom _rng;
@@ -293,7 +326,7 @@ public sealed partial class World
             Id = _entities.Count, Alive = true, PlayerId = -1, Kind = EntityKind.FerriteField,
             X = x, Y = y, TargetX = x, TargetY = y,
             Hp = 1, MaxHp = 1, Armour = ArmourClass.Structure, WeaponId = 0, ExplicitTarget = -1,
-            FerriteAmount = amount, FieldId = -1, RefineryId = -1,
+            FerriteAmount = amount, FerriteCap = amount, FieldId = -1, RefineryId = -1,
         });
 
     // Producible unit types (TICKET-P2-SIM-03). Compiled defaults serve also as the
@@ -847,6 +880,7 @@ public sealed partial class World
         CaptureSystem();
         CombatSystem();
         HarvestSystem();
+        RegrowthSystem();
         ProductionSystem();
         FogSystem();
         VictorySystem();
@@ -1835,6 +1869,46 @@ public sealed partial class World
         }
     }
 
+    /// <summary>
+    /// ADR-012: ferrite fields regrow. Each FerriteField regrows _regrowAmount
+    /// every _regrowIntervalTicks, up to its spawn amount (FerriteCap),
+    /// deterministically in entity-index order (a list walk, never a dictionary).
+    /// Ordered explicitly right after HarvestSystem: depletion then replenish,
+    /// the economy pair. Two rules make it a strategy, not a faucet:
+    ///   1. The OWN-AMOUNT rule is load-bearing: a field regrows only while its
+    ///      remaining amount is ABOVE ZERO. A field harvested to zero is set
+    ///      not-alive at depletion (HarvestSystem) and this loop skips it, so
+    ///      dead ground stays dead forever and strip-to-deny survives. The
+    ///      >0 guard also covers a field spawned empty. This is the ratified
+    ///      rule; the ADR's rejected "regrow regardless of remaining" and
+    ///      "spread to neighbours" alternatives are NOT implemented.
+    ///   2. The schedule is DERIVED FROM THE TICK, not a stored counter: it
+    ///      fires when the tick is a positive multiple of the interval. Tick is
+    ///      saved, so regrowth resumes sanely across save/load with no new
+    ///      hashed or serialized counter. RegrowthSystem runs before Tick++, so
+    ///      the pre-increment tick is the one tested; the first regrow lands at
+    ///      tick 75, a full interval after tick 0.
+    /// FerriteAmount is hashed, so a regrow is a hashed mutation and MOVES the
+    /// goldens of scenarios whose fields have been harvested below cap and run
+    /// long enough to reach an interval; a world with no ferrite field, or one
+    /// whose fields sit at cap, sees this loop change nothing (ADR-012's
+    /// required asymmetry).
+    /// </summary>
+    private void RegrowthSystem()
+    {
+        if (_regrowAmount <= 0 || _regrowIntervalTicks <= 0) return;
+        if (Tick <= 0 || Tick % _regrowIntervalTicks != 0) return;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (!e.Alive || e.Kind != EntityKind.FerriteField) continue;
+            if (e.FerriteAmount <= 0 || e.FerriteAmount >= e.FerriteCap) continue; // own-amount rule and the cap
+            int grown = e.FerriteAmount + _regrowAmount;
+            e.FerriteAmount = grown < e.FerriteCap ? grown : e.FerriteCap;
+            _entities[i] = e;
+        }
+    }
+
     private void RetargetField(ref Entity e)
     {
         // Nearest live field with ferrite remaining; ties break to lower id (US2.2 auto-reassign).
@@ -2390,6 +2464,12 @@ public sealed partial class World
             // ADR-007: rally is sim state, so it is hashed state, appended
             // after FieldCloaked in declaration order (the save order too).
             h.Add(e.RallyX); h.Add(e.RallyY); h.Add(e.HasRally); h.Add(e.Departing);
+            // ADR-012: FerriteCap is deliberately NOT hashed here. Like Sight
+            // it is immutable spawn-time state, identical on every client and
+            // reconstructed exactly on load (save v5), so it needs no desync
+            // coverage; hashing it would move every golden, including the
+            // no-ferrite scenarios the ADR requires stay still. FerriteAmount,
+            // which regrowth mutates, is already hashed above.
             // ADR-009 clause 1, the fourth IsProducer site and PROD-D5's
             // close: the queue hash covered FACTORY queues only, so a
             // Construction Yard divergence between two same-cost, same-ticks
