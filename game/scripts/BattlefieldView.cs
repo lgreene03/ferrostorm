@@ -1944,6 +1944,43 @@ public static class BattlefieldView
         });
     }
 
+    /// <summary>C-07 (doc 22): the SECONDARY team mark, a claimed-ground strip
+    /// around a structure footprint. ModelLibrary ships one com_ model per
+    /// structure type shared by both players, so without this a Directorate
+    /// refinery and a Sodality refinery are the same pixels; the baked orange
+    /// on a com_power_plant vent is faction-neutral and identical for both
+    /// owners. A square outline (not a torus) reads as claimed ground rather
+    /// than a decorative halo, because structure footprints are square.
+    /// EmissionEnergyMultiplier is held at 0.9 so the strip stays under the
+    /// glow HdrThreshold of 1.0 and does not bloom (doc 20 W1-08).</summary>
+    public static void DressStructure(Node3D node, int player, float span = 2.6f)
+    {
+        AddContactBlob(node, span);
+        if (player < 0) return;
+        var mark = player == 0 ? DirectorateMark : SodalityMark;
+        var mat = new StandardMaterial3D
+        {
+            AlbedoColor = mark,
+            EmissionEnabled = true,
+            Emission = mark,
+            EmissionEnergyMultiplier = 0.9f,
+        };
+        float half = span * 0.44f;      // 1.144 at span 2.6: just outside a 2x2 footprint
+        float t = 0.14f;                // strip thickness
+        foreach (var (sx, sz, lx, lz) in new[]
+        {
+            (0f, -half, half * 2f + t, t), (0f, half, half * 2f + t, t),
+            (-half, 0f, t, half * 2f + t), (half, 0f, t, half * 2f + t),
+        })
+            node.AddChild(new MeshInstance3D
+            {
+                Mesh = new BoxMesh { Size = new Vector3(lx, 0.03f, lz) },
+                Position = new Vector3(sx, 0.02f, sz),
+                MaterialOverride = mat,
+                Name = "TeamStrip",
+            });
+    }
+
     /// <summary>Team-colour ground ring for a mobile unit plus a hidden
     /// selection ring the scene toggles. The one-place team-colour law,
     /// applied at the presentation layer.</summary>
@@ -1953,7 +1990,9 @@ public static class BattlefieldView
         var mark = player == 0 ? DirectorateMark : SodalityMark;
         node.AddChild(new MeshInstance3D
         {
-            Mesh = new TorusMesh { InnerRadius = 0.30f, OuterRadius = 0.36f },
+            // C-07 clause 3: widened from 0.30/0.36 so the secondary mark
+            // survives the RTS camera band (RtsCamera clamps 8..42).
+            Mesh = new TorusMesh { InnerRadius = 0.27f, OuterRadius = 0.40f },
             Position = new Vector3(0, 0.02f, 0),
             MaterialOverride = new StandardMaterial3D
             {

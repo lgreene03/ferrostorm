@@ -2296,7 +2296,12 @@ public partial class SkirmishLive : Node3D
                 else if (v.Kind == EntityKind.Wall)
                     BattlefieldView.AddContactBlob(node, 1.0f);
                 else if (v.Kind != EntityKind.FerriteField)
-                    BattlefieldView.AddContactBlob(node, 2.6f);
+                    // C-07: shared com_ structures are the same model for both
+                    // players, so the team-colour footprint strip is what tells
+                    // a Directorate base from a Sodality one. Walls are the one
+                    // exception (their silhouette is the run, not the segment)
+                    // and keep the AddContactBlob branch ABOVE this one.
+                    BattlefieldView.DressStructure(node, v.PlayerId, 2.6f);
                 else
                     // W4-17: emissive amber stain pooled under the deposit;
                     // the per-frame drain scale shrinks it as ore is mined.
