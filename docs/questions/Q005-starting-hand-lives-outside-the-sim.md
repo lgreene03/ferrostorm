@@ -63,3 +63,28 @@ wearing the clothes of a consistency fix, and wants Balance's eyes as well.
 
 Both files read directly during the 2026-07-16 investigation; the coordinates
 above are measured from instrumented runs, not inferred.
+
+## RESOLVED 2026-07-20 (P6 Wave B5, ADR-011 ratified)
+
+Both halves are resolved in one change, as ADR-011 decided, with the CellCentre
+choice made explicit and Balance co-signed rather than smuggled in as a tidy-up.
+
+The structural half: the skirmish opening hand now lives in the sim, as
+MapData.PlaceSkirmishStart in sim/Ferrostorm.Sim/MapLoader.cs. The runner's gated
+skirmish scenario and the client's SkirmishLive.BuildStartingWorld both call it,
+so the sim's own gate and the client no longer disagree about what a skirmish
+start is, and the golden hash covers the world players actually play. A starting
+force is gameplay, so it now sits in the sim layer ADR-001 requires, and a future
+renderer swap (ADR-004) inherits the hand rather than reimplementing it.
+
+The CellCentre half: the harvester and the three rifle squads are now placed at
+Map.CellCentre, the convention of every other sim spawn, ending the corner split
+this question measured. It was not bundled as a silent side effect: ADR-011 named
+it, measured it and had Balance co-sign it. The measured 550-tick outcome shift
+on skirmish-04 is expected and authorised, recorded for Balance in the Wave B5
+delivery notes.
+
+The move regenerated exactly one golden (skirmish, 0x4F6252B168468346 to
+0x3CE6E400F07A3AA1), the single row ADR-011 authorised; a scratch neutralisation
+reverted all twenty-four rows to the pre-wave hashes, proving the hand plus the
+centring is the sole cause. Full detail in docs/tickets/P6-wave-b5-starting-hand.md.
