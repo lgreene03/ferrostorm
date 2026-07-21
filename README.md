@@ -4,7 +4,7 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 
 A modern real-time strategy game inspired by the classic RTS games of the 90s, built as two strictly separated layers (ADR-001): a deterministic, fixed-point C# lockstep simulation with zero package dependencies, and a Godot 4.7 .NET client that is presentation only. The sim is the authority on all gameplay; the client renders it and submits commands.
 
-This is a pre-release, in-development repository. The game is playable from source; there are no packaged builds, and the title is provisional.
+This is an in-development repository for a playable game, public on GitHub with green CI. The game is playable from source; there are no packaged builds yet, and the public title is still provisional.
 
 ## What exists today
 
@@ -13,6 +13,7 @@ This is a pre-release, in-development repository. The game is playable from sour
 - Binary save/load, and replays with hash-verified bit-exact playback
 - A settings scene: every key rebindable with conflict detection, audio buses, applied video options
 - Walls and barrier mechanics (ADR-005), and the full alert set (base and harvester attack warnings, low power, superweapon launch detection, jump-to-event)
+- A full visual overhaul (docs/design/25-visual-overhaul-roadmap.md): natural terrain shaders (ground biome, grass, foliage, water), re-baked materials, fog and ambient fixes, a camera FOV fix that closed the off-map void, and faction colour
 - Twelve unit types and ten buildings authored as YAML in /data, plus wall segments. All ten buildings are buildable in a match through the tabbed production sidebar with prerequisites enforced; the barracks has been buildable since ADR-009 and the radar uplink since ADR-008
 - A LAN lockstep transport (relay plus clients) that is real and soak-tested over loopback with zero desyncs; play between two machines is not yet possible because the battle scene's frame loop is not lockstep-driven (docs/questions/Q002)
 

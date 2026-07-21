@@ -195,6 +195,6 @@ battlefield reports; the voice itself is placeholder TTS.
 
 Needed next (from whom): legal-review's check on TTS redistribution before
 any public build ships the VO set (doc 24 caveat); the two Sodality icon
-sprites from art-pipeline (finding 3); a composed score to replace the
+sprites from art-pipeline (finding 3; DONE: sod_shade_raider and sod_phantom_tank sprites delivered); a composed score to replace the
 placeholder beds when the audio direction is ready (doc 24 says the system
 is the ticket, not the destination).

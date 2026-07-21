@@ -92,7 +92,7 @@ standard doc 26 and ADR-013 authored.
 MAP-02). Ferrite and density conventions as above. skirmish-03 preserved.
 
 **Needed next, and from whom.** Architect + Luke: ratify ADR-013 (the `skirmish`
-golden move). Art-pipeline + client-engineer: a taste pass on the running client,
+golden move). (DONE 2026-07-20: ADR-013 ratified and the skirmish map redesign shipped.) Art-pipeline + client-engineer: a taste pass on the running client,
 since the previews prove layout, not lighting and materials. Optional later
 ticket: bring skirmish-03 under the generator, which would require regenerating
 the look-dev reference save and re-taking its reference captures.

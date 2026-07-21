@@ -3,7 +3,7 @@
 
 **Working title:** Ferrostorm (provisional public title, pending trademark clearance - see 09-title-and-trademark.md and 10-stage-a-report.md; internal codename Project FERROSTORM)
 **Genre:** Real-time strategy, classic base-building style (Command & Conquer lineage)
-**Status:** Pre-production / design phase
+**Status:** In active development. Playable from source, public on GitHub with green determinism CI; post-vertical-slice, in the P6 campaign build-out (Phase B complete)
 **Owner:** Luke (solo developer, agent-assisted development model)
 
 ---

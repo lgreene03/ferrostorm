@@ -160,6 +160,6 @@ the one genuinely structural finding of the investigation.
 **Assumed:** combat units stay excluded from the alert deliberately; a player is
 expected to be watching an army they sent somewhere, whereas a harvester is sent
 away and forgotten. If Balance disagrees, ALERT-01's test is one line.
-**Needed next (from whom):** Architect on Q005; Balance and Game Designer on
+**Needed next (from whom):** Architect on Q005 (DONE: Q005 resolved by ADR-011 / Wave B5); Balance and Game Designer on
 BAL-01/BAL-02; UX on ALERT-03. (The ALERT-02 cues Audio owed were delivered
 2026-07-17; see the section above.)

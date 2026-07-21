@@ -24,13 +24,13 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 6. Milestone gates (docs/design/05-production-plan.md) require sign-off from Producer, QA, Legal agents plus Luke.
 
 ## Phase gate status
-- Current phase: **0 → 1 transition.** Phase 1 (Deterministic Core Prototype) may begin only when ADR-001 and ADR-002 are marked Ratified by Luke.
-- Phase 1 kill criterion: if cross-platform determinism cannot be stabilised within the phase, halt and rethink architecture. Do not patch around it.
+- Current phase: **P6 campaign build-out.** The deterministic core prototype shipped long ago: ADR-001 and ADR-002 are ratified, and the game is playable from source with green determinism CI. Campaign Phase B is complete (waves B1 to B6); Phase C (unit stances, C1) is in progress on a branch and not yet on main.
+- Standing determinism rule: cross-platform determinism is enforced by the golden-hash CI gate. If it ever cannot be held, halt and rethink rather than patch around it.
 
 ## Build commands
 - Build sim + runner: `dotnet build sim/Ferrostorm.Sim.Runner -c Release` (requires .NET 8 SDK; NuGet sources disabled by design - zero package dependencies)
 - Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
-- Modes: `selftest`, `determinism [seed]`, `match [seed]`, `bench`
+- Modes: `selftest`, `determinism [seed]`, `golden [seed]`, `match [seed]`, `lan [games]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs)
 - CI: .github/workflows/determinism.yml runs the sim purity grep and the cross-platform golden-hash check (sim/golden-hashes.txt) on Windows and Linux. Red determinism CI blocks all merges.
 - Changing a golden hash is a replay-compatibility break: ADR + Architect sign-off required.
 
