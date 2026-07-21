@@ -100,6 +100,13 @@ public static class Settings
     {
         ("attack_move", "ATTACK-MOVE"),
         ("stop", "STOP"),
+        // ADR-015 / TICKET-P6-C1a: the three unit command stances. Hold-fire is
+        // a toggle (aggressive when already held), guard sets a leashed hold in
+        // place, and patrol arms a two-point cycle whose far point the next click
+        // supplies - each a presentation-only issue of the one SetStance command.
+        ("hold_fire", "HOLD FIRE"),
+        ("guard", "GUARD"),
+        ("patrol", "PATROL"),
         ("repair", "REPAIR"),
         ("sell", "SELL"),
         ("deploy", "DEPLOY"),   // TICKET-P5-SPAWN-03: unpack the selected MCV
