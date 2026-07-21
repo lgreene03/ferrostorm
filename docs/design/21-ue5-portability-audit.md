@@ -22,7 +22,7 @@ as tickets so no future work designs a blocker.
 | Infantry/vehicles/workers/heroes | DONE (heroes = specials) | catalogue types 1-12 |
 | Aircraft | GAP -> P4-PORT-02 (design ticket; movement layer is ground-grid) | |
 | Buildings: construction/placement/footprints/power/queues/damage states | DONE except damage-state visuals (doc 18 Phase C) | |
-| Upgrades / tech tree / research buildings | GAP -> P4-PORT-03 (sim tiers; client gating shipped; GDD sketches tiers) | |
+| Upgrades / tech tree / research buildings | DONE (sim prerequisites enforced via ADR-009; /data-driven tech tree via doc 22 BD-17; prerequisites gate Produce/BuildStructure) | |
 | Resources: worker loop find/harvest/return | DONE | harvest state machine |
 | Multiple resource types | GAP -> P4-PORT-04 (single ferrite today; loader is type-ready) | |
 | Combat: damage/armour types, range, cooldowns, splash, death events; calc separated from FX | DONE | warhead x armour matrix; events feed FX |

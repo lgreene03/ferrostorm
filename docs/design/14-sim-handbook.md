@@ -104,14 +104,14 @@ and waves strike the enemy refinery first.
   noshortgame. The campaign manifest and briefings live in data/campaign/.
 - Replays: `ferrostorm-replay v2` - seed, setup, per-tick command lines
   including the queued flag.
-- Saves: binary `SLA1...SDNE` - every field of world state; the saveload
+- Saves: binary `SLA6...SDNE` - every field of world state; the saveload
   gate proves load-hash equality AND that a resumed run reaches the
   uninterrupted final hash (protects even unhashed fields).
 
 ## Runner modes and gates
 
 `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release -- <mode>`:
-selftest, determinism [seed], golden [seed], match [seed] (19 scenarios +
+selftest, determinism [seed], golden [seed], match [seed] (24 scenarios +
 hard 8 ms/tick perf gate), lan N, lanchaos N delay jitter, spectate, replay,
 saveload, bench, plus *debug diagnostics. The balance tool
 (`tools/Ferrostorm.Balance`) is a 4x4 matchup matrix plus a tempo baseline
@@ -121,7 +121,7 @@ saveload on every push; nightly-soak.yml runs 5 seeds x 2 OS + lan 20.
 
 ## Golden hashes
 
-`sim/golden-hashes.txt` pins 19 scenario finals. During pre-production a
+`sim/golden-hashes.txt` pins 24 scenario finals. During pre-production a
 schema change regenerates them freely (three-line header explains the
 policy); from first public build, changing one is a replay-compatibility
 break requiring an ADR.

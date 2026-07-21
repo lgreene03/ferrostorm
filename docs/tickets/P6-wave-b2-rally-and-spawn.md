@@ -146,8 +146,8 @@ predicate (Factory or Construction Yard, per the ADR, ahead of ADR-009's
 IsProducer), clamps exactly as Move does, and AuxId -1 clears back to the
 canonical unset state so cleared and never-rallied serialise identically.
 A produced unit leaves the mouth with movement fields written directly
-(no internal command channel, per the ADR): toward the rally when set,
-otherwise toward a deterministic default two further steps out along the
+(no internal command channel, per the ADR): towards the rally when set,
+otherwise towards a deterministic default two further steps out along the
 chosen spawn offset, so the eleven-cell ring cannot saturate in the
 no-rally default game. Departing suppresses the crowd-arrival shortcut
 until the unit leaves its spawn cell (or the walk ends), which kills

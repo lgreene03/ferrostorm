@@ -114,7 +114,7 @@ a big map is to look around?
 labels: persona:commander gdd:s6 phase:5 owner:balance + ai-engineer
 
 STANDARD banks the 8000 start grant and buys a SUPERWEAPON at ~tick 1450 via
-`SkirmishAI.cs:100`, striking at tick 3285 for 720 damage (24 percent of the
+`SkirmishAI.cs:100`, striking at tick 3285 for 720 damage (24 per cent of the
 yard's 3000 hp). Measured on all seven seeds: superStrikes = 1 every run.
 
 The interesting part, found by ablation: **disable the superweapon purchase and

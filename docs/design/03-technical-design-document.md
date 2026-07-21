@@ -94,9 +94,9 @@ An ADR must be written before any code confirms or overturns this (ADR-001).
 
 | ADR | Decision needed | Status |
 |---|---|---|
-| 001 | Engine choice (Godot+C# sim library) | Proposed |
-| 002 | Fixed-point library selection/benchmark | Open |
-| 003 | Infantry: squads vs individuals (perf + design) | Open, pairs with GDD Q3 |
+| 001 | Engine choice (Godot+C# sim library) | Ratified (2026-07-07) |
+| 002 | Fixed-point library selection/benchmark | Ratified (2026-07-07) |
+| 003 | Infantry: squads vs individuals (perf + design) | Ratified (2026-07-07); pairs with GDD Q3 |
 | 004 | Lua sandbox implementation for triggers | Open |
 | 005 | Tile size / grid resolution / footprint rules | Open |
 | 006 | Save format = snapshot vs command-log replay | Open |

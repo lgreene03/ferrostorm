@@ -5,6 +5,8 @@ Author: game-designer + producer agents, 2026-07-17. Source: Luke's question
 answered from the codebase as it stands at main ca481d3 and executed under
 Luke's directive of 2026-07-17: "design out and build all these".
 
+**STATUS, 2026-07-21.** Much of this roadmap has been built. Tier 3 (the faction picker, music, placeholder VO and contextual cursors) shipped as P6 Wave A. The Tier 1 ADRs were ratified under the directive and built as the P6 Phase B campaign (ADR-006 the /data runtime, ADR-007 rally, ADR-008 power, ADR-009 the production roster, ADR-011 the starting hand, ADR-012 ferrite regrowth). Read the tiers below with that delivery in mind; the out-of-scope list at the end still stands.
+
 ## How to read this
 
 Three tiers plus an out-of-scope list. Tier 1 is designed and carried by an
@@ -21,7 +23,7 @@ power rules, engineer capture, stealth and detection, veterancy with rank
 pips, the superweapon with charge, launch-detection and impact alerts,
 infantry crushing, attack-move (ADR-010), fog of war, minimap with pings and
 jump-to-event, control groups, shift-queued orders, a three-mission campaign
-with tech gating, skirmish against three AI presets, save/load (format v2),
+with tech gating, skirmish against three AI presets, save/load (format v6),
 and hash-verified replays, which the classics never had.
 
 ## Tier 1: designed, ratification supplied by the directive

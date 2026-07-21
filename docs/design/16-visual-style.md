@@ -19,8 +19,8 @@ band/slash), always. Silhouette-first: every unit must be identifiable as a
 harvester a fat beetle with a gold hopper, squads are dot-clusters.
 
 ## Reference implementations
-art/sprites/*.svg (19 sprites, rendered PNGs in art/png/, contact sheet at
+art/sprites/*.svg (20 sprites, rendered PNGs in art/png/, contact sheet at
 art/contact-sheet.png) and the match viewer (tools/viewer/) share one shape
 language; the viewer's signature is the ferrite-seam glow draining with the
 deposit. Blender/contractor work later should treat these as the style bible:
-stylized low-poly, silhouettes and team-colour law as above.
+stylised low-poly, silhouettes and team-colour law as above.

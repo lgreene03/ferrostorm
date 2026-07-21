@@ -13,7 +13,7 @@ open field into lanes and gives each base a defensible alcove; a safe home
 ferrite patch plus a larger contested patch so expansion is a decision. Redesign
 the three straight/open maps (skirmish-01, 02, 04) with committed Python
 generators that prove 180-degree rotation symmetry, reachability, load-bearing
-crossings, ferrite fairness and 8 to 10 percent density. Preserve skirmish-03: it
+crossings, ferrite fairness and 8 to 10 per cent density. Preserve skirmish-03: it
 already meets the standard and is the frozen look-dev reference. Prove each map
 with a full AI-vs-AI match before committing, because a chokepoint the flow field
 cannot path parks the army and is a broken map, not a hard one.
@@ -43,21 +43,21 @@ rotation so integer rounding cannot bias a bank.
 a river winding through three fords, base alcoves in opposite corners, ridge
 spurs splitting the near bank into a central lane and a southern flank, ruins and
 fences on the ford approaches, a safe 4-cell patch by each base and a contested
-6-cell patch beside the central ford. Census: 548 blocked (8.92 percent), 20
+6-cell patch beside the central ford. Census: 548 blocked (8.92 per cent), 20
 ferrite. Starts moved to the rotation pair (9,9) and (86,54).
 
 **skirmish-02, Ironback Ridge (96x64).** The old scattered blocks replaced by one
 winding ridgeline running corner to corner along the main diagonal, pierced by
 three passes (left flank, central saddle, right flank), with base alcoves, a
 forward knoll per land, rubble at the pass mouths and the contested patch at the
-saddle. Census: 594 blocked (9.67 percent), 20 ferrite. The three passes are
+saddle. Census: 594 blocked (9.67 per cent), 20 ferrite. The three passes are
 proved load-bearing. Starts (10,53) and (85,10), the opposite diagonal to
 skirmish-01 so the two do not feel the same.
 
 **skirmish-04, Tarnwater Crossing (192x128).** The straight water column replaced
 by a meandering Tarnwater, keeping the MAP-04 constraints: three bridges, bank
 bluffs, midfield ruins, a 60-cell economy as twelve clusters of five, 9x9 aprons,
-density 9.72 percent. Starts unchanged at (12,20) and (179,107).
+density 9.72 per cent. Starts unchanged at (12,20) and (179,107).
 
 **skirmish-03.** Deliberately unchanged; see ADR-013 and doc 26.
 

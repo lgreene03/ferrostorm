@@ -99,4 +99,4 @@ even the comment fix is left to a sim-owned ticket.
 
 Owed: the phase-1-backlog.md ledger entry (file was another agent's live
 edit for the whole session), and doc 23 / SET-01 prose that says "19
-actions" where the rebindable surface is now 20.
+actions" where the rebindable surface is now 21.

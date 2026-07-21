@@ -1,7 +1,7 @@
-# Project IRONHARVEST
+# Project FERROSTORM
 ## Modern Classic-Style RTS - Project Overview and Documentation Index
 
-**Working title:** Ironharvest (placeholder, original IP required - see Legal Constraints)
+**Working title:** Ferrostorm (provisional public title, pending trademark clearance - see 09-title-and-trademark.md and 10-stage-a-report.md; internal codename Project FERROSTORM)
 **Genre:** Real-time strategy, classic base-building style (Command & Conquer lineage)
 **Status:** Pre-production / design phase
 **Owner:** Luke (solo developer, agent-assisted development model)
@@ -65,6 +65,8 @@ Command & Conquer, Red Alert, Tiberium, GDI, Nod, and all associated names, char
 | Agent Team Definitions | 04-agent-team.md | Every AI agent role, prompt charter, inputs/outputs, handoffs. |
 | Production Plan | 05-production-plan.md | Phases, milestones, risk register, definition of done. |
 | Backlog: Epics & User Stories | 06-backlog-epics-user-stories.md | Story-level breakdown ready for sprint planning. |
+| Competitive Analysis | 07-competitive-analysis.md | Market positioning, competitor map, differentiation thesis. |
+| Art & Audio Cost Model | 08-art-cost-model.md | Asset inventory, cost scenarios, spend sequencing. |
 
 ## 7. How to Use This Package
 
