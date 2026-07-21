@@ -1,6 +1,6 @@
 # 25. Visual Overhaul Roadmap: why it does not look as good, and the order to fix it
 
-Status: IN EXECUTION. **Waves V0 and V1 SHIPPED; V2 PART-SHIPPED; a new terrain
+Status: IN EXECUTION. **Waves V0, V1 and V3 SHIPPED; V2 and V4 PART-SHIPPED; a new terrain
 wave V-TERRAIN SHIPPED alongside.** V-TERRAIN (branch
 `ticket/p6-visual-terrain`, docs/tickets/P6-visual-terrain.md) is the natural
 terrain pass the owner asked for directly, in these words: "i want grass, trees,
@@ -22,9 +22,10 @@ branch `ticket/p6-visual-v0-v1` (docs/tickets/P6-visual-v0-v1.md). Branch
 V2-01 (binary metallic) and V2-02 (kill the triple AO), the shroud-quality fix
 the previous wave uncovered, and the exposure retune this created, in one
 re-bake of all 27 models. **V2-03 (roughness octaves) and V2-04 (doc 22's C-06
-then C-05) were NOT in that session and remain**, and because the roadmap wants
-the whole bake to happen once, they now need their own re-bake; the pipeline is
-in the right state for them to land on the clean albedo V2-02 produced. **Wave
+then C-05) were NOT in that V2 session**; V2-04 subsequently shipped in Wave V4
+below (the one re-bake of C-06 then C-05), so only V2-03 remains, and because the
+roadmap wants the whole bake to happen once it needs its own re-bake on the clean
+albedo V2-02 produced. **Wave
 V3 SHIPPED (branch `ticket/p6-visual-v3`, docs/tickets/P6-visual-v3.md):**
 V3-01's FOV 50 removes the off-map void (gone at CAM-A, much reduced at CAM-B
 where a residual band at max zoom is inherent to the finite map); V3-02 removes
@@ -237,14 +238,14 @@ Wave summary:
 
 | Wave | What | Tickets | Sim risk | Bake required |
 |---|---|---|---|---|
-| V0 | The look-development loop | 3 | none | no |
-| V1 | The veils and the free one-liners | 7 | none | no |
-| V2 | The one bake session | 4 | none | yes, once |
+| V0 | The look-development loop (SHIPPED) | 3 | none | no |
+| V1 | The veils and the free one-liners (SHIPPED) | 7 | none | no |
+| V2 | The one bake session (PART-SHIPPED; V2-01/V2-02 done, V2-03 owed) | 4 | none | yes, once |
 | V3 | Camera, scale and the aliasing (SHIPPED; V3-03 delivered by V-TERRAIN) | 4 | none | no |
 | V4 | Faction identity and first impression (colour+faction PART-SHIPPED; C-01/C-10/C-11 palette polish + menu/HUD/VFX owed) | 4 | none | no |
 | V-TERRAIN | Natural terrain: grass, trees, water, sand, rocks, texture (subsumes doc 22 Wave A.5 + the ground half of Wave C) | 1 | none | no (procedural, no Blender) |
 
-Twenty-two tickets, five waves. Doc 22's Wave C tickets C-01, C-05, C-06, C-07, C-08, C-10 and C-11 are **not restated here**. They are ratified and they stand. This document schedules them and folds two additional fixes into C-05's bake session; where a ticket below interacts with one, the interaction is named in place.
+Twenty-three tickets, six waves. Doc 22's Wave C tickets C-01, C-05, C-06, C-07, C-08, C-10 and C-11 are **not restated here**. They are ratified and they stand. This document schedules them and folds two additional fixes into C-05's bake session; where a ticket below interacts with one, the interaction is named in place. Note: the "doc 22 line NNN" references throughout this document were written before doc 22's LOOK-03 capture-rule amendment was prepended, which shifted doc 22's Wave C content down by about four lines, so add roughly four to any doc 22 line number cited here.
 
 ### Wave V0: the look-development loop
 
@@ -306,7 +307,7 @@ At the shipped start height of 22 and a fixed -50 pitch, the minimum camera-to-g
 1. Line 75: `VolumetricFogDensity = 0.022f` becomes `0.010f`. At 28.7 metres that lifts transmittance from 0.53 to 0.75.
 2. Line 76: `VolumetricFogAlbedo` (0.55f, 0.62f, 0.75f) becomes (0.46f, 0.50f, 0.58f). Less saturated and darker, so what fog remains reads as distance rather than as a scrim.
 3. Line 78: `VolumetricFogLength` 110f stays. The length is not the problem; the density over the unavoidable minimum distance is.
-4. Add `VolumetricFogGiInject = 0.6f`, currently unset and therefore 0, so the fog picks up scene light and produces coloured haze around explosions and the superweapon rather than a uniform tint.
+4. Add `VolumetricFogGIInject = 0.6f`, currently unset and therefore 0, so the fog picks up scene light and produces coloured haze around explosions and the superweapon rather than a uniform tint.
 5. Do not disable the fog. It is doing real atmospheric work at the far edge of the frame and the storm mood depends on it. This is a density change, not a deletion.
 
 - Acceptance: contact sheet at all three cameras. At CAM-A the 95th-percentile luminance rises by at least 8/255 and the 5th-percentile luminance falls by at least 4/255, which is the frame regaining range at both ends rather than merely brightening. Mean HSV saturation at CAM-A rises by at least 0.03 absolute. Frame time at 1600x900 within 0.3 ms of baseline, and expected to improve slightly. sim golden-hash battery exits 0.
