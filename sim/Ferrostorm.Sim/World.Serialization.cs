@@ -42,6 +42,14 @@ namespace Ferrostorm.Sim;
 /// live distance, so a mid-walk pre-v6 save resumes with the backstop simply
 /// re-armed rather than mid-count, which is the sane meaning of a save that
 /// never recorded the counter.
+/// Format v7 (ADR-015): every entity carries the command stance tail - Stance
+/// (byte), PostX/PostY, PatrolX/PatrolY (Fix64) and PatrolOutbound (bool) -
+/// appended after the no-progress tail, because a stance is now hashed sim
+/// state and a save that drops hashed fields cannot honour the contract above.
+/// v1..v6 entities predate the fields and load with Stance defaulted to
+/// Aggressive and every position field zero, which is exactly what those saves
+/// meant (no stance existed): those units resume with today's auto-acquire
+/// behaviour, so old saves and replays continue identically.
 /// </summary>
 public sealed partial class World
 {
@@ -51,12 +59,13 @@ public sealed partial class World
     private const uint SaveMagicV4 = 0x534C4134; // v4 adds the per-entity rally fields (ADR-007)
     private const uint SaveMagicV5 = 0x534C4135; // v5 adds the per-entity ferrite cap (ADR-012)
     private const uint SaveMagicV6 = 0x534C4136; // v6 adds the no-progress backstop state (Q013, ADR-014)
+    private const uint SaveMagicV7 = 0x534C4137; // v7 adds the per-entity command stance tail (ADR-015)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV6);
+        w.Write(SaveMagicV7);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -130,20 +139,22 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
         bool hasCatalogue = magic != SaveMagicV1 && magic != SaveMagicV2;
         // ADR-007: v4 and every later format carry rally state (the B1-era
         // regression was conditioning a later field on one magic alone; do not
-        // repeat it - v6 was added for the no-progress backstop and MUST be
-        // listed here too or the rally tail misreads and the record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6;
-        // ADR-012: v5 AND v6 entities carry the cap (do not condition a later
-        // field on one magic alone - the B1-era regression this comment guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6;
-        bool hasNoProgress = magic == SaveMagicV6; // Q013/ADR-014: v6 entities carry the backstop state
+        // repeat it - every new format MUST be listed in each tail's predicate
+        // or that tail misreads and the whole entity record misaligns).
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7;
+        // ADR-012: v5 and every later format carry the cap (do not condition a
+        // later field on one magic alone - the B1-era regression this guards).
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7;
+        // Q013/ADR-014: v6 and every later format carry the backstop state.
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7;
+        bool hasStance = magic == SaveMagicV7; // ADR-015: v7 entities carry the command stance tail
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -179,7 +190,7 @@ public sealed partial class World
             for (int i = 0; i < words; i++) world._explored[p][i] = r.ReadUInt64();
         }
         int count = r.ReadInt32();
-        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap, hasNoProgress));
+        for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap, hasNoProgress, hasStance));
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {
@@ -235,9 +246,15 @@ public sealed partial class World
         // v6 (Q013, ADR-014): the no-progress backstop state, appended after the
         // ferrite cap in hash order exactly as ComputeStateHash appends it.
         w.Write(e.NearestApproachSq.Raw); w.Write(e.NoProgressTicks);
+        // v7 (ADR-015): the command stance tail, appended after the no-progress
+        // tail in hash order exactly as ComputeStateHash appends it.
+        w.Write((byte)e.Stance);
+        w.Write(e.PostX.Raw); w.Write(e.PostY.Raw);
+        w.Write(e.PatrolX.Raw); w.Write(e.PatrolY.Raw);
+        w.Write(e.PatrolOutbound);
     }
 
-    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields, bool hasFerriteCap, bool hasNoProgress)
+    private static Entity ReadEntity(BinaryReader r, bool hasRallyFields, bool hasFerriteCap, bool hasNoProgress, bool hasStance)
     {
         var e = ReadEntityV3(r);
         if (hasRallyFields)
@@ -264,6 +281,20 @@ public sealed partial class World
         {
             e.NearestApproachSq = new Fix64(r.ReadInt64());
             e.NoProgressTicks = r.ReadInt32();
+        }
+        // v7 fields in write order. A pre-v7 entity has none, so Stance defaults
+        // to Aggressive and every position field to zero: exactly what those
+        // saves meant, since no stance existed. The unit resumes with today's
+        // auto-acquire behaviour and the save is hash-identical to a fresh
+        // Aggressive spawn (ADR-015 save-compat clause).
+        if (hasStance)
+        {
+            e.Stance = (Stance)r.ReadByte();
+            e.PostX = new Fix64(r.ReadInt64());
+            e.PostY = new Fix64(r.ReadInt64());
+            e.PatrolX = new Fix64(r.ReadInt64());
+            e.PatrolY = new Fix64(r.ReadInt64());
+            e.PatrolOutbound = r.ReadBoolean();
         }
         return e;
     }
