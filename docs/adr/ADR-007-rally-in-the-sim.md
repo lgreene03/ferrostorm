@@ -86,7 +86,7 @@ Rally becomes sim state, wire format, save format and hash input.
    already lost on every save. `saveload` exiting 0 is the only proof the
    writer and reader agree, which is that file's own stated contract
    (World.Serialization.cs:5-9).
-5. **Produced units exit toward the rally.** In ProductionSystem after the
+5. **Produced units exit towards the rally.** In ProductionSystem after the
    spawn (World.cs:1844-1847), if the producer HasRally, the new unit's
    TargetX/TargetY/Moving/UseFlow are set directly rather than synthesising a
    Command: the sim queues no commands of its own anywhere today, and
@@ -179,7 +179,7 @@ saves all load with rally unset and Departing false, which preserves this
 ADR's tolerant-load intent verbatim (one version deeper). Everything else
 in the Decision is implemented as written. The spawngate's downgrade
 surgery proves the v3 and v2 loads; `saveload` exiting 0 remains the
-serializer's contract. Wave B2 also applied Departing to the DEFAULT
+serialiser's contract. Wave B2 also applied Departing to the DEFAULT
 (no-rally) exit move, not only rally spawns: the default exit lands 2 to 3
 cells out, inside the same crowd-arrival radius, and without the flag the
 inverted-order trap this ADR documents would return for the no-rally

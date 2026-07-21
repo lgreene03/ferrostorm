@@ -112,7 +112,7 @@ flow-pathing unit that has not bettered its nearest approach to the destination
 for `NoProgressDeadline` = 14 * TicksPerSecond (210 ticks, 14s: 3.5x the
 existing 4s net, a 59% margin over the 132-tick worst-case legitimate plateau).
 Nearest-approach, not displacement, because the orbiters keep moving but never
-get closer. Two new hashed and serialized per-entity fields (save v6). On the
+get closer. Two new hashed and serialised per-entity fields (save v6). On the
 fixed sim the whole seed-900913 crowd settles by tick 499, and units 27 and 151
 are the only two whose plateau reaches the deadline.
 

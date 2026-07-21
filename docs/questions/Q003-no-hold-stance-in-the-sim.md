@@ -18,7 +18,7 @@ Phase A, on the order surface: "the full order surface as context-sensitive righ
 
 Read together, three pieces of `World.cs` say that hold-position is the sim's default behaviour and not a separate stance:
 
-- **Auto-acquisition never pursues.** A unit with no explicit target and no attack-move scans for enemies already inside its weapon range and fires (World.cs:1116-1137). It sets `Moving` nowhere in that branch. It will not chase a target that steps out of range, and it will not walk toward one that is out of range to begin with.
+- **Auto-acquisition never pursues.** A unit with no explicit target and no attack-move scans for enemies already inside its weapon range and fires (World.cs:1116-1137). It sets `Moving` nowhere in that branch. It will not chase a target that steps out of range, and it will not walk towards one that is out of range to begin with.
 - **Only an explicit Attack order pursues.** `e.ExplicitTarget >= 0` with the target out of range sets `e.Moving = true; e.UseFlow = true` and closes (World.cs:1109-1114).
 - **Only attack-move hunts.** `e.AMove` additionally tracks the nearest enemy within SIGHT and closes on it (World.cs:1135, 1167-1173).
 

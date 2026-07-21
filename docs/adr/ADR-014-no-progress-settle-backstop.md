@@ -59,7 +59,7 @@ best-distance can never be bettered once an orbit locks, so it catches an orbit
 of any period regardless of its per-tick churn, which is exactly where the
 leaky net's balance point hides it.
 
-Both fields are hashed (ComputeStateHash) and serialized (save format v6),
+Both fields are hashed (ComputeStateHash) and serialised (save format v6),
 appended after the ADR-012 ferrite-cap tail, following the ADR-007 rally-field
 precedent for mutable per-entity movement state.
 
@@ -81,12 +81,12 @@ delta well beyond the two defective units. The additive backstop with a
 generous deadline leaves every unit the existing net already catches settling
 on the identical tick, so only genuine limit cycles change.
 
-**Leave the fields unhashed (serialize only, like ADR-012's FerriteCap), which
+**Leave the fields unhashed (serialise only, like ADR-012's FerriteCap), which
 would keep every seed-2026 golden byte-identical.** Tempting, and the fields
 are derivable from already-hashed positions, but FerriteCap's exemption is for
 IMMUTABLE spawn-time state. These are mutable and gate when a unit stops
 moving, so the rally precedent applies: mutable movement state is hashed, for
-desync-detection defence in depth. Serialization alone would also fail the
+desync-detection defence in depth. Serialisation alone would also fail the
 save/load contract had a later design read the counter across a mid-walk save
 without hashing it. We accept moving all 24 goldens and prove the move is
 purely mechanical.
@@ -116,4 +116,4 @@ Windows and Linux, per the doc 23 section 6 discipline.
 Gates: the existing ScenarioPathing assertion (every unit settles, none
 stranded across the wall, all within 22 cells) now passes at seed 900913 as
 well as 2026; the full five-seed determinism suite plus the 20-game LAN soak
-exit 0; saveload and campaignsave round-trips prove the v6 serializer order.
+exit 0; saveload and campaignsave round-trips prove the v6 serialiser order.

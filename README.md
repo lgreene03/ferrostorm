@@ -13,7 +13,7 @@ This is a pre-release, in-development repository. The game is playable from sour
 - Binary save/load, and replays with hash-verified bit-exact playback
 - A settings scene: every key rebindable with conflict detection, audio buses, applied video options
 - Walls and barrier mechanics (ADR-005), and the full alert set (base and harvester attack warnings, low power, superweapon launch detection, jump-to-event)
-- Twelve unit types and ten buildings authored as YAML in /data, plus wall segments. Two of the ten (the barracks and the radar uplink) are catalogued ahead of ADR-009's production roster and are not yet buildable in a match
+- Twelve unit types and ten buildings authored as YAML in /data, plus wall segments. All ten buildings are buildable in a match through the tabbed production sidebar with prerequisites enforced; the barracks has been buildable since ADR-009 and the radar uplink since ADR-008
 - A LAN lockstep transport (relay plus clients) that is real and soak-tested over loopback with zero desyncs; play between two machines is not yet possible because the battle scene's frame loop is not lockstep-driven (docs/questions/Q002)
 
 ## Build and run
@@ -40,7 +40,7 @@ Determinism is the project's law, not an aspiration:
 - `/sim` - the deterministic core: `Ferrostorm.Sim` (the simulation library), `Ferrostorm.Net` (lockstep relay and client), `Ferrostorm.Presentation` (the snapshot contract), `Ferrostorm.Sim.Runner` (the gate battery)
 - `/game` - the Godot 4.7 .NET client (presentation only)
 - `/data` - YAML unit and building definitions validated against the schemas here, `.fmap` maps and missions, and the campaign script
-- `/tools` - the balance simulator (`Ferrostorm.Balance`), a replay viewer, and map generation scripting
+- `/tools` - the balance simulator (`Ferrostorm.Balance`), a replay viewer, the look-dev harness (`tools/lookdev`), and map generation scripting
 - `/art` - source art: the 3D model builder, the audio synthesis pipeline, sprites and reference sheets
 - `/services` - placeholder only; no code yet (relay-as-a-service, matchmaking and ladder are future work)
 - `/docs` - the design package, ADRs, open questions, tickets and balance reports

@@ -1,4 +1,4 @@
-# CLAUDE.md — Project FERROSTORM Operating Rules
+# CLAUDE.md: Project FERROSTORM Operating Rules
 
 Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** (pending clearance, docs/design/10-stage-a-report.md). Provisional resource name: **Ferrite**. The word "Cinder" must never appear in player-facing content, asset names, or public copy.
 
@@ -7,10 +7,10 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 2. docs/design/02-game-design-document.md (GDD)
 3. docs/design/01-personas-and-stakeholders.md
 4. Your agent charter in .claude/agents/
-5. Your own judgement — and if it conflicts with any of the above, file a question in docs/questions/ instead of silently resolving it.
+5. Your own judgement. If it conflicts with any of the above, file a question in docs/questions/ instead of silently resolving it.
 
 ## Absolute rules (no exceptions, no exemptions for placeholders/tests/comments)
-- **Legal:** No Command & Conquer, C&C, Red Alert, Tiberium, GDI, Nod, Westwood, or EA names, assets, sounds, or trade dress anywhere. Approved marketing formulation: "inspired by the classic RTS games of the 90s". OpenRA source is GPL — read for architecture research only; never copy code.
+- **Legal:** No Command & Conquer, C&C, Red Alert, Tiberium, GDI, Nod, Westwood, or EA names, assets, sounds, or trade dress anywhere. Approved marketing formulation: "inspired by the classic RTS games of the 90s". OpenRA source is GPL: read for architecture research only; never copy code.
 - **Determinism:** No `float`/`double`, no `System.Random`, no wall-clock/locale/platform APIs, no unordered-iteration-dependent logic anywhere in `/sim`. No engine (Godot) references in `/sim`. Fixed-point maths only (library per ADR-002).
 - **Scope:** If a task grows beyond its ticket, stop and report. Never expand scope silently. New units, factions, or modes require Producer sign-off.
 - **British spelling** in all documentation and player-facing text. No em dashes or en dashes in any written content; restructure the sentence instead.
@@ -29,7 +29,7 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 
 ## Build commands
 - Build sim + runner: `dotnet build sim/Ferrostorm.Sim.Runner -c Release` (requires .NET 8 SDK; NuGet sources disabled by design - zero package dependencies)
-- Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + benchmark match; exit 0 required)
+- Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
 - Modes: `selftest`, `determinism [seed]`, `match [seed]`, `bench`
 - CI: .github/workflows/determinism.yml runs the sim purity grep and the cross-platform golden-hash check (sim/golden-hashes.txt) on Windows and Linux. Red determinism CI blocks all merges.
 - Changing a golden hash is a replay-compatibility break: ADR + Architect sign-off required.
