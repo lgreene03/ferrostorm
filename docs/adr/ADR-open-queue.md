@@ -40,9 +40,10 @@ the same commit.
 - ADR-014: RATIFIED 2026-07-20 - ADR-014-no-progress-settle-backstop.md
   (no-progress crowd-settle backstop; Q013 nightly-soak fix; regenerated all
   24 goldens; save format v6).
-- ADR-015: NUMBER CLAIMED by the in-flight unit-stance wave on branch
-  ticket/p6-wave-c1 (ADR-015-unit-command-stances.md: hold-fire, guard,
-  patrol; resolves Q003). Not yet on main.
+- ADR-015: RATIFIED 2026-07-21 - ADR-015-unit-command-stances.md (unit
+  command stances: hold-fire, guard, patrol; resolves Q003; save format v7;
+  regenerated all 24 goldens; shipped on main, P6 Wave C1a). Formations are
+  split to a filed C1b follow-up.
 - ADR-016: Lua sandbox implementation for map triggers (deterministic subset;
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
