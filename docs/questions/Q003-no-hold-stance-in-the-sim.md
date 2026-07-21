@@ -45,3 +45,29 @@ Option 3 is worth considering on its own merits regardless of the H hotkey: an e
 - **architect:** the ruling, and the ADR if it is option 2 or 3.
 - **game-designer:** whether stances are a mechanic this game wants (option 2/3) or a hotkey looking for a job (option 1).
 - **docs/design-review:** doc 18 Phase A's "H hold", either way.
+
+## RESOLVED (2026-07-21, ADR-015, P6 Wave C1a)
+
+Ruled **option 2, the fuller shape**: a per-unit stance system, which subsumes
+option 3 (hold-fire) rather than shipping it alone. The Architect ratified
+ADR-015 under Luke's standing "design out and build all these" directive, and
+P6 Wave C1a built it (commits 0562aaa sim, be3fd76 client, a9d041a goldens;
+delivery notes docs/tickets/P6-wave-c1-stances.md).
+
+The engineer-past-the-sentry case this question named is now expressible.
+Hold-fire is exactly option 3 as scoped here: a HoldFire unit skips the
+auto-acquire branch this question located (the else taken when ExplicitTarget < 0,
+the modern line of the old World.cs:1116-1137 read) and does not fire even with an
+enemy in range, while an explicit Attack order still fires ("defends only if
+explicitly ordered to attack"). It persists across a Move, so the engineer is set
+to hold-fire and then walked past the sentry it must not wake, which is the whole
+of the worked example. Guard and patrol landed beside it, closing doc 21's
+P4-PORT-01. **Doc 18's "H hold" now binds to a real behaviour** and can leave the
+unbound state P5-SET-01 left it in: the client defaults H to a hold-fire toggle
+(absolute, so the wire command stays idempotent).
+
+The golden cost this question flagged was paid honestly: a per-entity hashed
+stance field moved all 24 goldens mechanically, proven by identity that the move
+is the field-append alone with zero behavioural change at seed 2026. No
+behaviour changed for any existing unit, because the default stance is Aggressive
+and is exactly today's auto-acquire.

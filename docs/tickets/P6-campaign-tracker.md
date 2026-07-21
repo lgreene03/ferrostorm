@@ -19,7 +19,8 @@ lands; this file is the resume point if a session dies.
 | B4 | Barracks split, tabbed sidebar, tech tree, AI learns barracks | ADR-009 (ratified); doc 23 Wave 6 | regenerations per doc 23 s6 | DONE (2fbfcc0) |
 | B5 | Starting hand into the sim + CellCentre decision | ADR-011 (ratified); Balance note on the 550-tick shift | regeneration (skirmish golden) | DONE (e814e10) |
 | B6 | Ferrite regrowth | ADR-012: formalise from doc 24 sketch, then implement | regeneration | DONE (d7ff34c) |
-| C1 | Unit command layer: hold-fire, guard, patrol, formations | new ADR required (resolves Q003, P4-PORT-01, P4-PORT-05) | regeneration | pending |
+| C1a | Unit command stances: hold-fire, guard, patrol | ADR-015 (ratified); resolves Q003 and P4-PORT-01 | ONE regeneration | DONE (a9d041a) |
+| C1b | Formations: deterministic slot assignment on group orders | ADR-015 splits it out (P4-PORT-05); own design pass and regeneration | pending |
 | C2 | Repair vehicle | GDD line 62; data-driven, post-B1 | depends on design | pending |
 | C3 | Four-queue sidebar (GDD line 45 in full) | post-B4 design | likely neutral (client) | pending |
 | C4 | Neutral outposts | new ADR (EntityKind 17 reserved; doc 22 P5-ECON-14) | regeneration | pending |
@@ -32,7 +33,10 @@ lands; this file is the resume point if a session dies.
 Phase B is complete: with B5 landed (2026-07-20), every B row (B1 through B6) is
 DONE. The sim is now the authority on the runtime /data source, rally and spawn,
 power, the barracks and tech tree, the skirmish opening hand, and ferrite
-regrowth. The remaining waves are the C series.
+regrowth. The C series has opened: C1a (unit command stances, 2026-07-21) is DONE
+under ADR-015, so the sim now owns hold-fire, guard and patrol as hashed per-unit
+state, resolving Q003 and P4-PORT-01. C1b (formations, P4-PORT-05) is filed
+pending, split out by ADR-015 for its own design pass and regeneration.
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer
