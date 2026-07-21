@@ -19,6 +19,7 @@ public enum CommandType : byte
     Deploy = 14,         // EntityId (MCV) unpacks into a Construction Yard on its own cell
     LaunchSuper = 15,    // EntityId (charged superweapon) fires at map position X/Y (TICKET-P2-SIM-15)
     SetRally = 16,       // EntityId (own producing structure) rally point at X/Y; AuxId == -1 clears (ADR-007)
+    SetStance = 17,      // EntityId (own unit) stance = (Stance)AuxId; Patrol reads X/Y as the far waypoint (ADR-015)
 }
 
 public readonly struct Command
@@ -47,6 +48,13 @@ public readonly struct Command
 // silent and fatal.
 public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
+
+// APPEND ONLY (like EntityKind): the hash stores (int)e.Stance and the save
+// writes (byte)e.Stance, so a new value is invisible to both for every existing
+// stance; renumbering one rewrites every golden and every replay. Aggressive is
+// 0, which is the struct default and the neutral serialised value, so an unset
+// stance and a pre-v7 save both read Aggressive - today's behaviour (ADR-015).
+public enum Stance : byte { Aggressive = 0, HoldFire = 1, Guard = 2, Patrol = 3 }
 
 /// <summary>
 /// Entity state as plain structs in a list with fixed iteration order (TDD s3).
@@ -179,6 +187,23 @@ public struct Entity
     // from the live distance, so a re-order re-arms simply by zeroing it.
     public Fix64 NearestApproachSq;
     public int NoProgressTicks;
+
+    // Unit command stances (ADR-015), appended after the ADR-014 backstop tail,
+    // never inserted. Hash order and save order are this declaration order. All
+    // six are HASHED and SERIALIZED (save v7), following the ADR-007 rally
+    // precedent for mutable per-entity command state: a stance changes what a
+    // unit does, so two clients must agree on it exactly. Aggressive (0) is the
+    // default and every field is zero on a fresh spawn, which is today's
+    // behaviour, so nothing moves until a SetStance sets a non-default value.
+    // Stance carries the whole state; the four stances are mutually exclusive by
+    // construction. PostX/PostY is the guard POST or the patrol ORIGIN (endpoint
+    // A) - the unit's position when the order was given. PatrolX/PatrolY is the
+    // patrol FAR point (endpoint B), zero for non-patrol. PatrolOutbound is the
+    // patrol heading: true toward (PatrolX,PatrolY), false toward (PostX,PostY).
+    public Stance Stance;
+    public Fix64 PostX, PostY;
+    public Fix64 PatrolX, PatrolY;
+    public bool PatrolOutbound;
 }
 
 /// <summary>
@@ -897,6 +922,7 @@ public sealed partial class World
         _events.Clear();
         foreach (ref readonly var c in commands) ApplyCommand(in c);
         OrderDispatchSystem();
+        StanceSystem();
         MovementSystem();
         SeparationSystem();
         DetectionSystem();
@@ -940,6 +966,100 @@ public sealed partial class World
             var next = q[0];
             q.RemoveAt(0);
             ApplyCommandCore(in next);
+        }
+    }
+
+    /// <summary>
+    /// ADR-015: the per-unit command-stance step. Runs immediately after
+    /// OrderDispatchSystem and before MovementSystem, so a stance's movement or
+    /// targeting decision takes effect the same tick. It is a NO-OP for
+    /// Aggressive and HoldFire units - it touches only Guard and Patrol - which
+    /// is what keeps the golden move purely the hashed-field append: nothing
+    /// here runs unless a SetStance put a unit into Guard or Patrol, and no
+    /// scenario, AI or save at seed 2026 does. Guard engagement is routed
+    /// through ExplicitTarget so CombatSystem's battle-tested close-and-fire
+    /// machinery does the work (it is immune to the crowd-arrival shortcut, so
+    /// even a short-range guard closes properly); Patrol reuses the attack-move
+    /// completion and pursuit machinery whole and adds only the endpoint flip.
+    /// </summary>
+    private void StanceSystem()
+    {
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Unit) continue;
+            switch (e.Stance)
+            {
+                case Stance.Guard:
+                {
+                    // The leash is the unit's own SIGHT measured from the POST.
+                    // Scan for the nearest targetable enemy inside it; ties break
+                    // to the lower id, the auto-acquire convention. An unarmed
+                    // guard cannot engage, so it only ever holds and returns.
+                    int target = -1;
+                    if (e.WeaponId != 0)
+                    {
+                        Fix64 bestD = Fix64.MaxValue;
+                        Fix64 leashSq = e.Sight * e.Sight;
+                        for (int j = 0; j < _entities.Count; j++)
+                        {
+                            var t = _entities[j];
+                            if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId
+                                || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
+                            if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
+                            Fix64 d = Fix64.DistSq(t.X - e.PostX, t.Y - e.PostY);
+                            if (d <= leashSq && d < bestD) { bestD = d; target = j; }
+                        }
+                    }
+                    if (target >= 0)
+                    {
+                        // Hand the engagement to the explicit-attack path:
+                        // CombatSystem (later this tick) closes to weapon range
+                        // and fires, or pursues, exactly as an ordered attack.
+                        e.ExplicitTarget = target;
+                    }
+                    else
+                    {
+                        // Nothing in the leash: drop any standing target and walk
+                        // back to the post, settling within the crowd radius. Only
+                        // re-issue the return move when actually off-post, so a
+                        // guard already home stays parked rather than re-pathing
+                        // every tick (and the crowd-arrival stop handles the last
+                        // four cells for free).
+                        e.ExplicitTarget = -1;
+                        if (Fix64.DistSq(e.PostX - e.X, e.PostY - e.Y) > Fix64.FromInt(16))
+                        {
+                            e.TargetX = e.PostX; e.TargetY = e.PostY;
+                            e.Moving = true; e.UseFlow = true; e.AMove = false;
+                        }
+                    }
+                    _entities[i] = e;
+                    break;
+                }
+                case Stance.Patrol:
+                {
+                    // A leg completes exactly when AMove clears - the attack-move
+                    // completion rule only drops AMove at or near the endpoint
+                    // with the area clear, which is precisely "reached this
+                    // endpoint". Flip to the other endpoint, re-arm the
+                    // no-progress backstop, and attack-move back. Engaging any
+                    // enemy met en route and resuming afterwards is inherited
+                    // from the attack-move machinery whole.
+                    if (!e.AMove)
+                    {
+                        e.PatrolOutbound = !e.PatrolOutbound;
+                        Fix64 dx = e.PatrolOutbound ? e.PatrolX : e.PostX;
+                        Fix64 dy = e.PatrolOutbound ? e.PatrolY : e.PostY;
+                        e.TargetX = dx; e.TargetY = dy;
+                        e.AMoveX = dx; e.AMoveY = dy;
+                        e.Moving = true; e.UseFlow = true; e.AMove = true;
+                        e.ExplicitTarget = -1; e.HState = HarvestState.Idle;
+                        e.StallTicks = 0; e.NearestApproachSq = Fix64.Zero; e.NoProgressTicks = 0;
+                        _entities[i] = e;
+                    }
+                    break;
+                }
+            }
         }
     }
 
@@ -998,9 +1118,15 @@ public sealed partial class World
                 // benched mid-march.
                 e.NearestApproachSq = Fix64.Zero;
                 e.NoProgressTicks = 0;
+                // ADR-015: a fresh movement order supersedes a standing Guard or
+                // Patrol (the unit is being told to go elsewhere), but PRESERVES
+                // HoldFire - fire discipline persists across a Move, which is
+                // Q003's engineer walking past the sentry it must not wake.
+                CancelPositionalStance(ref e);
                 break;
             case CommandType.Stop:
                 e.Moving = false; e.HState = HarvestState.Idle; e.ExplicitTarget = -1; e.AMove = false;
+                CancelPositionalStance(ref e); // ADR-015: Stop ends Guard/Patrol; HoldFire stays
                 break;
             case CommandType.Harvest:
                 if (e.Kind == EntityKind.Harvester && ValidId(c.AuxId)
@@ -1013,6 +1139,11 @@ public sealed partial class World
                 break;
             case CommandType.Attack:
                 if (ValidId(c.AuxId) && _entities[c.AuxId].Alive) e.ExplicitTarget = c.AuxId;
+                // ADR-015: an explicit attack ends Guard/Patrol so StanceSystem
+                // stops overwriting this target next tick; HoldFire is preserved
+                // and the explicit target still fires (Q003: "defends only if
+                // explicitly ordered to attack").
+                CancelPositionalStance(ref e);
                 break;
             case CommandType.CancelProduce:
             {
@@ -1178,6 +1309,57 @@ public sealed partial class World
                 e.RallyY = Fix64.Clamp(c.Y, Fix64.Zero, Fix64.FromInt(Map.Height) - Fix64.Half);
                 break;
             }
+            case CommandType.SetStance:
+            {
+                // ADR-015: units only carry a stance (ownership is guarded at the
+                // top of this method). AuxId is the target stance value; an
+                // unknown value is ignored rather than defaulting to a real one.
+                if (e.Kind != EntityKind.Unit) break;
+                switch ((Stance)c.AuxId)
+                {
+                    case Stance.Aggressive:
+                    case Stance.HoldFire:
+                        // Fire-discipline stances leave movement untouched: a unit
+                        // set to hold-fire mid-march keeps marching, it just stops
+                        // auto-firing. Clear the positional fields so a hold-fire
+                        // or aggressive unit serialises canonically (posts belong
+                        // to guard and patrol alone).
+                        e.Stance = (Stance)c.AuxId;
+                        e.PostX = Fix64.Zero; e.PostY = Fix64.Zero;
+                        e.PatrolX = Fix64.Zero; e.PatrolY = Fix64.Zero;
+                        e.PatrolOutbound = false;
+                        break;
+                    case Stance.Guard:
+                        // Guard-in-place: the post is where the unit stands now.
+                        // StanceSystem halts it here next tick and thereafter
+                        // engages intruders within its leash and returns.
+                        e.Stance = Stance.Guard;
+                        e.PostX = e.X; e.PostY = e.Y;
+                        e.PatrolX = Fix64.Zero; e.PatrolY = Fix64.Zero;
+                        e.PatrolOutbound = false;
+                        break;
+                    case Stance.Patrol:
+                        // Ping-pong between the current spot (endpoint A) and the
+                        // ordered point (endpoint B), clamped exactly as Move does.
+                        // Kick off the outbound attack-move leg toward B; the leg
+                        // engages en route and StanceSystem flips endpoints when it
+                        // completes.
+                        e.Stance = Stance.Patrol;
+                        e.PostX = e.X; e.PostY = e.Y;
+                        e.PatrolX = Fix64.Clamp(c.X, Fix64.Zero, Fix64.FromInt(Map.Width) - Fix64.Half);
+                        e.PatrolY = Fix64.Clamp(c.Y, Fix64.Zero, Fix64.FromInt(Map.Height) - Fix64.Half);
+                        e.PatrolOutbound = true;
+                        e.TargetX = e.PatrolX; e.TargetY = e.PatrolY;
+                        e.AMoveX = e.PatrolX; e.AMoveY = e.PatrolY;
+                        e.Moving = true; e.UseFlow = true; e.AMove = true;
+                        e.ExplicitTarget = -1; e.HState = HarvestState.Idle;
+                        e.StallTicks = 0; e.NearestApproachSq = Fix64.Zero; e.NoProgressTicks = 0;
+                        break;
+                    default:
+                        break; // unknown stance value: ignore
+                }
+                break;
+            }
             case CommandType.Produce:
             {
                 // ADR-009 clause 1: any producer may receive Produce.
@@ -1274,6 +1456,25 @@ public sealed partial class World
     /// not spawned; the client offers no affordance on it).
     /// </summary>
     private static bool IsRallyable(EntityKind k) => IsProducer(k);
+
+    /// <summary>
+    /// ADR-015: a new movement, stop or attack order supersedes a standing
+    /// GUARD or PATROL (both are positional activities the order overrides),
+    /// dropping the unit back to Aggressive and clearing the post/waypoint
+    /// fields. HoldFire is deliberately PRESERVED: fire discipline is a
+    /// persisting preference that must survive the very Move that carries Q003's
+    /// engineer past the sentry. Aggressive and HoldFire units are left
+    /// untouched, so this is a no-op for the default stance and the golden move
+    /// stays purely the hashed-field append.
+    /// </summary>
+    private static void CancelPositionalStance(ref Entity e)
+    {
+        if (e.Stance is not (Stance.Guard or Stance.Patrol)) return;
+        e.Stance = Stance.Aggressive;
+        e.PostX = Fix64.Zero; e.PostY = Fix64.Zero;
+        e.PatrolX = Fix64.Zero; e.PatrolY = Fix64.Zero;
+        e.PatrolOutbound = false;
+    }
 
     /// <summary>Footprint physically clear (bounds, terrain, standing entities), ignoring adjacency - MCV deployment founds a base from nothing.</summary>
     /// <remarks>Fixed at FootprintSize by design (ADR-005 clause 1): only MCV deploy calls this, and a Construction Yard is always 2x2.</remarks>
@@ -1686,8 +1887,17 @@ public sealed partial class World
                     e.Moving = true; e.UseFlow = true;
                 }
             }
-            else
+            else if (e.Stance != Stance.HoldFire)
             {
+                // ADR-015 hold-fire, the ONE combat change: a HoldFire unit skips
+                // this auto-acquire scan entirely, so target stays -1 and it does
+                // not fire even with an enemy in range. The explicit-target branch
+                // above is untouched, so an ordered Attack still fires (Q003:
+                // "defends only if explicitly ordered to attack"). This is also
+                // the load-bearing neutralisation point: for the default
+                // Aggressive stance the condition is always true, so seed-2026
+                // behaviour is byte-identical to before this ADR.
+                //
                 // Auto-acquire nearest enemy in range; ties break to lower id.
                 // Attack-movers additionally track the nearest enemy within
                 // SIGHT so they can hunt flankers instead of marching past.
@@ -2532,6 +2742,19 @@ public sealed partial class World
             // are hashed (and serialized, save v6) following the rally precedent
             // for mutable movement state. Appended after the rally tail.
             h.Add(e.NearestApproachSq); h.Add(e.NoProgressTicks);
+            // ADR-015: the unit command stance and its post/patrol geometry,
+            // appended after the no-progress tail in declaration order (the save
+            // order too). All six are MUTABLE state that gates what a unit does -
+            // a stance changes its target acquisition and its movement - so they
+            // are hashed following the rally precedent, unlike the immutable
+            // FerriteCap below. Aggressive (0) with every position field zero is
+            // the fresh-spawn default, so this append moves every golden purely
+            // mechanically and changes no seed-2026 behaviour (the neutralisation
+            // proof in ADR-015's consequences).
+            h.Add((int)e.Stance);
+            h.Add(e.PostX); h.Add(e.PostY);
+            h.Add(e.PatrolX); h.Add(e.PatrolY);
+            h.Add(e.PatrolOutbound);
             // ADR-012: FerriteCap is deliberately NOT hashed here. Like Sight
             // it is immutable spawn-time state, identical on every client and
             // reconstructed exactly on load (save v5), so it needs no desync

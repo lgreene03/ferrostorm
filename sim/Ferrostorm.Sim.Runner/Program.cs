@@ -12,6 +12,7 @@ using Ferrostorm.Sim;
 //   lan [games]        - relay + 2 lockstep clients over loopback TCP per game (TICKET-P1-08)
 //   catrefuse          - ADR-006: a mismatched catalogue refuses (LAN hello, saves, replays) rather than desyncs
 //   spawngate          - ADR-007: rally in the sim, the spawn exit move, save v4, occupancy and the zero-drain hold
+//   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -2252,17 +2253,17 @@ int CatalogueRefuse()
 // bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
 // the only difference was the checksum; the wider entity record made it a
 // shared, layout-aware helper.)
-byte[] DowngradeSave(byte[] v6, uint targetMagic)
+byte[] DowngradeSave(byte[] v7, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u;
-    using var input = new BinaryReader(new MemoryStream(v6));
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u;
+    using var input = new BinaryReader(new MemoryStream(v7));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    if (input.ReadUInt32() != magicV6)
-        throw new InvalidOperationException("save surgery expects a v6 stream");
+    if (input.ReadUInt32() != magicV7)
+        throw new InvalidOperationException("save surgery expects a v7 stream");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2283,18 +2284,22 @@ byte[] DowngradeSave(byte[] v6, uint targetMagic)
     // The entity record is fixed-width: 209 bytes through FieldCloaked, then
     // the v4 rally tail (RallyX 8 + RallyY 8 + HasRally 1 + Departing 1), then
     // the v5 ferrite cap (int 4), then the v6 no-progress tail (NearestApproachSq
-    // 8 + NoProgressTicks 4 = 12, Q013/ADR-014). A target keeps the tails its
-    // format carried and drops the rest: v5 keeps rally+cap, v4 keeps rally
-    // only, v3 and below drop all three; v6 is dropped for every target here.
-    const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4, noProgressTailBytes = 12;
-    bool keepRally = targetMagic == magicV4 || targetMagic == magicV5;
-    bool keepCap = targetMagic == magicV5;
+    // 8 + NoProgressTicks 4 = 12, Q013/ADR-014), then the v7 stance tail (Stance
+    // 1 + PostX 8 + PostY 8 + PatrolX 8 + PatrolY 8 + PatrolOutbound 1 = 34,
+    // ADR-015). A target keeps the tails its format carried and drops the rest:
+    // v6 keeps rally+cap+no-progress, v5 keeps rally+cap, v4 keeps rally only,
+    // v3 and below drop all four; the v7 stance tail is dropped for every target.
+    const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4, noProgressTailBytes = 12, stanceTailBytes = 34;
+    bool keepRally = targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6;
+    bool keepCap = targetMagic == magicV5 || targetMagic == magicV6;
+    bool keepNoProgress = targetMagic == magicV6;
     for (int i = 0; i < count; i++)
     {
         w.Write(input.ReadBytes(v3EntityBytes));
         if (keepRally) w.Write(input.ReadBytes(rallyTailBytes)); else input.ReadBytes(rallyTailBytes);
         if (keepCap) w.Write(input.ReadBytes(ferriteCapBytes)); else input.ReadBytes(ferriteCapBytes);
-        input.ReadBytes(noProgressTailBytes); // dropped: no format below v6 carried the backstop state
+        if (keepNoProgress) w.Write(input.ReadBytes(noProgressTailBytes)); else input.ReadBytes(noProgressTailBytes);
+        input.ReadBytes(stanceTailBytes); // dropped: no format below v7 carried the stance tail
     }
     // Production queues, order queues and the trailer are format-identical.
     w.Write(input.ReadBytes((int)(input.BaseStream.Length - input.BaseStream.Position)));
@@ -3073,6 +3078,179 @@ int RegrowthGate()
     return 0;
 }
 
+int StanceGate()
+{
+    // ADR-015 gate. Additive, the catrefuse/spawngate/prodgate/regrowthgate
+    // pattern: a standalone mode and a Match battery stage, never a golden
+    // scenario, so the golden list stays 24 lines by construction. Proves the
+    // four things ADR-015's gate clause names: hold-fire suppresses the
+    // auto-acquire an identically-placed aggressive unit takes; guard engages an
+    // intruder within its leash and returns to its post; patrol cycles its two
+    // waypoints; and a v7 save round-trips the stance while a v6 downgrade loads
+    // Aggressive hash-identically.
+    //
+    // Weapon 1 (TestCannon) has range 4 and no dead zone, and anti-armour vs a
+    // Heavy target is full damage (30), so one shot fells a 10-hp intruder.
+    Fix64 crowdRadiusSq = Fix64.FromInt(16); // the 4-cell crowd-arrival radius, squared
+
+    // --- 1. Hold-fire is fire discipline, proven differentially --------------
+    // The SAME setup twice: a stationary armed unit with a stationary enemy two
+    // cells inside its weapon range. The aggressive unit auto-acquires and kills
+    // it; the hold-fire unit never fires and the enemy is untouched. The only
+    // difference between the two runs is the stance byte - Q003's engineer
+    // discipline, isolated.
+    int HoldFireProbe(Stance stance)
+    {
+        var w = new World(2200, 64, 64, players: 2);
+        int shooter = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 1);
+        int enemy = w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(20), Fix64.Zero, 10, ArmourClass.Heavy, weaponId: 0);
+        var set = new List<Command> { new(0, 0, CommandType.SetStance, shooter, Fix64.Zero, Fix64.Zero, (int)stance) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(set));
+        for (int t = 0; t < 60; t++) w.Step(default);
+        return w.Entities[enemy].Alive ? w.Entities[enemy].Hp : 0; // full hp (untouched) or 0 (dead)
+    }
+    int aggressiveHp = HoldFireProbe(Stance.Aggressive);
+    int holdFireHp = HoldFireProbe(Stance.HoldFire);
+    if (aggressiveHp != 0)
+        return Fail($"stance: the AGGRESSIVE control must auto-acquire and kill the in-range enemy (enemy hp {aggressiveHp}, expected dead)");
+    if (holdFireHp != 10)
+        return Fail($"stance: a HOLD-FIRE unit must not fire on an enemy in weapon range (enemy hp {holdFireHp}, expected the full 10)");
+
+    // --- 2. Guard engages within its leash and returns to its post -----------
+    {
+        // A wide-sighted guard so the leash is a visible excursion: sight 10,
+        // weapon range 4. Post at (20,20); a stationary 10-hp intruder 9 cells
+        // out - inside the leash, well outside weapon range - so the guard must
+        // LEAVE the post to close and fire, then RETURN once the intruder dies.
+        var w = new World(2201, 64, 64, players: 2);
+        int guard = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 1, sightCells: 10);
+        int intruder = w.SpawnUnit(1, Fix64.FromInt(20), Fix64.FromInt(29), Fix64.Zero, 10, ArmourClass.Heavy, weaponId: 0);
+        var set = new List<Command> { new(0, 0, CommandType.SetStance, guard, Fix64.Zero, Fix64.Zero, (int)Stance.Guard) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(set));
+        var g0 = w.Entities[guard];
+        if (g0.Stance != Stance.Guard) return Fail("stance: the guard order must set Stance.Guard");
+        if (g0.PostX != Fix64.FromInt(20) || g0.PostY != Fix64.FromInt(20))
+            return Fail("stance: the guard post must pin to the unit's position when ordered");
+        Fix64 maxStraySq = Fix64.Zero;
+        int diedAt = -1;
+        for (int t = 0; t < 200; t++)
+        {
+            w.Step(default);
+            var gg = w.Entities[guard];
+            Fix64 straySq = Fix64.DistSq(gg.X - Fix64.FromInt(20), gg.Y - Fix64.FromInt(20));
+            if (straySq > maxStraySq) maxStraySq = straySq;
+            if (diedAt < 0 && !w.Entities[intruder].Alive) diedAt = w.Tick;
+        }
+        if (diedAt < 0)
+            return Fail("stance: a guard must engage and kill an intruder inside its leash");
+        if (maxStraySq <= crowdRadiusSq)
+            return Fail($"stance: the guard should have LEFT its post to engage (max stray sq raw {maxStraySq.Raw}, expected beyond the crowd radius)");
+        var g = w.Entities[guard];
+        if (Fix64.DistSq(g.X - Fix64.FromInt(20), g.Y - Fix64.FromInt(20)) > crowdRadiusSq)
+            return Fail("stance: a guard with no intruder in leash must return to its post");
+        if (g.ExplicitTarget >= 0)
+            return Fail("stance: a returned guard must hold no target");
+        if (g.Stance != Stance.Guard)
+            return Fail("stance: guard must persist across the engage-and-return cycle");
+    }
+
+    // --- 3. Patrol cycles its two waypoints ----------------------------------
+    {
+        // Endpoint A is the spawn (10,20); endpoint B is (30,20), 20 cells east,
+        // on open ground with no enemies, so each leg completes cleanly.
+        var w = new World(2202, 64, 64, players: 1);
+        int scout = w.SpawnUnit(0, Fix64.FromInt(10), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 0);
+        var set = new List<Command> { new(0, 0, CommandType.SetStance, scout, Fix64.FromInt(30), Fix64.FromInt(20), (int)Stance.Patrol) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(set));
+        var s0 = w.Entities[scout];
+        if (s0.Stance != Stance.Patrol || !s0.PatrolOutbound)
+            return Fail("stance: the patrol order must set Stance.Patrol on the outbound leg");
+        if (s0.PatrolX != Fix64.FromInt(30) || s0.PostX != Fix64.FromInt(10))
+            return Fail("stance: patrol endpoints must pin A=origin, B=ordered point");
+        int flips = 0;
+        bool prevOutbound = s0.PatrolOutbound;
+        Fix64 minX = s0.X, maxX = s0.X;
+        for (int t = 0; t < 600; t++)
+        {
+            w.Step(default);
+            var s = w.Entities[scout];
+            if (s.PatrolOutbound != prevOutbound) { flips++; prevOutbound = s.PatrolOutbound; }
+            if (s.X < minX) minX = s.X;
+            if (s.X > maxX) maxX = s.X;
+        }
+        if (flips < 3)
+            return Fail($"stance: a patrol must cycle its endpoints (only {flips} flips in 600 ticks, expected at least 3)");
+        if (minX > Fix64.FromInt(14))
+            return Fail($"stance: patrol never returned near endpoint A (min x {minX.ToIntRound()}, expected within the crowd radius of 10)");
+        if (maxX < Fix64.FromInt(26))
+            return Fail($"stance: patrol never reached near endpoint B (max x {maxX.ToIntRound()}, expected within the crowd radius of 30)");
+    }
+
+    // --- 4. A v7 save round-trips stance; a v6 downgrade loads Aggressive -----
+    {
+        // A world carrying one unit in each non-default stance, advanced a few
+        // ticks so the patrol is mid-leg and the hold-fire unit is sat on an
+        // enemy it refuses to shoot.
+        var w = new World(2203, 64, 64, players: 2);
+        int guard = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 1, sightCells: 8);
+        int patrol = w.SpawnUnit(0, Fix64.FromInt(10), Fix64.FromInt(40), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 0);
+        int held = w.SpawnUnit(0, Fix64.FromInt(50), Fix64.FromInt(50), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 1);
+        w.SpawnUnit(1, Fix64.FromInt(50), Fix64.FromInt(52), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 0);
+        var set = new List<Command>
+        {
+            new(0, 0, CommandType.SetStance, guard, Fix64.Zero, Fix64.Zero, (int)Stance.Guard),
+            new(0, 0, CommandType.SetStance, patrol, Fix64.FromInt(30), Fix64.FromInt(40), (int)Stance.Patrol),
+            new(0, 0, CommandType.SetStance, held, Fix64.Zero, Fix64.Zero, (int)Stance.HoldFire),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(set));
+        for (int t = 0; t < 30; t++) w.Step(default); // patrol advances mid-leg
+        ulong hashMid = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != hashMid)
+            return Fail($"stance: a v7 save must load bit-exact (0x{loaded.ComputeStateHash():X16} vs 0x{hashMid:X16})");
+        if (loaded.Entities[guard].Stance != Stance.Guard || loaded.Entities[guard].PostX != Fix64.FromInt(20))
+            return Fail("stance: guard stance/post lost in the v7 round trip");
+        if (loaded.Entities[patrol].Stance != Stance.Patrol || loaded.Entities[patrol].PatrolX != Fix64.FromInt(30))
+            return Fail("stance: patrol stance/waypoint lost in the v7 round trip");
+        if (loaded.Entities[held].Stance != Stance.HoldFire)
+            return Fail("stance: hold-fire stance lost in the v7 round trip");
+        for (int t = 0; t < 60; t++) { w.Step(default); loaded.Step(default); }
+        if (loaded.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("stance: the resumed run diverged - stance state did not round-trip");
+
+        // A v6 downgrade of an AGGRESSIVE-only world must load hash-identically:
+        // v6 has no stance tail, so every unit loads Aggressive, which is exactly
+        // what those units are. A non-default stance cannot survive a v6
+        // downgrade because Stance is hashed; the honest, provable claim is that
+        // the state a v6 save could ever have held - stanceless - loads
+        // Aggressive-identical, so old saves and replays resume unchanged.
+        var wa = new World(2204, 64, 64, players: 2);
+        wa.SpawnUnit(0, Fix64.FromInt(15), Fix64.FromInt(15), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 1);
+        wa.SpawnUnit(1, Fix64.FromInt(40), Fix64.FromInt(40), Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
+        var move = new List<Command> { new(0, 0, CommandType.PathMove, 0, Fix64.FromInt(30), Fix64.FromInt(30)) };
+        wa.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(move));
+        for (int t = 0; t < 40; t++) wa.Step(default);
+        ulong aggHash = wa.ComputeStateHash();
+        using var msa = new MemoryStream();
+        wa.Save(msa);
+        var v6World = World.Load(new MemoryStream(DowngradeSave(msa.ToArray(), 0x534C4136u)));
+        if (v6World.ComputeStateHash() != aggHash)
+            return Fail($"stance: a v6 downgrade of an aggressive world must be hash-identical (0x{v6World.ComputeStateHash():X16} vs 0x{aggHash:X16})");
+        foreach (var e in v6World.Entities)
+            if (e.Stance != Stance.Aggressive)
+                return Fail("stance: a v6 downgrade must load every unit Aggressive");
+    }
+
+    Console.WriteLine("stancegate: hold-fire suppressed the auto-acquire an aggressive twin took (enemy 10/10 vs dead); " +
+                      "a guard left its post to kill an intruder in its leash and returned within the crowd radius; " +
+                      "a patrol cycled its two waypoints across 600 ticks; a v7 save round-tripped all three stances and resumed bit-exact; " +
+                      "a v6 downgrade loaded every unit Aggressive, hash-identical");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -3119,6 +3297,9 @@ int Match(ulong seed)
     // ADR-012: and the ferrite regrowth gate.
     int regrowth = RegrowthGate();
     if (regrowth != 0) return regrowth;
+    // ADR-015: and the unit command-stance gate.
+    int stance = StanceGate();
+    if (stance != 0) return stance;
     return 0;
 }
 
@@ -3823,6 +4004,7 @@ return args.Length == 0
         "spawngate" => SpawnGate(),
         "prodgate" => ProdGate(),
         "regrowthgate" => RegrowthGate(),
+        "stancegate" => StanceGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

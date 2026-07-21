@@ -124,6 +124,10 @@ public partial class SkirmishLive : Node3D
     // next left click, so the player picks the destination rather than the
     // mouse happening to be somewhere when the key went down.
     private bool _attackMoveArmed;
+    // ADR-015: patrol arms the same way attack-move does - the key selects the
+    // order and the next left click supplies endpoint B - because a patrol needs
+    // its far point chosen, not read off wherever the cursor happens to sit.
+    private bool _patrolArmed;
     // DEF-01 clause 9: the ghost tint was rebuilding a StandardMaterial3D every
     // frame while placing. Two immutable materials, assigned by reference.
     private static readonly StandardMaterial3D GhostValidMat = GhostMat(new Color(0.3f, 0.9f, 0.4f, 0.4f));
@@ -1727,7 +1731,7 @@ public partial class SkirmishLive : Node3D
             return CanPlace(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z), _placingType)
                 ? GameCursor.Select : GameCursor.Invalid;
         }
-        if (_attackMoveArmed) return GameCursor.Attack;
+        if (_attackMoveArmed || _patrolArmed) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
         bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false;
@@ -1858,7 +1862,28 @@ public partial class SkirmishLive : Node3D
                         : v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
                             ? $"   {Settings.KeyName(Settings.BindOf("deploy"))} deploy"
                             : "";
-                    return name + hp + off + rep + acts;
+                    // ADR-015: an own combat unit carries a stance readout - the
+                    // LIVE stance from the sim, and the three stance keys named
+                    // from their live bindings (the SET-01 rule). The MCV is
+                    // excluded: it advertises deploy, and a stance on it is a
+                    // no-op the player never wants to see offered.
+                    string stance = "";
+                    if (v.Kind == EntityKind.Unit && v.PlayerId == 0 && v.UnitType != McvUnitType
+                        && sid >= 0 && sid < _world.EntityCount)
+                    {
+                        string sName = _world.Entities[sid].Stance switch
+                        {
+                            Stance.HoldFire => "HOLD FIRE",
+                            Stance.Guard => "GUARD",
+                            Stance.Patrol => "PATROL",
+                            _ => "AGGRESSIVE",
+                        };
+                        stance = $"   STANCE {sName}"
+                            + $"   {Settings.KeyName(Settings.BindOf("hold_fire"))} hold-fire"
+                            + $"  {Settings.KeyName(Settings.BindOf("guard"))} guard"
+                            + $"  {Settings.KeyName(Settings.BindOf("patrol"))} patrol";
+                    }
+                    return name + hp + off + rep + acts + stance;
                 }
             return "";
         }
@@ -2723,6 +2748,12 @@ public partial class SkirmishLive : Node3D
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } am when _attackMoveArmed:
                 CommitAttackMove(am.Position);
                 break;
+            // ADR-015: an armed patrol consumes the next left click as endpoint B,
+            // the attack-move two-step. Tested before the drag-select case that
+            // would otherwise swallow it, exactly as attack-move is.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } pt when _patrolArmed:
+                CommitPatrol(pt.Position);
+                break;
             // TICKET-P5-SPAWN-03: double-click an own MCV and it unpacks, the
             // classic idiom. The first click of the pair already selected the
             // vehicle through FinishSelect; this second press issues instead
@@ -2771,12 +2802,23 @@ public partial class SkirmishLive : Node3D
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
             if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
+            if (_patrolArmed) { DisarmPatrol("patrol cancelled"); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
             if (_winner >= 0 || _replayDone) { QuitToMenu(); return true; }
             return false;
         }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
         if (ev.IsActionPressed("stop")) { IssueStop(); return true; }
+        // ADR-015 / TICKET-P6-C1a: the three unit command stances. Each is a
+        // presentation-only issue of the one sim SetStance command (ADR-001
+        // intact). Hold-fire is an absolute toggle so the wire command stays
+        // idempotent; guard sets a leashed hold in place; patrol arms a two-step
+        // order whose far point the next left click supplies, the attack-move
+        // idiom. They always consume the key, reporting an empty selection by
+        // toast exactly as attack-move does.
+        if (ev.IsActionPressed("hold_fire")) { ToggleHoldFire(); return true; }
+        if (ev.IsActionPressed("guard")) { IssueGuard(); return true; }
+        if (ev.IsActionPressed("patrol")) { ArmPatrol(); return true; }
         if (ev.IsActionPressed("repair") && _selection.Count > 0)
         {
             HandleRepairKey();
@@ -3036,6 +3078,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit) movers++;
         if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
+        _patrolArmed = false;                      // ADR-015: the armed orders are exclusive
         _attackMoveArmed = true;
         ShowToast($"ATTACK-MOVE: PICK A DESTINATION   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
@@ -3066,6 +3109,100 @@ public partial class SkirmishLive : Node3D
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
         ShowToast($"ATTACK-MOVE ORDERED   ({n} UNITS)");
+    }
+
+    // -------- ADR-015 / TICKET-P6-C1a: the unit command stances --------
+    // All three are presentation-only: the client decides the player's intent
+    // and issues the one sim SetStance command, and reads back the live stance
+    // for the readout. The sim owns the behaviour (ADR-001 intact).
+
+    /// <summary>Hold-fire as an ABSOLUTE toggle: if every own combat unit in the
+    /// selection already holds fire, release them to Aggressive; otherwise set
+    /// them all to HoldFire. Absolute rather than a per-unit flip so the wire
+    /// command is idempotent and replay-robust (ADR-015 clause 5), and so a
+    /// mixed selection resolves to a single intent instead of scattering.</summary>
+    private void ToggleHoldFire()
+    {
+        if (_replay != null) return;               // a spectator issues no orders
+        int owned = 0, held = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            {
+                owned++;
+                if (id >= 0 && id < _world.EntityCount && _world.Entities[id].Stance == Stance.HoldFire) held++;
+            }
+        if (owned == 0) { ShowToast("HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED"); return; }
+        bool release = held == owned;              // all already holding: weapons free
+        var target = release ? Stance.Aggressive : Stance.HoldFire;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+                _pending.Add(new Command(0, 0, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)target));
+        _audio.Play("ui_click", -10);
+        ShowToast(release ? $"WEAPONS FREE   ({owned} UNITS)" : $"HOLD FIRE   ({owned} UNITS)");
+    }
+
+    /// <summary>Guard in place: every own combat unit takes a leashed hold at its
+    /// current position. The sim reads the post off the unit's live position, so
+    /// the command carries no point.</summary>
+    private void IssueGuard()
+    {
+        if (_replay != null) return;
+        DisarmAttackMove();
+        DisarmPatrol();
+        int n = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            {
+                _pending.Add(new Command(0, 0, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)Stance.Guard));
+                n++;
+            }
+        if (n == 0) { ShowToast("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
+        _audio.Play("ui_click", -10);
+        ShowToast($"GUARD   ({n} UNITS)");
+    }
+
+    /// <summary>Arm patrol: the key picks the order, the next left click supplies
+    /// endpoint B, and the sim reads endpoint A off the unit's live position. The
+    /// attack-move two-step, because a patrol needs its far point chosen.</summary>
+    private void ArmPatrol()
+    {
+        if (_replay != null) return;
+        int movers = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit) movers++;
+        if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (_placingType > 0) ExitPlacement();
+        _attackMoveArmed = false;                  // the armed orders are exclusive
+        _patrolArmed = true;
+        ShowToast($"PATROL: PICK THE FAR POINT   ({movers} UNITS)");
+        _audio.Play("ui_click", -10);
+    }
+
+    private void DisarmPatrol(string? toast = null)
+    {
+        if (!_patrolArmed) return;
+        _patrolArmed = false;
+        if (toast != null) ShowToast(toast);
+    }
+
+    private void CommitPatrol(Vector2 screen)
+    {
+        _patrolArmed = false;
+        if (GroundPoint(screen) is not { } p) return;
+        var cx = Fix64.FromFraction((int)(p.X * 100), 100);
+        var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
+        int n = 0;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            {
+                _pending.Add(new Command(0, 0, CommandType.SetStance, id, cx, cy, (int)Stance.Patrol));
+                n++;
+            }
+        // A patrol leg is an attack-move, so it acknowledges in the attack colour,
+        // not the gold a plain move uses - the CommitAttackMove idiom.
+        _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
+        _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        ShowToast($"PATROL ORDERED   ({n} UNITS)");
     }
 
     /// <summary>Stop: drop the current order where you stand. Issued to every
