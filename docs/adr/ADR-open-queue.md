@@ -48,6 +48,12 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-022: RESERVED 2026-07-24 for the LAN setup exchange (TICKET-P6-C7b): a
+  host-supplied match-setup blob appended to the lockstep Hello frame so a
+  joiner builds the identical world. A WIRE-FORMAT change, so it takes this
+  ADR before code; the non-blocking poll half of Q002's remainder shipped
+  without it as Wave C7a (additive TryAdvanceTick + the lanpoll chaos gate,
+  no wire change).
 - ADR-021: RATIFIED 2026-07-24 - ADR-021-neutral-outpost.md (the neutral
   capturable Outpost, GDD line 41 / doc 22 P5-ECON-14; P6 Wave C4). Number
   claimed here per the numbering law. Design ratified and READY TO IMPLEMENT;

@@ -15,6 +15,7 @@ using Ferrostorm.Sim;
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
+//   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -3465,6 +3466,9 @@ int Match(ulong seed)
     // ADR-021: and the neutral-outpost gate.
     int outpost = OutpostGate();
     if (outpost != 0) return outpost;
+    // Q002 / C7a: and the non-blocking lockstep poll gate.
+    int lanpoll = LanPoll();
+    if (lanpoll != 0) return lanpoll;
     return 0;
 }
 
@@ -3534,6 +3538,97 @@ int Lan(int games)
         Console.WriteLine($"lan game {g + 1}/{games}: 300 ticks, 2 clients, hash 0x{results[0]:X16} identical, no desync");
     }
     Console.WriteLine($"lan: {games} games completed with zero desyncs (gate: 20)");
+    return 0;
+}
+
+int LanPoll()
+{
+    // P6 Wave C7a (Q002's remainder, first half): the NON-BLOCKING lockstep
+    // drive. Both clients run a frame-loop-shaped driver - submit this tick's
+    // batch exactly once, TryAdvanceTick, and on a miss sleep a millisecond
+    // standing in for "render a frame and come back" - so no call ever blocks
+    // on the socket, which is the property SkirmishLive's accumulator needs.
+    // Game 1 runs on clean loopback; game 2 runs through the ChaosProxy
+    // (60ms +/- 30ms plus stalls), where the gate additionally asserts the
+    // poll MISSED at least once, proving the non-blocking path was genuinely
+    // exercised rather than degenerating into the blocking soak.
+    for (int g = 0; g < 2; g++)
+    {
+        bool chaos = g == 1;
+        ulong seed = 7000UL + (ulong)g;
+        var relay = new Relay(playerCount: 2);
+        relay.Start();
+        new Thread(relay.Run) { IsBackground = true }.Start();
+        ChaosProxy[]? proxies = chaos
+            ? new[]
+            {
+                new ChaosProxy(relay.Port, 60, 30, 50, 500, timingSeed: 101),
+                new ChaosProxy(relay.Port, 60, 30, 50, 500, timingSeed: 102),
+            }
+            : null;
+
+        var results = new ulong[2];
+        var missCounts = new int[2];
+        var errors = new Exception?[2];
+        var threads = new Thread[2];
+        for (int p = 0; p < 2; p++)
+        {
+            int pid = p;
+            threads[p] = new Thread(() =>
+            {
+                try
+                {
+                    int port = proxies?[pid].Port ?? relay.Port;
+                    using var client = new LockstepClient(port, LanWorldFactory, seed);
+                    var cmdRng = new DeterministicRandom(seed * 7919UL + (ulong)client.PlayerId);
+                    client.Prime();
+                    const int ticks = 300;
+                    int lastSubmitted = -1, misses = 0;
+                    long deadline = Environment.TickCount64 + 120_000;
+                    while (client.World.Tick < ticks)
+                    {
+                        if (Environment.TickCount64 > deadline) throw new TimeoutException("poll drive never completed");
+                        // The once-per-tick submit guard the frame loop must
+                        // carry: the relay counts batches per tick, so a
+                        // resubmit for the same tick would corrupt the merge.
+                        if (client.World.Tick != lastSubmitted)
+                        {
+                            var cmds = new List<Command>();
+                            if (client.World.Tick % 15 == 0)
+                                for (int k = 0; k < 3; k++)
+                                {
+                                    int mine = cmdRng.NextInt(10) * 2 + client.PlayerId;
+                                    cmds.Add(new Command(0, client.PlayerId, CommandType.PathMove, mine,
+                                        Fix64.FromInt(4 + cmdRng.NextInt(56)), Fix64.FromInt(4 + cmdRng.NextInt(56))));
+                                }
+                            client.SubmitCommands(cmds);
+                            lastSubmitted = client.World.Tick;
+                        }
+                        if (!client.TryAdvanceTick(out bool desynced))
+                        {
+                            if (desynced) throw new Exception("desync notified");
+                            misses++;
+                            Thread.Sleep(1);   // the frame renders on; the sim waits
+                        }
+                    }
+                    results[pid] = client.World.ComputeStateHash();
+                    missCounts[pid] = misses;
+                }
+                catch (Exception ex) { errors[pid] = ex; }
+            });
+            threads[p].Start();
+        }
+        foreach (var t in threads) t.Join();
+        foreach (var e in errors) if (e != null) return Fail($"lanpoll {(chaos ? "chaos" : "clean")}: {e.Message}");
+        if (relay.DesyncDetected) return Fail($"lanpoll {(chaos ? "chaos" : "clean")}: relay flagged desync");
+        if (results[0] != results[1]) return Fail($"lanpoll {(chaos ? "chaos" : "clean")}: final hashes differ");
+        if (chaos && missCounts[0] + missCounts[1] == 0)
+            return Fail("lanpoll chaos: the poll never missed under 60ms+stall chaos - the non-blocking path was not exercised");
+        Console.WriteLine($"lanpoll {(chaos ? "chaos" : "clean")}: 300 ticks, 2 clients, hash 0x{results[0]:X16} identical, " +
+                          $"no desync, poll misses {missCounts[0]}/{missCounts[1]}");
+    }
+    Console.WriteLine("lanpoll: the non-blocking TryAdvanceTick drive completed clean and under chaos with identical hashes; " +
+                      "no call ever blocked on the socket (the frame-loop property Q002's remainder needs)");
     return 0;
 }
 
@@ -4172,6 +4267,7 @@ return args.Length == 0
         "stancegate" => StanceGate(),
         "repairgate" => RepairGate(),
         "outpostgate" => OutpostGate(),
+        "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

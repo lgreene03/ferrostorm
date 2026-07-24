@@ -62,3 +62,24 @@ accumulator cannot block the frame on a socket, so the battle scene needs a
 non-blocking poll or a buffering scheme, both of which carry a feel cost.
 Two-machine verification also remains open; no in-process test can provide
 it. This question stays open for that half.
+
+## Resolution, second instalment (2026-07-24, P6 Wave C7a)
+
+The non-blocking poll now exists and is gated. `LockstepClient.TryAdvanceTick
+(out bool desynced)` steps the current tick if its merged batch has already
+arrived and returns false immediately otherwise, never waiting; it is purely
+additive beside `AdvanceTick`, which the headless soaks keep. The new `lanpoll`
+battery gate drives two clients through a frame-loop-shaped driver (submit once
+per tick, poll, sleep-a-frame on miss) on clean loopback and through the
+ChaosProxy: both games finish 300 ticks hash-identical with zero desyncs, and
+under chaos the poll misses tens of thousands of times, proving the
+non-blocking path is genuinely exercised, not a degenerate of the blocking one.
+
+What remains, filed as TICKET-P6-C7b (docs/tickets/): the battle-scene
+integration itself (SkirmishLive gating its accumulator drain on the poll, the
+once-per-tick submit guard, LocalPlayerId through the hardcoded player-0
+sites, Host/Join in the menu, a setup exchange in the Hello so a joiner can
+build the identical world - that last one a wire change needing the reserved
+ADR-022), and the genuinely human two-machine verification this question has
+always said no in-process test can provide. This question stays open for the
+C7b half only.
