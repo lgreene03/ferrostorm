@@ -48,6 +48,17 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-020: RATIFIED 2026-07-24 - ADR-020-sidebar-cancel-and-queue-scope.md
+  (the four-queue sidebar, GDD line 45; P6 Wave C3). Number claimed here per the
+  numbering law before drafting. Scope decision: C3 ships the client-only,
+  hash-NEUTRAL half - right-click cancel/refund on every sidebar build item
+  (the client never issued CancelProduce at all) over the existing QueueContents
+  and CancelProduce - and confirms infantry/vehicles are already two parallel
+  queues. The literal GDD-45 remainder, TWO parallel structure/defence queues on
+  one Construction Yard, needs a second build-progress head and ready slot =
+  hashed sim state and a save bump, so it is deferred to TICKET-P6-C3b with its
+  own golden-move ADR. Ratified under Luke's 2026-07-24 directive to implement
+  out the C-series.
 - ADR-019: RATIFIED 2026-07-24 - ADR-019-repair-vehicle.md (the repair
   vehicle: a mobile field-repair unit reusing the Service Depot heal loop as a
   moving aura; P6 Wave C2, GDD line 62). Number claimed here per the numbering
