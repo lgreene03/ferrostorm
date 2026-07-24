@@ -49,7 +49,11 @@ Determinism is the project's law, not an aspiration:
 ## Where the truth lives
 
 1. `CLAUDE.md` - operating rules for everyone working in this repository
-2. `docs/design/` - the design package; `18-game-review-roadmap.md` is the current roadmap
-3. `docs/adr/` - architecture decisions and their status
-4. `docs/questions/` - open cross-team questions with owners and decide-by dates
-5. `docs/tickets/phase-1-backlog.md` - the work ledger, entry by entry
+2. `docs/tickets/P6-campaign-tracker.md` - the CURRENT state of play, wave by
+   wave, and the resume point if a session dies
+3. `docs/design/` - the design package. Note that `18-game-review-roadmap.md` is
+   a superseded 2026-07-14 snapshot whose plan has shipped, not the current
+   roadmap; it carries a status banner saying so. Read it as history
+4. `docs/adr/` - architecture decisions and their status
+5. `docs/questions/` - open cross-team questions with owners and decide-by dates
+6. `docs/tickets/phase-1-backlog.md` - the work ledger, entry by entry
