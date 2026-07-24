@@ -252,7 +252,8 @@ public partial class Sidebar : PanelContainer
             // be named out loud.
             var page = _unitProducedAt(it.TypeId) == World.BarracksStructType
                 ? _tabPages[TabInfantry] : _tabPages[TabVehicles];
-            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitCost(it.TypeId), _unitBuildTicks(it.TypeId));
+            var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitCost(it.TypeId), _unitBuildTicks(it.TypeId),
+                onCancel: () => _game.CancelUnit(it.TypeId));   // C3 (ADR-020): right-click cancels
             // TICKET-P6-FACTION-01: the veil button's gate, generalised to the
             // unit column, and it survives the move into tabs UNCHANGED - the
             // gate is per item, so it binds inside whichever tab the item
@@ -283,9 +284,12 @@ public partial class Sidebar : PanelContainer
     {
         // DEF-08 clause 9: a barrier bypasses the yard queue entirely, so
         // its button enters placement rather than queueing.
+        // C3 (ADR-020): a queued structure gets a right-click cancel; a barrier
+        // has no queue (bought and placed outright), so it gets none.
         var b = it.TypeId == BarrierType
             ? MakeButton(it, () => _game.EnterPlacement(BarrierType), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks)
-            : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks);
+            : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks,
+                onCancel: () => _game.CancelStructure(it.TypeId));
         // Classic campaign tech gating: disallowed items are absent,
         // not greyed - progression should read as the tree growing.
         // TICKET-P5-PROD-01: the faction gate reads the same shape - the
@@ -315,7 +319,8 @@ public partial class Sidebar : PanelContainer
     /// plant from a 20-second refinery except by watching one. Seconds, not
     /// ticks: ticks are the sim's unit, seconds are the player's. ADR-006: the
     /// cost arrives from the live catalogue delegates, never from a table.</summary>
-    private Button MakeButton(BuildItem it, System.Action onPress, int cost = 0, int buildTicks = 0)
+    private Button MakeButton(BuildItem it, System.Action onPress, int cost = 0, int buildTicks = 0,
+        System.Action? onCancel = null)
     {
         string label = cost > 0 ? $"{it.Label}  {cost}" : it.Label;
         // A zero-tick item is not instant, it is not queued at all (the barrier
@@ -367,6 +372,21 @@ public partial class Sidebar : PanelContainer
         b.AddChild(fill);
         _baseText[b] = b.Text;
         b.Pressed += () => onPress();
+        // C3 (ADR-020): right-click cancels one queued item of this type, the
+        // classic sidebar affordance the client never had (CancelProduce was
+        // issued nowhere). Left-click still builds; the tooltip advertises both.
+        if (onCancel != null)
+        {
+            b.TooltipText = "Left-click: build     Right-click: cancel / refund";
+            b.GuiInput += ev =>
+            {
+                if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true })
+                {
+                    onCancel();
+                    b.AcceptEvent();
+                }
+            };
+        }
         return b;
     }
 

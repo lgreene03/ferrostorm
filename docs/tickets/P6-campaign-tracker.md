@@ -22,7 +22,8 @@ lands; this file is the resume point if a session dies.
 | C1a | Unit command stances: hold-fire, guard, patrol | ADR-015 (ratified); resolves Q003 and P4-PORT-01 | ONE regeneration | DONE (a9d041a) |
 | C1b | Formations: deterministic slot assignment on group orders | ADR-018 (ratified): client-side slot layer, sim unchanged | DONE (client-side); cohesion deferred |
 | C2 | Repair vehicle | ADR-019 (ratified): reuses the depot heal loop as a mobile aura | DONE (NEUTRAL, no regen) |
-| C3 | Four-queue sidebar (GDD line 45 in full) | post-B4 design | likely neutral (client) | pending |
+| C3 | Four-queue sidebar (GDD line 45): the client cancel/refund | ADR-020 (ratified): client-only right-click cancel | DONE (client half, NEUTRAL) |
+| C3b | Parallel structure/defence queues (GDD line 45 remainder) | split out by ADR-020; second build head + ready slot | pending (golden move) |
 | C4 | Neutral outposts | new ADR (EntityKind 17 reserved; doc 22 P5-ECON-14) | regeneration | pending |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
@@ -46,7 +47,13 @@ state, is deferred to a future ADR on evidence of need. C2 (repair vehicle,
 Depot already heals friendly units, so the repair vehicle is unit type 13 running
 that same heal loop as a mobile aura (not power gated, excludes itself, mobile
 units only), which no golden scenario spawns, so no regeneration. Bespoke model
-and icon owed to art-pipeline (interim: the MCV model).
+and icon owed to art-pipeline (interim: the MCV model). C3 (four-queue sidebar,
+2026-07-24) is DONE for its client-only half under ADR-020, also NEUTRAL: the
+design pass found the client never issued CancelProduce at all, so it wired
+right-click cancel/refund on every sidebar item over the existing sim command, and
+confirmed infantry/vehicles are already two parallel queues. The literal GDD-45
+remainder, two parallel structure/defence queues on one yard (a second build head
+and ready slot = hashed state), is a golden move split out to C3b (pending).
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer

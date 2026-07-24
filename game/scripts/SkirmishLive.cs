@@ -863,6 +863,61 @@ public partial class SkirmishLive : Node3D
         }
     }
 
+    /// <summary>C3 (ADR-020): the last queue index of a type in a producer's
+    /// queue, or -1. Right-click-cancel removes the MOST RECENT of a type, the
+    /// classic sidebar behaviour, so it reads from the back.</summary>
+    private int LastQueueIndexOf(int producerId, int typeId)
+    {
+        var q = _world.QueueContents(producerId);
+        for (int k = q.Count - 1; k >= 0; k--) if (q[k] == typeId) return k;
+        return -1;
+    }
+
+    /// <summary>C3 (ADR-020): cancel one queued unit of a type, refunding via the
+    /// sim's pay-as-you-build CancelProduce (the head refunds pro-rata; a
+    /// not-yet-started queued item was never charged, so it refunds nothing,
+    /// which is correct). Finds the own producer of the right produced_at that
+    /// actually has the unit queued and cancels its most recent one. This is the
+    /// cancel half of the production loop, which the client never had.</summary>
+    public void CancelUnit(int unitType)
+    {
+        if (_replay != null) return;                 // a spectator issues no orders
+        int producedAt = _world.GetUnitType(unitType).ProducedAt;
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.PlayerId != 0 || v.Id < 0 || v.Id >= _world.EntityCount) continue;
+            if (_world.Entities[v.Id].StructType != producedAt) continue;
+            int idx = LastQueueIndexOf(v.Id, unitType);
+            if (idx < 0) continue;
+            _pending.Add(new Command(0, 0, CommandType.CancelProduce, v.Id, Fix64.Zero, Fix64.Zero, idx));
+            _audio.Play("ui_click", -8);
+            return;
+        }
+    }
+
+    /// <summary>C3 (ADR-020): cancel one queued structure of a type at the yard.
+    /// If a structure is READY to place, cancelling targets that ready slot (a
+    /// full refund, the sim's ready-first rule) but only when the ready structure
+    /// IS this type - a different ready structure pauses the queue, and the
+    /// player cancels it by right-clicking ITS own button, not this one. With
+    /// nothing ready, the most recent queued one of this type is cancelled.</summary>
+    public void CancelStructure(int structType)
+    {
+        if (_replay != null || _yardId < 0) return;
+        int ready = _world.Entities[_yardId].ReadyStructure;
+        if (ready != 0)
+        {
+            if (ready != structType) return;         // a different structure is ready
+            _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, 0));
+            _audio.Play("ui_click", -8);
+            return;
+        }
+        int idx = LastQueueIndexOf(_yardId, structType);
+        if (idx < 0) return;
+        _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, idx));
+        _audio.Play("ui_click", -8);
+    }
+
     public void EnterPlacement(int structType)
     {
         _placingType = structType;
