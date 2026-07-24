@@ -1,0 +1,27 @@
+# Neutral Outpost (ADR-021, P6 Wave C4) - the capturable income structure of GDD
+# line 41, the map-control incentive replacing oil derricks in spirit. MAP-PLACED
+# ONLY, never player-built: build_time_ticks 0 keeps it out of every Construction
+# Yard queue (the yard and barrier precedent) and no sidebar item names it. Maps
+# place it with the ordinary structure line and player -1 (neutral); an engineer
+# captures it, and while owned it pays its owner 15 credits per second (a system
+# constant, World.OutpostIncomePerSecond, not a stat here; Balance owns it under
+# A11). The cost exists for the schema and the classic sell-a-captured-building
+# half-refund; it is never charged. power_draw 0 so a captured income building
+# never browns out the grid it funds.
+id: com_outpost
+name: Outpost
+faction: common
+cost: 500
+build_time_ticks: 0
+hp: 1000
+power_supply: 0
+power_draw: 0
+sight_range: 5
+footprint: 2
+weapon_ids: []
+prerequisites: []
+notes: >
+  Secondary income: capture with an engineer to gain a passive credit trickle
+  and a little map-control vision. An outpost is an income node, not a base:
+  a player whose last possession is one is still eliminated (ADR-021), and
+  auto-acquire never targets a neutral one.

@@ -186,6 +186,10 @@ public sealed class MapData
                 EntityKind.Wall => world.SpawnWall(st.Player, st.Ax, st.Ay),
                 EntityKind.Barracks => world.SpawnBarracks(st.Player, st.Ax, st.Ay),
                 EntityKind.RadarUplink => world.SpawnRadarUplink(st.Player, st.Ax, st.Ay),
+                // ADR-021: the neutral Outpost rides the EXISTING structure line
+                // with player -1 (int.Parse accepts it; no format bump, the
+                // reason P5-ECON-14 was chosen over BD-22's new grid char).
+                EntityKind.Outpost => world.SpawnOutpost(st.Player, st.Ax, st.Ay),
                 _ => throw new FormatException($"map structure: unknown struct type {st.StructType}"),
             };
             Tag(st.Tag, id);

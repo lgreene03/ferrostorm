@@ -14,6 +14,7 @@ using Ferrostorm.Sim;
 //   spawngate          - ADR-007: rally in the sim, the spawn exit move, save v4, occupancy and the zero-drain hold
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
+//   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -3336,6 +3337,79 @@ int RepairGate()
     return 0;
 }
 
+int OutpostGate()
+{
+    // ADR-021 gate (P6 Wave C4). Additive, the repairgate/stancegate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so the
+    // golden list stays 24. Proves the four ADR-021 behaviours: an engineer
+    // captures a NEUTRAL outpost through the untouched CaptureSystem; a captured
+    // outpost pays exactly OutpostIncomePerSecond once per second; a neutral one
+    // pays nobody and is never auto-acquired; and a player whose last possession
+    // is a captured outpost is still eliminated (an income node is not a base).
+
+    // --- 1. Capture, then the exact income beat ------------------------------
+    {
+        var w = new World(2400, 64, 64, players: 2);
+        int outpost = w.SpawnOutpost(-1, 20, 20);
+        // The engineer is unit type 11; capture is an Attack order onto the
+        // structure, the ExplicitTarget CaptureSystem drives (the capture
+        // scenario's own idiom, here against a NEUTRAL owner).
+        int eng = w.SpawnUnit(0, Fix64.FromInt(26), Fix64.FromInt(20), Fix64.FromFraction(1, 5), 60, ArmourClass.None, weaponId: 0, unitType: 11);
+        var order = new List<Command> { new(0, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, outpost) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        int capturedAt = -1;
+        for (int t = 0; t < 300 && capturedAt < 0; t++)
+        {
+            w.Step(default);
+            if (w.Entities[outpost].PlayerId == 0) capturedAt = w.Tick;
+        }
+        if (capturedAt < 0)
+            return Fail("outpost: an engineer must capture a NEUTRAL outpost (PlayerId never flipped in 300 ticks)");
+        if (w.Entities[eng].Alive)
+            return Fail("outpost: the capture must consume the engineer");
+        // The income beat, proven exactly: over any 150-tick window an owned
+        // outpost pays on precisely 10 second-boundaries (150/15), 15 each.
+        long before = w.Credits(0);
+        for (int t = 0; t < 150; t++) w.Step(default);
+        long earned = w.Credits(0) - before;
+        if (earned != 150)
+            return Fail($"outpost: a captured outpost must pay exactly 10x{World.OutpostIncomePerSecond} over 150 ticks (earned {earned})");
+    }
+
+    // --- 2. A neutral outpost is inert: pays nobody, draws no fire -----------
+    {
+        var w = new World(2401, 64, 64, players: 2);
+        int outpost = w.SpawnOutpost(-1, 20, 20);
+        w.GrantCredits(0, 100);
+        w.GrantCredits(1, 100);
+        // An armed enemy unit parked beside it: auto-acquire skips neutrals
+        // (t.PlayerId < 0), so the outpost must take no damage unordered.
+        w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(20), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 1);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (w.Credits(0) != 100 || w.Credits(1) != 100)
+            return Fail($"outpost: a NEUTRAL outpost must pay nobody (credits {w.Credits(0)}/{w.Credits(1)}, expected 100/100)");
+        if (w.Entities[outpost].PlayerId != -1)
+            return Fail("outpost: nothing but an engineer may claim a neutral outpost");
+        if (w.Entities[outpost].Hp != w.Entities[outpost].MaxHp)
+            return Fail($"outpost: auto-acquire must never target a neutral outpost (hp {w.Entities[outpost].Hp})");
+    }
+
+    // --- 3. An outpost is not hope: its owner is still eliminated ------------
+    {
+        var w = new World(2402, 64, 64, players: 2);
+        w.SpawnOutpost(0, 20, 20);           // player 0's ONLY possession
+        w.SpawnPowerPlant(1, 40, 40);        // player 1 has a real base
+        for (int t = 0; t < 5 && w.Winner < 0; t++) w.Step(default);
+        if (w.Winner != 1)
+            return Fail($"outpost: a player whose last possession is a captured outpost must be eliminated (winner {w.Winner}, expected 1)");
+    }
+
+    Console.WriteLine("outpostgate: an engineer captured a NEUTRAL outpost (consumed by the act) and the prize paid exactly " +
+                      $"{World.OutpostIncomePerSecond}/s over a 150-tick window; a neutral outpost paid nobody and was never auto-acquired; " +
+                      "and a player left holding only a captured outpost was still eliminated");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -3388,6 +3462,9 @@ int Match(ulong seed)
     // ADR-019: and the repair-vehicle gate.
     int repair = RepairGate();
     if (repair != 0) return repair;
+    // ADR-021: and the neutral-outpost gate.
+    int outpost = OutpostGate();
+    if (outpost != 0) return outpost;
     return 0;
 }
 
@@ -4094,6 +4171,7 @@ return args.Length == 0
         "regrowthgate" => RegrowthGate(),
         "stancegate" => StanceGate(),
         "repairgate" => RepairGate(),
+        "outpostgate" => OutpostGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

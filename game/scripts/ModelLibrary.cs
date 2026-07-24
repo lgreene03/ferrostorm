@@ -40,6 +40,12 @@ public partial class ModelLibrary : Node
         // a scanning antenna for free. The bespoke model is owed to
         // art-pipeline (raised in the wave's delivery notes).
         { 13, "sod_veil_projector" },
+        // 17 = Outpost (ADR-021, P6 Wave C4). No com_outpost.glb exists yet; it
+        // takes the refinery as its interim, an industrial silhouette that reads
+        // as an income building. DressStructure already declines the team strip
+        // for a neutral owner (player < 0), so an uncaptured outpost renders
+        // unclaimed for free. The bespoke model is owed to art-pipeline.
+        { 17, "com_refinery" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit

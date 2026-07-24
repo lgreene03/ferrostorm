@@ -580,18 +580,28 @@ public sealed partial class World
         // supply covering draw. Its Prereqs are READ since ADR-009: the radar
         // waits on a factory, and the superweapon waits on the radar.
         12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 }),
+        // Neutral Outpost (ADR-021, P6 Wave C4): the capturable income structure
+        // of GDD line 41. MAP-PLACED ONLY, never player-built: BuildTicks 0 keeps
+        // it out of every Construction Yard queue by the existing guard (the yard
+        // and barrier precedent), and no sidebar item names it. Cost 500 exists
+        // for the schema and for the classic sell-a-captured-building half-refund;
+        // it is never charged. PowerDraw 0 so a captured income building never
+        // browns out the grid it funds. Unarmed; a modest Sight gives its owner
+        // map-control vision beside the income.
+        13 => new StructureTypeDef(500, EntityKind.Outpost, 0, Hp: 1000, SightCells: 5),
         _ => default,
     };
 
     /// <summary>
     /// The highest COMPILED structure type (TICKET-P5-PROD-02): the bound for
     /// every loop that enumerates the catalogue. EntityKind reservations above
-    /// it (airfield, emplacement, bastion, outpost) have numbers but no defs
-    /// and no /data files, so they must stay OUTSIDE this bound until
-    /// implemented. Enumerating loops must also skip GateStructType: the gate
+    /// it (airfield, emplacement, bastion) have numbers but no defs and no
+    /// /data files, so they must stay OUTSIDE this bound until implemented
+    /// (the outpost graduated to struct type 13 under ADR-021). Enumerating
+    /// loops must also skip GateStructType: the gate
     /// is inside the bound but has no def and no file (ADR-005 clause 6).
     /// </summary>
-    public const int MaxStructType = 12;
+    public const int MaxStructType = 13;
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -721,6 +731,15 @@ public sealed partial class World
     /// build wiring test the same number rather than a bare 13 in each.</summary>
     public const int RepairVehicleType = 13;
 
+    /// <summary>ADR-021 (P6 Wave C4): what a captured Outpost pays its owner,
+    /// once per second (the pre-increment tick's positive multiples of
+    /// TicksPerSecond, the ADR-012 regrowth schedule idiom, so it resumes
+    /// correctly across save/load). GDD line 41 reads "+15 credits/tick", which
+    /// at 15 Hz would be 225/s, roughly ten harvesters; doc 22 P5-ECON-14 flags
+    /// that as a units error and the ratified rate is 15 per SECOND. Balance
+    /// owns the number under A11.</summary>
+    public const int OutpostIncomePerSecond = 15;
+
     private void UnblockFootprint(int ax, int ay, int size)
     {
         for (int dy = 0; dy < size; dy++)
@@ -841,6 +860,23 @@ public sealed partial class World
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 8,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>ADR-021: the neutral Outpost, map-placed via the ordinary
+    /// structure line with player -1 (the FerriteField neutrality convention);
+    /// capture flips it to the capturer through the untouched CaptureSystem.</summary>
+    public int SpawnOutpost(int player, int ax, int ay)
+    {
+        var def = GetStructureType(13);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Outpost,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 13,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1,
         });
     }
 
@@ -1413,7 +1449,12 @@ public sealed partial class World
         => k is EntityKind.Refinery or EntityKind.Factory or EntityKind.PowerPlant
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
              or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall
-             or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield;
+             or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield
+             // ADR-021: the Outpost is a structure, which is what makes it
+             // engineer-capturable through the untouched CaptureSystem (whose
+             // only ownership test, t.PlayerId == e.PlayerId, a neutral -1
+             // passes). VictorySystem excludes it from hope explicitly.
+             or EntityKind.Outpost;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
@@ -2513,6 +2554,22 @@ public sealed partial class World
                 _entities[i] = e;
                 continue;
             }
+
+            // Neutral Outpost (ADR-021, P6 Wave C4): a CAPTURED outpost pays its
+            // owner a once-per-second trickle, GDD line 41's secondary income.
+            // Guarded on PlayerId >= 0 twice over: a neutral outpost pays nobody,
+            // and _credits[-1] must never be indexed. The schedule is derived
+            // from the tick (positive multiples only, the regrowth idiom), never
+            // a stored counter, so a loaded save resumes on the same beat. This
+            // branch fires only for Kind == Outpost, which no golden scenario
+            // spawns, so the goldens are untouched (ADR-021).
+            if (e.Kind == EntityKind.Outpost)
+            {
+                if (e.PlayerId >= 0 && Tick > 0 && Tick % TicksPerSecond == 0)
+                    _credits[e.PlayerId] += OutpostIncomePerSecond;
+                _entities[i] = e;
+                continue;
+            }
             if (e.Kind == EntityKind.Superweapon)
             {
                 int sp = e.PlayerId;
@@ -2733,8 +2790,11 @@ public sealed partial class World
             if (!e.Alive || e.PlayerId < 0) continue;
             // ADR-005 clause 2: a barrier is not hope. Without this exclusion a
             // player whose last possession is one 100-credit wall is never
-            // eliminated and the match never ends.
-            if ((IsStructure(e.Kind) && !IsBarrier(e.Kind)) || e.UnitType == 7) hasHope[e.PlayerId] = true;
+            // eliminated and the match never ends. ADR-021 adds the Outpost to
+            // the same exclusion: a captured income node is not a base, so a
+            // player whose last possession is one is still eliminated.
+            if ((IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost)
+                || e.UnitType == 7) hasHope[e.PlayerId] = true;
         }
         int living = 0, last = -1;
         for (int p = 0; p < _players; p++)
