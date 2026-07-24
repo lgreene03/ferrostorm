@@ -3427,7 +3427,7 @@ int MapGate()
     Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
     if (maps.Length == 0) return Fail("mapgate: no maps found");
 
-    int totalOutposts = 0;
+    int totalOutposts = 0, totalCaptured = 0;
     const int ticks = 1500;
     foreach (var mapPath in maps)
     {
@@ -3476,24 +3476,34 @@ int MapGate()
         if (world.EntityCount <= before)
             return Fail($"mapgate: {name} produced nothing in {ticks} ticks - the AI cannot play this map");
 
-        // ADR-021: every outpost the map declares must stand, and must still be
-        // NEUTRAL, because no AI captures one yet. This is the end-to-end proof
-        // of the MAP path that outpostgate cannot give (it spawns directly).
-        int outposts = 0;
+        // ADR-021: every outpost the map declares must stand. Ownership is
+        // deliberately NOT asserted neutral any more: since the AI learned to
+        // send an engineer (C4c) a captured outpost here is the feature
+        // working, not a fault. That an outpost EXISTS at all after a real map
+        // load is the end-to-end proof of the map path outpostgate cannot give,
+        // because outpostgate spawns its outposts directly.
+        int outposts = 0, captured = 0;
         foreach (var e in world.Entities)
         {
             if (!e.Alive || e.Kind != EntityKind.Outpost) continue;
             outposts++;
-            if (e.PlayerId != -1)
-                return Fail($"mapgate: {name} has an outpost owned by player {e.PlayerId}; map outposts spawn neutral");
+            if (e.PlayerId >= 0) captured++;
         }
+        // C4c: on a map that carries outposts the AI must actually TAKE the
+        // free income. Without this the whole capture routine could rot to a
+        // no-op and every other assertion here would still pass. Deterministic
+        // (fixed seed), and measured with margin: 2 of 2 and 3 of 4 today.
+        if (outposts > 0 && captured == 0)
+            return Fail($"mapgate: {name} carries {outposts} outposts and the AI captured none in {ticks} ticks");
         totalOutposts += outposts;
+        totalCaptured += captured;
         Console.WriteLine($"mapgate: {name} loaded, {ticks} ticks of AI-vs-AI, " +
-                          $"{world.EntityCount - before} entities produced, {outposts} neutral outposts");
+                          $"{world.EntityCount - before} entities produced, " +
+                          $"{outposts} outposts ({captured} AI-captured)");
     }
 
     Console.WriteLine($"mapgate: all {maps.Length} committed maps load, spawn the opening hand and play {ticks} ticks " +
-                      $"of AI-vs-AI without throwing; {totalOutposts} neutral outposts stood across them");
+                      $"of AI-vs-AI without throwing; {totalOutposts} outposts stood across them, {totalCaptured} taken by an AI");
     return 0;
 }
 

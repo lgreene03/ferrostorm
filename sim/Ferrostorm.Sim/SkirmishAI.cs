@@ -48,7 +48,7 @@ public sealed class SkirmishAI
         int cy = -1, factory = -1, refinery = -1, barracks = -1;
         bool hasPlant = false, hasTurret = false, hasRadar = false;
         int harvesters = 0, army = 0, supply = 0, draw = 0;
-        int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0;
+        int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0, ownEngineer = -1;
         bool hasSuper = false;
         int readySuper = -1, enemyRefinery = -1;
         int enemyStructure = -1;
@@ -84,7 +84,16 @@ public sealed class SkirmishAI
                     case EntityKind.Unit:
                         if (e.UnitType == 7) ownMcv = i;
                         else if (e.UnitType == 6) scouts++; // support, not line strength
-                        else army++;
+                        else
+                        {
+                            // ADR-021: note an engineer so the outpost logic can
+                            // send it. Deliberately INSIDE the existing else, so
+                            // an engineer still counts toward army exactly as it
+                            // did before: changing that would shift wave timing
+                            // and move every golden.
+                            if (e.UnitType == EngineerType && ownEngineer < 0) ownEngineer = i;
+                            army++;
+                        }
                         break;
                 }
                 supply += e.PowerSupply;
@@ -109,6 +118,37 @@ public sealed class SkirmishAI
             }
         }
         if (cy < 0) return; // decapitated: nothing to command with
+
+        // --- ADR-021: take the free income. A neutral Outpost pays whoever
+        // walks an engineer into it, and until now only a human ever did, so
+        // on any map carrying one the AI simply conceded the economy.
+        //
+        // ENTIRELY INERT WITHOUT AN OUTPOST. NearestNeutralOutpost returns -1
+        // on a map with none, which is every golden scenario (skirmish-01 and
+        // the mission maps carry none by deliberate choice, C4b), so this block
+        // adds no command and changes no existing decision there. That is what
+        // keeps the AI change hash-neutral.
+        int outpost = NearestNeutralOutpost(w, homeX, homeY);
+        if (outpost >= 0)
+        {
+            if (ownEngineer >= 0)
+            {
+                // An Attack order on a structure IS the capture order: the
+                // engineer walks in and CaptureSystem consumes it on contact.
+                // Re-issued each beat, which is harmless (the same target) and
+                // self-healing if the walk is interrupted.
+                output.Add(new Command(w.Tick, _player, CommandType.Attack, ownEngineer,
+                    Fix64.Zero, Fix64.Zero, outpost));
+            }
+            else if (barracks >= 0 && w.Credits(_player) >= w.GetUnitType(EngineerType).Cost
+                     && !AlreadyQueued(w, barracks, EngineerType))
+            {
+                // No engineer standing and none on the line: buy one. Gated on
+                // the queue so this cannot spam an engineer every beat.
+                output.Add(new Command(w.Tick, _player, CommandType.Produce, barracks,
+                    Fix64.Zero, Fix64.Zero, EngineerType));
+            }
+        }
 
         // --- Construction via the sidebar flow (TICKET-P2-SIM-05): place
         // whatever the yard has finished; otherwise queue the next need. ---
@@ -443,6 +483,40 @@ public sealed class SkirmishAI
             if (d < bestD) { bestD = d; best = i; }
         }
         return best;
+    }
+
+    /// <summary>ADR-021: the engineer's unit type. Named because the outpost
+    /// logic tests it in three places and a bare 11 in each is how one of them
+    /// drifts (the McvUnitType precedent on the client side). Unit type 11 is
+    /// the engineer; STRUCT type 11 is the barracks, a different namespace.</summary>
+    private const int EngineerType = 11;
+
+    /// <summary>ADR-021: the nearest UNCAPTURED outpost to a point, ties to the
+    /// lower entity id so the choice is stable, in the NearestField shape. An
+    /// outpost owned by anyone (including this player) is not a target: capture
+    /// only ever flips a neutral one, and re-taking an enemy's is a job for the
+    /// army, not a lone engineer. Returns -1 on a map with no outposts, which
+    /// is what makes the whole outpost block inert in every golden scenario.</summary>
+    private static int NearestNeutralOutpost(World w, Fix64 x, Fix64 y)
+    {
+        int best = -1; Fix64 bestD = Fix64.MaxValue;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var o = w.Entities[i];
+            if (!o.Alive || o.Kind != EntityKind.Outpost || o.PlayerId >= 0) continue;
+            Fix64 d = Fix64.DistSq(o.X - x, o.Y - y);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary>Is this unit type already on a producer's line? Keeps the
+    /// outpost logic from queueing an engineer every decision beat.</summary>
+    private static bool AlreadyQueued(World w, int producer, int unitType)
+    {
+        var q = w.QueueContents(producer);
+        for (int i = 0; i < q.Count; i++) if (q[i] == unitType) return true;
+        return false;
     }
 
     /// <summary>Deterministic outward ring scan around own structures for a

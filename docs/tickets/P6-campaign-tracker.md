@@ -26,6 +26,7 @@ lands; this file is the resume point if a session dies.
 | C3b | Parallel structure/defence queues (GDD line 45 remainder) | split out by ADR-020; second build head + ready slot | pending (golden move) |
 | C4 | Neutral outposts | ADR-021 (ratified): capturable income Outpost, struct type 13 | DONE (NEUTRAL, no regen) |
 | C4b | Outposts placed on skirmish-02/-04 + the mapgate harness | under ADR-021; skirmish-01 (golden) and -03 (look-dev) untouched | DONE (NEUTRAL) |
+| C4c | The AI captures neutral outposts | under ADR-021; inert without an outpost, so no golden moves | DONE (NEUTRAL) |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
@@ -64,9 +65,14 @@ elimination rule, with all 24 goldens byte-identical. C4b (2026-07-24) then made
 it REACHABLE: outposts are placed through the committed generators on skirmish-02
 (one pair) and skirmish-04 (two pairs), leaving skirmish-01 (the golden's map) and
 skirmish-03 (the frozen look-dev reference) untouched so no hash moves, and a new
-mapgate harness plays AI-vs-AI on every committed map and asserts its declared
-outposts stand neutral. The AI still ignores outposts, so only a human captures
-one today. C7a (2026-07-24) is DONE:
+mapgate harness plays AI-vs-AI on every committed map. C4c then taught the AI to
+take the free income: it notices the nearest neutral outpost, buys an engineer at
+the barracks and walks it in, all of it inert on a map with no outposts (every
+golden scenario), so the 24 goldens stayed byte-identical through an AI change,
+proven additionally by the five-seed determinism suite and by the skirmish
+scenario reporting an identical match summary. mapgate's assertion flipped from
+"outposts stay neutral" to "the AI captures at least one", which it does 2 of 2
+on skirmish-02 and 3 of 4 on skirmish-04. C7a (2026-07-24) is DONE:
 LockstepClient.TryAdvanceTick is the non-blocking poll Q002's remainder asked
 for, and the lanpoll gate proves two clients complete 300 ticks hash-identical
 clean AND under 60ms+stall chaos with the poll missing tens of thousands of
