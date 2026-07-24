@@ -48,3 +48,10 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-018: RATIFIED 2026-07-24 - ADR-018-formations.md (formations:
+  deterministic slot assignment on group move orders; the C1b follow-up
+  ADR-015 promised, P4-PORT-05; shipped as P6 Wave C1b, client-only). The
+  client-side transient model, so hash impact is NEUTRAL (no Entity field, no
+  wire command, no save bump; all 24 goldens byte-identical). Cohesive
+  formation movement, the part that would need hashed sim state and a golden
+  regeneration, is deferred to a future ADR when a concrete need appears.
