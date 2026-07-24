@@ -48,6 +48,15 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-021: RATIFIED 2026-07-24 - ADR-021-neutral-outpost.md (the neutral
+  capturable Outpost, GDD line 41 / doc 22 P5-ECON-14; P6 Wave C4). Number
+  claimed here per the numbering law. Design ratified and READY TO IMPLEMENT;
+  hash impact NEUTRAL (EntityKind.Outpost = 17 already reserved and inert, all
+  behaviour Kind==Outpost gated, no golden scenario spawns one, income reuses
+  the already-hashed _credits pool, no new hashed Entity field), so the existing
+  24 goldens stay byte-identical, proven by an additive OutpostGate rather than a
+  golden regeneration. Ratified under Luke's 2026-07-24 directive to implement
+  out the C-series.
 - ADR-020: RATIFIED 2026-07-24 - ADR-020-sidebar-cancel-and-queue-scope.md
   (the four-queue sidebar, GDD line 45; P6 Wave C3). Number claimed here per the
   numbering law before drafting. Scope decision: C3 ships the client-only,
