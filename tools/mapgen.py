@@ -62,6 +62,12 @@ class Canvas:
                     self.apron_cells.add((x, y))
         self.river_cells = set()
         self.choke_cells = set()            # bridges, or ridge passes: the load-bearing crossings
+        # ADR-021: neutral capturable Outposts, as (ax, ay) top-left anchors of
+        # their 2x2 footprints. Held APART from the grid because an outpost is
+        # an ENTITY, not terrain: the sim blocks its own footprint when it
+        # spawns (World.SpawnOutpost calls BlockFootprint), so writing it into
+        # the grid would block those cells twice and inflate the density.
+        self.outposts = []
 
     def inb(self, x, y):
         return 0 <= x < self.w and 0 <= y < self.h
@@ -161,6 +167,28 @@ class Canvas:
             self.grid[y][x] = 'F'
             self.grid[ry][rx] = 'F'
 
+    def outpost(self, ax, ay):
+        """ADR-021: place a neutral capturable Outpost and its rotation image.
+        (ax, ay) is the TOP-LEFT anchor of the 2x2 footprint, the anchor
+        convention World.SpawnOutpost takes. Both footprints must be wholly
+        open, outside every apron (a base must not start owning one) and clear
+        of the load-bearing crossings (an outpost is 2x2 and would part-seal a
+        pass it stood in). The rotation image of the block anchored at (ax, ay)
+        is anchored at rot(ax+1, ay+1), the min corner of the rotated cells."""
+        rax, ray = rot(ax + 1, ay + 1, self.w, self.h)
+        for (bx, by) in ((ax, ay), (rax, ray)):
+            for y in range(by, by + 2):
+                for x in range(bx, bx + 2):
+                    assert self.inb(x, y), f"outpost ({bx},{by}) runs off-map at {(x, y)}"
+                    assert self.grid[y][x] == '.', \
+                        f"outpost cell {(x, y)} is '{self.grid[y][x]}', not open"
+                    assert (x, y) not in self.apron_cells, \
+                        f"outpost cell {(x, y)} sits in a start apron: a base would own it for free"
+                    assert (x, y) not in self.choke_cells, \
+                        f"outpost cell {(x, y)} sits on a load-bearing crossing"
+        assert (ax, ay) != (rax, ray), "an outpost placed on the map centre is its own mirror"
+        self.outposts.extend([(ax, ay), (rax, ray)])
+
     # -- proof ------------------------------------------------------------
     def _flood(self, sx, sy, grid=None):
         g = grid or self.grid
@@ -235,6 +263,50 @@ class Canvas:
             return sorted(max(abs(x - s[0]), abs(y - s[1])) for x, y in fields)
         assert cheb(self.starts[0]) == cheb(self.starts[1]), "ferrite distance profiles differ between starts"
 
+        # 8. ADR-021 outposts. They are entities, not terrain, so they are absent
+        #    from the grid and from the density above; what has to be proved is
+        #    that the map still works WITH them standing, because the sim blocks
+        #    each 2x2 footprint the moment it spawns. Block them here and re-run
+        #    the reachability proof: an outpost that seals a lane or walls off a
+        #    field would otherwise only be discovered in a match.
+        if self.outposts:
+            assert len(self.outposts) % 2 == 0, "outposts must be placed in rotation pairs"
+            saved = []
+            for (ax, ay) in self.outposts:
+                for y in range(ay, ay + 2):
+                    for x in range(ax, ax + 2):
+                        saved.append((x, y, grid[y][x]))
+                        grid[y][x] = '#'
+            try:
+                for p, s in self.starts.items():
+                    seen = self._flood(*s)
+                    for f in fields:
+                        assert f in seen, f"with outposts standing, player {p} cannot reach ferrite at {f}"
+                    assert self.starts[1 - p] in seen, \
+                        f"with outposts standing, player {p} cannot reach the far start"
+                    for c in self.apron_cells:
+                        assert c in seen, f"with outposts standing, player {p} cannot reach apron cell {c}"
+            finally:
+                for (x, y, ch) in saved:
+                    grid[y][x] = ch
+            # Fairness: the same Chebyshev-profile rule the ferrite obeys. An
+            # outpost nearer one base is a free income lead.
+            #
+            # Measured to the footprint CENTRE, not the anchor, and in DOUBLED
+            # integers so it stays exact. Ferrite can use the cell itself
+            # because rotation maps a single cell onto a single cell, but the
+            # 180-rotation of a 2x2 block maps its top-left anchor onto the
+            # rotated block's BOTTOM-RIGHT, so anchor distances differ by one
+            # between the two starts even when the placement is perfectly
+            # symmetric. The centre is what the sim itself uses
+            # (World.FootprintCentre) and it is the only measure that rotates
+            # cleanly. (Written the naive way first; this check caught it.)
+            def cheb_out(s):
+                return sorted(max(abs((2 * x + 1) - 2 * s[0]), abs((2 * y + 1) - 2 * s[1]))
+                              for x, y in self.outposts)
+            assert cheb_out(self.starts[0]) == cheb_out(self.starts[1]), \
+                "outpost distance profiles differ between starts"
+
         return fields, blocked, density
 
     # -- emit -------------------------------------------------------------
@@ -246,6 +318,12 @@ class Canvas:
             lines.append(f"start {p} {cx} {cy}")
         lines.append("grid:")
         lines.extend("".join(row) for row in self.grid)
+        # ADR-021: entity lines follow the grid, the mission-map convention.
+        # Player -1 is neutral (the ferrite-field convention) and 13 is the
+        # outpost struct type; the loader's structure line already parses a
+        # negative player, so this needs no map-format bump.
+        for (ax, ay) in self.outposts:
+            lines.append(f"structure -1 13 {ax} {ay}")
         with open(path, "w") as fh:
             fh.write("\n".join(lines) + "\n")
 
@@ -265,4 +343,6 @@ def report(name, canvas, fields, blocked, density, path, crossings):
     print(f"  starts:  {canvas.starts[0]} and {canvas.starts[1]}, "
           f"apron {canvas.apron * 2 + 1}x{canvas.apron * 2 + 1}")
     print(f"  crossings: {crossings}")
+    if canvas.outposts:
+        print(f"  outposts: {len(canvas.outposts)} neutral (ADR-021) at {canvas.outposts}")
     print("  all symmetry, density, reachability, crossing and fairness checks passed")

@@ -89,6 +89,16 @@ CLUSTERS = [
 for cx, cy in CLUSTERS:
     c.cluster(cx, cy, CLUSTER)
 
+# ---- Neutral Outposts (ADR-021): two pairs on a theatre this size, laid on
+# player 0's ground and completed by rotation. One sits on the western approach
+# to the central ford, so holding the ford and holding its income become the
+# same decision; the other sits back in the southern lane as a quieter node an
+# expansion can pick up. Both clear the channel, the bridge decks, the base
+# aprons and every stamp - an outpost blocks its own 2x2 when it spawns, so
+# validate() re-proves reachability with them standing.
+c.outpost(66, 40)                # western approach to the central ford
+c.outpost(30, 70)                # southern lane, behind the fence line
+
 fields, blocked, density = c.validate(expected_fields=60, density_range=(0.08, 0.10))
 
 path = sys.argv[1] if len(sys.argv) > 1 else "skirmish-04.fmap"

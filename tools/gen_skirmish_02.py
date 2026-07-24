@@ -85,6 +85,13 @@ CONTEST = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)]
 c.cluster(18, 47, SAFE)          # safe patch, near base 0
 c.cluster(37, 39, CONTEST)       # contested patch below the central saddle
 
+# ---- Neutral Outposts (ADR-021): one in each land, a forward income node worth
+# an engineer and worth raiding. Placed well clear of the base aprons and of the
+# three passes, so an outpost never part-seals a crossing (its 2x2 footprint
+# blocks when it spawns) and neither base starts owning one. The pair is a
+# rotation image, so the Chebyshev profiles match and neither side is nearer.
+c.outpost(20, 20)                # in base 0's land, forward on the western lane
+
 fields, blocked, density = c.validate(expected_fields=20, density_range=(0.08, 0.10))
 
 path = sys.argv[1] if len(sys.argv) > 1 else "skirmish-02.fmap"

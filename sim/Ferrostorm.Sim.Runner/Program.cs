@@ -15,6 +15,7 @@ using Ferrostorm.Sim;
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
+//   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and its declared outposts stand neutral
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
@@ -3411,6 +3412,91 @@ int OutpostGate()
     return 0;
 }
 
+int MapGate()
+{
+    // The map validation harness doc 18 Phase D asked for and never got, now
+    // owed a second time by ADR-021: a map may declare a neutral Outpost, and
+    // MapLoader THROWS on any struct type with no spawn arm, so an unguarded
+    // map file can break the shipped game while every golden stays green (no
+    // golden scenario loads skirmish-02 or skirmish-04). This walks EVERY
+    // committed map, builds the real opening hand on it, and plays both AIs.
+    // Additive, never a golden scenario, so the golden list stays 24.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapDir = Path.Combine(root, "data", "maps");
+    var maps = Directory.GetFiles(mapDir, "*.fmap");
+    Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
+    if (maps.Length == 0) return Fail("mapgate: no maps found");
+
+    int totalOutposts = 0;
+    const int ticks = 1500;
+    foreach (var mapPath in maps)
+    {
+        string name = Path.GetFileNameWithoutExtension(mapPath);
+        MapData map;
+        World world;
+        try
+        {
+            // ADR-006: the /data catalogue before tick 0, exactly as the client
+            // and the battery do, so a map naming a /data-defined structure is
+            // exercised against the shipped catalogue.
+            map = MapData.Load(mapPath);
+            world = map.BuildWorld(4242, players: 2, out _, w =>
+            {
+                CatalogueFiles.RegisterAll(w,
+                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+                CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+            });
+            map.PlaceSkirmishStart(world, 8000);
+        }
+        catch (Exception ex)
+        {
+            // The exact failure an unguarded map produces: a struct type with
+            // no MapLoader arm, a malformed line, an off-map start.
+            return Fail($"mapgate: {name} failed to load: {ex.Message}");
+        }
+
+        int before = world.EntityCount;
+        var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
+        var cmds = new List<Command>();
+        try
+        {
+            for (int t = 0; t < ticks; t++)
+            {
+                cmds.Clear();
+                ais[0].Act(world, cmds);
+                ais[1].Act(world, cmds);
+                world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            }
+        }
+        catch (Exception ex)
+        {
+            return Fail($"mapgate: {name} threw during play at tick {world.Tick}: {ex.Message}");
+        }
+
+        if (world.EntityCount <= before)
+            return Fail($"mapgate: {name} produced nothing in {ticks} ticks - the AI cannot play this map");
+
+        // ADR-021: every outpost the map declares must stand, and must still be
+        // NEUTRAL, because no AI captures one yet. This is the end-to-end proof
+        // of the MAP path that outpostgate cannot give (it spawns directly).
+        int outposts = 0;
+        foreach (var e in world.Entities)
+        {
+            if (!e.Alive || e.Kind != EntityKind.Outpost) continue;
+            outposts++;
+            if (e.PlayerId != -1)
+                return Fail($"mapgate: {name} has an outpost owned by player {e.PlayerId}; map outposts spawn neutral");
+        }
+        totalOutposts += outposts;
+        Console.WriteLine($"mapgate: {name} loaded, {ticks} ticks of AI-vs-AI, " +
+                          $"{world.EntityCount - before} entities produced, {outposts} neutral outposts");
+    }
+
+    Console.WriteLine($"mapgate: all {maps.Length} committed maps load, spawn the opening hand and play {ticks} ticks " +
+                      $"of AI-vs-AI without throwing; {totalOutposts} neutral outposts stood across them");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -3466,6 +3552,9 @@ int Match(ulong seed)
     // ADR-021: and the neutral-outpost gate.
     int outpost = OutpostGate();
     if (outpost != 0) return outpost;
+    // ADR-021 / doc 18 Phase D: and every committed map loads and plays.
+    int mapgate = MapGate();
+    if (mapgate != 0) return mapgate;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -4267,6 +4356,7 @@ return args.Length == 0
         "stancegate" => StanceGate(),
         "repairgate" => RepairGate(),
         "outpostgate" => OutpostGate(),
+        "mapgate" => MapGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
