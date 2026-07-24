@@ -25,6 +25,7 @@ lands; this file is the resume point if a session dies.
 | C3 | Four-queue sidebar (GDD line 45): the client cancel/refund | ADR-020 (ratified): client-only right-click cancel | DONE (client half, NEUTRAL) |
 | C3b | Parallel structure/defence queues (GDD line 45 remainder) | split out by ADR-020; second build head + ready slot | pending (golden move) |
 | C4 | Neutral outposts | ADR-021 (ratified): capturable income Outpost, struct type 13 | DONE (NEUTRAL, no regen) |
+| C4b | Outposts placed on skirmish-02/-04 + the mapgate harness | under ADR-021; skirmish-01 (golden) and -03 (look-dev) untouched | DONE (NEUTRAL) |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
@@ -59,8 +60,13 @@ and ready slot = hashed state), is a golden move split out to C3b (pending). C4
 struct type 13 / EntityKind 17, map-placed neutral, engineer-captured through the
 untouched CaptureSystem, paying 15/s while owned; excluded from victory hope; an
 OutpostGate proves capture, the exact income beat, neutral inertness and the
-elimination rule, with all 24 goldens byte-identical. No shipped map places one
-yet: that is a tools + balance map-design pass. C7a (2026-07-24) is DONE:
+elimination rule, with all 24 goldens byte-identical. C4b (2026-07-24) then made
+it REACHABLE: outposts are placed through the committed generators on skirmish-02
+(one pair) and skirmish-04 (two pairs), leaving skirmish-01 (the golden's map) and
+skirmish-03 (the frozen look-dev reference) untouched so no hash moves, and a new
+mapgate harness plays AI-vs-AI on every committed map and asserts its declared
+outposts stand neutral. The AI still ignores outposts, so only a human captures
+one today. C7a (2026-07-24) is DONE:
 LockstepClient.TryAdvanceTick is the non-blocking poll Q002's remainder asked
 for, and the lanpoll gate proves two clients complete 300 ticks hash-identical
 clean AND under 60ms+stall chaos with the poll missing tens of thousands of
