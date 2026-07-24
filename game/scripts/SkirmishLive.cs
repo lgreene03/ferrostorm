@@ -36,6 +36,14 @@ public partial class SkirmishLive : Node3D
     private readonly List<Command> _tickCmds = new();
     private readonly List<SnapshotInterpolator.ViewEntity> _view = new();
     private readonly HashSet<int> _selection = new();
+    // ADR-021 legibility: the entity the player last clicked that they do NOT
+    // own, held for a read-only readout. Deliberately NOT in _selection, which
+    // is own-only by invariant and is iterated by every order, sell and repair
+    // path; a foreign entity in there would have those paths sending commands
+    // the sim silently refuses (ApplyCommand rejects a carrier whose PlayerId
+    // is not the issuer's), which is exactly the kind of dead affordance this
+    // change exists to remove. -1 means nothing inspected.
+    private int _inspected = -1;
     private readonly Dictionary<int, Node3D> _actors = new();
     private readonly Dictionary<int, Vector3> _targets = new();
     private readonly Dictionary<int, SnapshotInterpolator.ViewEntity> _latest = new();
@@ -1861,6 +1869,21 @@ public partial class SkirmishLive : Node3D
 
     private string SelectionSummary()
     {
+        // ADR-021: the inspect readout for an Outpost the player does not own.
+        // It states the two things the mechanic is worthless without: that it
+        // pays, and how it is taken. Only shown when nothing of the player's
+        // own is selected, so it can never mask a real selection.
+        if (_selection.Count == 0 && _inspected >= 0
+            && _latest.TryGetValue(_inspected, out var iv) && iv.Alive
+            && iv.Kind == EntityKind.Outpost)
+        {
+            string owner = iv.PlayerId < 0 ? "UNCLAIMED" : "ENEMY HELD";
+            string how = iv.PlayerId < 0
+                ? "send an engineer to claim it"
+                : "send an engineer to take it";
+            return $"OUTPOST ({owner})   {iv.Hp}/{iv.MaxHp}   "
+                 + $"pays its owner {World.OutpostIncomePerSecond} cr/s   {how}";
+        }
         if (_selection.Count == 0) return "";
         // TICKET-P5-SET-01 rule, applied here too: the readout names the LIVE
         // bindings, never the default letters - hard-coded "R repair  X sell"
@@ -1938,7 +1961,12 @@ public partial class SkirmishLive : Node3D
                             + $"  {Settings.KeyName(Settings.BindOf("guard"))} guard"
                             + $"  {Settings.KeyName(Settings.BindOf("patrol"))} patrol";
                     }
-                    return name + hp + off + rep + acts + stance;
+                    // ADR-021: an outpost the player HAS taken says what it is
+                    // earning, so the capture reads as having paid off rather
+                    // than as a building that did nothing.
+                    string income = v.Kind == EntityKind.Outpost && v.PlayerId == 0
+                        ? $"   +{World.OutpostIncomePerSecond} cr/s" : "";
+                    return name + hp + off + rep + income + acts + stance;
                 }
             return "";
         }
@@ -3333,6 +3361,7 @@ public partial class SkirmishLive : Node3D
     private void FinishSelect(Vector2 at, bool add)
     {
         if (!add) _selection.Clear();
+        _inspected = -1;   // any fresh click or drag retires the inspect readout
         if ((at - _dragStart).Length() <= 8)
         {
             int hit = PickEntity(at, 0.9f, v => v.PlayerId == 0 && Mobile(v.Kind));
@@ -3343,7 +3372,16 @@ public partial class SkirmishLive : Node3D
                 _selection.Add(hit);
                 AddSelRingFor(hit);
                 _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));   // W3-21
+                return;
             }
+            // ADR-021: a click that selected nothing of the player's own may
+            // still have landed on an Outpost. An unclaimed one is not
+            // selectable (it is not theirs) but it MUST be inspectable, or the
+            // whole mechanic is undiscoverable: the building simply sits there
+            // looking like scenery, with nothing anywhere saying it pays or
+            // that an engineer takes it. Read-only, never selected.
+            _inspected = PickEntity(at, 1.4f, v => v.Kind == EntityKind.Outpost);
+            if (_inspected >= 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
             return;
         }
         var tl = new Vector2(Mathf.Min(_dragStart.X, at.X), Mathf.Min(_dragStart.Y, at.Y));
@@ -3548,7 +3586,14 @@ public partial class SkirmishLive : Node3D
     /// start a second match through the real menu.</summary>
     public void QuitToMenuForTest() => QuitToMenu();
     public int SelectionCount => _selection.Count;
-    public void ClearSelection() => _selection.Clear();
+    /// <summary>ADR-021 verification read (the SelectionCount pattern): the id
+    /// of the unowned entity being inspected, or -1.</summary>
+    public int InspectedId => _inspected;
+    /// <summary>ADR-021 verification read: the live readout line, so an
+    /// offscreen check can assert the outpost actually explains itself rather
+    /// than only that a click landed.</summary>
+    public string ReadoutText() => SelectionSummary();
+    public void ClearSelection() { _selection.Clear(); _inspected = -1; }
     /// <summary>Select exactly one entity, as a single left-click on it would.</summary>
     public void SelectOne(int id) { _selection.Clear(); _selection.Add(id); }
     /// <summary>Add to the selection, as a shift-click on it would.</summary>
