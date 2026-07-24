@@ -4,7 +4,7 @@ jobs:
   banned-tokens:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Sim purity check (no float/double/System.Random/Godot in /sim library)
         run: |
           if grep -rnE '\b(float|double|System\.Random|Godot)\b' sim/Ferrostorm.Sim/ ; then
@@ -22,8 +22,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with: { dotnet-version: '8.0.x' }
       - name: Build
         run: dotnet build sim/Ferrostorm.Sim.Runner -c Release
