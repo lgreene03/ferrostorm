@@ -15,6 +15,11 @@ public partial class ModelLibrary : Node
         { 5, "sod_shade_raider" }, { 6, "dir_sentinel_scout" }, { 7, "com_mcv" },
         { 8, "dir_howitzer" }, { 9, "sod_phantom_tank" }, { 10, "dir_bulwark_tank" },
         { 11, "com_engineer" }, { 12, "dir_vanguard_car" },
+        // 13 = Repair Vehicle (ADR-019, P6 Wave C2). No com_repair_vehicle.glb
+        // exists yet; it takes the MCV as its interim, a vehicle silhouette that
+        // reads far better than the rifle-squad default GetValueOrDefault would
+        // otherwise hand it. The bespoke model is owed to art-pipeline.
+        { 13, "com_mcv" },
     };
     private static readonly Dictionary<int, string> KindModel = new()
     {

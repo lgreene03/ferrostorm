@@ -455,6 +455,12 @@ public sealed partial class World
         // Vanguard: the Directorate harasser - the raider trade, armour for
         // stealth (TICKET-P4-SLICE-01, the full-pipeline vertical slice).
         { 12, new UnitTypeDef(450, 100, 150, ArmourClass.Light, 7, Fix64.FromFraction(8, 25), SightCells: 6, Faction: FactionDirectorate) }, // dir_vanguard_car
+        // Repair vehicle (ADR-019, P6 Wave C2): common, unarmed, mends own units
+        // in the field. Prereq the Service Depot (struct type 8), so field repair
+        // unlocks behind the repair building it extends; produced at the factory
+        // (the ProducedAt default 2). Veterancy off, like the MCV and harvester.
+        // The heal behaviour is hardcoded in ProductionSystem, not a stat.
+        { 13, new UnitTypeDef(700, 120, 300, ArmourClass.Light, 0, Fix64.FromFraction(1, 5), Veterancy: false, Prereqs: new[] { 8 }) }, // com_repair_vehicle
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -707,6 +713,13 @@ public sealed partial class World
     /// ProductionSystem's depot loop (a squared-distance compare against 16),
     /// so behaviour is bit-identical.</summary>
     public const int DepotRepairRadiusCells = 4;
+
+    /// <summary>ADR-019 (P6 Wave C2): the repair vehicle's unit type id. It is an
+    /// ordinary EntityKind.Unit (like the MCV is type 7); its only special
+    /// behaviour is the mobile field-repair aura in ProductionSystem, which keys
+    /// on this id. Named here so the sim heal branch and the client's model and
+    /// build wiring test the same number rather than a bare 13 in each.</summary>
+    public const int RepairVehicleType = 13;
 
     private void UnblockFootprint(int ax, int ay, int size)
     {
@@ -2462,6 +2475,34 @@ public sealed partial class World
                     if (!v.Alive || v.PlayerId != e.PlayerId || v.Hp >= v.MaxHp) continue;
                     if (v.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                     // Squared distance, so the compare is radius squared: 16.
+                    if (Fix64.DistSq(v.X - e.X, v.Y - e.Y)
+                        > Fix64.FromInt(DepotRepairRadiusCells * DepotRepairRadiusCells)) continue;
+                    if (_credits[e.PlayerId] < 1) break;
+                    _credits[e.PlayerId] -= 1;
+                    v.Hp = v.Hp + 2 > v.MaxHp ? v.MaxHp : v.Hp + 2;
+                    _entities[u] = v;
+                }
+                _entities[i] = e;
+                continue;
+            }
+
+            // Repair vehicle (ADR-019, P6 Wave C2): the mobile field-repair unit
+            // runs the depot heal loop as a moving aura, with three deliberate
+            // departures from the depot (ADR-019). It is NOT power-gated (a field
+            // repairer must work away from base power); it excludes ITSELF (u == i;
+            // it mends others, not itself); and, like the depot, it mends only
+            // mobile own units (Unit or Harvester), never structures. Same rate and
+            // price as the depot: radius 4, 2 hp/tick, 1 credit per unit per tick,
+            // halting when broke. This branch fires only for unit type 13, which no
+            // golden scenario spawns, so the goldens are untouched (ADR-019).
+            if (e.Kind == EntityKind.Unit && e.UnitType == RepairVehicleType)
+            {
+                for (int u = 0; u < _entities.Count; u++)
+                {
+                    if (u == i) continue;              // repairs others, not itself
+                    var v = _entities[u];
+                    if (!v.Alive || v.PlayerId != e.PlayerId || v.Hp >= v.MaxHp) continue;
+                    if (v.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                     if (Fix64.DistSq(v.X - e.X, v.Y - e.Y)
                         > Fix64.FromInt(DepotRepairRadiusCells * DepotRepairRadiusCells)) continue;
                     if (_credits[e.PlayerId] < 1) break;
