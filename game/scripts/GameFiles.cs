@@ -33,10 +33,62 @@ public static class GameFiles
     public static string SavesDir => Dir("saves");
     public static string ReplaysDir => Dir("replays");
 
-    /// <summary>The repo root: the parent of res://, which is where /data sits.
-    /// MainMenu already resolves maps this way; this is that idiom named once.</summary>
-    public static string RepoRoot =>
-        Path.GetFullPath(Path.Combine(ProjectSettings.GlobalizePath("res://"), ".."));
+    /// <summary>
+    /// The directory that holds /data. Running from source that is the repo
+    /// root, the parent of res://; in a PACKAGED build there is no repo, so it
+    /// is the folder beside the executable.
+    ///
+    /// This has to be a search rather than one path because ADR-006 made /data
+    /// the runtime source and the sim's loaders take REAL OS PATHS
+    /// (CatalogueFiles.RegisterAll walks directories, MapData.Load opens a
+    /// file). Files inside an exported .pck are not real OS files, so /data
+    /// cannot simply be imported into res://: it ships as a loose folder
+    /// beside the game, which is also what keeps it moddable and what lets one
+    /// code path serve both layouts.
+    ///
+    /// Resolved once and cached. If no candidate holds a /data the first is
+    /// returned unchanged, so the existing readable failure still fires (the
+    /// catrefuse gate pins "the /data loader fails readably for a missing
+    /// directory"), with a warning naming everywhere it looked, so the log says
+    /// what actually went wrong rather than only that something did.
+    /// </summary>
+    public static string RepoRoot => _dataRoot ??= ResolveDataRoot();
+    private static string? _dataRoot;
+
+    private static IEnumerable<string> DataRootCandidates()
+    {
+        // 1. From source: res:// is game/, so its parent is the repo root.
+        string res = ProjectSettings.GlobalizePath("res://");
+        yield return Path.GetFullPath(Path.Combine(res, ".."));
+        // 2. Inside the project folder, for a layout that keeps data under game/.
+        yield return Path.GetFullPath(res);
+        // 3. Packaged: the folder holding the executable, the shipped layout
+        //    (the game binary with a data folder beside it).
+        string? exeDir = Path.GetDirectoryName(OS.GetExecutablePath());
+        if (!string.IsNullOrEmpty(exeDir))
+        {
+            yield return Path.GetFullPath(exeDir);
+            // 4. macOS puts the binary at Game.app/Contents/MacOS/game, so the
+            //    folder the user actually sees the .app sitting in is three up.
+            yield return Path.GetFullPath(Path.Combine(exeDir, "..", "..", ".."));
+        }
+    }
+
+    private static string ResolveDataRoot()
+    {
+        string? first = null;
+        var searched = new List<string>();
+        foreach (string c in DataRootCandidates())
+        {
+            first ??= c;
+            searched.Add(c);
+            if (Directory.Exists(Path.Combine(c, "data"))) return c;
+        }
+        GD.PushWarning("no data directory found beside the game. Searched: "
+                       + string.Join(", ", searched)
+                       + ". A packaged build must ship the data folder beside the executable.");
+        return first ?? ".";
+    }
 
     /// <summary>Saves and replays store map paths RELATIVE to the repo root, not
     /// absolute: an absolute path bakes one machine's home directory into a

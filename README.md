@@ -4,7 +4,7 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 
 A modern real-time strategy game inspired by the classic RTS games of the 90s, built as two strictly separated layers (ADR-001): a deterministic, fixed-point C# lockstep simulation with zero package dependencies, and a Godot 4.7 .NET client that is presentation only. The sim is the authority on all gameplay; the client renders it and submits commands.
 
-This is an in-development repository for a playable game, public on GitHub with green CI. The game is playable from source; there are no packaged builds yet, and the public title is still provisional.
+This is an in-development repository for a playable game, public on GitHub with green CI. The game is playable from source, and `tools/package.sh` produces a self-contained macOS build (see docs/tickets/P6-packaging.md); the public title is still provisional.
 
 ## What exists today
 

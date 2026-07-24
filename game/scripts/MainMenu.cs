@@ -77,8 +77,11 @@ public partial class MainMenu : Control
         _factionPick = Row(v, "FACTION");
         _factionPick.AddItem("DIRECTORATE"); _factionPick.AddItem("SODALITY");
         _mapPick = Row(v, "THEATRE");
-        foreach (var f in System.IO.Directory.GetFiles(System.IO.Path.GetFullPath(
-            System.IO.Path.Combine(ProjectSettings.GlobalizePath("res://"), "..", "data", "maps")), "*.fmap"))
+        // Through GameFiles.RepoRoot, not the res://-parent idiom open-coded:
+        // that idiom is true only when running from source, so a packaged build
+        // listed no maps at all and the theatre picker came up empty.
+        foreach (var f in System.IO.Directory.GetFiles(
+            System.IO.Path.Combine(GameFiles.RepoRoot, "data", "maps"), "*.fmap"))
         {
             _maps.Add(f);
             _mapPick.AddItem(System.IO.Path.GetFileNameWithoutExtension(f).ToUpperInvariant());

@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ferrostorm.Game", "Ferrostorm.Game.csproj", "{32EC18A9-1DAD-4D93-B608-55D883840947}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ferrostorm.Sim", "..\sim\Ferrostorm.Sim\Ferrostorm.Sim.csproj", "{3DB0C2DD-C730-47F1-A55A-6817DB414D31}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ferrostorm.Presentation", "..\sim\Ferrostorm.Presentation\Ferrostorm.Presentation.csproj", "{9BCFF2AF-63BE-46EB-AF0B-0519B6584016}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ferrostorm.Net", "..\sim\Ferrostorm.Net\Ferrostorm.Net.csproj", "{38C0CBA1-3F6E-4558-A0F1-78D8E57CFA72}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{32EC18A9-1DAD-4D93-B608-55D883840947}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{32EC18A9-1DAD-4D93-B608-55D883840947}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{32EC18A9-1DAD-4D93-B608-55D883840947}.Release|Any CPU.ActiveCfg = Debug|Any CPU
+		{32EC18A9-1DAD-4D93-B608-55D883840947}.Release|Any CPU.Build.0 = Debug|Any CPU
+		{3DB0C2DD-C730-47F1-A55A-6817DB414D31}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3DB0C2DD-C730-47F1-A55A-6817DB414D31}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3DB0C2DD-C730-47F1-A55A-6817DB414D31}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3DB0C2DD-C730-47F1-A55A-6817DB414D31}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9BCFF2AF-63BE-46EB-AF0B-0519B6584016}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9BCFF2AF-63BE-46EB-AF0B-0519B6584016}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9BCFF2AF-63BE-46EB-AF0B-0519B6584016}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9BCFF2AF-63BE-46EB-AF0B-0519B6584016}.Release|Any CPU.Build.0 = Release|Any CPU
+		{38C0CBA1-3F6E-4558-A0F1-78D8E57CFA72}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{38C0CBA1-3F6E-4558-A0F1-78D8E57CFA72}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{38C0CBA1-3F6E-4558-A0F1-78D8E57CFA72}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{38C0CBA1-3F6E-4558-A0F1-78D8E57CFA72}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

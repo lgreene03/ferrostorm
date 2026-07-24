@@ -42,3 +42,6 @@ game/assets/models/*_diff.png.import
 game/assets/models/*_rough.png.import
 game/assets/models/*_norm.png.import
 game/assets/models/*_orm.png.import
+
+# Packaged builds (tools/package.sh output)
+build/

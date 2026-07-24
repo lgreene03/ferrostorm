@@ -19,6 +19,12 @@ window/size/viewport_width=1600
 window/size/viewport_height=900
 
 [rendering]
+; Required to export for arm64 or universal on macOS: Godot refuses the export
+; outright without it ("Cannot export for universal or arm64 if ETC2 ASTC
+; texture format is disabled"). It is an IMPORT-time texture compression
+; option, so it changes what lands in the gitignored import cache and in the
+; exported package, never the renderer's behaviour and never the sim.
+textures/vram_compression/import_etc2_astc=true
 renderer/rendering_method="forward_plus"
 environment/volumetric_fog/volume_size=96
 environment/volumetric_fog/volume_depth=96
