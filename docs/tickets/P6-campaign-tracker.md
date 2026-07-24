@@ -24,7 +24,7 @@ lands; this file is the resume point if a session dies.
 | C2 | Repair vehicle | ADR-019 (ratified): reuses the depot heal loop as a mobile aura | DONE (NEUTRAL, no regen) |
 | C3 | Four-queue sidebar (GDD line 45): the client cancel/refund | ADR-020 (ratified): client-only right-click cancel | DONE (client half, NEUTRAL) |
 | C3b | Parallel structure/defence queues (GDD line 45 remainder) | split out by ADR-020; second build head + ready slot | pending (golden move) |
-| C4 | Neutral outposts | ADR-021 (ratified, ready to implement) | NEUTRAL (not regen) - design pass corrected the guess | ADR done, build pending |
+| C4 | Neutral outposts | ADR-021 (ratified): capturable income Outpost, struct type 13 | DONE (NEUTRAL, no regen) |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
 | C7 | Two-machine LAN: non-blocking frame-loop integration | Q002 remainder | neutral (net layer) | pending |
@@ -53,7 +53,13 @@ design pass found the client never issued CancelProduce at all, so it wired
 right-click cancel/refund on every sidebar item over the existing sim command, and
 confirmed infantry/vehicles are already two parallel queues. The literal GDD-45
 remainder, two parallel structure/defence queues on one yard (a second build head
-and ready slot = hashed state), is a golden move split out to C3b (pending).
+and ready slot = hashed state), is a golden move split out to C3b (pending). C4
+(neutral outposts, 2026-07-24) is DONE under ADR-021, also NEUTRAL: the Outpost is
+struct type 13 / EntityKind 17, map-placed neutral, engineer-captured through the
+untouched CaptureSystem, paying 15/s while owned; excluded from victory hope; an
+OutpostGate proves capture, the exact income beat, neutral inertness and the
+elimination rule, with all 24 goldens byte-identical. No shipped map places one
+yet: that is a tools + balance map-design pass.
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer
