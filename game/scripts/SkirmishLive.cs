@@ -3098,10 +3098,14 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
+        // ADR-018: an attack-move is a group move too, so it forms up (the verb is
+        // preserved: each unit attack-moves to its slot, engaging en route).
+        var formation = BuildFormation(new Vector3(p.X, 0, p.Z));
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
             {
-                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, cx, cy));
+                var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
+                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, mx, my));
                 n++;
             }
         // W3-17's attack colour: an attack-move is an attack order, and it must
@@ -3636,6 +3640,74 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Right-click order resolution; public so scripted verification
     /// can drive the exact input path a player uses.</summary>
+    // ADR-018 / TICKET-P6-C1b: formations. Spacing between formation slots, in
+    // world units. A presentation constant, tunable by playtest (ADR-018's named
+    // human step); it never reaches the sim. Kept wider than a unit footprint so
+    // slots read as distinct ranks against the four-cell crowd-arrival settle.
+    private const float FormationSpacing = 2.0f;
+
+    /// <summary>
+    /// ADR-018: resolve a group move's anchor into per-unit formation slots. Every
+    /// selected COMBAT unit (EntityKind.Unit) is assigned its own destination in a
+    /// forward-facing box lattice centred on the anchor, so a massed move, attack
+    /// -move or queued move arrives in assigned slots rather than piling onto one
+    /// cell (the gap World.cs:1619 left open). Returns null when fewer than two
+    /// combat units are selected, and the caller then sends everyone the plain
+    /// anchor exactly as before.
+    ///
+    /// The whole layer is client-side and presentation, ADR-001 intact: the sim has
+    /// no selection and only ever sees the resolved per-unit destinations this hands
+    /// back, issued through the ordinary Move/AttackMove commands. Because only the
+    /// ordering client computes and the wire carries the resolved targets, the
+    /// geometry need not be deterministic across platforms, so it is ordinary float
+    /// maths and the sim's no-float rule does not reach it. Slot assignment is by
+    /// SORTED ENTITY ID, so the same group ordered to the same point always gets the
+    /// same slots: order-independent and stable, which is the determinism ADR-018
+    /// asks of it. Harvesters and other mobiles are never formation members; they
+    /// keep the plain anchor.
+    /// </summary>
+    private Dictionary<int, (Fix64 X, Fix64 Y)>? BuildFormation(Vector3 anchor)
+    {
+        var members = new List<int>();
+        var centroid = Vector2.Zero;
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit)
+            {
+                members.Add(id);
+                centroid += new Vector2((float)v.X, (float)v.Y);
+            }
+        if (members.Count < 2) return null;
+        members.Sort();                                   // stable, order-independent
+        centroid /= members.Count;
+
+        // Facing runs from the group's centre toward the anchor, so the box points
+        // at where it is going. A group already sitting on its destination has no
+        // heading, so fall back to +Z for a defined orientation rather than a NaN.
+        // v.Y and anchor.Z are both the world Z axis (sim Y), so the Vector2 stays
+        // in the (worldX, worldZ) plane throughout.
+        var target = new Vector2(anchor.X, anchor.Z);
+        var fwd = target - centroid;
+        fwd = fwd.LengthSquared() < 0.0001f ? Vector2.Down : fwd.Normalized();
+        var right = new Vector2(-fwd.Y, fwd.X);
+
+        // A near-square box: columns across the facing, rows back along it. The
+        // grid is centred on the anchor. A ragged final row sits left-aligned in
+        // the centred grid, which reads fine and keeps the lattice fixed.
+        int cols = Mathf.CeilToInt(Mathf.Sqrt(members.Count));
+        int rows = Mathf.CeilToInt(members.Count / (float)cols);
+        var slots = new Dictionary<int, (Fix64 X, Fix64 Y)>(members.Count);
+        for (int i = 0; i < members.Count; i++)
+        {
+            float ox = (i % cols - (cols - 1) * 0.5f) * FormationSpacing;
+            float oz = (i / cols - (rows - 1) * 0.5f) * FormationSpacing;
+            var slot = target + right * ox + fwd * oz;
+            slots[members[i]] = (
+                Fix64.FromFraction((int)(slot.X * 100), 100),
+                Fix64.FromFraction((int)(slot.Y * 100), 100));
+        }
+        return slots;
+    }
+
     public void IssueOrder(Vector2 screen, bool queued)
     {
         if (_selection.Count == 0) return;
@@ -3673,6 +3745,10 @@ public partial class SkirmishLive : Node3D
         bool hasRef = HasLiveRefinery();
         bool deniedHarvest = false;
         int issued = 0;
+        // ADR-018: a plain move (not an attack on an enemy) arranges the selected
+        // combat units into a formation. Resolved once for the click; harvesters
+        // are never members and keep the shared anchor below.
+        var formation = enemy >= 0 ? null : BuildFormation(new Vector3(p.X, 0, p.Z));
         foreach (int id in _selection)
         {
             if (!_latest.TryGetValue(id, out var me)) continue;
@@ -3690,7 +3766,10 @@ public partial class SkirmishLive : Node3D
             }
             else if (Mobile(me.Kind))
             {
-                _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
+                // ADR-018: a combat unit takes its formation slot; a harvester (or
+                // any lone-mover fallback) keeps the shared anchor.
+                var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
+                _pending.Add(new Command(0, 0, CommandType.PathMove, id, mx, my, -1, queued));
                 // P5-ECON-07 clause 2: a bare move on a harvester is the player
                 // saying where it should be. Auto-harvest must not overrule that.
                 if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
@@ -3735,17 +3814,42 @@ public partial class SkirmishLive : Node3D
     {
         var cx = Fix64.FromFraction((int)(x * 100), 100);
         var cy = Fix64.FromFraction((int)(z * 100), 100);
+        // ADR-018: the programmatic hook drives the same formation path the mouse
+        // does, so offscreen verification exercises the real behaviour.
+        var formation = BuildFormation(new Vector3(x, 0, z));
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
-                _pending.Add(new Command(0, 0, CommandType.PathMove, id, cx, cy, -1, queued));
+            {
+                var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
+                _pending.Add(new Command(0, 0, CommandType.PathMove, id, mx, my, -1, queued));
+            }
     }
 
     public void OrderAttackMoveTo(float x, float z)
     {
         var cx = Fix64.FromFraction((int)(x * 100), 100);
         var cy = Fix64.FromFraction((int)(z * 100), 100);
+        var formation = BuildFormation(new Vector3(x, 0, z));
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
-                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, cx, cy));
+            {
+                var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
+                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, mx, my));
+            }
+    }
+
+    /// <summary>ADR-018 verification hook: resolve the current selection's
+    /// formation slots for a move to (x,z) WITHOUT issuing anything, so an
+    /// offscreen check can assert that each combat unit gets a distinct slot and
+    /// that the assignment is stable across identical calls. Returns raw Fix64
+    /// values (Raw is public, FracBits 32) keyed by entity id; empty when fewer
+    /// than two combat units are selected (no formation, everyone the anchor).</summary>
+    public Dictionary<int, (long RawX, long RawY)> ResolveFormationSlots(float x, float z)
+    {
+        var outp = new Dictionary<int, (long, long)>();
+        var f = BuildFormation(new Vector3(x, 0, z));
+        if (f != null)
+            foreach (var kv in f) outp[kv.Key] = (kv.Value.X.Raw, kv.Value.Y.Raw);
+        return outp;
     }
 }

@@ -20,7 +20,7 @@ lands; this file is the resume point if a session dies.
 | B5 | Starting hand into the sim + CellCentre decision | ADR-011 (ratified); Balance note on the 550-tick shift | regeneration (skirmish golden) | DONE (e814e10) |
 | B6 | Ferrite regrowth | ADR-012: formalise from doc 24 sketch, then implement | regeneration | DONE (d7ff34c) |
 | C1a | Unit command stances: hold-fire, guard, patrol | ADR-015 (ratified); resolves Q003 and P4-PORT-01 | ONE regeneration | DONE (a9d041a) |
-| C1b | Formations: deterministic slot assignment on group orders | ADR-015 splits it out (P4-PORT-05); own design pass and regeneration | pending |
+| C1b | Formations: deterministic slot assignment on group orders | ADR-018 (ratified): client-side slot layer, sim unchanged | DONE (client-side); cohesion deferred |
 | C2 | Repair vehicle | GDD line 62; data-driven, post-B1 | depends on design | pending |
 | C3 | Four-queue sidebar (GDD line 45 in full) | post-B4 design | likely neutral (client) | pending |
 | C4 | Neutral outposts | new ADR (EntityKind 17 reserved; doc 22 P5-ECON-14) | regeneration | pending |
@@ -35,8 +35,13 @@ DONE. The sim is now the authority on the runtime /data source, rally and spawn,
 power, the barracks and tech tree, the skirmish opening hand, and ferrite
 regrowth. The C series has opened: C1a (unit command stances, 2026-07-21) is DONE
 under ADR-015, so the sim now owns hold-fire, guard and patrol as hashed per-unit
-state, resolving Q003 and P4-PORT-01. C1b (formations, P4-PORT-05) is filed
-pending, split out by ADR-015 for its own design pass and regeneration.
+state, resolving Q003 and P4-PORT-01. C1b (formations, P4-PORT-05, 2026-07-24) is
+DONE as a client-side slot layer under ADR-018: the design pass found that a
+resolved slot is not per-tick behaviour and the sim has no selection, so
+formations live client-side (sorted-id box lattice resolved to per-unit
+destinations over the existing move commands) with NEUTRAL hash impact, no
+regeneration. Cohesive formation movement, the part that would need hashed sim
+state, is deferred to a future ADR on evidence of need.
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer
