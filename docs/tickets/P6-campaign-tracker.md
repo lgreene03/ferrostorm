@@ -27,7 +27,8 @@ lands; this file is the resume point if a session dies.
 | C4 | Neutral outposts | ADR-021 (ratified): capturable income Outpost, struct type 13 | DONE (NEUTRAL, no regen) |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
-| C7 | Two-machine LAN: non-blocking frame-loop integration | Q002 remainder | neutral (net layer) | pending |
+| C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
+| C7b | The LAN battle scene: SkirmishLive integration, LocalPlayerId, Host/Join, Hello setup exchange | ADR-022 reserved (wire change); ticket filed | neutral but WIDE | pending |
 | C8 | Multi-resource fields | P4-PORT-04, new ADR | regeneration | pending |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
@@ -59,7 +60,15 @@ struct type 13 / EntityKind 17, map-placed neutral, engineer-captured through th
 untouched CaptureSystem, paying 15/s while owned; excluded from victory hope; an
 OutpostGate proves capture, the exact income beat, neutral inertness and the
 elimination rule, with all 24 goldens byte-identical. No shipped map places one
-yet: that is a tools + balance map-design pass.
+yet: that is a tools + balance map-design pass. C7a (2026-07-24) is DONE:
+LockstepClient.TryAdvanceTick is the non-blocking poll Q002's remainder asked
+for, and the lanpoll gate proves two clients complete 300 ticks hash-identical
+clean AND under 60ms+stall chaos with the poll missing tens of thousands of
+times and no call ever blocking - the frame-loop property the battle scene
+needs. C7b (the SkirmishLive integration, LocalPlayerId plumbing, Host/Join and
+the ADR-022 Hello setup exchange) is filed pending with the full design in its
+ticket; it is the widest client change since Phase A and carries the real
+two-machine human verification.
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer

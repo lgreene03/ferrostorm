@@ -401,6 +401,35 @@ public sealed class LockstepClient : IDisposable
         });
     }
 
+    /// <summary>
+    /// The non-blocking half of Q002's remainder (P6 Wave C7a): step the current
+    /// tick if its merged batch has ALREADY arrived, else return false
+    /// immediately, never waiting. desynced reports the latched relay verdict
+    /// either way. This is the frame-loop shape SkirmishLive needs: the
+    /// accumulator drain calls this once per due tick and, on false, simply
+    /// stops draining for the frame - the render goes on from the last
+    /// snapshot, the sim waits, and the frame never blocks on a socket.
+    /// Purely additive beside AdvanceTick, which the headless soaks keep.
+    /// </summary>
+    public bool TryAdvanceTick(out bool desynced)
+    {
+        Command[]? cmds;
+        lock (_gate)
+        {
+            desynced = DesyncNotified;
+            if (desynced || !_merged.TryGetValue(World.Tick, out cmds!)) return false;
+            _merged.Remove(World.Tick);
+        }
+        World.Step(cmds);
+        if (World.Tick % HashInterval == 0)
+        {
+            ulong h = World.ComputeStateHash();
+            int t = World.Tick;
+            Wire.SendFrame(_stream, Wire.Hash, w => { w.Write(t); w.Write(h); });
+        }
+        return true;
+    }
+
     /// <summary>Block until the merged batch for the current tick arrives, then step. Returns false on desync/disconnect.</summary>
     public bool AdvanceTick(int timeoutMs = 10_000)
     {
