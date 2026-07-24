@@ -21,7 +21,7 @@ lands; this file is the resume point if a session dies.
 | B6 | Ferrite regrowth | ADR-012: formalise from doc 24 sketch, then implement | regeneration | DONE (d7ff34c) |
 | C1a | Unit command stances: hold-fire, guard, patrol | ADR-015 (ratified); resolves Q003 and P4-PORT-01 | ONE regeneration | DONE (a9d041a) |
 | C1b | Formations: deterministic slot assignment on group orders | ADR-018 (ratified): client-side slot layer, sim unchanged | DONE (client-side); cohesion deferred |
-| C2 | Repair vehicle | GDD line 62; data-driven, post-B1 | depends on design | pending |
+| C2 | Repair vehicle | ADR-019 (ratified): reuses the depot heal loop as a mobile aura | DONE (NEUTRAL, no regen) |
 | C3 | Four-queue sidebar (GDD line 45 in full) | post-B4 design | likely neutral (client) | pending |
 | C4 | Neutral outposts | new ADR (EntityKind 17 reserved; doc 22 P5-ECON-14) | regeneration | pending |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
@@ -41,7 +41,12 @@ resolved slot is not per-tick behaviour and the sim has no selection, so
 formations live client-side (sorted-id box lattice resolved to per-unit
 destinations over the existing move commands) with NEUTRAL hash impact, no
 regeneration. Cohesive formation movement, the part that would need hashed sim
-state, is deferred to a future ADR on evidence of need.
+state, is deferred to a future ADR on evidence of need. C2 (repair vehicle,
+2026-07-24) is DONE under ADR-019, also NEUTRAL: the design pass found the Service
+Depot already heals friendly units, so the repair vehicle is unit type 13 running
+that same heal loop as a mobile aura (not power gated, excludes itself, mobile
+units only), which no golden scenario spawns, so no regeneration. Bespoke model
+and icon owed to art-pipeline (interim: the MCV model).
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer

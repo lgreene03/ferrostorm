@@ -48,6 +48,14 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-019: RATIFIED 2026-07-24 - ADR-019-repair-vehicle.md (the repair
+  vehicle: a mobile field-repair unit reusing the Service Depot heal loop as a
+  moving aura; P6 Wave C2, GDD line 62). Number claimed here per the numbering
+  law before drafting. Hash impact NEUTRAL: a new unit type id (13) whose heal
+  branch fires only for that type, which no golden scenario spawns, so all 24
+  goldens stay byte-identical; no new EntityKind, no new hashed Entity field, no
+  schema change, save stays v7. Ratified under Luke's 2026-07-24 directive to
+  implement out the C-series.
 - ADR-018: RATIFIED 2026-07-24 - ADR-018-formations.md (formations:
   deterministic slot assignment on group move orders; the C1b follow-up
   ADR-015 promised, P4-PORT-05; shipped as P6 Wave C1b, client-only). The

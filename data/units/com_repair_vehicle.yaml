@@ -1,0 +1,30 @@
+# Repair Vehicle - a mobile field-repair unit (ADR-019, P6 Wave C2). Mends its
+# owner's damaged units and harvesters within radius 4 for 2 hp/tick at 1 credit
+# per unit per tick, the Service Depot's rate and price but MOBILE and NOT power
+# gated, so an army can be sustained in the field. Unarmed and lightly armoured;
+# it repairs others, never itself. The heal is hardcoded behaviour (ADR-019), not
+# a stat, so this file carries no repair field.
+id: com_repair_vehicle
+name: "Repair Vehicle"
+faction: common
+tier: 2
+cost: 700
+build_time_ticks: 120
+hp: 300
+armour_class: light
+speed: 20
+role: support
+weapon_ids: []
+sight_range: 5
+stealth: false
+detector: false
+produced_at: com_factory
+# Field repair unlocks behind the repair building it extends: the Service Depot,
+# which is itself gated on the factory. So the tech path is factory -> depot ->
+# repair vehicle. Not a tautology with produced_at (the producer is the factory).
+prerequisites: [com_service_depot]
+veterancy_enabled: false
+notes: >
+  The army's medic. Reuses the Service Depot heal loop as a moving aura
+  (ADR-019); mends vehicles, infantry and harvesters but not structures, and
+  cannot mend itself. Balance owns cost/hp/speed under A11.

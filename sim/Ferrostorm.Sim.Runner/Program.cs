@@ -13,6 +13,7 @@ using Ferrostorm.Sim;
 //   catrefuse          - ADR-006: a mismatched catalogue refuses (LAN hello, saves, replays) rather than desyncs
 //   spawngate          - ADR-007: rally in the sim, the spawn exit move, save v4, occupancy and the zero-drain hold
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
+//   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -3251,6 +3252,90 @@ int StanceGate()
     return 0;
 }
 
+int RepairGate()
+{
+    // ADR-019 gate (P6 Wave C2). Additive, the stancegate/regrowthgate pattern:
+    // a standalone mode and a Match battery stage, never a golden scenario, so the
+    // golden list stays 24. Proves the repair vehicle (unit type 13) mends own
+    // mobile units at the depot's rate and price, NOT power gated, NOT itself, NOT
+    // enemies, NOT structures, mends a harvester too, and stops when broke.
+    const int RV = World.RepairVehicleType;
+    Fix64 x20 = Fix64.FromInt(20), x22 = Fix64.FromInt(22), x18 = Fix64.FromInt(18);
+
+    // --- 1. Mends a friendly unit at 2 hp/tick for 1 credit/tick, with NO power
+    //        anywhere in the world - the not-power-gated decision (ADR-019). A
+    //        Service Depot in this same powerless setup would heal nothing. ------
+    {
+        var w = new World(2300, 64, 64, players: 1);
+        w.GrantCredits(0, 100);
+        w.SpawnUnit(0, x20, x20, Fix64.Zero, 300, ArmourClass.Light, weaponId: 0, unitType: RV);
+        int hurt = w.SpawnUnit(0, x22, x20, Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        var h = w.Entities[hurt]; h.Hp = 50; w.SetEntityForTest(hurt, h);   // scripted battle damage
+        long before = w.Credits(0);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (w.Entities[hurt].Hp != 100)
+            return Fail($"repair: a repair vehicle must fully mend a friendly unit with no power present (hp {w.Entities[hurt].Hp}/100)");
+        long spent = before - w.Credits(0);
+        if (spent != 25)
+            return Fail($"repair: 50 hp at 2hp/1cr per tick must cost exactly 25 (spent {spent})");
+    }
+
+    // --- 2. Excludes itself and enemies; mends a harvester ---------------------
+    {
+        var w = new World(2301, 64, 64, players: 2);
+        w.GrantCredits(0, 200);
+        int medic = w.SpawnUnit(0, x20, x20, Fix64.Zero, 300, ArmourClass.Light, weaponId: 0, unitType: RV);
+        var m = w.Entities[medic]; m.Hp = 250; w.SetEntityForTest(medic, m);   // damaged: must NOT self-heal
+        int control = w.SpawnUnit(0, x20, x22, Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        var c = w.Entities[control]; c.Hp = 50; w.SetEntityForTest(control, c);
+        int enemy = w.SpawnUnit(1, x22, x20, Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        var en = w.Entities[enemy]; en.Hp = 50; w.SetEntityForTest(enemy, en);
+        int harv = w.SpawnHarvester(0, x18, x20);
+        var hv = w.Entities[harv]; hv.Hp = 600; w.SetEntityForTest(harv, hv);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (w.Entities[control].Hp != 100)
+            return Fail($"repair: the positive-control friendly unit must be mended ({w.Entities[control].Hp}/100)");
+        if (w.Entities[medic].Hp != 250)
+            return Fail($"repair: a repair vehicle must NOT mend itself ({w.Entities[medic].Hp}, expected the unchanged 250)");
+        if (w.Entities[enemy].Hp != 50)
+            return Fail($"repair: a repair vehicle must NOT mend an enemy ({w.Entities[enemy].Hp}, expected the unchanged 50)");
+        if (w.Entities[harv].Hp != 700)
+            return Fail($"repair: a repair vehicle must mend a harvester ({w.Entities[harv].Hp}/700)");
+    }
+
+    // --- 3. Excludes structures (the kind gate, proven at zero distance) -------
+    {
+        var w = new World(2302, 64, 64, players: 1);
+        w.GrantCredits(0, 100);
+        int plant = w.SpawnPowerPlant(0, 30, 30);
+        var pe = w.Entities[plant];
+        w.SpawnUnit(0, pe.X, pe.Y, Fix64.Zero, 300, ArmourClass.Light, weaponId: 0, unitType: RV); // medic ON the plant
+        int plantMax = pe.MaxHp;
+        var pd = w.Entities[plant]; pd.Hp = plantMax - 100; w.SetEntityForTest(plant, pd);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (w.Entities[plant].Hp != plantMax - 100)
+            return Fail($"repair: a repair vehicle must NOT mend a structure ({w.Entities[plant].Hp}, expected the unchanged {plantMax - 100})");
+    }
+
+    // --- 4. Stops the tick the treasury empties -------------------------------
+    {
+        var w = new World(2303, 64, 64, players: 1);
+        w.GrantCredits(0, 6);   // 6 credits: exactly 6 heal-ticks, +12 hp
+        w.SpawnUnit(0, x20, x20, Fix64.Zero, 300, ArmourClass.Light, weaponId: 0, unitType: RV);
+        int hurt = w.SpawnUnit(0, x22, x20, Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        var h = w.Entities[hurt]; h.Hp = 50; w.SetEntityForTest(hurt, h);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (w.Entities[hurt].Hp != 62)
+            return Fail($"repair: 6 credits must buy exactly 6 heal-ticks then stop ({w.Entities[hurt].Hp}, expected 62)");
+        if (w.Credits(0) != 0)
+            return Fail($"repair: a repair vehicle must stop when broke (credits {w.Credits(0)}, expected 0)");
+    }
+
+    Console.WriteLine("repairgate: a repair vehicle fully mended a friendly unit at 2hp/1cr per tick with NO power present (a depot would not); " +
+                      "it did not mend itself, an enemy, or a structure; it mended a harvester to full; and 6 credits bought exactly 6 heal-ticks then stopped");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -3300,6 +3385,9 @@ int Match(ulong seed)
     // ADR-015: and the unit command-stance gate.
     int stance = StanceGate();
     if (stance != 0) return stance;
+    // ADR-019: and the repair-vehicle gate.
+    int repair = RepairGate();
+    if (repair != 0) return repair;
     return 0;
 }
 
@@ -4005,6 +4093,7 @@ return args.Length == 0
         "prodgate" => ProdGate(),
         "regrowthgate" => RegrowthGate(),
         "stancegate" => StanceGate(),
+        "repairgate" => RepairGate(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
         "exdebug" => ExDebug(),

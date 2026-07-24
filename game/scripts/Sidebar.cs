@@ -95,6 +95,11 @@ public partial class Sidebar : PanelContainer
         new("SHADE RAIDER", 5, "sod_shade_raider"),
         new("VANGUARD CAR", 12, "dir_vanguard_car"),
         new("CANNON TANK", 1, "dir_cannon_tank"),
+        // ADR-019 (P6 Wave C2): the repair vehicle, common, produced at the
+        // factory so it sits in VEHICLES. The icon sprite is not cut yet; the
+        // MakeButton Exists guard tolerates that, and the bespoke icon is owed
+        // to art-pipeline with the model.
+        new("REPAIR VEHICLE", World.RepairVehicleType, "com_repair_vehicle"),
         new("HOWITZER", 8, "dir_howitzer"),
         new("PHANTOM TANK", 9, "sod_phantom_tank"),
         new("HARVESTER", 4, "com_harvester"),
