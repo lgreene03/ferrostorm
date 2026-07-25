@@ -35,6 +35,23 @@ public partial class SkirmishLive : Node3D
     private readonly List<Command> _pending = new();
     private readonly List<Command> _tickCmds = new();
     private readonly List<SnapshotInterpolator.ViewEntity> _view = new();
+    /// <summary>
+    /// C7b: WHICH SEAT this client is playing. 0 in every single-player match,
+    /// which is every match today, so the default keeps behaviour identical.
+    /// In a LAN game the JOINER is player 1, and every place that used to say
+    /// "player 0" meaning "me" has to say this instead.
+    ///
+    /// This is the widest and least interesting part of the LAN wave, and it is
+    /// where every miss becomes a bug that only the joiner ever sees: their
+    /// selection picks nothing, their fog reveals the wrong base, their sidebar
+    /// prices the wrong treasury. The gate therefore drives a match from the
+    /// player-1 seat rather than trusting a careful read.
+    /// </summary>
+    public int LocalPlayerId { get; private set; }
+    /// <summary>The other seat in a two-player match, for the handful of reads
+    /// that are genuinely about the opponent rather than about me.</summary>
+    private int EnemyPlayerId => 1 - LocalPlayerId;
+
     private readonly HashSet<int> _selection = new();
     // ADR-021 legibility: the entity the player last clicked that they do NOT
     // own, held for a read-only readout. Deliberately NOT in _selection, which
@@ -621,7 +638,7 @@ public partial class SkirmishLive : Node3D
         if (_world.Tick < GameFiles.MinRecordedTicks) return;
         ulong hash = _world.ComputeStateHash();
         _rec.Finish(hash, _recPath);
-        var meta = MatchMeta.For(_setup, _world.Tick, _world.Credits(0));
+        var meta = MatchMeta.For(_setup, _world.Tick, _world.Credits(LocalPlayerId));
         meta.FinalHash = $"{hash:X16}";
         meta.Write(Path.ChangeExtension(_recPath, ".json"));
     }
@@ -666,7 +683,7 @@ public partial class SkirmishLive : Node3D
             _mission.Save(bw);
         }
         File.WriteAllBytes(GameFiles.SlotSave(slot), ms.ToArray());
-        MatchMeta.For(_setup, _world.Tick, _world.Credits(0)).Write(GameFiles.SlotMeta(slot));
+        MatchMeta.For(_setup, _world.Tick, _world.Credits(LocalPlayerId)).Write(GameFiles.SlotMeta(slot));
         _audio.Play("ui_confirm", -6);
     }
 
@@ -724,7 +741,7 @@ public partial class SkirmishLive : Node3D
     private int FindOwnStructure(EntityKind kind)
     {
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && v.Kind == kind) return v.Id;
+            if (v.Alive && v.PlayerId == LocalPlayerId && v.Kind == kind) return v.Id;
         return -1;
     }
 
@@ -744,7 +761,7 @@ public partial class SkirmishLive : Node3D
         int best = -1, bestQueue = int.MaxValue;
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0 || v.Id < 0 || v.Id >= _world.EntityCount) continue;
+            if (!v.Alive || v.PlayerId != LocalPlayerId || v.Id < 0 || v.Id >= _world.EntityCount) continue;
             if (_world.Entities[v.Id].StructType != structType) continue;
             int q = _world.QueueLength(v.Id);
             if (q < bestQueue || (q == bestQueue && v.Id < best)) { bestQueue = q; best = v.Id; }
@@ -765,7 +782,7 @@ public partial class SkirmishLive : Node3D
     private bool HasLiveRefinery()
     {
         foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Refinery) return true;
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.Refinery) return true;
         return false;
     }
 
@@ -776,7 +793,7 @@ public partial class SkirmishLive : Node3D
     private bool OwnsStructType(int structType)
     {
         foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == 0 && e.StructType == structType) return true;
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.StructType == structType) return true;
         return false;
     }
 
@@ -834,7 +851,7 @@ public partial class SkirmishLive : Node3D
         for (int i = 0; i < ents.Count; i++)
         {
             var e = ents[i];
-            if (!e.Alive || e.PlayerId != 0 || e.Kind != EntityKind.Harvester) continue;
+            if (!e.Alive || e.PlayerId != LocalPlayerId || e.Kind != EntityKind.Harvester) continue;
             if (e.HState != HarvestState.Idle) continue;
             if (_manuallyStopped.Contains(i)) continue;
             if (_lastAutoHarvest.TryGetValue(i, out int last) && tick - last < AutoHarvestEvery) continue;
@@ -842,7 +859,7 @@ public partial class SkirmishLive : Node3D
             if (field < 0) continue;             // nothing left to mine: parking is correct
             _lastAutoHarvest[i] = tick;
             _autoHarvestIssues++;
-            _pending.Add(new Command(0, 0, CommandType.Harvest, i, Fix64.Zero, Fix64.Zero, field));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.Harvest, i, Fix64.Zero, Fix64.Zero, field));
         }
     }
 
@@ -851,7 +868,7 @@ public partial class SkirmishLive : Node3D
         if (!(MatchConfig.AllowedStructures?.Contains(structType) ?? true)) return;
         if (_yardId >= 0)
         {
-            _pending.Add(new Command(0, 0, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
             _audio.Play("ui_confirm", -6);
         }
     }
@@ -866,7 +883,7 @@ public partial class SkirmishLive : Node3D
         int producer = FindOwnStructureByType(_world.GetUnitType(unitType).ProducedAt);
         if (producer >= 0)
         {
-            _pending.Add(new Command(0, 0, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
             _audio.Play("ui_confirm", -6);
         }
     }
@@ -893,11 +910,11 @@ public partial class SkirmishLive : Node3D
         int producedAt = _world.GetUnitType(unitType).ProducedAt;
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0 || v.Id < 0 || v.Id >= _world.EntityCount) continue;
+            if (!v.Alive || v.PlayerId != LocalPlayerId || v.Id < 0 || v.Id >= _world.EntityCount) continue;
             if (_world.Entities[v.Id].StructType != producedAt) continue;
             int idx = LastQueueIndexOf(v.Id, unitType);
             if (idx < 0) continue;
-            _pending.Add(new Command(0, 0, CommandType.CancelProduce, v.Id, Fix64.Zero, Fix64.Zero, idx));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.CancelProduce, v.Id, Fix64.Zero, Fix64.Zero, idx));
             _audio.Play("ui_click", -8);
             return;
         }
@@ -916,7 +933,7 @@ public partial class SkirmishLive : Node3D
         if (ready != 0)
         {
             if (ready != structType) return;         // a different structure is ready
-            _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, 0));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, 0));
             _audio.Play("ui_click", -8);
             return;
         }
@@ -928,20 +945,20 @@ public partial class SkirmishLive : Node3D
         int laneReady = _world.LaneState(_yardId).Ready;
         if (laneReady == structType)
         {
-            _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag));
             _audio.Play("ui_click", -8);
             return;
         }
         for (int k = laneQ.Count - 1; k >= 0; k--)
             if (laneQ[k] == structType)
             {
-                _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag | k));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag | k));
                 _audio.Play("ui_click", -8);
                 return;
             }
         int idx = LastQueueIndexOf(_yardId, structType);
         if (idx < 0) return;
-        _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, idx));
+        _pending.Add(new Command(0, LocalPlayerId, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, idx));
         _audio.Play("ui_click", -8);
     }
 
@@ -963,7 +980,7 @@ public partial class SkirmishLive : Node3D
         ClearCoverageRings();
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0 || Mobile(v.Kind)) continue;
+            if (!v.Alive || v.PlayerId != LocalPlayerId || Mobile(v.Kind)) continue;
             if (v.Id < 0 || v.Id >= _world.EntityCount) continue;
             float cr = RangeOf(_world.Entities[v.Id].WeaponId);
             if (cr <= 0) continue;
@@ -1245,13 +1262,13 @@ public partial class SkirmishLive : Node3D
         // reported after the step. The sim decides a Deploy inside this very
         // Step, so the verdict below is never more than one tick stale.
         foreach (var c in _tickCmds)
-            if (c.Type == CommandType.Deploy && c.PlayerId == 0)
+            if (c.Type == CommandType.Deploy && c.PlayerId == LocalPlayerId)
                 _pendingDeploys[c.EntityId] = recTick;
         var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
         _world.Step(span);
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
-        _fog.UpdateFrom(_world, 0);
+        _fog.UpdateFrom(_world, LocalPlayerId);
         if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
         if (_mission != null && _mission.Messages.Count > _seenMessages)
         {
@@ -1299,7 +1316,7 @@ public partial class SkirmishLive : Node3D
                 && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var nu = _world.Entities[ev.A];
-                if (nu.Alive && nu.PlayerId == 0 && nu.Kind == EntityKind.Harvester)
+                if (nu.Alive && nu.PlayerId == LocalPlayerId && nu.Kind == EntityKind.Harvester)
                     _manuallyStopped.Add(ev.A);
             }
             // W3-19: flyout toast for own completions. For CY
@@ -1309,7 +1326,7 @@ public partial class SkirmishLive : Node3D
             if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var pe = _world.Entities[ev.A];
-                if (pe.PlayerId == 0)
+                if (pe.PlayerId == LocalPlayerId)
                 {
                     // TICKET-P5-SAVE-01: "PLACE >>" is a call to action, and a
                     // spectator has no action to take - the ready slot belongs
@@ -1331,8 +1348,8 @@ public partial class SkirmishLive : Node3D
             // signal to full; AfterTicks decays it over ~5 seconds of frame
             // time. Post-Step entity reads, the established precedent.
             if (ev.Type == GameEventType.Fired
-                && ((ev.A >= 0 && ev.A < _world.EntityCount && _world.Entities[ev.A].PlayerId == 0)
-                 || (ev.B >= 0 && ev.B < _world.EntityCount && _world.Entities[ev.B].PlayerId == 0)))
+                && ((ev.A >= 0 && ev.A < _world.EntityCount && _world.Entities[ev.A].PlayerId == LocalPlayerId)
+                 || (ev.B >= 0 && ev.B < _world.EntityCount && _world.Entities[ev.B].PlayerId == LocalPlayerId)))
                 _combatIntensity = 1f;
             // TICKET-P6-VO-01: a fallen own mobile speaks once per cooldown
             // window, however many died in it - eleven walls falling is a
@@ -1341,7 +1358,7 @@ public partial class SkirmishLive : Node3D
             if (ev.Type == GameEventType.Died && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var fallen = _world.Entities[ev.A];
-                if (fallen.PlayerId == 0 && Mobile(fallen.Kind))
+                if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
                     PlayVo("vo_unit_lost");
             }
             if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
@@ -1378,9 +1395,9 @@ public partial class SkirmishLive : Node3D
             {
                 var target = _world.Entities[ev.B];
                 double now = Time.GetTicksMsec() / 1000.0;
-                bool ownStructure = target.PlayerId == 0
+                bool ownStructure = target.PlayerId == LocalPlayerId
                     && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester;
-                bool ownHarvester = target.PlayerId == 0 && target.Kind == EntityKind.Harvester;
+                bool ownHarvester = target.PlayerId == LocalPlayerId && target.Kind == EntityKind.Harvester;
                 if (ownStructure && now - _lastAttackAlert > 12.0)
                 {
                     _lastAttackAlert = now;
@@ -1432,7 +1449,7 @@ public partial class SkirmishLive : Node3D
             // most once per charge cycle, minutes apart.
             if (ev.Type == GameEventType.SuperweaponLaunched
                 && ev.A >= 0 && ev.A < _world.EntityCount
-                && _world.Entities[ev.A].PlayerId != 0)
+                && _world.Entities[ev.A].PlayerId != LocalPlayerId)
             {
                 LaunchAlerts++;
                 // The hard klaxon, not a new cue: an incoming superweapon is
@@ -1498,7 +1515,7 @@ public partial class SkirmishLive : Node3D
         SyncActors((float)delta);
         int supply = 0, draw = 0;
         foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
+            if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
         string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
         // TICKET-P5-PWR-01: the low-power alert, on the 75 per cent CROSSING.
         // Same integer test as the sidebar's brown-out colour (Sidebar.cs),
@@ -1534,7 +1551,7 @@ public partial class SkirmishLive : Node3D
         // thing that died.
         bool hasUplink = false;
         foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.RadarUplink)
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.RadarUplink)
             {
                 hasUplink = true;
                 // The rally-marker idiom for Fix64 to float (raw over 2^32).
@@ -1566,8 +1583,8 @@ public partial class SkirmishLive : Node3D
             foreach (var e in _world.Entities)
             {
                 if (!e.Alive) continue;
-                if (e.PlayerId == 0) { s0 += e.PowerSupply; d0 += e.PowerDraw; }
-                else if (e.PlayerId == 1) { s1 += e.PowerSupply; d1 += e.PowerDraw; }
+                if (e.PlayerId == LocalPlayerId) { s0 += e.PowerSupply; d0 += e.PowerDraw; }
+                else if (e.PlayerId == EnemyPlayerId) { s1 += e.PowerSupply; d1 += e.PowerDraw; }
             }
             _ownerBrownedOut[0] = d0 > 0 && s0 * 4 < d0 * 3;
             _ownerBrownedOut[1] = d1 > 0 && s1 * 4 < d1 * 3;
@@ -1577,15 +1594,15 @@ public partial class SkirmishLive : Node3D
         // silently ignores orders reads as a broken game.
         string mode = _replay != null ? $"    REPLAY {_world.Tick}/{_replayTicks}"
             : _resumed ? "    RESUMED (not recording)" : "";
-        _status.Text = $"CREDITS {_world.Credits(0)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}{mode}";
+        _status.Text = $"CREDITS {_world.Credits(LocalPlayerId)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}{mode}";
 
         var dots = new List<(float, float, Color)>();
         foreach (var v in _view)
         {
             if (!v.Alive || v.Kind == EntityKind.FerriteField) continue;
-            if (v.PlayerId == 1 && !_world.IsVisible(0, (int)v.X, (int)v.Y)) continue;
-            var c = v.PlayerId == 0 ? BattlefieldView.DirectorateMark
-                : v.PlayerId == 1 ? BattlefieldView.SodalityMark
+            if (v.PlayerId == EnemyPlayerId && !_world.IsVisible(0, (int)v.X, (int)v.Y)) continue;
+            var c = v.PlayerId == LocalPlayerId ? BattlefieldView.DirectorateMark
+                : v.PlayerId == EnemyPlayerId ? BattlefieldView.SodalityMark
                 : new Color(0.79f, 0.63f, 0.36f);
             dots.Add(((float)v.X, (float)v.Y, c));
         }
@@ -1644,7 +1661,7 @@ public partial class SkirmishLive : Node3D
         var laneSt = _yardId >= 0 ? _world.LaneState(_yardId) : (Progress: 0, Paid: 0, Ready: 0);
         float laneProg = laneQ.Count > 0
             ? laneSt.Progress / (_world.GetStructureType(laneQ[0]).BuildTicks * 100f) : 0f;
-        _sidebar.Refresh(_world.Credits(0), ready,
+        _sidebar.Refresh(_world.Credits(LocalPlayerId), ready,
             new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
             UnitLine(_factoryId), UnitLine(_barracksId),
             supply, draw, OwnsStructType,
@@ -1835,7 +1852,7 @@ public partial class SkirmishLive : Node3D
                 else anyCombat = true;
             }
         if (!anyMobile) return GameCursor.Select;
-        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == 1 && v.Kind != EntityKind.FerriteField);
+        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == EnemyPlayerId && v.Kind != EntityKind.FerriteField);
         if (enemy >= 0)
         {
             if (anyEngineer && !anyCombat && !anyHarvester
@@ -1947,7 +1964,7 @@ public partial class SkirmishLive : Node3D
                     // heal while the rest stall, and a global test would print
                     // REPAIRING on a building that is not being repaired.
                     string rep = "";
-                    if (!Mobile(v.Kind) && v.PlayerId == 0
+                    if (!Mobile(v.Kind) && v.PlayerId == LocalPlayerId
                         && sid >= 0 && sid < _world.EntityCount && _world.Entities[sid].Repairing)
                         rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
                     // ADR-008: an unpowered turret says so out loud - the
@@ -1965,7 +1982,7 @@ public partial class SkirmishLive : Node3D
                         // action the way the structures advertise repair,
                         // read from the live binding (the SET-01 rule) so a
                         // rebound key never leaves the readout lying.
-                        : v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
+                        : v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
                             ? $"   {Settings.KeyName(Settings.BindOf("deploy"))} deploy"
                             : "";
                     // ADR-015: an own combat unit carries a stance readout - the
@@ -1974,7 +1991,7 @@ public partial class SkirmishLive : Node3D
                     // excluded: it advertises deploy, and a stance on it is a
                     // no-op the player never wants to see offered.
                     string stance = "";
-                    if (v.Kind == EntityKind.Unit && v.PlayerId == 0 && v.UnitType != McvUnitType
+                    if (v.Kind == EntityKind.Unit && v.PlayerId == LocalPlayerId && v.UnitType != McvUnitType
                         && sid >= 0 && sid < _world.EntityCount)
                     {
                         string sName = _world.Entities[sid].Stance switch
@@ -1992,7 +2009,7 @@ public partial class SkirmishLive : Node3D
                     // ADR-021: an outpost the player HAS taken says what it is
                     // earning, so the capture reads as having paid off rather
                     // than as a building that did nothing.
-                    string income = v.Kind == EntityKind.Outpost && v.PlayerId == 0
+                    string income = v.Kind == EntityKind.Outpost && v.PlayerId == LocalPlayerId
                         ? $"   +{World.OutpostIncomePerSecond} cr/s" : "";
                     return name + hp + off + rep + income + acts + stance;
                 }
@@ -2018,17 +2035,17 @@ public partial class SkirmishLive : Node3D
         for (int i = 0; i < id && i < ents.Count; i++)
         {
             var e = ents[i];
-            if (e.Alive && e.PlayerId == 0 && e.Repairing
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Repairing
                 && !Mobile(e.Kind) && e.Kind != EntityKind.FerriteField) ahead++;
         }
-        return _world.Credits(0) < ahead + 1;
+        return _world.Credits(LocalPlayerId) < ahead + 1;
     }
 
     private int CountOwn()
     {
         int n = 0;
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && (v.Kind == EntityKind.Unit || v.Kind == EntityKind.Harvester)) n++;
+            if (v.Alive && v.PlayerId == LocalPlayerId && (v.Kind == EntityKind.Unit || v.Kind == EntityKind.Harvester)) n++;
         return n;
     }
 
@@ -2063,7 +2080,7 @@ public partial class SkirmishLive : Node3D
         for (int i = 0; i < ents.Count; i++)
         {
             var e = ents[i];
-            if (!e.Alive || e.PlayerId != 0 || !e.HasRally) continue;
+            if (!e.Alive || e.PlayerId != LocalPlayerId || !e.HasRally) continue;
             var m = RallyMarkerFor(i);
             m.Position = new Vector3(
                 (float)(e.RallyX.Raw / 4294967296.0), 0.35f, (float)(e.RallyY.Raw / 4294967296.0));
@@ -2072,7 +2089,7 @@ public partial class SkirmishLive : Node3D
         List<int>? stale = null;
         foreach (var (sid, _) in _rallyMarkers)
             if (sid < 0 || sid >= ents.Count || !ents[sid].Alive
-                || ents[sid].PlayerId != 0 || !ents[sid].HasRally)
+                || ents[sid].PlayerId != LocalPlayerId || !ents[sid].HasRally)
                 (stale ??= new List<int>()).Add(sid);
         if (stale != null) foreach (int sid in stale) ForgetRally(sid);
     }
@@ -2094,7 +2111,7 @@ public partial class SkirmishLive : Node3D
             // ADR-009: every unit producer can hold, not just the factory. A
             // walled-in barracks that never says so is the same silent stall
             // the toast exists to break.
-            if (e.Alive && e.PlayerId == 0 && e.Kind is EntityKind.Factory or EntityKind.Barracks)
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind is EntityKind.Factory or EntityKind.Barracks)
             {
                 var q = _world.QueueContents(i);
                 held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
@@ -2207,7 +2224,7 @@ public partial class SkirmishLive : Node3D
     {
         if (!_world.ValidPlacement(0, ax, ay, type)) return false;
         if (!IsBarrier(type)) return true;
-        return _world.Credits(0) >= _world.GetStructureType(type).Cost
+        return _world.Credits(LocalPlayerId) >= _world.GetStructureType(type).Cost
             && OwnCount(EntityKind.Wall) < World.MaxBarriersPerPlayer;
     }
 
@@ -2319,7 +2336,7 @@ public partial class SkirmishLive : Node3D
         if (!_wallDrag) return 0;
         var run = WallRun(_wallDragStart.X, _wallDragStart.Y, cx, cy);
         foreach (var (x, y) in run)
-            _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.PlaceStructure, _yardId,
                 Fix64.FromInt(x), Fix64.FromInt(y), _placingType));
         _wallDrag = false;
         ClearDragGhosts();
@@ -2513,7 +2530,7 @@ public partial class SkirmishLive : Node3D
             // at full health, which removes the ring here. The ring rides as a
             // child of the actor, so a dying structure sinks with its ring.
             if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField
-                && v.PlayerId == 0 && v.Id >= 0 && v.Id < _world.EntityCount)
+                && v.PlayerId == LocalPlayerId && v.Id >= 0 && v.Id < _world.EntityCount)
             {
                 bool repairing = _world.Entities[v.Id].Repairing;
                 var rring = node.GetNodeOrNull<MeshInstance3D>("RepairRing");
@@ -2543,7 +2560,7 @@ public partial class SkirmishLive : Node3D
             // Radius is World.DepotRepairRadiusCells - the system constant the
             // sim itself heals by, NOT sight_range, which matches it only by
             // coincidence (com_service_depot.yaml warns of exactly that).
-            if (v.Kind == EntityKind.ServiceDepot && v.PlayerId == 0)
+            if (v.Kind == EntityKind.ServiceDepot && v.PlayerId == LocalPlayerId)
             {
                 var aura = node.GetNodeOrNull<MeshInstance3D>("DepotAura");
                 if (aura == null)
@@ -2700,7 +2717,7 @@ public partial class SkirmishLive : Node3D
             // footprint and ride higher: the shipped 0.9-wide bar is tuned
             // for mobiles and would float a third-width inside a 2x2 roof.
             if (_latest.TryGetValue(id, out var hv)
-                && (Mobile(hv.Kind) || (hv.PlayerId == 0 && hv.Kind != EntityKind.FerriteField)))
+                && (Mobile(hv.Kind) || (hv.PlayerId == LocalPlayerId && hv.Kind != EntityKind.FerriteField)))
             {
                 bool show = node.Visible && hv.MaxHp > 0
                     && (hv.Kind == EntityKind.Wall
@@ -2986,7 +3003,7 @@ public partial class SkirmishLive : Node3D
             _sellConfirmUntil = -1;
             foreach (int sid in _selection)
                 if (_latest.TryGetValue(sid, out var xv) && !Mobile(xv.Kind))
-                    _pending.Add(new Command(0, 0, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
+                    _pending.Add(new Command(0, LocalPlayerId, CommandType.SellStructure, sid, Fix64.Zero, Fix64.Zero));
             _audio.Play("ui_click", -8);
             return true;
         }
@@ -3060,7 +3077,7 @@ public partial class SkirmishLive : Node3D
         }
         _repairConfirmUntil = -1;
         foreach (int sid in targets)
-            _pending.Add(new Command(0, 0, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.Repair, sid, Fix64.Zero, Fix64.Zero));
         // REP-01, the single line that kills the lie: the confirmation chime
         // belongs to the branch that actually did something.
         _audio.Play("ui_confirm", -8);
@@ -3111,14 +3128,14 @@ public partial class SkirmishLive : Node3D
         }
         int supply = 0, draw = 0;
         foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == 0) { supply += e.PowerSupply; draw += e.PowerDraw; }
+            if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
         if (supply < draw)
         {
             ShowToast("DEPOT OFFLINE: LOW POWER");   // World's depot gate, said out loud
             _audio.Play("ui_click", -12);
             return;
         }
-        if (_world.Credits(0) < 1)
+        if (_world.Credits(LocalPlayerId) < 1)
         {
             ShowToast("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
             _audio.Play("ui_click", -12);
@@ -3161,7 +3178,7 @@ public partial class SkirmishLive : Node3D
                 dx = Fix64.FromFraction((int)(((float)dp.X + dir.X * 2f) * 1000), 1000);
                 dy = Fix64.FromFraction((int)(((float)dp.Y + dir.Y * 2f) * 1000), 1000);
             }
-            _pending.Add(new Command(0, 0, CommandType.PathMove, id, dx, dy));
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.PathMove, id, dx, dy));
             _manuallyStopped.Add(id);   // player-directed: auto-resume keeps off
         }
         _effects.OrderMarker(new Vector3((float)dp.X, 0, (float)dp.Y), 0);
@@ -3181,7 +3198,7 @@ public partial class SkirmishLive : Node3D
         float bestD = float.MaxValue;
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0 || v.Kind != EntityKind.ServiceDepot) continue;
+            if (!v.Alive || v.PlayerId != LocalPlayerId || v.Kind != EntityKind.ServiceDepot) continue;
             float d = new Vector2((float)v.X - at.X, (float)v.Y - at.Y).LengthSquared();
             if (d < bestD) { bestD = d; best = v.Id; }
         }
@@ -3232,7 +3249,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
             {
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
-                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, mx, my));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.AttackMove, id, mx, my));
                 n++;
             }
         // W3-17's attack colour: an attack-move is an attack order, and it must
@@ -3257,7 +3274,7 @@ public partial class SkirmishLive : Node3D
         if (_replay != null) return;               // a spectator issues no orders
         int owned = 0, held = 0;
         foreach (int id in _selection)
-            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
             {
                 owned++;
                 if (id >= 0 && id < _world.EntityCount && _world.Entities[id].Stance == Stance.HoldFire) held++;
@@ -3266,8 +3283,8 @@ public partial class SkirmishLive : Node3D
         bool release = held == owned;              // all already holding: weapons free
         var target = release ? Stance.Aggressive : Stance.HoldFire;
         foreach (int id in _selection)
-            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
-                _pending.Add(new Command(0, 0, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)target));
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)target));
         _audio.Play("ui_click", -10);
         ShowToast(release ? $"WEAPONS FREE   ({owned} UNITS)" : $"HOLD FIRE   ({owned} UNITS)");
     }
@@ -3282,9 +3299,9 @@ public partial class SkirmishLive : Node3D
         DisarmPatrol();
         int n = 0;
         foreach (int id in _selection)
-            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
             {
-                _pending.Add(new Command(0, 0, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)Stance.Guard));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)Stance.Guard));
                 n++;
             }
         if (n == 0) { ShowToast("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
@@ -3300,7 +3317,7 @@ public partial class SkirmishLive : Node3D
         if (_replay != null) return;
         int movers = 0;
         foreach (int id in _selection)
-            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit) movers++;
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit) movers++;
         if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();
         _attackMoveArmed = false;                  // the armed orders are exclusive
@@ -3324,9 +3341,9 @@ public partial class SkirmishLive : Node3D
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
         foreach (int id in _selection)
-            if (_latest.TryGetValue(id, out var v) && v.PlayerId == 0 && v.Kind == EntityKind.Unit)
+            if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
             {
-                _pending.Add(new Command(0, 0, CommandType.SetStance, id, cx, cy, (int)Stance.Patrol));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, cx, cy, (int)Stance.Patrol));
                 n++;
             }
         // A patrol leg is an attack-move, so it acknowledges in the attack colour,
@@ -3346,7 +3363,7 @@ public partial class SkirmishLive : Node3D
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
             {
-                _pending.Add(new Command(0, 0, CommandType.Stop, id, Fix64.Zero, Fix64.Zero));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Stop, id, Fix64.Zero, Fix64.Zero));
                 // P5-ECON-07 clause 2, and the line that keeps this feature
                 // quality of life rather than strategy automation (GDD s1): a
                 // harvester the player explicitly stopped stays stopped until
@@ -3373,7 +3390,7 @@ public partial class SkirmishLive : Node3D
     /// the SPAWN-02 watcher in RunOneTick, so no caller needs to ask twice.
     /// </summary>
     public void IssueDeploy(int mcvId) =>
-        _pending.Add(new Command(0, 0, CommandType.Deploy, mcvId, Fix64.Zero, Fix64.Zero));
+        _pending.Add(new Command(0, LocalPlayerId, CommandType.Deploy, mcvId, Fix64.Zero, Fix64.Zero));
 
     /// <summary>The deploy key's handler: every own MCV in the selection is
     /// ordered to unpack; whatever else is selected alongside is left alone,
@@ -3384,7 +3401,7 @@ public partial class SkirmishLive : Node3D
         if (_replay != null) return false;   // a spectator issues no orders
         int n = 0;
         foreach (int sid in _selection)
-            if (_latest.TryGetValue(sid, out var dv) && dv.PlayerId == 0
+            if (_latest.TryGetValue(sid, out var dv) && dv.PlayerId == LocalPlayerId
                 && dv.Kind == EntityKind.Unit && dv.UnitType == McvUnitType)
             {
                 IssueDeploy(sid);
@@ -3399,7 +3416,7 @@ public partial class SkirmishLive : Node3D
     /// mobile branch of FinishSelect, so the vehicle that answers a
     /// double-click is exactly the one a single click would select.</summary>
     private int PickOwnMcv(Vector2 at)
-        => PickEntity(at, 0.9f, v => v.PlayerId == 0
+        => PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId
             && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType);
 
     private void FinishSelect(Vector2 at, bool add)
@@ -3408,9 +3425,9 @@ public partial class SkirmishLive : Node3D
         _inspected = -1;   // any fresh click or drag retires the inspect readout
         if ((at - _dragStart).Length() <= 8)
         {
-            int hit = PickEntity(at, 0.9f, v => v.PlayerId == 0 && Mobile(v.Kind));
+            int hit = PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
             if (hit < 0)
-                hit = PickEntity(at, 1.4f, v => v.PlayerId == 0 && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+                hit = PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
             if (hit >= 0)
             {
                 _selection.Add(hit);
@@ -3444,7 +3461,7 @@ public partial class SkirmishLive : Node3D
         var walls = new List<int>();
         foreach (var v in _view)
         {
-            if (!v.Alive || v.PlayerId != 0) continue;
+            if (!v.Alive || v.PlayerId != LocalPlayerId) continue;
             if (!Mobile(v.Kind) && v.Kind != EntityKind.Wall) continue;
             var sp = _cam.UnprojectPosition(new Vector3((float)v.X, 0.3f, (float)v.Y));
             if (sp.X < tl.X || sp.X > br.X || sp.Y < tl.Y || sp.Y > br.Y) continue;
@@ -3471,7 +3488,7 @@ public partial class SkirmishLive : Node3D
         // ghost and a refused click are the same answer given twice.
         if (_placingType <= 0 || !CanPlace(ax, ay, _placingType))
         { _audio.Play("ui_click", -12); return false; }
-        _pending.Add(new Command(0, 0, CommandType.PlaceStructure, _yardId,
+        _pending.Add(new Command(0, LocalPlayerId, CommandType.PlaceStructure, _yardId,
             Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
         // DEF-08 clause 7: a barrier STAYS IN MODE - the classic loop is draw,
         // draw, draw, Escape. Everything else consumes its ready slot and so
@@ -3501,14 +3518,14 @@ public partial class SkirmishLive : Node3D
     public Vector3? FindOwnUnitPos(int unitType)
     {
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && v.Kind == EntityKind.Unit && v.UnitType == unitType)
+            if (v.Alive && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit && v.UnitType == unitType)
                 return new Vector3((float)v.X, 0, (float)v.Y);
         return null;
     }
     public bool RecoilActive(int unitType)
     {
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && v.UnitType == unitType
+            if (v.Alive && v.PlayerId == LocalPlayerId && v.UnitType == unitType
                 && _rigs.TryGetValue(v.Id, out var r) && r.Turret is { } t
                 && (t.Position - r.TurretRest).Length() > 0.01f)
                 return true;
@@ -3518,11 +3535,11 @@ public partial class SkirmishLive : Node3D
     public bool AimActive(int unitType)
     {
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && v.UnitType == unitType && _aim.TryGetValue(v.Id, out var a) && a.Until > _now)
+            if (v.Alive && v.PlayerId == LocalPlayerId && v.UnitType == unitType && _aim.TryGetValue(v.Id, out var a) && a.Until > _now)
                 return true;
         return false;
     }
-    public long CreditsNow => _world.Credits(0);
+    public long CreditsNow => _world.Credits(LocalPlayerId);
     public int ReadyAtYard => _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
 
     // ---- Verification surface for DEF-01/08/09, following the PlaceAtCell and
@@ -3620,7 +3637,7 @@ public partial class SkirmishLive : Node3D
         for (int i = 0; i < _world.EntityCount; i++)
         {
             var e = _world.Entities[i];
-            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Unit) newest = i;
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.Unit) newest = i;
         }
         if (newest < 0) return false;
         var u = _world.Entities[newest];
@@ -3705,7 +3722,7 @@ public partial class SkirmishLive : Node3D
     {
         var l = new List<Vector2>();
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && Mobile(v.Kind)) l.Add(new Vector2((float)v.X, (float)v.Y));
+            if (v.Alive && v.PlayerId == LocalPlayerId && Mobile(v.Kind)) l.Add(new Vector2((float)v.X, (float)v.Y));
         return l;
     }
     /// <summary>Drive the real box-select path from a screen rect.</summary>
@@ -3762,14 +3779,14 @@ public partial class SkirmishLive : Node3D
     // charges. Reads, not recomputations.
     public int UnitCostOf(int typeId) => _world.GetUnitType(typeId).Cost;
     public int StructCostOf(int typeId) => _world.GetStructureType(typeId).Cost;
-    public long DebugCredits => _world.Credits(0);
+    public long DebugCredits => _world.Credits(LocalPlayerId);
     public ulong DebugCatalogueChecksum => _world.CatalogueChecksum;
     public int ReadyStructureTypeForTest
     {
         get
         {
             foreach (var e in _world.Entities)
-                if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.ConstructionYard && e.ReadyStructure > 0)
+                if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.ConstructionYard && e.ReadyStructure > 0)
                     return e.ReadyStructure;
             return 0;
         }
@@ -3778,7 +3795,7 @@ public partial class SkirmishLive : Node3D
     public int OwnCount(EntityKind kind)
     {
         int n = 0;
-        foreach (var v in _view) if (v.Alive && v.PlayerId == 0 && v.Kind == kind) n++;
+        foreach (var v in _view) if (v.Alive && v.PlayerId == LocalPlayerId && v.Kind == kind) n++;
         return n;
     }
 
@@ -3868,9 +3885,9 @@ public partial class SkirmishLive : Node3D
         if (onlyStructures)
         {
             foreach (int sid in _selection)
-                if (_latest.TryGetValue(sid, out var sv) && Ralliable(sv.Kind) && sv.PlayerId == 0)
+                if (_latest.TryGetValue(sid, out var sv) && Ralliable(sv.Kind) && sv.PlayerId == LocalPlayerId)
                 {
-                    _pending.Add(new Command(0, 0, CommandType.SetRally, sid,
+                    _pending.Add(new Command(0, LocalPlayerId, CommandType.SetRally, sid,
                         Fix64.FromFraction((int)(p.X * 100), 100),
                         Fix64.FromFraction((int)(p.Z * 100), 100), 0)); // AuxId 0 = set; -1 clears
                     // W3-17: rally clicks acknowledge in gold. The marker
@@ -3882,7 +3899,7 @@ public partial class SkirmishLive : Node3D
         }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
-        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == 1 && v.Kind != EntityKind.FerriteField);
+        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == EnemyPlayerId && v.Kind != EntityKind.FerriteField);
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
         // P5-ECON-06: computed ONCE for the whole click, not per selected unit,
         // and the answer decides whether the order is sent at all.
@@ -3897,13 +3914,13 @@ public partial class SkirmishLive : Node3D
         {
             if (!_latest.TryGetValue(id, out var me)) continue;
             if (enemy >= 0)
-                _pending.Add(new Command(0, 0, CommandType.Attack, id, cx, cy, enemy, queued));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, enemy, queued));
             else if (field >= 0 && me.Kind == EntityKind.Harvester)
             {
                 // P5-ECON-06: without a refinery this command is a silent no-op
                 // that also mutates FieldId for nothing. Do not send it.
                 if (!hasRef) { deniedHarvest = true; continue; }
-                _pending.Add(new Command(0, 0, CommandType.Harvest, id, cx, cy, field, queued));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Harvest, id, cx, cy, field, queued));
                 // P5-ECON-07 clause 2: an explicit Harvest is the one order that
                 // un-parks a harvester the player had parked.
                 _manuallyStopped.Remove(id);
@@ -3913,7 +3930,7 @@ public partial class SkirmishLive : Node3D
                 // ADR-018: a combat unit takes its formation slot; a harvester (or
                 // any lone-mover fallback) keeps the shared anchor.
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
-                _pending.Add(new Command(0, 0, CommandType.PathMove, id, mx, my, -1, queued));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.PathMove, id, mx, my, -1, queued));
                 // P5-ECON-07 clause 2: a bare move on a harvester is the player
                 // saying where it should be. Auto-harvest must not overrule that.
                 if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
@@ -3950,7 +3967,7 @@ public partial class SkirmishLive : Node3D
     {
         _selection.Clear();
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == 0 && Mobile(v.Kind)) _selection.Add(v.Id);
+            if (v.Alive && v.PlayerId == LocalPlayerId && Mobile(v.Kind)) _selection.Add(v.Id);
         return _selection.Count;
     }
 
@@ -3965,7 +3982,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
             {
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
-                _pending.Add(new Command(0, 0, CommandType.PathMove, id, mx, my, -1, queued));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.PathMove, id, mx, my, -1, queued));
             }
     }
 
@@ -3978,7 +3995,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var me) && me.Kind == EntityKind.Unit)
             {
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
-                _pending.Add(new Command(0, 0, CommandType.AttackMove, id, mx, my));
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.AttackMove, id, mx, my));
             }
     }
 

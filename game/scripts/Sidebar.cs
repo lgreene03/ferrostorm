@@ -263,7 +263,7 @@ public partial class Sidebar : PanelContainer
             // hand-crafted wrong-faction Produce is still refused unchanged.
             int fac = _unitFaction(it.TypeId);
             b.Visible = (MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true)
-                && (fac == World.FactionCommon || fac == _game.FactionOf(0));
+                && (fac == World.FactionCommon || fac == _game.FactionOf(_game.LocalPlayerId));
             _unitButtons[it.TypeId] = b;
             page.AddChild(b);
         }
@@ -301,7 +301,7 @@ public partial class Sidebar : PanelContainer
         // prerequisite half of ADR-009 clause 6's three-way AND is not here:
         // it changes as the base grows, so it belongs in Refresh.
         b.Visible = (MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true)
-            && (it.TypeId != VeilType || _game.FactionOf(0) == World.FactionSodality);
+            && (it.TypeId != VeilType || _game.FactionOf(_game.LocalPlayerId) == World.FactionSodality);
         _structButtons[it.TypeId] = b;
         page.AddChild(b);
     }
@@ -465,7 +465,7 @@ public partial class Sidebar : PanelContainer
                 bool treeMet = PrereqsMet(_structDef(typeId).Prereqs, ownsStructType);
                 if (!treeMet) _prereqHidden.Add(typeId); else _prereqHidden.Remove(typeId);
                 b.Visible = treeMet && (MatchConfig.AllowedStructures?.Contains(typeId) ?? true)
-                    && (typeId != VeilType || _game.FactionOf(0) == World.FactionSodality);
+                    && (typeId != VeilType || _game.FactionOf(_game.LocalPlayerId) == World.FactionSodality);
             }
             // DEF-08 clause 9: a full ready slot pauses the yard's queue and so
             // disables the queued structures, but a barrier never enters that
@@ -500,7 +500,7 @@ public partial class Sidebar : PanelContainer
                 if (!met) _prereqHiddenUnits.Add(typeId); else _prereqHiddenUnits.Remove(typeId);
                 int fac = _unitFaction(typeId);
                 b.Visible = met && (MatchConfig.AllowedUnits?.Contains(typeId) ?? true)
-                    && (fac == World.FactionCommon || fac == _game.FactionOf(0));
+                    && (fac == World.FactionCommon || fac == _game.FactionOf(_game.LocalPlayerId));
             }
             var q = line.Queue;
             int n = 0;

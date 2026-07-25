@@ -32,7 +32,8 @@ lands; this file is the resume point if a session dies.
 | C6b | Wall gates | ADR-005 clause 6 DEFERRED them; its revisit precondition (per-player flow fields) is still unmet | measured, not neutral by construction | DEFERRED: needs Luke to override clause 6 |
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
 | C7b-i | LAN setup exchange (the Hello carries the host's match setup) | ADR-022 (ratified) | NEUTRAL (net layer) | DONE |
-| C7b-ii | The LAN battle scene: drain gating, LocalPlayerId, Host/Join | no ADR-gated work left; ticket has the full design | neutral but WIDE | pending |
+| C7b-ii | LocalPlayerId through the battle scene (the joiner's seat) | C7b slice 2; CI seat-check guards it | NEUTRAL (client only) | DONE |
+| C7b-iii | LAN battle scene: drain gating, Host/Join, and a headless client harness to verify from the joiner's seat | no ADR-gated work left | neutral but WIDE | pending |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
