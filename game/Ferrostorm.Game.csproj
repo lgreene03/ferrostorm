@@ -1,13 +1,13 @@
 <Project Sdk="Godot.NET.Sdk/4.7.0">
-  <!-- Requires a Godot 4.7.x .NET editor. Godot.NET.Sdk is NOT fetched from
-       nuget.org: the repo's nuget.config clears every package source by design,
-       and the editor SHIPS the SDK it wants in GodotSharp/Tools/nupkgs, so that
-       directory is the source. CI unpacks the editor and points NuGet at it.
+  <!-- Requires a Godot 4.7.x .NET editor. Godot.NET.Sdk resolves from
+       nuget.org through game/NuGet.config, which shadows the repo root's
+       offline-first clear for this one project.
 
        This comment used to end "this project is therefore excluded from CI".
-       It no longer is - the client-harness job builds it and drives the real
-       battle scene headless on every push. The presentation CONTRACT it
-       consumes is still tested by the runner's spectate mode as well. -->
+       It no longer is - the client-harness job installs the editor, builds
+       this project and drives the real battle scene headless on every push.
+       The presentation CONTRACT it consumes is still tested by the runner's
+       spectate mode as well. -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
