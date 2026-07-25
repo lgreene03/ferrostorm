@@ -3608,6 +3608,52 @@ int LaneGate()
                         $"(0x{v7World.ComputeStateHash():X16} vs 0x{singleHash:X16})");
     }
 
+    // BD-05: SELLING a producer must give back what the player already PAID
+    // toward what it was building. It used to refund the building's own cost
+    // and nothing else, so a yard holding a finished structure sold for half
+    // its own price while the fully-paid item in the slot simply vanished.
+    // Asserted to the CREDIT, and with a CONTROL: an EMPTY yard must still
+    // refund exactly half and not a credit more, or the fix has started
+    // inventing money.
+    {
+        int yardCost = new World(1, 1).GetStructureType(4).Cost;
+        int plantCost = new World(1, 1).GetStructureType(1).Cost;
+
+        // Control: nothing pending, so the refund is the building alone.
+        var bare = LaneWorld(4401, out int bareCy);
+        long beforeBare = bare.Credits(0);
+        Step(bare, One(new Command(0, 0, CommandType.SellStructure, bareCy, Fix64.Zero, Fix64.Zero)));
+        if (bare.Credits(0) != beforeBare + yardCost / 2)
+            return Fail($"sell: an EMPTY yard must refund exactly half ({bare.Credits(0) - beforeBare} vs {yardCost / 2})");
+
+        // A finished structure in the ready slot: fully paid, so fully refunded,
+        // exactly as cancelling it would.
+        var loaded2 = LaneWorld(4402, out int loadedCy);
+        Step(loaded2, One(new Command(0, 0, CommandType.BuildStructure, loadedCy, Fix64.Zero, Fix64.Zero, 1)));
+        for (int t = 0; t < 400 && loaded2.Entities[loadedCy].ReadyStructure == 0; t++) Step(loaded2);
+        if (loaded2.Entities[loadedCy].ReadyStructure == 0)
+            return Fail("sell: the yard never finished a structure to hold");
+        long beforeLoaded = loaded2.Credits(0);
+        Step(loaded2, One(new Command(0, 0, CommandType.SellStructure, loadedCy, Fix64.Zero, Fix64.Zero)));
+        long gained = loaded2.Credits(0) - beforeLoaded;
+        if (gained != yardCost / 2 + plantCost)
+            return Fail($"sell: a LOADED yard must refund the ready structure in full too " +
+                        $"({gained} vs {yardCost / 2 + plantCost})");
+
+        // Mid-build: the pro-rata payment comes back, exactly as cancelling the
+        // head does. Compared against the drained amount rather than a guess.
+        var midBuild = LaneWorld(4403, out int midCy);
+        Step(midBuild, One(new Command(0, 0, CommandType.BuildStructure, midCy, Fix64.Zero, Fix64.Zero, 1)));
+        for (int t = 0; t < 20; t++) Step(midBuild);
+        int paid = midBuild.Entities[midCy].BuildPaid;
+        if (paid <= 0) return Fail("sell: the mid-build yard never drained anything to refund");
+        long beforeMid = midBuild.Credits(0);
+        Step(midBuild, One(new Command(0, 0, CommandType.SellStructure, midCy, Fix64.Zero, Fix64.Zero)));
+        if (midBuild.Credits(0) != beforeMid + yardCost / 2 + paid)
+            return Fail($"sell: a yard sold MID-BUILD must refund what it drained " +
+                        $"({midBuild.Credits(0) - beforeMid} vs {yardCost / 2 + paid})");
+    }
+
     Console.WriteLine("lanegate: an order into an idle yard stays in lane 1 (the rule the goldens rest on); a second order at a busy yard " +
                       "overflows and BOTH lanes build simultaneously; the lanes hold independent ready slots and refund independently; " +
                       "a used-then-emptied lane hashes identically to one that never existed (the prune matches the hash guard); " +

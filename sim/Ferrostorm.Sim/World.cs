@@ -1033,6 +1033,54 @@ public sealed partial class World
     /// refused on arrival. The client had to count something because this was
     /// private; now it does not.
     /// </summary>
+    /// <summary>
+    /// BD-05: refund everything the player has already PAID toward what this
+    /// producer was building, because selling discards all of it.
+    ///
+    /// The amounts are not invented here. CancelProduce already rules on every
+    /// one of them, and this applies THE SAME RULES to the path that never
+    /// asked: a READY structure refunds in full ("it was fully paid", as that
+    /// code says), and an in-progress head refunds exactly what was drained,
+    /// which pay-as-you-build makes pro-rata for free. Queued-but-unstarted
+    /// items are owed nothing, because nothing has been charged for them yet.
+    ///
+    /// FOUR places hold paid credits on a Construction Yard since ADR-023 - the
+    /// first lane's ready slot and build payment, and the second lane's - and
+    /// selling burned all four. A factory or barracks sold mid-build lost its
+    /// head payment the same way.
+    /// </summary>
+    private void RefundPendingOnSell(ref Entity e)
+    {
+        if (e.ReadyStructure != 0)
+        {
+            _credits[e.PlayerId] += GetStructureType(e.ReadyStructure).Cost;
+            e.ReadyStructure = 0;
+        }
+        if (e.BuildPaid > 0)
+        {
+            _credits[e.PlayerId] += e.BuildPaid;
+            e.BuildPaid = 0;
+            e.BuildProgress = 0;
+        }
+        if (LaneOf(e.Id) is { } lane)
+        {
+            if (lane.Ready != 0)
+            {
+                _credits[e.PlayerId] += GetStructureType(lane.Ready).Cost;
+                lane.Ready = 0;
+            }
+            if (lane.Paid > 0)
+            {
+                _credits[e.PlayerId] += lane.Paid;
+                lane.Paid = 0;
+                lane.Progress = 0;
+            }
+            lane.Queue.Clear();
+            PruneLane(e.Id);
+        }
+        _queues.Remove(e.Id);
+    }
+
     public int CountBarriers(int player)
     {
         int n = 0;
@@ -1521,6 +1569,12 @@ public sealed partial class World
                 if (!IsStructure(e.Kind)) break;
                 var sold = GetStructureType(e.StructType);
                 _credits[e.PlayerId] += sold.Cost / 2;
+                // BD-05: give back what the player has already PAID toward
+                // whatever this producer was building. Selling looked only at
+                // the building's own cost, so a Construction Yard holding a
+                // finished superweapon in its ready slot sold for 1500 while the
+                // 4000 already spent simply vanished, with nothing said.
+                RefundPendingOnSell(ref e);
                 e.Alive = false;
                 FootprintOnDeath(in e);   // ADR-025
                 break;
