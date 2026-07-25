@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Package Ferrostorm into a runnable build (macOS).
+# Package Ferrostorm into a runnable build.
 #
 # There are two halves and the second is the one people forget. Godot exports
-# everything under res:// into the .app, but /data lives OUTSIDE the Godot
+# everything under res:// into the package, but /data lives OUTSIDE the Godot
 # project (it is the sim's runtime source under ADR-006, and the sim's loaders
 # take real OS paths, which files inside an exported .pck are not). So the data
-# folder is copied BESIDE the .app, which is the layout GameFiles.RepoRoot
-# searches for. Skip that copy and the game exports cleanly and then refuses
-# every match with "catalogue" errors.
+# folder is copied BESIDE the executable, which is the layout
+# GameFiles.RepoRoot searches for. Skip that copy and the game exports cleanly
+# and then refuses every match with catalogue errors.
 #
-# Usage:  tools/package.sh [--debug]
-# Output: build/macos/Ferrostorm.app  plus  build/macos/data
+# Usage:  tools/package.sh [macos|linux|windows|all] [--debug]
+# Output: build/<platform>/<the game>  plus  build/<platform>/data
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT="${GODOT:-$HOME/Applications/Godot_mono.app/Contents/MacOS/Godot}"
-OUT="$ROOT/build/macos"
-APP="$OUT/Ferrostorm.app"
-PRESET="macOS"
+
+TARGET="${1:-macos}"
+case "$TARGET" in macos|linux|windows|all) ;; --debug) TARGET=macos ;; *) echo "unknown target '$TARGET' (macos|linux|windows|all)" >&2; exit 1 ;; esac
 MODE="--export-release"
-[ "${1:-}" = "--debug" ] && MODE="--export-debug"
+for a in "$@"; do [ "$a" = "--debug" ] && MODE="--export-debug"; done
 
 [ -x "$GODOT" ] || { echo "godot not found at $GODOT (set GODOT=...)" >&2; exit 1; }
 
@@ -36,42 +36,76 @@ fi
 echo "==> building the C# assemblies (ExportRelease)"
 dotnet build "$ROOT/game/Ferrostorm.Game.csproj" -c ExportRelease
 
-echo "==> exporting $PRESET"
-rm -rf "$APP"
-mkdir -p "$OUT"
-# Godot resolves the preset's export_path relative to the project directory.
-"$GODOT" --headless --path "$ROOT/game" $MODE "$PRESET" "$APP"
+# Stage /data beside a built game. rsync with --delete so a re-package never
+# leaves a stale map or unit file behind, which would make the packaged build
+# disagree with the repo.
+stage_data() {
+  local out="$1"
+  echo "==> staging /data beside the build in $out"
+  rsync -a --delete "$ROOT/data/" "$out/data/"
+  for f in data/units data/buildings data/maps data/campaign data/fields; do
+    [ -d "$out/$f" ] || { echo "missing $f beside the build" >&2; exit 1; }
+  done
+  local maps
+  maps=$(find "$out/data/maps" -name '*.fmap' | wc -l | tr -d ' ')
+  [ "$maps" -gt 0 ] || { echo "no maps staged" >&2; exit 1; }
+  echo "    $maps maps staged"
+}
 
-[ -d "$APP" ] || { echo "export produced no app bundle at $APP" >&2; exit 1; }
+package_macos() {
+  local out="$ROOT/build/macos" app
+  app="$out/Ferrostorm.app"
+  echo "==> exporting macOS"
+  rm -rf "$app"; mkdir -p "$out"
+  "$GODOT" --headless --path "$ROOT/game" $MODE "macOS" "$app"
+  [ -d "$app" ] || { echo "export produced no app bundle at $app" >&2; exit 1; }
 
-echo "==> re-signing without the hardened runtime"
-# Godot's macOS export signs ad-hoc AND enables the hardened runtime
-# (codesign flags 0x10002 = adhoc,runtime). macOS refuses to launch that
-# combination: the process is SIGKILLed at exec with no output at all, which
-# reads like a corrupt build rather than a signing policy. Re-signing plain
-# ad-hoc clears the runtime flag and the bundle launches.
-#
-# This is the LOCAL/TEST signature. Shipping to anyone else needs a real
-# Developer ID signature and notarisation, at which point the hardened runtime
-# comes back and stays (it is required for notarisation).
-codesign --force --deep --sign - "$APP"
+  echo "==> re-signing without the hardened runtime"
+  # Godot's macOS export signs ad-hoc AND enables the hardened runtime
+  # (codesign flags 0x10002 = adhoc,runtime). macOS refuses to launch that
+  # combination: the process is SIGKILLed at exec with no output at all, which
+  # reads like a corrupt build rather than a signing policy. Re-signing plain
+  # ad-hoc clears the runtime flag and the bundle launches.
+  #
+  # This is the LOCAL/TEST signature. Shipping to anyone else needs a real
+  # Developer ID signature and notarisation, at which point the hardened
+  # runtime comes back and stays (it is required for notarisation) and this
+  # step must be dropped rather than kept.
+  codesign --force --deep --sign - "$app"
+  stage_data "$out"
+  echo "packaged: $app"
+}
 
-echo "==> staging /data beside the app"
-# The game reads these at runtime, so they ship loose rather than baked in.
-# rsync with --delete so a re-package never leaves a stale map or unit file
-# behind, which would make the packaged build disagree with the repo.
-rsync -a --delete "$ROOT/data/" "$OUT/data/"
+package_linux() {
+  local out="$ROOT/build/linux" bin
+  bin="$out/Ferrostorm.x86_64"
+  echo "==> exporting Linux"
+  rm -rf "$out"; mkdir -p "$out"
+  "$GODOT" --headless --path "$ROOT/game" $MODE "Linux" "$bin"
+  [ -f "$bin" ] || { echo "export produced no linux binary at $bin" >&2; exit 1; }
+  chmod +x "$bin"
+  stage_data "$out"
+  echo "packaged: $bin"
+}
 
-echo "==> verifying"
-for f in data/units data/buildings data/maps data/campaign data/fields; do
-  [ -d "$OUT/$f" ] || { echo "missing $f beside the app" >&2; exit 1; }
-done
-MAPS=$(find "$OUT/data/maps" -name '*.fmap' | wc -l | tr -d ' ')
-[ "$MAPS" -gt 0 ] || { echo "no maps staged" >&2; exit 1; }
+package_windows() {
+  local out="$ROOT/build/windows" bin
+  bin="$out/Ferrostorm.exe"
+  echo "==> exporting Windows"
+  rm -rf "$out"; mkdir -p "$out"
+  "$GODOT" --headless --path "$ROOT/game" $MODE "Windows Desktop" "$bin"
+  [ -f "$bin" ] || { echo "export produced no windows binary at $bin" >&2; exit 1; }
+  stage_data "$out"
+  echo "packaged: $bin"
+}
+
+case "$TARGET" in
+  macos)   package_macos ;;
+  linux)   package_linux ;;
+  windows) package_windows ;;
+  all)     package_macos; package_linux; package_windows ;;
+esac
 
 echo
-echo "packaged: $APP"
-echo "data:     $OUT/data ($MAPS maps)"
-echo
-echo "The .app and the data folder must stay TOGETHER; moving the .app on its"
-echo "own gives a game that starts and then refuses every match."
+echo "The game and its data folder must stay TOGETHER; moving the executable on"
+echo "its own gives a game that starts and then refuses every match."
