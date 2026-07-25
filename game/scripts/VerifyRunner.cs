@@ -572,12 +572,23 @@ public partial class VerifyRunner : Node
             // Drive both scenes the way the frame loop does: each polls, and a
             // tick only lands once BOTH have submitted for it. Interleaved on
             // one thread precisely because neither call may block.
+            //
+            // BOTH seats are driven to EXACTLY the same tick, and each is capped
+            // rather than the loop exiting on the host's count alone. That was a
+            // latent flaw in this test, not in the game: the seats advance
+            // independently once their merged batches land, so stepping both and
+            // then exiting on the host could leave them one tick apart - and the
+            // hash comparison below would then compare two DIFFERENT ticks and
+            // report a desync that had not happened. It passed locally every
+            // time and failed the first time a loaded CI runner changed the
+            // interleaving (60 vs 61).
+            const int lanTicks = 60;
             int spins = 0;
-            while (host.CurrentTick < 60 && spins++ < 4000)
+            while ((host.CurrentTick < lanTicks || join.CurrentTick < lanTicks) && spins++ < 4000)
             {
                 int before = host.CurrentTick + join.CurrentTick;
-                host.StepTicks(1);
-                join.StepTicks(1);
+                if (host.CurrentTick < lanTicks) host.StepTicks(1);
+                if (join.CurrentTick < lanTicks) join.StepTicks(1);
                 // Yield when neither could advance. The merged batch arrives on
                 // the client's reader THREAD, so a spin loop that never gives
                 // the scheduler a chance simply burns its whole budget before a
@@ -587,7 +598,7 @@ public partial class VerifyRunner : Node
                 if (host.CurrentTick + join.CurrentTick == before)
                     System.Threading.Thread.Sleep(1);
             }
-            Check(host.CurrentTick >= 60, $"the host advanced under lockstep ({host.CurrentTick} ticks)");
+            Check(host.CurrentTick >= lanTicks, $"the host advanced under lockstep ({host.CurrentTick} ticks)");
             Check(join.CurrentTick == host.CurrentTick,
                   $"both seats advanced in lockstep ({host.CurrentTick} vs {join.CurrentTick})");
             Check(host.StateHash == join.StateHash,
