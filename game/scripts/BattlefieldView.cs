@@ -13,6 +13,22 @@ public static class BattlefieldView
 {
     public static readonly Color DirectorateMark = new(0.91f, 0.42f, 0.13f);
     public static readonly Color SodalityMark = new(0.24f, 0.70f, 0.63f);
+    /// <summary>Unowned: an outpost nobody has claimed, a bridge. Ferrite gold,
+    /// which reads as "not a side" against both team marks.</summary>
+    public static readonly Color NeutralMark = new(0.79f, 0.63f, 0.36f);
+
+    /// <summary>
+    /// The one-place team-colour law, actually in one place.
+    ///
+    /// A player's colour is a property of WHICH PLAYER THEY ARE, not of who is
+    /// looking: player 0 wears Directorate orange on both machines, so the two
+    /// commanders can talk about "the orange tanks" and mean the same tanks.
+    /// The minimap held a rival copy keyed on "me versus them", which agrees at
+    /// seat 0 and inverts at seat 1 - a joiner saw their own army orange on the
+    /// minimap and teal on the battlefield, and the enemy the reverse.
+    /// </summary>
+    public static Color MarkFor(int player) =>
+        player < 0 ? NeutralMark : player == 0 ? DirectorateMark : SodalityMark;
 
     public static void BuildEnvironment(Node3D parent)
     {
@@ -1957,7 +1973,7 @@ public static class BattlefieldView
     {
         AddContactBlob(node, span);
         if (player < 0) return;
-        var mark = player == 0 ? DirectorateMark : SodalityMark;
+        var mark = MarkFor(player);
         var mat = new StandardMaterial3D
         {
             AlbedoColor = mark,
@@ -1987,7 +2003,7 @@ public static class BattlefieldView
     public static void DressMobile(Node3D node, int player, float blobDiameter = 1.15f)
     {
         AddContactBlob(node, blobDiameter);
-        var mark = player == 0 ? DirectorateMark : SodalityMark;
+        var mark = MarkFor(player);
         node.AddChild(new MeshInstance3D
         {
             // C-07 clause 3: widened from 0.30/0.36 so the secondary mark

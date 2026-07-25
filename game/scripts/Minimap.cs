@@ -103,6 +103,17 @@ public partial class Minimap : Control
 
     /// <summary>camAt is retained for call-site stability; the W3-20 frustum
     /// trapezoid replaces the old camera circle as the view indicator.</summary>
+    /// <summary>Verification read: the colours this minimap is actually about
+    /// to DRAW, taken from the dots it holds rather than recomputed. A check
+    /// that recomputed them would agree with a bug in the feed by construction,
+    /// which is exactly how the seat-relative team colour survived review.</summary>
+    public List<Color> DotColoursForTest()
+    {
+        var cs = new List<Color>(_dots.Count);
+        foreach (var (_, c) in _dots) cs.Add(c);
+        return cs;
+    }
+
     public void Refresh(Image fogImage, IEnumerable<(float X, float Y, Color C)> dots, Vector2 camAt, Vector2[]? frustum = null)
     {
         (_fogRect.Texture as ImageTexture)?.Update(fogImage);

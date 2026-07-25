@@ -1815,12 +1815,20 @@ public sealed partial class World
 
     /// <summary>
     /// GDD s7 line 85's 75 per cent threshold in integer maths with no
-    /// division - the same expression the client's power bar already uses
+    /// division. Read by CombatSystem's turret gate (ADR-008 clause 1) against
+    /// the pre-combat tally; the boundary is inclusive.
+    ///
+    /// PUBLIC so the client can CALL it rather than copy it. This comment used
+    /// to claim it was "the same expression the client's power bar already uses
     /// (Sidebar.cs), so the sim's notion of a brown-out and the UI's cannot
-    /// drift (PWR-D4). Read by CombatSystem's turret gate (ADR-008 clause 1)
-    /// against the pre-combat tally; the boundary is inclusive.
+    /// drift". That was an aspiration, not a mechanism: there were FOUR copies
+    /// of the expression - this one, the client's klaxon, its per-owner turret
+    /// dim, and its power bar - agreeing only because nobody had yet edited one
+    /// of them. Now there is one, and the claim is true. Pure and stateless, so
+    /// exporting it moves no hash and gives the client no way to reach into the
+    /// sim: it is a question, not a lever.
     /// </summary>
-    private static bool AtLeast75(int supply, int draw) => draw <= 0 || supply * 4 >= draw * 3;
+    public static bool AtLeast75(int supply, int draw) => draw <= 0 || supply * 4 >= draw * 3;
 
     private void MovementSystem()
     {

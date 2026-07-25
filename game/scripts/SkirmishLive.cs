@@ -1598,9 +1598,10 @@ public partial class SkirmishLive : Node3D
             if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
         string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
         // TICKET-P5-PWR-01: the low-power alert, on the 75 per cent CROSSING.
-        // Same integer test as the sidebar's brown-out colour (Sidebar.cs),
-        // so the klaxon and the red bar cannot disagree about the threshold.
-        bool brownOut = draw > 0 && supply * 4 < draw * 3;
+        // Through the shared predicate, so the klaxon, the red bar and the
+        // turret dim cannot disagree about the threshold. They used to say so
+        // in three comments while holding three copies of the expression.
+        bool brownOut = BrownedOut(supply, draw);
         if (brownOut && !_wasBrownOut)
         {
             LowPowerAlerts++;
@@ -1657,17 +1658,25 @@ public partial class SkirmishLive : Node3D
         _wasRadarLive = radarLive;
         RadarLive = radarLive;
         // ADR-008 clause 1's client face: per-owner brown-out for the turret
-        // dim and readout, the same integer test as the bar.
+        // dim and readout, through the same shared predicate as the bar.
+        //
+        // KEYED BY ABSOLUTE PLAYER ID, and that is the fix rather than a
+        // detail. This array was WRITTEN seat-relative (slot 0 meaning "me",
+        // slot 1 meaning "the opponent") and READ absolutely, by v.PlayerId, at
+        // both consumers. The two agree at seat 0 by luck. At seat 1 they swap:
+        // a joiner's own turrets read the HOST'S power, so they greyed out and
+        // said OFFLINE while the joiner's grid was healthy, and stayed lit while
+        // it collapsed and the sim quietly refused to let them fire.
         {
-            int s0 = 0, d0 = 0, s1 = 0, d1 = 0;
+            var supplyOf = new int[2];
+            var drawOf = new int[2];
             foreach (var e in _world.Entities)
             {
-                if (!e.Alive) continue;
-                if (e.PlayerId == LocalPlayerId) { s0 += e.PowerSupply; d0 += e.PowerDraw; }
-                else if (e.PlayerId == EnemyPlayerId) { s1 += e.PowerSupply; d1 += e.PowerDraw; }
+                if (!e.Alive || e.PlayerId < 0 || e.PlayerId > 1) continue;
+                supplyOf[e.PlayerId] += e.PowerSupply;
+                drawOf[e.PlayerId] += e.PowerDraw;
             }
-            _ownerBrownedOut[0] = d0 > 0 && s0 * 4 < d0 * 3;
-            _ownerBrownedOut[1] = d1 > 0 && s1 * 4 < d1 * 3;
+            for (int p = 0; p < 2; p++) _ownerBrownedOut[p] = BrownedOut(supplyOf[p], drawOf[p]);
         }
         // TICKET-P5-SAVE-01: the mode is on the status line because two of the
         // three modes change what the player's clicks do, and a replay that
@@ -1681,10 +1690,10 @@ public partial class SkirmishLive : Node3D
         {
             if (!v.Alive || v.Kind == EntityKind.FerriteField) continue;
             if (!DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y)) continue;
-            var c = v.PlayerId == LocalPlayerId ? BattlefieldView.DirectorateMark
-                : v.PlayerId == EnemyPlayerId ? BattlefieldView.SodalityMark
-                : new Color(0.79f, 0.63f, 0.36f);
-            dots.Add(((float)v.X, (float)v.Y, c));
+            // Through the team-colour law, not a rival copy keyed on "me versus
+            // them": a player's colour is which player they ARE, not who is
+            // looking, or the minimap and the battlefield disagree at seat 1.
+            dots.Add(((float)v.X, (float)v.Y, BattlefieldView.MarkFor(v.PlayerId)));
         }
         // W3-20: project the four viewport corners onto the ground for the
         // minimap frustum trapezoid. GroundPoint casts through the camera's own
@@ -2302,7 +2311,15 @@ public partial class SkirmishLive : Node3D
     /// </summary>
     private bool CanPlace(int ax, int ay, int type)
     {
-        if (!_world.ValidPlacement(0, ax, ay, type)) return false;
+        // The SEAT matters here and was hardcoded: ValidPlacement's player
+        // argument selects whose structures anchor the build radius (World.cs,
+        // "o.PlayerId != player"), so asking as player 0 and then issuing the
+        // command as LocalPlayerId asks about one player's base and builds in
+        // another's. At seat 0 the two are the same by luck. At seat 1 the ghost
+        // glowed green only inside the HOST'S base and red inside the joiner's
+        // own, and since PlaceAtCell gates on this, a joiner could not put a
+        // structure down anywhere at all.
+        if (!_world.ValidPlacement(LocalPlayerId, ax, ay, type)) return false;
         if (!IsBarrier(type)) return true;
         return _world.Credits(LocalPlayerId) >= _world.GetStructureType(type).Cost
             && OwnCount(EntityKind.Wall) < World.MaxBarriersPerPlayer;
@@ -2373,7 +2390,7 @@ public partial class SkirmishLive : Node3D
             var (x, y) = run[i];
             g.Visible = true;
             g.Position = new Vector3(x + 0.5f, 0.25f, y + 0.5f);
-            bool ok = _world.ValidPlacement(0, x, y, _placingType)
+            bool ok = _world.ValidPlacement(LocalPlayerId, x, y, _placingType)
                       && have + i < World.MaxBarriersPerPlayer;
             g.MaterialOverride = ok ? GhostValidMat : GhostInvalidMat;
         }
@@ -3588,7 +3605,7 @@ public partial class SkirmishLive : Node3D
                 for (int dy = -r; dy <= r; dy++)
                 {
                     if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r) continue;
-                    if (_world.ValidPlacement(0, cx + dx, cy + dy)) return (cx + dx, cy + dy);
+                    if (_world.ValidPlacement(LocalPlayerId, cx + dx, cy + dy)) return (cx + dx, cy + dy);
                 }
         return null;
     }
@@ -3749,6 +3766,28 @@ public partial class SkirmishLive : Node3D
         return (0f, 0f);
     }
     /// <summary>
+    /// ADR-008 clause 1's threshold: below 75 per cent of demand, the grid
+    /// browns out. Integer maths, no division, so it cannot drift by rounding.
+    ///
+    /// ONE definition, because there were four: the status-line klaxon, the
+    /// per-owner turret dim, the sidebar's power bar, and the sim's own
+    /// AtLeast75. Two of the client copies carried comments asserting there was
+    /// a single shared threshold, which there was not.
+    ///
+    /// It DELEGATES to the sim rather than restating the expression, so the
+    /// count is one across both projects and not two kept in step by vigilance.
+    /// The sim is the authority - it is the thing that actually refuses to let
+    /// a turret fire - and a HUD that computes its own opinion of the same
+    /// question is a HUD that can lie about it.
+    /// </summary>
+    public static bool BrownedOut(int supply, int draw) => !World.AtLeast75(supply, draw);
+
+    /// <summary>Verification read: the latched per-owner brown-out, by ABSOLUTE
+    /// player id. The array was once written seat-relative and read absolutely,
+    /// which is invisible at seat 0 and inverted at seat 1.</summary>
+    public bool BrownedOutForTest(int playerId) => _ownerBrownedOut[playerId];
+
+    /// <summary>
     /// How full a ferrite deposit looks, 0.2 to 1. Both the node scale and the
     /// stain's glow read it, so a drained field shrinks and dims together.
     ///
@@ -3876,11 +3915,30 @@ public partial class SkirmishLive : Node3D
         _rankPips.TryGetValue(id, out var p) ? (p.P2.Visible ? 2 : p.P1.Visible ? 1 : 0) : 0;
     /// <summary>The ghost-and-commit truth for the current placement type.</summary>
     public bool CanPlaceAt(int ax, int ay) => _placingType > 0 && CanPlace(ax, ay, _placingType);
+
+    /// <summary>Verification read: how many cells around this entity the REAL
+    /// ghost-and-commit predicate would accept for the local seat. Counted
+    /// around a given entity rather than "my base" so the same call can ask the
+    /// question about the OPPOSITION'S base, where the answer must be zero -
+    /// the two directions are what catch a seat that has inverted. Reads the
+    /// sim's positions, not the per-frame view cache.</summary>
+    public int PlaceableCellsNearForTest(int entityId, int structType, int radius)
+    {
+        var e = _world.Entities[entityId];
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y), n = 0;
+        for (int dy = -radius; dy <= radius; dy++)
+            for (int dx = -radius; dx <= radius; dx++)
+                if (CanPlace(cx + dx, cy + dy, structType)) n++;
+        return n;
+    }
     public bool SidebarStructVisible(int typeId) => _sidebar.StructButtonVisible(typeId);
     /// <summary>TICKET-P6-FACTION-01: the unit-side twin.</summary>
     public bool SidebarUnitVisible(int typeId) => _sidebar.UnitButtonVisible(typeId);
     /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
     public void PressStop() => IssueStop();
+    /// <summary>Verification surface: the real minimap, so a check can read the
+    /// dots it will DRAW rather than a recomputation of them.</summary>
+    public Minimap MinimapView => _minimap;
     public int WallMaskOf(int id) => _wallMask.TryGetValue(id, out int m) ? m : -1;
     public float ActorYaw(int id) => _actors.TryGetValue(id, out var n) ? n.RotationDegrees.Y : float.NaN;
     /// <summary>The live barrier at a cell, or -1. Walls sit at cell centre.</summary>
