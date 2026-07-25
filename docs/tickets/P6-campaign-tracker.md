@@ -51,6 +51,7 @@ lands; this file is the resume point if a session dies.
 | REVIEW | Design review as designer + reviewer: gaps and features register | docs/design/27 (evidence: balance tool, full inventory, cited genre canon); Q017 filed as its principal recommendation | NEUTRAL (docs only) | DONE |
 | DR-05+06 | The selection layer: army key, type-select, group 0, idle-harvester key | doc 27 tier 2, first delivery wave off the design review | NEUTRAL (client only) | DONE - 102 harness checks |
 | DR-07+09 | Camera bookmarks F1-F4 + minimap alt-click ping | doc 27 tier 2, second delivery wave | NEUTRAL (client only) | DONE - 108 harness checks |
+| DR-08 | Grid build hotkeys: Tab cycles the sidebar, alt+digit queues a slot | doc 27 TIER 2 COMPLETE with this row | NEUTRAL (client only) | DONE - 113 harness checks |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 

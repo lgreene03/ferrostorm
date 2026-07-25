@@ -577,6 +577,36 @@ public partial class VerifyRunner : Node
         Check((_game.CameraGroundTargetForTest - beforeNav).Length() > 1f,
               "...it still navigates the camera, as it always has");
 
+        // --- Grid build hotkeys (doc 27 DR-08, the last tier-2 item) ---------
+        // Tab cycles the sidebar tab; alt+digit queues the Nth visible item of
+        // the active tab - the digit keys' third meaning, all off the event.
+        int tabBefore = _game.SidebarView.CurrentTabForTest;
+        _game.PressKey(Settings.BindOf("sidebar_tab"));
+        Check(_game.SidebarView.CurrentTabForTest == (tabBefore + 1) % 4,
+              $"Tab cycles the sidebar tab ({tabBefore} -> {_game.SidebarView.CurrentTabForTest})");
+        for (int t = 0; t < 3; t++) _game.PressKey(Settings.BindOf("sidebar_tab"));
+        Check(_game.SidebarView.CurrentTabForTest == tabBefore,
+              "...and wraps back around after four presses");
+
+        // Alt+1 on the BUILDINGS tab queues slot one, the power plant, through
+        // the button's own Pressed signal - the same handler the mouse runs.
+        while (_game.SidebarView.CurrentTabForTest != Sidebar.TabBuildings)
+            _game.PressKey(Settings.BindOf("sidebar_tab"));
+        int gridYard = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        int qBefore = _game.QueuedAt(gridYard);
+        _game.PressKeyWithAlt(Key.Key1);
+        _game.StepTicks(2);
+        Check(_game.QueuedAt(gridYard) == qBefore + 1,
+              $"alt+1 queues the first BUILDINGS item at the yard ({_game.QueuedAt(gridYard)})");
+        // Hand the world back: cancel what the hotkey queued, refund exact.
+        _game.CancelStructure(1);
+        _game.StepTicks(2);
+        Check(_game.QueuedAt(gridYard) == qBefore, "...and the check hands the queue back");
+        // The control: an alt+digit past the tab's visible slots does nothing.
+        _game.PressKeyWithAlt(Key.Key9);
+        _game.StepTicks(2);
+        Check(_game.QueuedAt(gridYard) == qBefore, "an empty slot number queues NOTHING");
+
         // --- Cancel must not destroy a building you did not click ------------
         // The sim's lane branch checks `cl.Ready != 0` BEFORE it looks at the
         // index, so a cancel aimed at a QUEUED item while a DIFFERENT structure
