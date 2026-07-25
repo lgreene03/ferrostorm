@@ -12,7 +12,13 @@ jobs:
           fi
       - name: Portability check (no engine references anywhere outside /game - ADR-004)
         run: |
-          if grep -rln 'using Godot' sim/ tools/ data/ ; then
+          # Scoped to .cs, because "using Godot" is a C# directive and the only
+          # place it can do harm is a source file. Unscoped, this grep tripped on
+          # tools/README.md for DOCUMENTING the rule - a guard that forbids
+          # naming the thing it forbids gets the explanation deleted instead of
+          # the defect, which is the same reasoning that filters comment lines
+          # out of the seat check below.
+          if grep -rln --include='*.cs' 'using Godot' sim/ tools/ data/ ; then
             echo "::error::Engine reference outside /game - the portable surface must stay engine-free (ADR-004)"; exit 1
           fi
       - name: Seat check (the battle scene must not hardcode player 0 - C7b)
