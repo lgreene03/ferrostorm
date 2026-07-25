@@ -483,6 +483,57 @@ public partial class VerifyRunner : Node
                   $"the refund was EXACT, to the credit ({midway} -> {_game.CreditsNow}, started {creditsBefore})");
         }
 
+        // --- The selection layer (doc 27 DR-05 and DR-06) --------------------
+        // All driven through the REAL input path with the LIVE bindings.
+
+        // Select-army takes the fighters and refuses the workers. Both
+        // directions, because an army key that also grabs the harvester is how
+        // a harvester walks into a firefight.
+        _game.ClearSelectionForTest();
+        _game.PressKey(Settings.BindOf("select_all_army"));
+        Check(_game.SelectionCount >= 3, $"the army key selects the opening squads ({_game.SelectionCount})");
+        int armyHarv = _game.FindEntity(EntityKind.Harvester, _game.LocalPlayerId);
+        Check(armyHarv >= 0 && !_game.IsSelected(armyHarv), "...and does NOT select the harvester");
+
+        // The idle-harvester key selects exactly the idle one and none when
+        // none is idle. The world is restored afterwards.
+        _game.ClearSelectionForTest();
+        _game.PressKey(Settings.BindOf("idle_harvester"));
+        Check(_game.SelectionCount == 1 && _game.IsSelected(armyHarv),
+              "the idle key finds the idle harvester");
+        _game.ClearSelectionForTest();
+        _game.SetHStateForTest(armyHarv, HarvestState.Loading);
+        _game.PressKey(Settings.BindOf("idle_harvester"));
+        Check(_game.SelectionCount == 0, "...and finds NOTHING when no harvester is idle");
+        _game.SetHStateForTest(armyHarv, HarvestState.Idle);   // hand the world back
+
+        // Double-click type-select: all rifles on screen, nothing else. The
+        // camera is parked over them first, because on-screen is the rule.
+        // The exemplar is taken from the army selection itself rather than by
+        // catalogue type, because the OPENING-HAND squads are spawned with
+        // UnitType 0 - the map spawner never sets a type (the DR-19 family).
+        // The gesture groups by type either way; the check must not assume a
+        // type the data does not carry.
+        _game.PressKey(Settings.BindOf("select_all_army"));
+        var (sqx, sqz) = _game.FirstSelectedPosition();
+        _game.FocusCameraOn(sqx, sqz, 22f);
+        _game.ClearSelectionForTest();
+        _game.PressDoubleClick(_game.ScreenOf(sqx, sqz));
+        Check(_game.SelectionCount >= 3,
+              $"double-click selects every squad of the type on screen ({_game.SelectionCount})");
+        Check(!_game.IsSelected(armyHarv), "...and type-select does not take the harvester");
+
+        // Group 0, assign AND recall, through a synthetic ctrl press - which
+        // only works because the assign path reads the modifier off the EVENT.
+        _game.PressKey(Settings.BindOf("select_all_army"));
+        int armyCount = _game.SelectionCount;
+        _game.PressKeyWithCtrl(Key.Key0);            // assign to group 0
+        _game.ClearSelectionForTest();
+        _game.PressKey(Key.Key0);                    // recall
+        Check(_game.SelectionCount == armyCount && armyCount > 0,
+              $"group 0 assigns with ctrl and recalls plain ({_game.SelectionCount} of {armyCount})");
+        _game.ClearSelectionForTest();
+
         // --- Cancel must not destroy a building you did not click ------------
         // The sim's lane branch checks `cl.Ready != 0` BEFORE it looks at the
         // index, so a cancel aimed at a QUEUED item while a DIFFERENT structure

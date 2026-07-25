@@ -100,6 +100,10 @@ public static class Settings
     {
         ("attack_move", "ATTACK-MOVE"),
         ("stop", "STOP"),
+        // Doc 27 DR-05/DR-06: the selection layer. Rebindable like everything
+        // else (the SET-01 rule); defaults E and I.
+        ("select_all_army", "SELECT ARMY"),
+        ("idle_harvester", "IDLE HARVESTER"),
         // ADR-015 / TICKET-P6-C1a: the three unit command stances. Hold-fire is
         // a toggle (aggressive when already held), guard sets a leashed hold in
         // place, and patrol arms a two-point cycle whose far point the next click

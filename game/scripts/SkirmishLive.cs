@@ -1157,7 +1157,7 @@ public partial class SkirmishLive : Node3D
                   // structures and the old hint promised more than R could do.
                   // TICKET-P5-ALERT-02: "last alert" advertises the jump key,
                   // read from the live binding like every other key here.
-                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("jump_to_event")} last alert  {K("pause_menu")} menu   ctrl+1-9 groups   arrows/edge/wheel camera",
+                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("select_all_army")} army  {K("idle_harvester")} idle harv  {K("jump_to_event")} last alert  {K("pause_menu")} menu   ctrl+0-9 groups   arrows/edge/wheel camera",
             AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
             OffsetTop = -30, OffsetLeft = 16,
         };
@@ -3255,6 +3255,17 @@ public partial class SkirmishLive : Node3D
                 IssueDeploy(dmcv);
                 _audio.Play("ui_confirm", -8);
                 break;
+            // Doc 27 DR-05: double-click an own mobile and every own unit of
+            // that TYPE on screen joins the selection - the genre's oldest
+            // type-select gesture. AFTER the MCV case above, which owns the
+            // double-click on an MCV (it deploys, the P5-SPAWN-03 idiom), and
+            // BEFORE the generic press case that would start a drag.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true, DoubleClick: true } tc
+                when _replay == null
+                     && PickEntity(tc.Position, 0.9f, v => v.PlayerId == LocalPlayerId
+                         && Mobile(v.Kind) && v.UnitType != McvUnitType) is >= 0 and var texemplar:
+                SelectAllOfTypeOnScreen(texemplar);
+                break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
                 else if (_dragging) { _dragging = false; _dragRect.Visible = false; FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift)); }
@@ -3328,6 +3339,17 @@ public partial class SkirmishLive : Node3D
             _cam.FlyTo(_lastAlertPos);
             return true;
         }
+        // Doc 27 DR-05: the army in one press. COMBAT units only - the MCV,
+        // engineer and repair vehicle are deliberately excluded, because
+        // "select the army" that grabs your MCV is how an MCV walks into a
+        // firefight; the harvester is excluded by kind. The sentinel counts:
+        // unarmed, but it is a military scout and the classic key takes it.
+        if (ev.IsActionPressed("select_all_army")) { SelectArmy(); return true; }
+        // Doc 27 DR-06: the idle-harvester key. Repeated presses CYCLE through
+        // idle harvesters, selecting each and flying the camera to it - idle
+        // includes manually parked, because a parked harvester the player has
+        // forgotten is exactly what this key exists to find.
+        if (ev.IsActionPressed("idle_harvester")) { SelectIdleHarvester(); return true; }
         // DEF-09 clause 4: selling 40 walls for 2000 credits on a stray
         // keypress is a match-losing misclick and the sim has no cancel for
         // it, so past 8 structures the first press only asks. Repair carries
@@ -3357,10 +3379,17 @@ public partial class SkirmishLive : Node3D
         // the overlay is the pause indicator the banner used to be, and it
         // is where saving, loading and abandoning live.
         if (ev.IsActionPressed("pause_menu")) { TogglePause(); return true; }
-        for (int slot = 0; slot < 9; slot++)
+        // Ten groups since DR-05: slots 0-8 are keys 1-9, slot 9 is key 0
+        // (GDD s10 promised 0-9). The assign modifier is read off the EVENT
+        // rather than polled from the device: identical for a real keyboard,
+        // and it makes the whole path drivable by a synthetic event, which is
+        // what lets the harness test assign as well as recall.
+        for (int slot = 0; slot < 10; slot++)
         {
-            if (!ev.IsActionPressed($"group_{slot + 1}")) continue;
-            if (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta))
+            string action = slot < 9 ? $"group_{slot + 1}" : "group_0";
+            if (!ev.IsActionPressed(action)) continue;
+            bool assign = ev is InputEventKey ik && (ik.CtrlPressed || ik.MetaPressed);
+            if (assign)
                 _groups[slot] = new HashSet<int>(_selection);          // assign
             else if (_groups.TryGetValue(slot, out var g))
             {
@@ -3778,6 +3807,17 @@ public partial class SkirmishLive : Node3D
         if ((at - _dragStart).Length() <= 8)
         {
             int hit = PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
+            // Doc 27 DR-05: ctrl-click on an own mobile is type-select, the
+            // keyboard sibling of the double-click, THROUGH THE SAME helper so
+            // the two gestures cannot drift apart. Device-polled here because
+            // this runs on a real mouse release; the shared helper itself is
+            // exercised by the harness through the double-click path.
+            if (hit >= 0 && (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta))
+                && _latest.TryGetValue(hit, out var tv) && tv.UnitType != McvUnitType)
+            {
+                SelectAllOfTypeOnScreen(hit);
+                return;
+            }
             if (hit < 0)
                 hit = PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
             if (hit >= 0)
@@ -4169,6 +4209,15 @@ public partial class SkirmishLive : Node3D
     /// sim's own scenario-scripting setter. Loading one for real means driving a
     /// full round trip to a field, which is a slower and far more fragile way to
     /// ask whether a readout prints a number it was handed.</summary>
+    /// <summary>Verification hook: set a harvester's HState, so the idle key
+    /// can be tested in both directions and the world RESTORED after.</summary>
+    public void SetHStateForTest(int id, HarvestState st)
+    {
+        var e = _world.Entities[id];
+        e.HState = st;
+        _world.SetEntityForTest(id, e);
+    }
+
     public void SetCarryForTest(int id, int carry)
     {
         var e = _world.Entities[id];
@@ -4280,6 +4329,17 @@ public partial class SkirmishLive : Node3D
         return _effects.GetChildCount() - before;
     }
 
+    /// <summary>Verification read: the first own unit of a given catalogue
+    /// type, or -1. From the sim, not the view cache.</summary>
+    public int FindOwnUnitOfTypeForTest(int unitType)
+    {
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+            if (ents[i].Alive && ents[i].PlayerId == LocalPlayerId
+                && ents[i].Kind == EntityKind.Unit && ents[i].UnitType == unitType) return i;
+        return -1;
+    }
+
     /// <summary>Verification read: an entity's cell, from the SIM.</summary>
     public (int X, int Y) CellOfForTest(int id)
     {
@@ -4345,6 +4405,15 @@ public partial class SkirmishLive : Node3D
     /// this hook's behaviour too, which is the point of testing through it.</summary>
     public void PressKey(Key k) =>
         _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false });
+    /// <summary>DR-05: the modifier rides ON the event, which is exactly why
+    /// the group-assign path reads it from the event rather than polling the
+    /// device - a synthetic press can now carry ctrl, so assign is testable.</summary>
+    public void PressKeyWithCtrl(Key k) =>
+        _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false, CtrlPressed = true });
+    /// <summary>DR-05: a real double-click through the real input path.</summary>
+    public void PressDoubleClick(Vector2 at) =>
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = at, DoubleClick = true });
 
     /// <summary>TICKET-P5-SET-01: drive a real left click through the real
     /// input path, so armed attack-move is committed the way the mouse commits
@@ -4691,6 +4760,67 @@ public partial class SkirmishLive : Node3D
     /// <summary>Programmatic hooks for offscreen verification: select all own
     /// mobile units, then order them to a map point through the same command
     /// path the mouse uses.</summary>
+    /// <summary>Doc 27 DR-05: the army. One definition of "combat unit" - the
+    /// key, the double-click type-select and any future select-all share it.</summary>
+    private bool IsArmy(in SnapshotInterpolator.ViewEntity v) =>
+        v.Alive && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit
+        && v.UnitType != McvUnitType && v.UnitType != EngineerUnitType
+        && v.UnitType != World.RepairVehicleType;
+
+    private void SelectArmy()
+    {
+        _selection.Clear();
+        _inspected = -1;
+        foreach (var v in _view)
+            if (IsArmy(in v)) _selection.Add(v.Id);
+        if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+    }
+
+    /// <summary>Doc 27 DR-06: cycle through idle own harvesters, camera to each.
+    /// Reads the SIM's HState, because "idle" is a sim fact, not a render one.</summary>
+    private int _idleHarvesterCycle;
+    private void SelectIdleHarvester()
+    {
+        var idle = new List<int>();
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+        {
+            var e = ents[i];
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.Harvester
+                && e.HState == HarvestState.Idle) idle.Add(i);
+        }
+        if (idle.Count == 0) { _audio.Play("ui_click", -18); return; }
+        int pick = idle[_idleHarvesterCycle++ % idle.Count];
+        _selection.Clear();
+        _inspected = -1;
+        _selection.Add(pick);
+        var e2 = ents[pick];
+        _cam.FlyTo(new Vector3((float)(e2.X.Raw / 4294967296.0), 0, (float)(e2.Y.Raw / 4294967296.0)));
+        _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+    }
+
+    /// <summary>Doc 27 DR-05: select every own unit of the same TYPE currently
+    /// on screen. Shared by double-click and ctrl-click, so the two gestures
+    /// cannot drift apart. On screen, not everywhere: the genre rule, because
+    /// grabbing every rifle across the map on a double-click is a misclick
+    /// amplifier.</summary>
+    private void SelectAllOfTypeOnScreen(int exemplarId)
+    {
+        if (!_latest.TryGetValue(exemplarId, out var ex)) return;
+        var rect = GetViewport().GetVisibleRect();
+        _selection.Clear();
+        _inspected = -1;
+        foreach (var v in _view)
+        {
+            if (!v.Alive || v.PlayerId != LocalPlayerId) continue;
+            if (v.Kind != ex.Kind || v.UnitType != ex.UnitType) continue;
+            if (!Mobile(v.Kind)) continue;
+            var screen = _cam.UnprojectPosition(new Vector3((float)v.X, 0.3f, (float)v.Y));
+            if (rect.HasPoint(screen)) _selection.Add(v.Id);
+        }
+        if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+    }
+
     public int SelectAllOwn()
     {
         _selection.Clear();
