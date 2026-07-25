@@ -23,8 +23,23 @@ jobs:
           # really is 0, and breaks only for the joiner. That is the worst shape
           # a bug can have: it cannot be found by playing the game the usual
           # way. So it is guarded here rather than left to review.
-          if grep -nE 'PlayerId (==|!=) 0\b|_world\.Credits\(0\)|UpdateFrom\(_world, 0\)' game/scripts/SkirmishLive.cs ; then
-            echo "::error::Hardcoded player 0 in the battle scene - use LocalPlayerId (C7b)"; exit 1
+          #
+          # WIDENED after two sites SURVIVED the C7b-ii sweep and this grep: the
+          # actor loop said 'PlayerId != 1' and both it and the minimap feed said
+          # 'IsVisible(0, ...)'. Neither matches the patterns above, and both are
+          # correct at seat 0 by luck. For a joiner they inverted the fog: their
+          # own army drawn only where the HOST had vision, the host's army drawn
+          # through the shroud. The lesson is that "player 0" is not the only way
+          # to name the wrong seat - "player 1" names it just as wrongly - so the
+          # literal seat is banned in BOTH directions.
+          # Comment lines are filtered out, and deliberately: the fix's own
+          # doc comment QUOTES the two bad expressions so the next reader knows
+          # what the shape looks like, and a guard that forbids naming the bug
+          # is a guard that gets the explanation deleted instead of the defect.
+          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$HITS" ]; then
+            echo "$HITS"
+            echo "::error::Hardcoded seat in the battle scene - use LocalPlayerId / EnemyPlayerId (C7b)"; exit 1
           fi
           if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs ; then
             echo "::error::Hardcoded player-0 faction gate in the sidebar - use _game.LocalPlayerId (C7b)"; exit 1

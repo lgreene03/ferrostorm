@@ -138,6 +138,34 @@ public partial class VerifyRunner : Node
         // vision: their own base shrouded and the enemy's revealed.
         Check(_game.FogRevealsOwnBase(), "fog reveals the seat's own base");
 
+        // --- ...and so is WHAT IS DRAWN UNDER IT -----------------------------
+        // The check above passes on the shroud TEXTURE, which has always used
+        // LocalPlayerId. The actor loop and the minimap feed were a different
+        // matter: both still asked player 0's eyes, so at seat 1 a joiner's own
+        // army was drawn only where the HOST had vision and the host's whole
+        // army was drawn through the fog. Two checks, because the two halves
+        // fail in opposite directions and one alone would look fine.
+        int ownYard = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        Check(ownYard >= 0 && _game.DrawnForLocalSeatForTest(ownYard),
+              "my own base is DRAWN for me (not gated on the other player's vision)");
+        int enemyYard = _game.FindEntity(EntityKind.ConstructionYard, _game.EnemyPlayerId);
+        Check(enemyYard >= 0, "the opposition owns a base to hide");
+        if (enemyYard >= 0)
+            Check(!_game.DrawnForLocalSeatForTest(enemyYard),
+                  "an enemy in unseen fog is NOT drawn for me");
+
+        // --- The ferrite drain reaches the renderer (P5-ECON-01) -------------
+        // The first of the five defects of this shape, and the last to get a
+        // check. The fix shipped; nothing asserted it, which is exactly how it
+        // came to ship dead in the first place.
+        var (famount, fcap) = _game.FieldViewForTest();
+        Check(famount > 0 && fcap > 0,
+              $"a ferrite field reaches the VIEW carrying its real stock ({famount}/{fcap})");
+        // The regression that actually happened: the old expression was
+        // constant, so a mined-out field drew exactly as large as a full one.
+        Check(SkirmishLive.FieldFullness(fcap, fcap) > SkirmishLive.FieldFullness(fcap / 4, fcap),
+              "a mined-out field draws SMALLER than a full one (the dead expression did not)");
+
         // ================= BACKFILL =================
         // Everything below guards a feature that SHIPPED with no way to check
         // it. Each was believed to work; four such beliefs have already turned
