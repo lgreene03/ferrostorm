@@ -48,6 +48,12 @@ public partial class SkirmishLive : Node3D
     /// player-1 seat rather than trusting a careful read.
     /// </summary>
     public int LocalPlayerId { get; private set; }
+    /// <summary>The seat this scene will take, set BEFORE it loads. Static for
+    /// the same reason AutoStep is: the value has to be in place before _Ready
+    /// runs, and a scene change is the only handoff there is. This is not test
+    /// scaffolding - it is the mechanism the LAN join path uses to say "you are
+    /// player 1" before the battle scene comes up.</summary>
+    public static int LocalSeat;
     /// <summary>The other seat in a two-player match, for the handful of reads
     /// that are genuinely about the opponent rather than about me.</summary>
     private int EnemyPlayerId => 1 - LocalPlayerId;
@@ -392,6 +398,7 @@ public partial class SkirmishLive : Node3D
         // Skirmish.tscn is launched scene-direct (that is how this client is
         // verified offscreen) and a battle reached that way must still come up
         // with the player's volume, video and key bindings.
+        LocalPlayerId = LocalSeat;
         Settings.EnsureLoaded();
 
         _models = new ModelLibrary();
@@ -3647,6 +3654,36 @@ public partial class SkirmishLive : Node3D
     /// start a second match through the real menu.</summary>
     public void QuitToMenuForTest() => QuitToMenu();
     public int SelectionCount => _selection.Count;
+    /// <summary>Verification read: the sim tick, so a harness can assert an
+    /// exact number of steps rather than trusting the frame clock.</summary>
+    public int CurrentTick => _world.Tick;
+    /// <summary>Verification read: where the first selected entity is, read
+    /// from the SIM rather than from _latest. _latest is a per-FRAME render
+    /// cache filled during _Process, so under AutoStep=false - where a harness
+    /// steps the sim without any frames elapsing - it is stale, and asserting
+    /// against it reports that nothing moved when the unit crossed the map.
+    /// The sim is the truth; the cache is a picture of it.</summary>
+    public (float X, float Z) FirstSelectedPosition()
+    {
+        foreach (int id in _selection)
+            if (id >= 0 && id < _world.EntityCount)
+            {
+                var e = _world.Entities[id];
+                return ((float)(e.X.Raw / 4294967296.0), (float)(e.Y.Raw / 4294967296.0));
+            }
+        return (0f, 0f);
+    }
+    /// <summary>Verification read: is the seat's OWN base revealed to it? A
+    /// joiner whose fog was still computed for player 0 would see the host's
+    /// vision - their own base shrouded and the enemy's revealed - which is
+    /// invisible in single player, where the seat really is 0.</summary>
+    public bool FogRevealsOwnBase()
+    {
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind == EntityKind.ConstructionYard)
+                return _world.IsVisible(LocalPlayerId, Map.CellOf(e.X), Map.CellOf(e.Y));
+        return false;
+    }
     /// <summary>ADR-021 verification read (the SelectionCount pattern): the id
     /// of the unowned entity being inspected, or -1.</summary>
     public int InspectedId => _inspected;

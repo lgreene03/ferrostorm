@@ -33,7 +33,8 @@ lands; this file is the resume point if a session dies.
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
 | C7b-i | LAN setup exchange (the Hello carries the host's match setup) | ADR-022 (ratified) | NEUTRAL (net layer) | DONE |
 | C7b-ii | LocalPlayerId through the battle scene (the joiner's seat) | C7b slice 2; CI seat-check guards it | NEUTRAL (client only) | DONE |
-| C7b-iii | LAN battle scene: drain gating, Host/Join, and a headless client harness to verify from the joiner's seat | no ADR-gated work left | neutral but WIDE | pending |
+| VERIFY | Headless client harness (tools/verify-client.sh) | closes the repo's oldest verification gap | NEUTRAL (client only) | DONE |
+| C7b-iii | LAN battle scene: drain gating, Host/Join | no ADR-gated work left; the harness can now verify it | neutral but WIDE | pending |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
