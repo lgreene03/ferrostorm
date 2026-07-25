@@ -309,12 +309,142 @@ public partial class VerifyRunner : Node
                   $"the two seats hold IDENTICAL worlds (0x{host.StateHash:X16} vs 0x{join.StateHash:X16})");
             Check(!relay.DesyncDetected, "the relay saw no desync");
 
+            // --- C7b-iv: the pause that must NOT pause ----------------------
+            // _paused stops the accumulator drain, and the drain is the only
+            // thing that submits this client's batch - so a LAN pause stops the
+            // OTHER player's world too, with nothing on their screen to explain
+            // it. Asserted through the real TogglePause, not a flag.
+            host.TogglePause();
+            int atPause = host.CurrentTick;
+            int spun = 0;
+            while (host.CurrentTick == atPause && spun++ < 2000)
+            {
+                host.StepTicks(1);
+                join.StepTicks(1);
+                if (host.CurrentTick == atPause) System.Threading.Thread.Sleep(1);
+            }
+            Check(host.PauseOpen, "the operations menu opens in a LAN match");
+            Check(host.CurrentTick > atPause,
+                  $"pausing does NOT stall the lockstep ({atPause} -> {host.CurrentTick})");
+            host.ClosePause();
+
             host.QueueFree();
             join.QueueFree();
         }
         catch (System.Exception ex)
         {
             Check(false, $"the LAN match threw: {ex.Message}");
+        }
+
+        RunLobbyChecks();
+    }
+
+    /// <summary>
+    /// C7b-iv acceptance: the REAL lobby, both ends, in this process.
+    ///
+    /// The lobby is deliberately not part of MainMenu, so it can be driven with
+    /// no scene at all - which matters because the thing worth proving is not
+    /// the buttons but the handshake behind them: that a host opens a port and
+    /// blocks, that a joiner dialling that port lands on the opposite seat, and
+    /// above all that the joiner ends up with THE HOST'S SETUP rather than its
+    /// own menu's. Everything a real join does except the typing.
+    /// </summary>
+    private void RunLobbyChecks()
+    {
+        GD.Print("  --    LAN: the host and join lobby");
+
+        // The codec first, on its own. A field the encoder writes and the
+        // decoder does not read is a joiner-only divergence, and finding it here
+        // is the difference between a one-line fix and a desync hunt.
+        var original = new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-04.fmap",
+            MissionIndex = 0,
+            AiPreset = 2,
+            StartCredits = 12345,
+            Seed = 987654321UL,
+            Faction = 1,
+            OppFaction = 0,
+        };
+        var round = MatchSetupBlob.Decode(MatchSetupBlob.Encode(original));
+        Check(round.MapPath == original.MapPath && round.MissionIndex == original.MissionIndex
+              && round.AiPreset == original.AiPreset && round.StartCredits == original.StartCredits
+              && round.Seed == original.Seed && round.Faction == original.Faction
+              && round.OppFaction == original.OppFaction,
+              "every setup field survives the wire round trip");
+
+        // A host running a build the joiner cannot read must be told so in the
+        // lobby. The alternative is building a world from a misread blob and
+        // discovering it as a desync at the first order.
+        bool refusedEmpty = false;
+        try { MatchSetupBlob.Decode(System.Array.Empty<byte>()); }
+        catch (System.Exception) { refusedEmpty = true; }
+        Check(refusedEmpty, "a setup blob that is absent is REFUSED, not guessed at");
+
+        try
+        {
+            // The host's match is skirmish-04 with distinctive options, and the
+            // joiner is never told any of it. If the joiner comes back holding
+            // these values, they can only have arrived over the wire.
+            var hosted = new MatchSetup
+            {
+                MapPath = "data/maps/skirmish-04.fmap",
+                AiPreset = 1,
+                StartCredits = 5000,
+                Seed = 31337UL,
+                Faction = 1,
+                OppFaction = 0,
+            };
+            // Port 0 is unusable for a real lobby (nobody can dial an ephemeral
+            // port) but it is exactly right here: a fixed port would make this
+            // check fail against a stale relay left by an earlier run rather
+            // than against anything it is testing.
+            var host = LanLobby.Host(hosted, port: 0);
+            // The host's relay must be listening before anything dials it, and
+            // it binds on the connect thread. Waiting for the port is the
+            // handshake's real precondition, so wait for it rather than sleeping
+            // a guessed interval.
+            int waited = 0;
+            while (host.RelayPortForTest <= 0 && host.State == LanLobby.Phase.Connecting && waited++ < 5000)
+                System.Threading.Thread.Sleep(1);
+            Check(host.RelayPortForTest > 0, $"the host opened a lobby port ({host.RelayPortForTest})");
+            Check(host.State == LanLobby.Phase.Connecting,
+                  "the host WAITS rather than starting alone (nobody has joined yet)");
+
+            var join = LanLobby.Join("127.0.0.1", host.RelayPortForTest);
+
+            waited = 0;
+            while ((host.State == LanLobby.Phase.Connecting || join.State == LanLobby.Phase.Connecting)
+                   && waited++ < 15000)
+                System.Threading.Thread.Sleep(1);
+
+            Check(host.State == LanLobby.Phase.Ready, $"the host's lobby became ready ({host.Status})");
+            Check(join.State == LanLobby.Phase.Ready, $"the join lobby became ready ({join.Status})");
+
+            if (host.State == LanLobby.Phase.Ready && join.State == LanLobby.Phase.Ready)
+            {
+                Check(host.Seat == 0 && join.Seat == 1,
+                      $"the relay seated them opposite (host {host.Seat}, joiner {join.Seat})");
+                var got = join.Setup!;
+                Check(got.MapPath == hosted.MapPath,
+                      $"the joiner took the HOST'S map, never its own menu's (\"{got.MapPath}\")");
+                Check(got.Seed == hosted.Seed && got.StartCredits == hosted.StartCredits
+                      && got.Faction == hosted.Faction && got.OppFaction == hosted.OppFaction,
+                      "the joiner took the host's seed, treasury and sides");
+                // The claim that actually matters. Two worlds built independently
+                // on two ends of a socket, identical before a single tick runs -
+                // which is the precondition every later tick depends on.
+                Check(host.Client!.World.ComputeStateHash() == join.Client!.World.ComputeStateHash(),
+                      $"both lobbies built the IDENTICAL world before tick 0 "
+                      + $"(0x{host.Client!.World.ComputeStateHash():X16})");
+            }
+
+            host.Cancel();
+            join.Cancel();
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"the lobby threw: {ex.Message}");
         }
     }
 }
