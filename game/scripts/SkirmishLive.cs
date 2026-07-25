@@ -1046,6 +1046,20 @@ public partial class SkirmishLive : Node3D
             _audio.Play("ui_click", -8);
             return;
         }
+        // THE SAME GUARD LANE 1 HAS, which lane 2 was missing. The sim's lane
+        // branch checks `cl.Ready != 0` BEFORE it looks at the index, so a
+        // cancel aimed at a QUEUED item while a DIFFERENT structure sits
+        // finished in the slot destroys the finished one and leaves the queued
+        // one alone - the player refunds a building they never clicked.
+        //
+        // Reachable in an ordinary match: queue three structures, let lane 2's
+        // head finish while lane 1 is still building (AdvanceBuildLanes pauses a
+        // lane on a full ready slot without draining its queue), then right-click
+        // the third. Refusing here matches lane 1's rule exactly - to clear a
+        // ready slot, right-click THAT item's own button - and is hash-neutral,
+        // where teaching the sim to honour the index would change a command's
+        // meaning.
+        if (laneReady != 0) return;
         for (int k = laneQ.Count - 1; k >= 0; k--)
             if (laneQ[k] == structType)
             {
@@ -3688,7 +3702,15 @@ public partial class SkirmishLive : Node3D
     private void IssueStop()
     {
         if (_replay != null) return;
+        // BOTH armed orders, because stop means stop. This disarmed attack-move
+        // and not patrol, and it was the ONLY site in the family that treated
+        // them separately: guard disarms both, arming either clears the other,
+        // and Escape clears both. So arming a patrol, changing your mind and
+        // pressing stop left the patrol ARMED - the units halted, the cursor
+        // stayed on the attack glyph, and the next left click issued the patrol
+        // to the whole selection and marched them straight back out.
         DisarmAttackMove();
+        DisarmPatrol();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
@@ -4332,6 +4354,15 @@ public partial class SkirmishLive : Node3D
         { ButtonIndex = MouseButton.Left, Pressed = true, Position = at });
 
     public bool AttackMoveArmed => _attackMoveArmed;
+    /// <summary>Verification read: is a patrol armed and waiting for its click?
+    /// Stop used to leave this standing, so the next click marched the units
+    /// the player had just halted.</summary>
+    public bool PatrolArmed => _patrolArmed;
+    /// <summary>Verification reads: the yard's second lane, as the SIM holds
+    /// it - what is queued there and what is finished and waiting.</summary>
+    public IReadOnlyList<int> LaneQueueForTest => _world.LaneContents(_yardId);
+    public int LaneReadyForTest => _world.LaneState(_yardId).Ready;
+    public int ReadyStructureForTest => _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
     /// <summary>C7c: the widget now carries TWO causes (a desync and a
     /// departure), so the reads are named for the widget rather than for one of
     /// them. The Desync* pair stays as an alias so nothing that already asks in

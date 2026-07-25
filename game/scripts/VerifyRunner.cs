@@ -173,6 +173,23 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- Stop disarms EVERY armed order ----------------------------------
+        // IssueStop disarmed attack-move and not patrol, and it was the only
+        // site in the family that treated them separately. Arm a patrol, change
+        // your mind, press stop: the units halted and the patrol stayed armed,
+        // so the next left click issued it to the whole selection and marched
+        // them back out. Both directions, since the pair must clear together.
+        _game.SelectAllOwn();
+        _game.PressKey(Settings.BindOf("patrol"));   // the LIVE binding, not a guessed letter
+        Check(_game.PatrolArmed, "a patrol can be armed (the precondition)");
+        _game.PressStop();
+        Check(!_game.PatrolArmed, "STOP disarms an armed patrol");
+        _game.PressKey(Settings.BindOf("attack_move"));
+        Check(_game.AttackMoveArmed, "an attack-move can be armed (the precondition)");
+        _game.PressStop();
+        Check(!_game.AttackMoveArmed, "...and still disarms an armed attack-move");
+        _game.ClearSelectionForTest();
+
         // --- A harvester says what it is CARRYING (P5-ECON-08) ---------------
         // The readout showed "700/700", which is HIT POINTS, so a full hopper
         // and an empty one were indistinguishable - the one number a harvester
