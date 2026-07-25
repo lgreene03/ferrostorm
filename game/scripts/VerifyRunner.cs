@@ -173,6 +173,62 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- A harvester says what it is CARRYING (P5-ECON-08) ---------------
+        // The readout showed "700/700", which is HIT POINTS, so a full hopper
+        // and an empty one were indistinguishable - the one number a harvester
+        // exists to produce was the one number the game would not show. Driven
+        // through a REAL load: select the harvester, read the line, put ore
+        // aboard, read it again.
+        int harv = _game.FindEntity(EntityKind.Harvester, _game.LocalPlayerId);
+        Check(harv >= 0, "the seat owns a harvester to inspect");
+        if (harv >= 0)
+        {
+            _game.SelectOnlyForTest(harv);
+            string empty = _game.ReadoutText();
+            Check(empty.Contains("LOAD 0/"), $"an empty harvester reads LOAD 0 (\"{empty}\")");
+            _game.SetCarryForTest(harv, 350);
+            string half = _game.ReadoutText();
+            Check(half.Contains("LOAD 350/"), $"a half-full one reads its actual load (\"{half}\")");
+            // The distinction that was missing: the load line must not be the
+            // hit-point line. Both are present and they must differ.
+            Check(half.Contains("700/700") && half.Contains("LOAD 350/700"),
+                  "hit points and cargo are BOTH shown, and are different numbers");
+            _game.SetCarryForTest(harv, 0);
+            _game.ClearSelectionForTest();
+        }
+
+        // --- A ferrite field can be interrogated at all ----------------------
+        // The deposit a player is about to send a harvester across the map for
+        // could not be inspected: no readout, and its only tell was the node's
+        // size, which is floor-clamped and so cannot separate "nearly spent"
+        // from "spent".
+        int fieldId = _game.FindEntity(EntityKind.FerriteField, -1);
+        Check(fieldId >= 0, "the map carries a ferrite field to inspect");
+        if (fieldId >= 0)
+        {
+            // Reached by a REAL CLICK, not by setting the id. The readout being
+            // correct is worth nothing if the pick never returns a field, and a
+            // check that calls InspectForTest directly would pass either way -
+            // the same call-site gap that let a seat-relative team colour
+            // survive a check of the colour law itself.
+            var (fcx, fcy) = _game.CellOfForTest(fieldId);
+            var at = _game.ScreenOf(fcx + 0.5f, fcy + 0.5f);
+            _game.ClearSelectionForTest();
+            _game.BoxSelect(at, at);            // from == to, so the click branch runs
+            // Asserted on the KIND, not the instance: deposits sit adjacent and
+            // the pick radius is 1.4 cells, so a click aimed at one field
+            // legitimately lands on its neighbour. Demanding the exact id would
+            // be a check that fails for being right.
+            Check(_game.InspectedId >= 0
+                  && _game.EntityKindForTest(_game.InspectedId) == EntityKind.FerriteField,
+                  $"CLICKING a ferrite field inspects a field (id {_game.InspectedId})");
+            string fr = _game.ReadoutText();
+            Check(fr.Contains("FERRITE FIELD"), $"a field names itself when inspected (\"{fr}\")");
+            Check(fr.Contains("cr"), "...and states the stock in credits, which is what the trip is worth");
+            Check(_game.SelectionCount == 0, "inspecting a field does not put it in the selection");
+            _game.ClearSelectionForTest();
+        }
+
         // --- The end-of-match banner tells ME what happened ------------------
         // _winner is an ABSOLUTE player id and the banner asked whether it was
         // zero, so at seat 1 it was exactly inverted: the LAN joiner who had
