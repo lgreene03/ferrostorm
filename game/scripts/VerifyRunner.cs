@@ -483,6 +483,54 @@ public partial class VerifyRunner : Node
                   $"the refund was EXACT, to the credit ({midway} -> {_game.CreditsNow}, started {creditsBefore})");
         }
 
+        // --- Cancel must not destroy a building you did not click ------------
+        // The sim's lane branch checks `cl.Ready != 0` BEFORE it looks at the
+        // index, so a cancel aimed at a QUEUED item while a DIFFERENT structure
+        // sits finished in lane 2 destroyed the finished one and left the queued
+        // one alone. Lane 1 has always guarded this; lane 2 did not.
+        //
+        // LAST in the run, and deliberately: it grants credits and stands a
+        // building, and a check that leaves the world changed breaks the ones
+        // after it - which is exactly what happened on the first attempt.
+        int cyId = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        if (cyId >= 0)
+        {
+            // A built plant opens the tech tree. Without it the seat may queue
+            // NOTHING but a plant, so the two-lane state cannot be reached at
+            // all - the reason this check was missing.
+            var (cyx, cyy) = _game.CellOfForTest(cyId);
+            _game.SpawnPowerPlantForTest(cyx + 6, cyy + 6);
+            _game.GrantCreditsForTest(40000);
+            _game.QueueStructure(3);              // refinery: slow, holds lane 1
+            _game.StepTicks(2);
+            _game.QueueStructure(5);              // turret: overflows to lane 2
+            _game.StepTicks(2);
+            _game.QueueStructure(1);              // plant: queues BEHIND it in lane 2
+            for (int i = 0; i < 900 && _game.LaneReadyForTest == 0; i++) _game.StepTicks(1);
+
+            bool plantQueued = false;
+            foreach (int q in _game.LaneQueueForTest) if (q == 1) plantQueued = true;
+            Check(_game.LaneReadyForTest == 5,
+                  $"lane 2 holds a FINISHED turret (ready={_game.LaneReadyForTest})");
+            Check(plantQueued, "...with a power plant queued BEHIND it (the precondition)");
+            if (_game.LaneReadyForTest == 5 && plantQueued)
+            {
+                long creditsBefore = _game.CreditsNow;
+                _game.CancelStructure(1);         // right-click the QUEUED PLANT
+                _game.StepTicks(2);
+                Check(_game.LaneReadyForTest == 5,
+                      $"cancelling the QUEUED plant leaves the finished turret alone (ready={_game.LaneReadyForTest})");
+                // NOT an equality: lane 1's refinery is still draining
+                // pay-as-you-build, so the treasury legitimately FALLS during
+                // these ticks. The defect ADDS credits - it refunds a turret the
+                // player never cancelled - so "did not rise" is the property
+                // that actually separates the two, and an equality here failed
+                // for the wrong reason.
+                Check(_game.CreditsNow <= creditsBefore,
+                      $"...and refunds NOTHING for a building never cancelled (delta {_game.CreditsNow - creditsBefore}, a turret would be +{_game.StructCostOf(5)})");
+            }
+        }
+
         RunLanChecks();
     }
 

@@ -4408,6 +4408,13 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification hook: hand an entity to another player, as a
     /// capture does. Through the sim's own scenario-scripting SetEntity, so the
     /// world stays internally consistent rather than the view being lied to.</summary>
+    /// <summary>Verification hook: stand a finished POWER PLANT for the local
+    /// seat, through the sim's own public spawn. Needed because the opening hand
+    /// is a bare Construction Yard, so HasPrereqs refuses every structure except
+    /// the plant - which made the two-lane states impossible to build offscreen
+    /// and left the lane-2 cancel guard unchecked for a wave.</summary>
+    public int SpawnPowerPlantForTest(int cx, int cy) => _world.SpawnPowerPlant(LocalPlayerId, cx, cy);
+
     public void SetOwnerForTest(int id, int player)
     {
         var e = _world.Entities[id];
