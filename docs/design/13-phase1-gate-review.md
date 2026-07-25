@@ -1,5 +1,10 @@
 # 13 - Phase 1 Gate Review Pack (TICKET-P1-15)
 
+**HISTORICAL, kept as the 2026-07-07 snapshot.** Its open items were all
+closed long ago: Windows determinism runs green in CI on every push, and the
+Godot renderer is not merely started but shipped, packaged and gated by a
+headless harness. Read it as a record of that gate, not as current state.
+
 Date: 2026-07-07. Prepared by: Producer agent. Decision required from: Luke.
 
 ## Gate criteria vs evidence

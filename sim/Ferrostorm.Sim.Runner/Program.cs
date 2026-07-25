@@ -18,7 +18,7 @@ using Ferrostorm.Sim;
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
-//   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and its declared outposts stand neutral
+//   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and the AI CAPTURES at least one of its declared outposts (C4c inverted this from the original "stand neutral" assertion)
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.

@@ -420,7 +420,7 @@ Console.WriteLine($"faction war: Directorate {dirWins} - {sodWins} Sodality");
 // is visible; the gate is promoted to blocking once the AI can defend its
 // economy without being puppeted and human playtesting has set the meta.
 if (dirWins < 2 || sodWins < 2)
-    Console.WriteLine($"faction balance (reporting): one side dominating ({dirWins}-{sodWins}); blocked on TICKET-AI-05 + human playtesting");
+    Console.WriteLine($"faction balance (reporting): one side dominating ({dirWins}-{sodWins}); AI-05 landed; now blocked on human playtesting only");
 
 if (args.Length > 0) File.WriteAllText(args[0], text);
 return hardFail ? 1 : 0;

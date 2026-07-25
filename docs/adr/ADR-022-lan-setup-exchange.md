@@ -98,3 +98,10 @@ loop from the lockstep poll, `LocalPlayerId` is still hardcoded to 0 in roughly
 forty places, and Host and Join are still disabled in the menu. Those remain
 TICKET-P6-C7b, which now has no ADR-gated work left in it. Real two-machine
 verification was always, and remains, a human step.
+
+**POSTSCRIPT, 2026-07-25: every limitation named in the paragraph above has
+since been lifted.** C7b-ii plumbed the seat through ninety-three sites (with a
+CI guard now enforcing it), C7b-iii made the frame loop lockstep-driven, and
+C7b-iv shipped the Host and Join lobby. C7c added a dropped-peer notice. The
+paragraph is kept as written because it was true at ratification; only the
+human two-machine session is still owed.

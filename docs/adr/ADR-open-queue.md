@@ -86,8 +86,7 @@ the same commit.
   world; P6 Wave C7b, first slice). Ratified under the standing directive. The
   blob is OPAQUE to the net layer, which keeps Ferrostorm.Net free of any
   knowledge of maps, factions or seeds; hash impact NEUTRAL (net layer, outside
-  the state hash). Originally reserved 2026-07-24 as:
- a
+  the state hash). Originally reserved 2026-07-24 as: a
   host-supplied match-setup blob appended to the lockstep Hello frame so a
   joiner builds the identical world. A WIRE-FORMAT change, so it takes this
   ADR before code; the non-blocking poll half of Q002's remainder shipped
@@ -95,7 +94,7 @@ the same commit.
   no wire change).
 - ADR-021: RATIFIED 2026-07-24 - ADR-021-neutral-outpost.md (the neutral
   capturable Outpost, GDD line 41 / doc 22 P5-ECON-14; P6 Wave C4). Number
-  claimed here per the numbering law. Design ratified and READY TO IMPLEMENT;
+  claimed here per the numbering law. Design ratified; BUILT AND SHIPPED 2026-07-25 (C4, C4b, C4c);
   hash impact NEUTRAL (EntityKind.Outpost = 17 already reserved and inert, all
   behaviour Kind==Outpost gated, no golden scenario spawns one, income reuses
   the already-hashed _credits pool, no new hashed Entity field), so the existing

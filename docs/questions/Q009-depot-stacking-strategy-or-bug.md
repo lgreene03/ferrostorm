@@ -1,3 +1,10 @@
+**PREMISE WIDENED, 2026-07-25.** When this was filed the Service Depot was the
+only source of the stacking aura. ADR-019 has since added a SECOND: the repair
+vehicle (unit type 13) runs the identical heal loop as a mobile aura and is
+deliberately NOT power-gated. The two stack with each other as well as with
+themselves, so whoever rules on this is ruling on both. Line numbers quoted
+below have also drifted; the loops are now in ProductionSystem.
+
 # Q009: depot stacking: five overlapping depots heal 10 hp per tick. Strategy or bug?
 
 Owner: game-designer (Balance consulted; any cap or rate change over 15 per

@@ -105,7 +105,7 @@ jobs:
           dotnet run --project tools/Ferrostorm.Balance -c Release --no-build
 
   # The headless CLIENT harness. It boots the REAL battle scene, drives it from
-  # the joiner's seat and asserts on what it does; it has caught nine defects
+  # the joiner's seat and asserts on what it does; it has caught TEN defects
   # that every other gate here was blind to, because the sim battery cannot see
   # the client and "it compiles" is not a test.
   #
@@ -144,7 +144,7 @@ jobs:
       # a clean clone) and is the fallback if nuget.org ever becomes a problem
       # here - but it invented a second policy beside one the repo had already
       # settled, so it is not what ships.
-      - name: Drive the real battle scene headless (67 checks)
+      - name: Drive the real battle scene headless
         run: |
           GODOT="$(find ~/godot -type f -name 'Godot_v4.7-stable_mono_linux.x86_64' | head -1)"
           test -n "$GODOT" || { echo "::error::no Godot binary in the install"; exit 1; }

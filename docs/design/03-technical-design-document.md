@@ -29,7 +29,7 @@ An ADR must be written before any code confirms or overturns this (ADR-001).
 
 - **Model:** Fixed-timestep lockstep. Sim ticks at 15 Hz (classic RTS rate; interpolated rendering at display rate). Every tick consumes an ordered list of player commands.
 - **Determinism rules (enforced by CI):**
-  - Fixed-point maths (Q32.32) throughout the sim. No `float`/`double` in simulation code - a Roslyn analyser fails the build if found.
+  - Fixed-point maths (Q32.32) throughout the sim. No `float`/`double` in simulation code. Enforced by a CI grep, not a Roslyn analyser as this line once claimed: see the `banned-tokens` job in .github/workflows/determinism.yml.
   - Single seeded PRNG owned by the sim; no `System.Random` elsewhere.
   - Deterministic collections only (no unordered dict iteration affecting outcomes).
   - No wall-clock, locale, or platform API access inside the sim.
@@ -97,6 +97,12 @@ An ADR must be written before any code confirms or overturns this (ADR-001).
 | 001 | Engine choice (Godot+C# sim library) | Ratified (2026-07-07) |
 | 002 | Fixed-point library selection/benchmark | Ratified (2026-07-07) |
 | 003 | Infantry: squads vs individuals (perf + design) | Ratified (2026-07-07); pairs with GDD Q3 |
-| 004 | Lua sandbox implementation for triggers | Open |
-| 005 | Tile size / grid resolution / footprint rules | Open |
-| 006 | Save format = snapshot vs command-log replay | Open |
+| 004 | Engine strategy (UE5 as a later renderer swap) | Ratified (2026-07-14) |
+| 005 | Footprints and barriers | Ratified (2026-07-18) |
+| 006 | /data is the runtime source | Ratified (2026-07-19) |
+
+**Numbering note:** 004, 005 and 006 were REASSIGNED to the topics above; the
+three original subjects were re-queued as ADR-016 (Lua sandbox) and ADR-017
+(save format), with grid resolution absorbed into ADR-005. This table asserted
+the old mapping for several waves. docs/adr/ADR-open-queue.md is the live
+register and is authoritative over this one.

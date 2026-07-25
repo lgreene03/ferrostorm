@@ -55,6 +55,8 @@ units puppeting the defence trigger until the army died piecemeal, army
 annihilated 25-0 between t=2800 and t=4200). Findings banked along the way:
 the sentinel tax, value-per-factory-hour vs per-credit costing, the opening
 tempo hole (nobody opens with their Mammoth), the common-triangle law
-above, and the puppet exploit. Promotion to blocking is gated on
+above, and the puppet exploit. Promotion to blocking was gated on
 TICKET-AI-05 (defence squads: a dedicated guard force so the main army
-ignores bait) and human playtesting once the Godot client runs.
+ignores bait) and human playtesting once the Godot client runs. **Both halves
+of that gate are now met** (AI-05 shipped in SkirmishAI; the client has run
+since 2026-07-11), so the promotion awaits a decision rather than a dependency.
