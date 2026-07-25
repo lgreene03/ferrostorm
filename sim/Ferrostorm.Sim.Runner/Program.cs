@@ -15,6 +15,7 @@ using Ferrostorm.Sim;
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
+//   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and its declared outposts stand neutral
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -2257,17 +2258,17 @@ int CatalogueRefuse()
 // bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
 // the only difference was the checksum; the wider entity record made it a
 // shared, layout-aware helper.)
-byte[] DowngradeSave(byte[] v7, uint targetMagic)
+byte[] DowngradeSave(byte[] v8, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u;
-    using var input = new BinaryReader(new MemoryStream(v7));
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u;
+    using var input = new BinaryReader(new MemoryStream(v8));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    if (input.ReadUInt32() != magicV7)
-        throw new InvalidOperationException("save surgery expects a v7 stream");
+    if (input.ReadUInt32() != magicV8)
+        throw new InvalidOperationException("save surgery expects a v8 stream");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6 || targetMagic == magicV7) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2294,19 +2295,51 @@ byte[] DowngradeSave(byte[] v7, uint targetMagic)
     // v6 keeps rally+cap+no-progress, v5 keeps rally+cap, v4 keeps rally only,
     // v3 and below drop all four; the v7 stance tail is dropped for every target.
     const int v3EntityBytes = 209, rallyTailBytes = 18, ferriteCapBytes = 4, noProgressTailBytes = 12, stanceTailBytes = 34;
-    bool keepRally = targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6;
-    bool keepCap = targetMagic == magicV5 || targetMagic == magicV6;
-    bool keepNoProgress = targetMagic == magicV6;
+    bool keepRally = targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6 || targetMagic == magicV7;
+    bool keepCap = targetMagic == magicV5 || targetMagic == magicV6 || targetMagic == magicV7;
+    bool keepNoProgress = targetMagic == magicV6 || targetMagic == magicV7;
+    bool keepStance = targetMagic == magicV7;
     for (int i = 0; i < count; i++)
     {
         w.Write(input.ReadBytes(v3EntityBytes));
         if (keepRally) w.Write(input.ReadBytes(rallyTailBytes)); else input.ReadBytes(rallyTailBytes);
         if (keepCap) w.Write(input.ReadBytes(ferriteCapBytes)); else input.ReadBytes(ferriteCapBytes);
         if (keepNoProgress) w.Write(input.ReadBytes(noProgressTailBytes)); else input.ReadBytes(noProgressTailBytes);
-        input.ReadBytes(stanceTailBytes); // dropped: no format below v7 carried the stance tail
+        if (keepStance) w.Write(input.ReadBytes(stanceTailBytes)); else input.ReadBytes(stanceTailBytes);
     }
-    // Production queues, order queues and the trailer are format-identical.
-    w.Write(input.ReadBytes((int)(input.BaseStream.Length - input.BaseStream.Position)));
+    // Production queues and order queues are format-identical in every format,
+    // so they are copied verbatim - but ADR-023's lane block sits between them
+    // and the trailer in v8 and exists in NO earlier format, so the tail can no
+    // longer be one blanket copy: the blocks are walked so the lane block can
+    // be dropped for every target below v8.
+    int queueCount = input.ReadInt32(); w.Write(queueCount);
+    for (int i = 0; i < queueCount; i++)
+    {
+        w.Write(input.ReadInt32());                       // producer id
+        int n = input.ReadInt32(); w.Write(n);
+        for (int k = 0; k < n; k++) w.Write(input.ReadInt32());
+    }
+    int orderQueueCount = input.ReadInt32(); w.Write(orderQueueCount);
+    for (int i = 0; i < orderQueueCount; i++)
+    {
+        w.Write(input.ReadInt32());                       // entity id
+        int n = input.ReadInt32(); w.Write(n);
+        for (int k = 0; k < n; k++) w.Write(input.ReadBytes(34)); // one serialized Command
+    }
+    // ADR-023 (v8 only): consumed and DROPPED. This helper only ever produces
+    // formats BELOW v8, and v8 is refused as a target rather than half-copied:
+    // writing the count without the lane bodies would emit a corrupt save that
+    // loaded as a truncation error somewhere far from here.
+    if (targetMagic == magicV8) throw new InvalidOperationException("save surgery downgrades; v8 is the source format, not a target");
+    int laneCount = input.ReadInt32();
+    for (int i = 0; i < laneCount; i++)
+    {
+        input.ReadInt32();                                // yard id
+        input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); // progress, paid, ready
+        int n = input.ReadInt32();
+        for (int k = 0; k < n; k++) input.ReadInt32();
+    }
+    w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
 
@@ -3412,6 +3445,149 @@ int OutpostGate()
     return 0;
 }
 
+int LaneGate()
+{
+    // ADR-023 gate. Additive, the repairgate/outpostgate pattern: standalone
+    // mode plus a Match stage, never a golden scenario, so the golden list
+    // stays 24 lines by construction.
+    //
+    // Proves the wave's feature AND its neutrality rule. The second is the one
+    // that matters: if a second order at an IDLE yard ever reached lane 2, the
+    // construction scenario's turret would move and every AI golden would
+    // diverge, so that rule is asserted here rather than trusted.
+    World LaneWorld(ulong seed, out int cy)
+    {
+        var w = new World(seed, 64, 64, players: 1);
+        w.GrantCredits(0, 100000);
+        cy = w.SpawnConstructionYard(0, 20, 20);
+        w.SpawnPowerPlant(0, 30, 30);   // supply, so the rate is the full 100
+        return w;
+    }
+    List<Command> One(Command c) => new() { c };
+    void Step(World w, List<Command>? cmds = null) =>
+        w.Step(cmds is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+    // --- 1. THE NEUTRALITY RULE: an order into an IDLE yard stays in lane 1 --
+    {
+        var w = LaneWorld(3300, out int cy);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1)));
+        if (w.QueueLength(cy) != 1)
+            return Fail($"lane: an order into an idle yard must land in lane 1 (QueueLength {w.QueueLength(cy)})");
+        if (w.LaneContents(cy).Count != 0)
+            return Fail("lane: an order into an idle yard must NOT create a second lane - this is the rule the goldens rest on");
+    }
+
+    // --- 2. THE FEATURE: a second order overflows and BOTH build at once -----
+    {
+        var w = LaneWorld(3301, out int cy);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1)));   // power plant
+        Step(w);                                                                                      // lane 1 starts
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 3)));   // refinery: overflows
+        if (w.LaneContents(cy).Count != 1)
+            return Fail("lane: a second order at a BUSY yard must overflow into lane 2");
+        int p1 = -1, p2 = -1;
+        for (int t = 0; t < 40; t++)
+        {
+            Step(w);
+            p1 = w.Entities[cy].BuildProgress;
+            p2 = w.LaneState(cy).Progress;
+        }
+        if (p1 <= 0 || p2 <= 0)
+            return Fail($"lane: BOTH lanes must build simultaneously (lane1 progress {p1}, lane2 progress {p2}) - this is the whole wave");
+    }
+
+    // --- 3. Independent ready slots, and an independent refund --------------
+    {
+        var w = LaneWorld(3302, out int cy);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1)));
+        Step(w);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1)));
+        for (int t = 0; t < 400; t++) Step(w);
+        if (w.Entities[cy].ReadyStructure != 1)
+            return Fail($"lane: lane 1 should hold a ready structure (got {w.Entities[cy].ReadyStructure})");
+        if (w.LaneState(cy).Ready != 1)
+            return Fail($"lane: lane 2 should hold its OWN ready structure (got {w.LaneState(cy).Ready})");
+
+        // Cancelling the lane-2 ready refunds it in full and leaves lane 1 alone.
+        long before = w.Credits(0);
+        Step(w, One(new Command(0, 0, CommandType.CancelProduce, cy, Fix64.Zero, Fix64.Zero, World.LaneFlag)));
+        long refund = w.Credits(0) - before;
+        if (refund != w.GetStructureType(1).Cost)
+            return Fail($"lane: cancelling a lane-2 ready must refund its full cost (refunded {refund})");
+        if (w.LaneState(cy).Ready != 0)
+            return Fail("lane: the lane-2 ready slot must clear on cancel");
+        if (w.Entities[cy].ReadyStructure != 1)
+            return Fail("lane: cancelling lane 2 must not disturb lane 1");
+    }
+
+    // --- 4. THE GUARD IS EQUIVALENT TO INERTNESS ---------------------------
+    // A world whose lane was used and then emptied must hash IDENTICALLY to a
+    // world that never had one. If pruning ever stopped matching the hash
+    // guard, the two would differ and every save and LAN peer would disagree.
+    {
+        var a = LaneWorld(3303, out int cyA);
+        var b = LaneWorld(3303, out int cyB);
+        // a: overflow a cheap structure into lane 2, then cancel it away.
+        Step(a, One(new Command(0, 0, CommandType.BuildStructure, cyA, Fix64.Zero, Fix64.Zero, 1)));
+        Step(a);
+        Step(a, One(new Command(0, 0, CommandType.BuildStructure, cyA, Fix64.Zero, Fix64.Zero, 1)));
+        if (a.LaneContents(cyA).Count != 1) return Fail("lane: setup for the inertness proof did not overflow");
+        Step(a, One(new Command(0, 0, CommandType.CancelProduce, cyA, Fix64.Zero, Fix64.Zero, World.LaneFlag)));
+        // b: the same single order, never overflowed. The SAME NUMBER OF TICKS
+        // (four each), or the comparison would only be measuring the tick
+        // counter, which is itself hashed.
+        Step(b, One(new Command(0, 0, CommandType.BuildStructure, cyB, Fix64.Zero, Fix64.Zero, 1)));
+        Step(b);
+        Step(b);
+        Step(b);
+        if (a.LaneContents(cyA).Count != 0)
+            return Fail("lane: a cancelled lane must be pruned, or 'entry present' stops meaning 'lane active'");
+        if (a.ComputeStateHash() != b.ComputeStateHash())
+            return Fail($"lane: a used-then-emptied lane must hash identically to one that never existed " +
+                        $"(0x{a.ComputeStateHash():X16} vs 0x{b.ComputeStateHash():X16})");
+    }
+
+    // --- 5. v8 round-trips both lanes; a v7 downgrade of a one-lane world ---
+    {
+        var w = LaneWorld(3304, out int cy);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 1)));
+        Step(w);
+        Step(w, One(new Command(0, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, 3)));
+        for (int t = 0; t < 30; t++) Step(w);
+        ulong mid = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != mid)
+            return Fail($"lane: a v8 save must load bit-exact (0x{loaded.ComputeStateHash():X16} vs 0x{mid:X16})");
+        if (loaded.LaneContents(cy).Count != w.LaneContents(cy).Count || loaded.LaneState(cy) != w.LaneState(cy))
+            return Fail("lane: the second lane did not survive the v8 round trip");
+        for (int t = 0; t < 60; t++) { Step(w); Step(loaded); }
+        if (loaded.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("lane: the resumed run diverged - lane state did not round-trip");
+
+        // A v7 downgrade of a world with NO lane is hash-identical: v7 is
+        // exactly "this world, without a second lane", which is what it was.
+        var single = LaneWorld(3305, out int cy2);
+        Step(single, One(new Command(0, 0, CommandType.BuildStructure, cy2, Fix64.Zero, Fix64.Zero, 1)));
+        for (int t = 0; t < 20; t++) Step(single);
+        ulong singleHash = single.ComputeStateHash();
+        using var ms2 = new MemoryStream();
+        single.Save(ms2);
+        var v7World = World.Load(new MemoryStream(DowngradeSave(ms2.ToArray(), 0x534C4137u)));
+        if (v7World.ComputeStateHash() != singleHash)
+            return Fail($"lane: a v7 downgrade of a lane-free world must be hash-identical " +
+                        $"(0x{v7World.ComputeStateHash():X16} vs 0x{singleHash:X16})");
+    }
+
+    Console.WriteLine("lanegate: an order into an idle yard stays in lane 1 (the rule the goldens rest on); a second order at a busy yard " +
+                      "overflows and BOTH lanes build simultaneously; the lanes hold independent ready slots and refund independently; " +
+                      "a used-then-emptied lane hashes identically to one that never existed (the prune matches the hash guard); " +
+                      "and a v8 save round-trips both lanes bit-exact while a v7 downgrade of a lane-free world loads hash-identically");
+    return 0;
+}
+
 int MapGate()
 {
     // The map validation harness doc 18 Phase D asked for and never got, now
@@ -3562,6 +3738,9 @@ int Match(ulong seed)
     // ADR-021: and the neutral-outpost gate.
     int outpost = OutpostGate();
     if (outpost != 0) return outpost;
+    // ADR-023: and the parallel build lanes.
+    int lanegate = LaneGate();
+    if (lanegate != 0) return lanegate;
     // ADR-021 / doc 18 Phase D: and every committed map loads and plays.
     int mapgate = MapGate();
     if (mapgate != 0) return mapgate;
@@ -4366,6 +4545,7 @@ return args.Length == 0
         "stancegate" => StanceGate(),
         "repairgate" => RepairGate(),
         "outpostgate" => OutpostGate(),
+        "lanegate" => LaneGate(),
         "mapgate" => MapGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
