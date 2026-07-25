@@ -792,6 +792,16 @@ public sealed partial class World
     /// build wiring test the same number rather than a bare 13 in each.</summary>
     public const int RepairVehicleType = 13;
 
+    /// <summary>The MCV (com_mcv), the deployable that becomes a Construction
+    /// Yard, and the ENGINEER (com_engineer), the capture unit. Both were bare
+    /// literals scattered across the deploy gate, the victory-hope test, three
+    /// AI branches and two client files, plus two PRIVATE constants naming the
+    /// same numbers in two projects. Named once here for the reason
+    /// RepairVehicleType is: so everything that means "the MCV" tests the same
+    /// number rather than a 7 that has to be recognised on sight.</summary>
+    public const int McvUnitType = 7;
+    public const int EngineerUnitType = 11;
+
     /// <summary>ADR-021 (P6 Wave C4): what a captured Outpost pays its owner,
     /// once per second (the pre-increment tick's positive multiples of
     /// TicksPerSecond, the ADR-012 regrowth schedule idiom, so it resumes
@@ -1013,8 +1023,17 @@ public sealed partial class World
         else UnblockFootprint(ax, ay, f);
     }
 
-    /// <summary>Living barrier count for a player, enforcing MaxBarriersPerPlayer. Entity-index scan: deterministic.</summary>
-    private int CountBarriers(int player)
+    /// <summary>
+    /// Living barrier count for a player, enforcing MaxBarriersPerPlayer.
+    /// Entity-index scan: deterministic.
+    ///
+    /// PUBLIC so the placement ghost can ask the SIM how many walls stand rather
+    /// than counting them in the interpolated view, which trails the sim by up
+    /// to eight ticks: at the cap boundary that let a segment tint green and be
+    /// refused on arrival. The client had to count something because this was
+    /// private; now it does not.
+    /// </summary>
+    public int CountBarriers(int player)
     {
         int n = 0;
         for (int i = 0; i < _entities.Count; i++)
@@ -1442,7 +1461,7 @@ public sealed partial class World
                 // ADR-009 clause 3: the faction gate stays and is ORTHOGONAL
                 // to the tree - the veil now also needs a power plant, and a
                 // Directorate player is refused it either way.
-                if (c.AuxId == 7 && _playerFaction[c.PlayerId] != FactionSodality) break;
+                if (!StructureAllowedForFaction(c.AuxId, _playerFaction[c.PlayerId])) break;
                 // ADR-009 clause 3: the structure tech tree, authored in
                 // /data/buildings and enforced here. Clause 4 pins the
                 // semantic: the gate is on QUEUEING, so killing a
@@ -1474,7 +1493,7 @@ public sealed partial class World
             }
             case CommandType.Deploy:
             {
-                if (e.Kind != EntityKind.Unit || e.UnitType != 7) break; // MCVs only
+                if (e.Kind != EntityKind.Unit || e.UnitType != McvUnitType) break; // MCVs only
                 int dax = Map.CellOf(e.X), day = Map.CellOf(e.Y);
                 if (!ValidFoundation(dax, day, c.EntityId)) break;
                 e.Alive = false; // the vehicle IS the building
@@ -1666,9 +1685,52 @@ public sealed partial class World
     /// is negligible against the TDD s6 budget. Null and empty both mean "no
     /// prerequisites" and both pass. StructType is 0 on every non-structure,
     /// and no required id is ever 0, so units can never satisfy a
-    /// prerequisite by accident.
+    /// <summary>TICKET-P2-SIM-08: what a repair costs and mends per TICK, for a
+    /// structure under the repair toggle and for each unit inside a depot's or a
+    /// repair vehicle's aura alike. Named because the CLIENT quoted the derived
+    /// per-second figure ("15 cr/s") hand-multiplied in three readouts, so a
+    /// rate change would have made the HUD lie in three places at once while the
+    /// treasury drained at the new rate.</summary>
+    public const int RepairCreditsPerTick = 1;
+    public const int RepairHpPerTick = 2;
+
+    /// <summary>Struct type 7, the Veil Projector: Sodality doctrine. Named
+    /// rather than spelled 7 in the gate below, because it was spelled 7 in the
+    /// sim AND in the sidebar, in two projects, with nothing tying them.</summary>
+    public const int VeilStructType = 7;
+
+    /// <summary>
+    /// May this faction build this structure? Sodality doctrine covers the Veil
+    /// Projector; everything else is common, for now.
+    ///
+    /// PUBLIC and called by the sidebar, which used to hold its own `typeId !=
+    /// VeilType || faction == Sodality` and its own `const int VeilType = 7`.
+    /// The two agreed, so the visible symptom was nil - but the UNIT faction
+    /// gate beside it reads the live catalogue column, so the day a second
+    /// faction-specific structure is authored, the sidebar offers it to both
+    /// sides and the sim refuses it for one, silently.
+    ///
+    /// The permanent fix is a Faction column on StructureTypeDef to match
+    /// UnitTypeDef, which is a /data schema change and therefore its own wave
+    /// with its own catalogue-checksum argument. This collapses the two copies
+    /// to one in the meantime, at no hash cost: a pure static predicate.
     /// </summary>
-    private bool HasPrereqs(int player, int[]? ids)
+    public static bool StructureAllowedForFaction(int structType, int faction) =>
+        structType != VeilStructType || faction == FactionSodality;
+
+    /// <summary>
+    /// ADR-009 clause 2: does this player own a living instance of every
+    /// prerequisite?
+    ///
+    /// PUBLIC so the sidebar can CALL it instead of keeping its own copy. The
+    /// client had an OwnsStructType plus a PrereqsMet fold that reproduced this
+    /// scan exactly, and the failure mode on any drift between them is the worst
+    /// kind: a LIT BUTTON whose order the sim then silently drops, because the
+    /// panel and the gate disagreed about what is buildable. A read-only
+    /// question over state the client can already see, so exporting it moves no
+    /// hash and hands the client no lever.
+    /// </summary>
+    public bool HasPrereqs(int player, int[]? ids)
     {
         if (ids == null) return true;
         for (int r = 0; r < ids.Length; r++)
@@ -2689,10 +2751,10 @@ public sealed partial class World
             if (e.Repairing && IsStructure(e.Kind))
             {
                 if (e.Hp >= e.MaxHp) { e.Repairing = false; _entities[i] = e; }
-                else if (_credits[e.PlayerId] >= 1)
+                else if (_credits[e.PlayerId] >= RepairCreditsPerTick)
                 {
-                    _credits[e.PlayerId] -= 1;
-                    e.Hp = Math.Min(e.MaxHp, e.Hp + 2);
+                    _credits[e.PlayerId] -= RepairCreditsPerTick;
+                    e.Hp = Math.Min(e.MaxHp, e.Hp + RepairHpPerTick);
                     if (e.Hp >= e.MaxHp) e.Repairing = false;
                     _entities[i] = e;
                 }
@@ -3043,7 +3105,7 @@ public sealed partial class World
             // the same exclusion: a captured income node is not a base, so a
             // player whose last possession is one is still eliminated.
             if ((IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost)
-                || e.UnitType == 7) hasHope[e.PlayerId] = true;
+                || e.UnitType == McvUnitType) hasHope[e.PlayerId] = true;
         }
         int living = 0, last = -1;
         for (int p = 0; p < _players; p++)

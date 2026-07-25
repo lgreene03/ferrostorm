@@ -189,11 +189,19 @@ public partial class SkirmishLive : Node3D
         Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
     };
 
-    /// <summary>DEF-01: the WeaponId a structure type spawns with. This mirrors
-    /// the WeaponId hardcoded in World.SpawnTurret (World.cs:486) and MUST be
-    /// updated alongside it - the sim is the source of truth, this is a
-    /// presentation-side echo of it for the placement preview only.</summary>
-    private static int WeaponOfStruct(int structType) => structType == 5 ? 4 : 0;
+    /// <summary>
+    /// DEF-01: the WeaponId a structure type spawns with, READ FROM THE LIVE
+    /// CATALOGUE, which is where it now lives.
+    ///
+    /// This was `structType == 5 ? 4 : 0`, and its comment said it mirrored a
+    /// hardcode in World.SpawnTurret that "MUST be updated alongside it". That
+    /// hardcode is gone: ADR-006 moved the weapon onto StructureTypeDef and the
+    /// sim reads `def.WeaponId` from /data. So the echo was a copy of something
+    /// that no longer existed, kept correct only by the turret happening to
+    /// remain the sole armed structure. The moment a second one is authored,
+    /// the placement ghost would draw the wrong range ring, or none.
+    /// </summary>
+    private int WeaponOfStruct(int structType) => _world.GetStructureType(structType).WeaponId;
 
     /// <summary>DEF-01: a weapon's range in world units. Fix64.Raw is public and
     /// FracBits is 32, so this is the same conversion SnapshotInterpolator.ToDouble
@@ -265,7 +273,7 @@ public partial class SkirmishLive : Node3D
     // unit catalogue, and the id the sim's own Deploy guard tests). Named here
     // because the deploy control tests it in three places and a bare 7 in each
     // is how one of them drifts.
-    private const int McvUnitType = 7;
+    private const int McvUnitType = World.McvUnitType;
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
     // carry the identical destination (see SendMobilesToDepot for why exact
     // equality matters: the sim's arrival contagion keys on it).
@@ -852,16 +860,17 @@ public partial class SkirmishLive : Node3D
         return false;
     }
 
-    /// <summary>ADR-009 clause 6: does player 0 own a living instance of this
-    /// structure type? The client's read of the same question World.HasPrereqs
-    /// asks of the same state, which is what keeps the panel and the gate from
-    /// disagreeing about what is buildable.</summary>
-    private bool OwnsStructType(int structType)
-    {
-        foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == LocalPlayerId && e.StructType == structType) return true;
-        return false;
-    }
+    /// <summary>
+    /// ADR-009 clause 6: are this item's prerequisites met for the local seat?
+    ///
+    /// It CALLS World.HasPrereqs rather than reproducing the scan. The old pair
+    /// (an OwnsStructType here, a PrereqsMet fold in the sidebar) carried a
+    /// comment claiming it was "what keeps the panel and the gate from
+    /// disagreeing" - an aspiration, since two implementations agree only until
+    /// one is edited, and the failure mode is a LIT BUTTON whose order the sim
+    /// silently drops.
+    /// </summary>
+    private bool PrereqsMetForLocal(int[]? prereqs) => _world.HasPrereqs(LocalPlayerId, prereqs);
 
     /// <summary>
     /// The nearest field with ferrite left, by squared distance in the sim's own
@@ -929,9 +938,26 @@ public partial class SkirmishLive : Node3D
         }
     }
 
+    /// <summary>
+    /// A mission's tech gate, asked in ONE place rather than at each of the six
+    /// sites that used to open-code it. Null means the full catalogue (every
+    /// skirmish), an empty set means nothing.
+    ///
+    /// It exists because the BARRIER path consulted none of them: a wall does
+    /// not queue at the yard, it goes EnterPlacement then PlaceAtCell, so a
+    /// mission that disallowed struct type 9 was enforced only by the sidebar
+    /// button being hidden. Every other structure was refused twice, at the
+    /// button and at the command; the wall was refused once, and a hotkey or a
+    /// retained placement mode walked straight through.
+    /// </summary>
+    public static bool StructureAllowed(int structType) =>
+        MatchConfig.AllowedStructures?.Contains(structType) ?? true;
+    public static bool UnitAllowed(int unitType) =>
+        MatchConfig.AllowedUnits?.Contains(unitType) ?? true;
+
     public void QueueStructure(int structType)
     {
-        if (!(MatchConfig.AllowedStructures?.Contains(structType) ?? true)) return;
+        if (!StructureAllowed(structType)) return;
         if (_yardId >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
@@ -941,7 +967,7 @@ public partial class SkirmishLive : Node3D
 
     public void QueueUnit(int unitType)
     {
-        if (!(MatchConfig.AllowedUnits?.Contains(unitType) ?? true)) return;
+        if (!UnitAllowed(unitType)) return;
         // ADR-009 clause 6: route by the unit's OWN produced_at, through the
         // live catalogue the sim gates on. Sending every unit to the factory
         // would now be sending the infantry somewhere that refuses them, and
@@ -1030,6 +1056,11 @@ public partial class SkirmishLive : Node3D
 
     public void EnterPlacement(int structType)
     {
+        // The mission's tech gate, on the path a BARRIER takes. A wall never
+        // queues at the yard, so QueueStructure's check never saw it and the
+        // allow-list was enforced by a hidden button alone. Refusing here means
+        // the wall is refused at the command like every other structure.
+        if (!StructureAllowed(structType)) return;
         _placingType = structType;
         _ghost.Visible = true;
         // DEF-01: the ghost is the real footprint, not a hardcoded 2x2. A
@@ -1475,8 +1506,12 @@ public partial class SkirmishLive : Node3D
             {
                 var target = _world.Entities[ev.B];
                 double now = Time.GetTicksMsec() / 1000.0;
-                bool ownStructure = target.PlayerId == LocalPlayerId
-                    && target.Kind != EntityKind.Unit && target.Kind != EntityKind.Harvester;
+                // Through Mobile, not an inlined negation of it. This copy is
+                // what would classify an AIR kind as a structure the day one is
+                // appended, firing the BASE UNDER ATTACK klaxon (and its
+                // twelve-second cooldown) every time an aircraft was shot at,
+                // swallowing the warning the base itself needs.
+                bool ownStructure = target.PlayerId == LocalPlayerId && !Mobile(target.Kind);
                 bool ownHarvester = target.PlayerId == LocalPlayerId && target.Kind == EntityKind.Harvester;
                 if (ownStructure && now - _lastAttackAlert > 12.0)
                 {
@@ -1593,9 +1628,7 @@ public partial class SkirmishLive : Node3D
         _combatIntensity = Mathf.Max(0f, _combatIntensity - (float)delta / CombatDecaySeconds);
         _audio.SetCombatIntensity(_combatIntensity);
         SyncActors((float)delta);
-        int supply = 0, draw = 0;
-        foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
+        var (supply, draw) = OwnPower();
         string pwr = draw > supply ? $"PWR {supply}/{draw} LOW" : $"PWR {supply}/{draw}";
         // TICKET-P5-PWR-01: the low-power alert, on the 75 per cent CROSSING.
         // Through the shared predicate, so the klaxon, the red bar and the
@@ -1753,7 +1786,7 @@ public partial class SkirmishLive : Node3D
         _sidebar.Refresh(_world.Credits(LocalPlayerId), ready,
             new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
             UnitLine(_factoryId), UnitLine(_barracksId),
-            supply, draw, OwnsStructType,
+            supply, draw, PrereqsMetForLocal,
             new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
 
         if (_placingType > 0)
@@ -1798,6 +1831,24 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Verification read: what a unit type is CALLED on screen.</summary>
     public string UnitNameForTest(int type) => UnitNameOf(type);
+
+    /// <summary>Verification read: would the cursor offer HARVEST right now,
+    /// with the seat's own units selected and a deposit under the pointer? Runs
+    /// the REAL CursorFor at the projected screen position of a ferrite field,
+    /// so what is measured is the verb the player would actually be shown rather
+    /// than a restatement of the rule behind it.</summary>
+    public bool HarvestVerbOfferedForTest()
+    {
+        int field = FindEntity(EntityKind.FerriteField, -1);
+        if (field < 0) return false;
+        SelectAllOwn();
+        var e = _world.Entities[field];
+        var cam = _cam.GetViewport()?.GetCamera3D();
+        if (cam is null) return false;
+        var screen = cam.UnprojectPosition(new Vector3(
+            (float)(e.X.Raw / 4294967296.0), 0.4f, (float)(e.Y.Raw / 4294967296.0)));
+        return CursorFor(screen) == GameCursor.Harvest;
+    }
 
     // W3-19: structure names by type id (Sidebar's table is private).
     // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
@@ -1964,14 +2015,26 @@ public partial class SkirmishLive : Node3D
                 return GameCursor.Enter;
             return GameCursor.Attack;
         }
-        if (anyHarvester && PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField) >= 0)
+        // The refinery precondition is part of the pick, not decoration. Without
+        // one standing, IssueOrder refuses every harvest and toasts NO REFINERY,
+        // so a cursor that showed the harvest verb here promised a verb the click
+        // would not deliver - precisely what this method's header claims it never
+        // does. The same call the order path makes, so the two cannot disagree
+        // about what "can harvest" means.
+        if (anyHarvester && HasLiveRefinery()
+            && PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField) >= 0)
             return GameCursor.Harvest;
         return GameCursor.Move;
     }
 
     /// <summary>The engineer's catalogue id (com_engineer), named for the same
     /// reason McvUnitType is.</summary>
-    private const int EngineerUnitType = 11;
+    private const int EngineerUnitType = World.EngineerUnitType;
+
+    /// <summary>Struct type 8, the Service Depot, named because the repair
+    /// prompt quotes its price and a bare 8 in a readout is a number nobody can
+    /// grep for.</summary>
+    private const int ServiceDepotStructType = 8;
 
     /// <summary>Resolve and apply. SetCustomMouseCursor is only called when
     /// the resolved cursor CHANGES - it re-uploads the texture to the OS every
@@ -2018,7 +2081,7 @@ public partial class SkirmishLive : Node3D
     {
         int type = _placingType;
         long cost = _dragRun * (long)_world.GetStructureType(type).Cost;
-        int have = OwnCount(EntityKind.Wall);
+        int have = _world.CountBarriers(LocalPlayerId);   // the sim's count, as the ghosts use
         int landing = BarriersThatWillLand(type, _dragRun);
         string tail;
         if (landing >= _dragRun)
@@ -2055,16 +2118,27 @@ public partial class SkirmishLive : Node3D
         string kSell = Settings.KeyName(Settings.BindOf("sell"));
         // DEF-09 clause 5: a wall run's readout is the two actions it supports
         // plus the refund, which is the number the player actually needs.
+        // The refund is summed PER SEGMENT from each one's own catalogue cost,
+        // not walls-times-a-literal-9's-cost halved. Two reasons, and the second
+        // is the one that mattered: the sim refunds Cost / 2 per entity, so
+        // halving each in turn is what it actually pays under integer division;
+        // and ADR-005 reserves a second barrier type, which a hardcoded 9 would
+        // have quietly priced as a wall.
         int walls = 0;
+        long refund = 0;
         foreach (int sid in _selection)
-            if (_latest.TryGetValue(sid, out var wv) && wv.Kind == EntityKind.Wall) walls++;
+            if (_latest.TryGetValue(sid, out var wv) && wv.Kind == EntityKind.Wall)
+            {
+                walls++;
+                if (sid < _world.EntityCount)
+                    refund += _world.GetStructureType(_world.Entities[sid].StructType).Cost / 2;
+            }
         if (walls > 1 && walls == _selection.Count)
         {
-            long refund = walls * (long)_world.GetStructureType(9).Cost / 2;
             // TICKET-P5-REP-06: the readout carries the repair DRAIN as well
             // as the sell refund - the drain is the number that decides
             // whether to press repair on a forty-segment run.
-            return $"{walls} WALL SEGMENTS   {kRepair} repair {walls * 15} cr/s  {kSell} sell {refund} cr";
+            return $"{walls} WALL SEGMENTS   {kRepair} repair {walls * RepairCostPerSecond} cr/s  {kSell} sell {refund} cr";
         }
         if (_selection.Count == 1)
         {
@@ -2084,7 +2158,7 @@ public partial class SkirmishLive : Node3D
                     string rep = "";
                     if (!Mobile(v.Kind) && v.PlayerId == LocalPlayerId
                         && sid >= 0 && sid < _world.EntityCount && _world.Entities[sid].Repairing)
-                        rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : "   REPAIRING 15 cr/s";
+                        rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : $"   REPAIRING {RepairCostPerSecond} cr/s";
                     // ADR-008: an unpowered turret says so out loud - the
                     // readout twin of the actor's dark wash, the REP-04 idiom.
                     string off = v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1
@@ -2163,7 +2237,7 @@ public partial class SkirmishLive : Node3D
     {
         int n = 0;
         foreach (var v in _view)
-            if (v.Alive && v.PlayerId == LocalPlayerId && (v.Kind == EntityKind.Unit || v.Kind == EntityKind.Harvester)) n++;
+            if (v.Alive && v.PlayerId == LocalPlayerId && Mobile(v.Kind)) n++;
         return n;
     }
 
@@ -2289,7 +2363,12 @@ public partial class SkirmishLive : Node3D
         _audio.Play("production_done", -8);
     }
 
-    private static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
+    /// <summary>Does this kind move under its own power? THE client answer, and
+    /// there were four: this, an inlined negation in the base-under-attack
+    /// alert, an inlined positive in the unit count, and a copy keyed on raw
+    /// ints in ReplayTheater. All four agreed only because EntityKind.Unit is 0
+    /// and Harvester is 1 and nothing has been appended since.</summary>
+    public static bool Mobile(EntityKind k) => k is EntityKind.Unit or EntityKind.Harvester;
 
     // ADR-008: the powered-down wash. One shared unshaded material, built
     // once (the GhostValidMat lifecycle precedent): near-black at partial
@@ -2387,7 +2466,10 @@ public partial class SkirmishLive : Node3D
     /// click came to disagree in the first place.</summary>
     private bool CanAffordAnotherBarrier(int type, int aheadInRun) =>
         _world.Credits(LocalPlayerId) >= (long)_world.GetStructureType(type).Cost * (aheadInRun + 1)
-        && OwnCount(EntityKind.Wall) + aheadInRun < World.MaxBarriersPerPlayer;
+        // The SIM'S count, not the interpolated view's. The view trails by up to
+        // eight ticks, so at the cap boundary a segment tinted green and was
+        // refused on arrival.
+        && _world.CountBarriers(LocalPlayerId) + aheadInRun < World.MaxBarriersPerPlayer;
 
     /// <summary>
     /// DEF-01 clause 8: the selection ring was hardcoded at 1.5, which is the
@@ -3232,7 +3314,7 @@ public partial class SkirmishLive : Node3D
         if (!switchingOff && targets.Count > 8 && _now > _repairConfirmUntil)
         {
             _repairConfirmUntil = _now + 2.0;
-            ShowToast($"REPAIR {targets.Count} STRUCTURES?  {targets.Count * 15} cr/s   PRESS {Settings.KeyName(Settings.BindOf("repair"))} AGAIN");
+            ShowToast($"REPAIR {targets.Count} STRUCTURES?  {targets.Count * RepairCostPerSecond} cr/s   PRESS {Settings.KeyName(Settings.BindOf("repair"))} AGAIN");
             _audio.Play("ui_click", -8);
             return;
         }
@@ -3283,13 +3365,11 @@ public partial class SkirmishLive : Node3D
         int depot = NearestOwnDepotTo(new Vector2(cxs / damaged.Count, cys / damaged.Count));
         if (depot < 0)
         {
-            ShowToast($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(8).Cost} cr)");
+            ShowToast($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(ServiceDepotStructType).Cost} cr)");
             _audio.Play("ui_click", -12);
             return;
         }
-        int supply = 0, draw = 0;
-        foreach (var e in _world.Entities)
-            if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
+        var (supply, draw) = OwnPower();
         if (supply < draw)
         {
             ShowToast("DEPOT OFFLINE: LOW POWER");   // World's depot gate, said out loud
@@ -3660,8 +3740,14 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>First valid placement anchor near the yard, scanning outward.
-    /// Used by scripted verification and future placement hints.</summary>
-    public (int X, int Y)? FindPlacementCell()
+    /// Used by scripted verification and future placement hints.
+    ///
+    /// Takes the struct type it is scanning FOR, because ValidPlacement's
+    /// default of 0 tests type 0's footprint: this asked whether a
+    /// one-cell-something would fit and then handed the answer to a caller
+    /// placing a real building. The type flows through now, so the cell it
+    /// returns is a cell the thing can actually occupy.</summary>
+    public (int X, int Y)? FindPlacementCell(int structType = 0)
     {
         if (_yardId < 0 || !_latest.TryGetValue(_yardId, out var yard)) return null;
         int cx = (int)yard.X - 1, cy = (int)yard.Y - 1;
@@ -3670,7 +3756,8 @@ public partial class SkirmishLive : Node3D
                 for (int dy = -r; dy <= r; dy++)
                 {
                     if (Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) != r) continue;
-                    if (_world.ValidPlacement(LocalPlayerId, cx + dx, cy + dy)) return (cx + dx, cy + dy);
+                    if (_world.ValidPlacement(LocalPlayerId, cx + dx, cy + dy, structType))
+                        return (cx + dx, cy + dy);
                 }
         return null;
     }
@@ -3830,6 +3917,26 @@ public partial class SkirmishLive : Node3D
             }
         return (0f, 0f);
     }
+    /// <summary>What one structure under repair drains per SECOND. DERIVED from
+    /// the sim's own per-tick charge and tick rate, never hand-multiplied: this
+    /// was the literal 15 in three separate readouts, so a rate change would
+    /// have made the HUD lie in three places while the treasury drained at the
+    /// new rate.</summary>
+    private static int RepairCostPerSecond => World.RepairCreditsPerTick * World.TicksPerSecond;
+
+    /// <summary>The local seat's power supply and draw, summed once. There were
+    /// three identical copies of this loop in this file, one of which fed the
+    /// 75-per-cent brown-out test and another the depot's supply-covers-draw
+    /// test - two different sim rules over the same tally, which makes an
+    /// accidental copy-paste between them very easy and very quiet.</summary>
+    private (int Supply, int Draw) OwnPower()
+    {
+        int supply = 0, draw = 0;
+        foreach (var e in _world.Entities)
+            if (e.Alive && e.PlayerId == LocalPlayerId) { supply += e.PowerSupply; draw += e.PowerDraw; }
+        return (supply, draw);
+    }
+
     /// <summary>
     /// ADR-008 clause 1's threshold: below 75 per cent of demand, the grid
     /// browns out. Integer maths, no division, so it cannot drift by rounding.

@@ -173,6 +173,17 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- The cursor never promises a verb the click refuses --------------
+        // CursorFor's own header claims it "runs the exact picks IssueOrder
+        // runs". The refinery precondition was missing, so with no refinery
+        // standing the cursor showed the harvest verb over every deposit and the
+        // click yielded a NO REFINERY toast. Asserted as the invariant rather
+        // than as a screen position: whatever the cursor offers, the order path
+        // must agree it is possible.
+        Check(!_game.RefineryLive, "no refinery stands at the opening hand (the precondition)");
+        Check(!_game.HarvestVerbOfferedForTest(),
+              "with no refinery, the harvest verb is NOT offered over a deposit");
+
         // --- The fog hides the SHOOTING too ----------------------------------
         // CombatEffects gated only on the actor EXISTING, and a fog-hidden
         // enemy's actor exists with Visible = false. So an unseen turret firing
@@ -180,15 +191,27 @@ public partial class VerifyRunner : Node
         // the shooter and the effects layer painted a bright arrow at it.
         // The second check is the control - it is what catches a "fix" that
         // simply turned all effects off.
+        // A shot has two ends and the fog can hide either, so the rule is per
+        // EFFECT: muzzle and report at the shooter, tracer between them, impact
+        // and flinch at the target. Three checks, because conflating them was
+        // wrong in BOTH directions - drawing everything gave the shooter away,
+        // and drawing nothing meant a unit shot from the dark took damage
+        // without reacting at all.
         int hiddenFoe = _game.FindEntity(EntityKind.ConstructionYard, _game.EnemyPlayerId);
+        int hiddenFoe2 = _game.FindEntity(EntityKind.Harvester, _game.EnemyPlayerId);
         int myUnit = _game.FindEntity(EntityKind.Harvester, _game.LocalPlayerId);
-        if (hiddenFoe >= 0 && myUnit >= 0)
+        if (hiddenFoe >= 0 && hiddenFoe2 >= 0 && myUnit >= 0)
         {
-            Check(!_game.DrawnForLocalSeatForTest(hiddenFoe), "the shooter is genuinely in fog (the precondition)");
-            int leaked = _game.EffectNodesFromFiredForTest(hiddenFoe, myUnit);
-            Check(leaked == 0, $"an enemy firing from unseen fog draws NOTHING ({leaked} effect nodes)");
+            Check(!_game.DrawnForLocalSeatForTest(hiddenFoe) && !_game.DrawnForLocalSeatForTest(hiddenFoe2),
+                  "both ends of the enemy exchange are in fog (the precondition)");
+            int leaked = _game.EffectNodesFromFiredForTest(hiddenFoe, hiddenFoe2);
+            Check(leaked == 0,
+                  $"an unseen shot at an unseen target draws NOTHING ({leaked} effect nodes)");
+            int onMe = _game.EffectNodesFromFiredForTest(hiddenFoe, myUnit);
+            Check(onMe > 0,
+                  $"...but a round LANDING on my own visible unit still strikes it ({onMe} nodes)");
             int mine2 = _game.EffectNodesFromFiredForTest(myUnit, myUnit);
-            Check(mine2 > 0, $"...while my own visible unit still draws its muzzle flash ({mine2} nodes)");
+            Check(mine2 > 0, $"...and my own visible unit still draws its muzzle flash ({mine2} nodes)");
         }
 
         // --- A wall run the player cannot afford SAYS SO ---------------------

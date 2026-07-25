@@ -261,6 +261,11 @@ public partial class LookDev : Node
             GD.Print($"  ENT p{v.PlayerId} {v.Kind} at {v.X:F1},{v.Y:F1} hp {v.Hp}");
         }
         foreach (var kv in byKind) GD.Print($"  COUNT {kv.Key} = {kv.Value}");
+        // Player 0 BY DESIGN, not by oversight. This is the look-dev harness: it
+        // builds a fixed one-sided world to photograph and has no seat concept
+        // at all, which is why the readout below says "p0" out loud. Recorded so
+        // a future sweep for hardcoded seats can tell this apart from the battle
+        // scene's copies, which were real bugs.
         int explored = 0, visible = 0;
         for (int y = 0; y < 64; y++)
             for (int x = 0; x < 96; x++)

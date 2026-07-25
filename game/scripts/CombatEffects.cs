@@ -366,9 +366,12 @@ public partial class CombatEffects : Node3D
     /// first place. Own and neutral actors are always visible, so nothing the
     /// player owns loses an effect.
     ///
-    /// Audio is deliberately NOT gated: the superweapon's charge cue plays
-    /// before this is called, and hearing distant gunfire you cannot see is
-    /// atmosphere rather than a leak - a sound gives away no position.
+    /// Audio is gated per cue rather than by this predicate, and the two rules
+    /// differ on purpose. The superweapon's charge is a GLOBAL warning and plays
+    /// before this is called, because every commander is meant to hear it. A
+    /// weapon's report is POSITIONAL, so it plays only where the shooter is
+    /// visible: a 3D sound at an unseen position is a quieter version of the
+    /// same giveaway.
     /// </summary>
     private static bool Live(IReadOnlyDictionary<int, Node3D> actors, int id, out Node3D node)
     {
@@ -458,47 +461,76 @@ public partial class CombatEffects : Node3D
     private void OnFired(GameEvent ev, IReadOnlyDictionary<int, Node3D> actors, AudioDirector? audio,
         System.Func<int, int>? weaponOf)
     {
-        if (!Live(actors, ev.A, out var attacker)) return;
-        Vector3 from = attacker.GlobalPosition + new Vector3(0, 0.4f, 0);
+        // A shot has TWO ends and the fog can hide either one, so they are asked
+        // about separately. Gating the whole thing on the shooter (as this did)
+        // meant a unit shot from unseen fog took damage with no dust, no sparks
+        // and no flinch: rounds landing on your own tank and the tank ignoring
+        // them. Gating nothing on the shooter is the leak wave 2 closed. The
+        // rule is per effect, not per event:
+        //   muzzle flash, smoke, report - AT the shooter
+        //   tracer, shell, rocket flight - BETWEEN them, so both ends
+        //   impact, sparks, flinch      - AT the target
+        bool seeShooter = Live(actors, ev.A, out var attacker);
+        bool seeTarget = Live(actors, ev.B, out var target);
+        if (!seeShooter && !seeTarget) return;
         int w = weaponOf?.Invoke(ev.A) ?? 0;
+        Vector3 from = seeShooter ? attacker.GlobalPosition + new Vector3(0, 0.4f, 0) : Vector3.Zero;
 
-        // Muzzle family: quad size and light energy per weapon class. The
-        // shared quad is 0.5 so per-class sizes come from instance scale.
-        float quadSize = w switch { 2 => 0.4f, 7 => 0.3f, 1 or 4 or 6 => 0.7f, _ => 0.5f };
-        float lightEnergy = w switch { 2 => 2.0f, 1 or 4 or 6 => 4.0f, _ => 3.0f };
-        SpawnMuzzle(from, quadSize, lightEnergy);
-        if (w is 1 or 4 or 6)
-            SpawnBurst(SmokeQuad, SmokeProcess, from, amount: 6, lifetime: 0.8f, freeAfter: 1.0f);
-
-        if (Live(actors, ev.B, out var target))
+        if (seeShooter)
         {
-            Vector3 to = target.GlobalPosition + new Vector3(0, 0.4f, 0);
-            switch (w)
-            {
-                case 2: // TestRifle: thin hitscan tracer, instant impact
-                    SpawnTracer(from, to, TracerMat, 0.04f, 0.10f);
-                    SpawnImpact(to, armour: true);
-                    HitPop(target);
-                    break;
-                case 7: // VanguardGun autocannon: 3-round burst
-                    SpawnAutocannonBurst(actors, ev.A, ev.B);
-                    break;
-                case 1 or 4 or 6: // cannons: travelling shell
-                    SpawnShell(actors, ev.B, from, to);
-                    break;
-                case 5: // Howitzer: high arc + splash-scaled dirt burst
-                    SpawnHowitzerShell(actors, ev.B, from, to);
-                    break;
-                case 3: // TestRocket: arced rocket with smoke trail
-                    SpawnRocket(actors, ev.B, from, to);
-                    break;
-                default: // unknown weapon: the original generic tracer
-                    SpawnTracer(from, to, TracerMat, 0.05f, 0.12f);
-                    break;
-            }
+            // Muzzle family: quad size and light energy per weapon class. The
+            // shared quad is 0.5 so per-class sizes come from instance scale.
+            float quadSize = w switch { 2 => 0.4f, 7 => 0.3f, 1 or 4 or 6 => 0.7f, _ => 0.5f };
+            float lightEnergy = w switch { 2 => 2.0f, 1 or 4 or 6 => 4.0f, _ => 3.0f };
+            SpawnMuzzle(from, quadSize, lightEnergy);
+            if (w is 1 or 4 or 6)
+                SpawnBurst(SmokeQuad, SmokeProcess, from, amount: 6, lifetime: 0.8f, freeAfter: 1.0f);
         }
 
-        audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from, AudioDirector.Jitter(0.06f));   // W3-21
+        if (seeTarget)
+        {
+            Vector3 to = target.GlobalPosition + new Vector3(0, 0.4f, 0);
+            if (w == 7)                     // the burst splits the two ends itself
+                SpawnAutocannonBurst(actors, ev.A, ev.B);
+            else if (!seeShooter)
+            {
+                // The strike lands and the shooter stays hidden. Deliberately
+                // the generic impact rather than the weapon's own arrival
+                // flourish: the splash dirt and the shell's travel belong to a
+                // projectile the player never saw leave, and inventing a flight
+                // path from an unseen origin would draw the arrow all over
+                // again, more slowly.
+                SpawnImpact(to, armour: true);
+                HitPop(target);
+            }
+            else
+                switch (w)
+                {
+                    case 2: // TestRifle: thin hitscan tracer, instant impact
+                        SpawnTracer(from, to, TracerMat, 0.04f, 0.10f);
+                        SpawnImpact(to, armour: true);
+                        HitPop(target);
+                        break;
+                    case 1 or 4 or 6: // cannons: travelling shell
+                        SpawnShell(actors, ev.B, from, to);
+                        break;
+                    case 5: // Howitzer: high arc + splash-scaled dirt burst
+                        SpawnHowitzerShell(actors, ev.B, from, to);
+                        break;
+                    case 3: // TestRocket: arced rocket with smoke trail
+                        SpawnRocket(actors, ev.B, from, to);
+                        break;
+                    default: // unknown weapon: the original generic tracer
+                        SpawnTracer(from, to, TracerMat, 0.05f, 0.12f);
+                        break;
+                }
+        }
+
+        // The report is POSITIONAL, so it is placed only when the shooter is on
+        // screen: a 3D sound at an unseen position is a quieter version of the
+        // same giveaway.
+        if (seeShooter)
+            audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from, AudioDirector.Jitter(0.06f));   // W3-21
     }
 
     private void SpawnMuzzle(Vector3 from, float quadSize, float lightEnergy)
@@ -535,10 +567,18 @@ public partial class CombatEffects : Node3D
     {
         void Round()
         {
-            if (!Live(actors, attackerId, out var a) || !Live(actors, targetId, out var t)) return;
-            Vector3 f = a.GlobalPosition + new Vector3(0, 0.4f, 0);
+            // Two visibilities, two different effects, and conflating them was a
+            // fault in BOTH directions. The TRACER is a line between the two
+            // ends, so it needs both visible or it draws from nowhere and gives
+            // the shooter away. The IMPACT and the flinch happen ON THE TARGET,
+            // on ground the player can see, so gating them on the SHOOTER meant
+            // a unit shot from unseen fog took damage without reacting at all -
+            // rounds landing on your own tank with no dust and no recoil.
+            bool seeShooter = Live(actors, attackerId, out var a);
+            if (!Live(actors, targetId, out var t)) return;
             Vector3 to = t.GlobalPosition + new Vector3(0, 0.4f, 0);
-            SpawnTracer(f, to, AutoTracerMat, 0.03f, 0.10f);
+            if (seeShooter)
+                SpawnTracer(a.GlobalPosition + new Vector3(0, 0.4f, 0), to, AutoTracerMat, 0.03f, 0.10f);
             SpawnImpact(to, armour: true);
             HitPop(t);
         }

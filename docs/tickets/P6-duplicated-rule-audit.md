@@ -2,9 +2,12 @@
 
 Labels: persona:p3, gdd:s9, phase:6, owner:client-engineer
 
-Status: **AUDIT COMPLETE, 2026-07-25.** Wave 1 fixed three HIGH seat bugs.
-**Wave 2 (same day) cleared the LAST HIGH and the four most player-visible
-MEDIUMs: NO HIGH FINDINGS REMAIN.** What is left is filed below with severities.
+Status: **CLOSED, 2026-07-25. Every finding is fixed or has a stated reason for
+standing.** Wave 1 took three HIGH seat bugs, wave 2 the last HIGH and the four
+most player-visible MEDIUMs, wave 3 the entire remainder. Nine of the findings
+were live bugs; the rest were loaded guns - correct today, wrong on the day
+someone appended an air kind, authored a second faction-specific building, or
+changed a rate.
 
 ## Why this audit happened
 
@@ -109,58 +112,122 @@ readouts rather than one obvious gap. Now one `UnitNameOf`.
 The exact defect P5-ECON-01 fixed on the live side, with the cap hardcoded at
 12000. Now calls `SkirmishLive.FieldFullness`, so the default lives in one place.
 
-## NOT FIXED, filed with severity
+## WAVE 3: the remainder, cleared
 
-### MEDIUM
+Every MEDIUM and every actionable LOW. What is left below is a short list of
+things that are deliberately as they are, recorded so nobody re-files them.
 
-- **The cursor promises a harvest the click refuses.** `CursorFor`'s comment
-  claims it runs the exact picks `IssueOrder` runs. The enemy and field picks do
-  match; the **refinery precondition does not**, so with no refinery standing the
-  cursor shows the harvest verb over every deposit and the click yields only a
-  `NO REFINERY` toast.
-- **An impact on a visible target is lost when the shooter is hidden.** Surfaced
-  BY the wave-2 fog fix rather than by it: `SpawnAutocannonBurst` gates the
-  tracer, the impact and the hit-pop on both ends, so a unit shot from fog no
-  longer flinches. Correct for the tracer (it is a line between the two) and
-  wrong for the impact, which happens on ground the player can see. Wants the
-  attacker-gated and target-gated effects separated per spawner, which is a
-  taste call per weapon family rather than a one-line change.
-- **The tech tree is reimplemented client-side** (`OwnsStructType` +
-  `PrereqsMet` against `World.HasPrereqs`). Identical today. The failure mode on
-  drift is a lit button whose order the sim silently drops.
-- **The Veil's Sodality gate is the literal type 7 in two projects**, while the
-  *unit* faction gate reads the live catalogue. A second faction-specific
-  structure would be offered to both sides and refused for one.
-- **`IsBarrier` from the catalogue in one file, the literal 9 in the other.**
-  ADR-005 reserves type 10 for a gate; on the day it lands `SkirmishLive` picks
-  it up and `Sidebar` does not, so the gate button would queue at the yard and
-  wait for a ready slot a barrier never fills.
-- **The campaign allow-list is asked in six places**, and the **barrier path
-  consults none of them** - a mission that disallows the wall is enforced only by
-  the button being hidden, unlike every other structure.
-- **`WeaponOfStruct` is a stale hardcoded table.** Its comment says it mirrors a
-  hardcode in `World.SpawnTurret` that no longer exists: the sim now reads
-  `WeaponId` from the catalogue. The placement ghost's range ring is drawn from
-  the stale copy while the built structure uses the live value.
-- **Sidebar button visibility computed twice**, at Init and per frame, and the
-  per-frame copy only runs for items the Init copy did not already hide.
-- **`Mobile` implemented four times**, one of them keyed on raw ints in
-  `ReplayTheater`. All agree until an air kind is appended, at which point the
-  inlined copies classify aircraft as structures and the `BASE UNDER ATTACK`
-  klaxon fires whenever an aircraft is shot at.
-- **The own supply and draw tally exists three times** in one file.
+### Behaviour
 
-### LOW
+**9. The cursor promised a harvest the click refused.** `CursorFor`'s header
+claims it "runs the exact picks `IssueOrder` runs". The refinery precondition
+was missing, so with no refinery standing the cursor showed the harvest verb
+over every deposit and the click yielded a `NO REFINERY` toast. It now makes the
+same `HasLiveRefinery` call the order path makes.
 
-Tool scenes (`LookDev`, `Main`) hold hardcoded-seat reads; `FindPlacementCell`
-asks the geometry question without a struct type; struct type ids appear as bare
-literals in three readouts; the repair rate `15 cr/s` is hand-precomputed in
-three places; the sell refund halving is a client copy of a sim rule; the barrier
-count is recomputed from the interpolated view rather than the sim; `Ralliable`
-deliberately differs from the sim's `IsRallyable` (documented on both sides,
-recorded here so the divergence is known rather than missed); the MCV and
-engineer type ids are duplicated constants; `Lan.cs` identifies own mobiles by
-speed rather than kind.
+**10. An impact on a visible target was lost when the shooter was hidden.**
+Surfaced by wave 2's own fog fix. A shot has two ends and the fog can hide
+either, so the rule is now per EFFECT rather than per event:
+
+| effect | gated on |
+|---|---|
+| muzzle flash, smoke, report | the SHOOTER |
+| tracer, shell, rocket flight | BOTH ends |
+| impact, sparks, flinch | the TARGET |
+
+Conflating them was wrong in both directions: drawing everything gave the
+shooter away, and drawing nothing meant a unit shot from the dark took damage
+without reacting at all. `OnFired` and `SpawnAutocannonBurst` both split now.
+
+**11. The campaign allow-list was asked in six places and the barrier path
+consulted none of them.** A wall does not queue at the yard, so `QueueStructure`'s
+check never saw it and a mission that disallowed struct type 9 was enforced by a
+hidden button alone. One `StructureAllowed` / `UnitAllowed` pair now, and
+`EnterPlacement` asks it, so the wall is refused at the command like everything
+else.
+
+### The sim is the authority
+
+**12. The tech tree was reimplemented client-side.** `World.HasPrereqs` is public
+and the sidebar calls it; the client's `OwnsStructType` and `PrereqsMet` are
+gone. The old pair carried a comment claiming it was "what keeps the panel and
+the gate from disagreeing" - an aspiration, since two implementations agree only
+until one is edited, and the failure mode is a lit button whose order the sim
+silently drops.
+
+**13. The Veil's Sodality gate was the literal 7 in two projects.**
+`World.StructureAllowedForFaction` is public, named `VeilStructType`, and both
+the sim's `BuildStructure` and the sidebar call it. The permanent fix is a
+`Faction` column on `StructureTypeDef` to match `UnitTypeDef`, which is a /data
+schema change and therefore its own wave with its own catalogue-checksum
+argument; this collapses two copies to one at no hash cost in the meantime.
+
+**14. `IsBarrier` was the catalogue in one file and the literal 9 in the other.**
+The sidebar now asks the catalogue's `Kind`, so ADR-005 clause 6's reserved gate
+type is classified correctly on the day it lands instead of queueing at a yard
+and waiting for a ready slot a barrier never fills.
+
+**15. `WeaponOfStruct` was a stale hardcoded table.** Its comment said it mirrored
+a hardcode in `World.SpawnTurret` that no longer exists - ADR-006 moved the
+weapon onto `StructureTypeDef`. It reads the live catalogue now.
+
+**16. The barrier cap counted the interpolated view.** `World.CountBarriers` is
+public; the view trails the sim by up to eight ticks, which at the cap boundary
+let a segment tint green and be refused on arrival.
+
+**17. The repair rate was hand-multiplied in three readouts.** `15 cr/s` is now
+derived from `World.RepairCreditsPerTick * World.TicksPerSecond`, both named in
+the sim and used by its own charging loop.
+
+**18. The MCV and engineer ids were bare literals** across the deploy gate, the
+victory-hope test, three AI branches and two client files, plus two private
+constants naming the same numbers in two projects. `World.McvUnitType` and
+`World.EngineerUnitType` now.
+
+### Client-internal duplicates
+
+**19. `Mobile` existed four times**, one keyed on raw ints in `ReplayTheater`.
+All agreed only because `Unit` is 0 and `Harvester` is 1. One predicate now, and
+the base-under-attack alert calls it rather than inlining its negation - that
+copy is what would have classified an air kind as a structure and fired the
+klaxon whenever an aircraft was shot at.
+
+**20. The own supply-and-draw tally existed three times** in one file, feeding
+two DIFFERENT sim rules (the 75 per cent brown-out and the depot's
+supply-covers-draw), which is what makes an accidental copy-paste between them
+quiet. One `OwnPower`.
+
+**21. Sidebar visibility was computed twice**, at Init and per frame, with the
+per-frame copy unable to reach items Init had already hidden. One
+`FixedGatesAllow` pair.
+
+**22. The wall-run refund was `walls * type-9-cost / 2`.** Now summed per segment
+from each one's own catalogue cost, which is both what the sim actually pays
+under integer division and correct for a second barrier type.
+
+**23. `FindPlacementCell` asked the geometry question without a struct type**, so
+it tested type 0's footprint and handed the answer to a caller placing a real
+building. The type flows through.
+
+**24. Bare struct ids in readouts** are named (`ServiceDepotStructType`).
+
+## Deliberately left, with reasons
+
+- **`Ralliable` differs from the sim's `IsRallyable`** (the client excludes the
+  Construction Yard). Intentional, documented at length on both sides. Recorded
+  here so the divergence stays known rather than being "fixed" by someone
+  reading only one end.
+- **`RepairStalled` approximates the sim's charging order.** Its own header says
+  so: the depot drain interleaves, making the prediction optimistic. A faithful
+  version would mean replaying the sim's entity loop client-side each frame,
+  which is a worse trade than an honest approximation that says it is one.
+- **`LookDev` and `Main` read player 0.** Neither has a seat concept: LookDev
+  photographs a fixed one-sided world and `Main` is single-player loopback and
+  says so. Both now carry a comment stating this, so a future sweep can tell
+  design from defect. This is why CI's hardcoded-seat guard covers
+  `SkirmishLive.cs` specifically.
+- **A `Faction` column on `StructureTypeDef`** is the permanent fix for finding
+  13 and is a /data schema change; it wants its own wave.
 
 ## Audited and found CLEAN
 
@@ -174,3 +241,8 @@ Every instance of this defect class has been one conceptual rule with more than
 one implementation, where the copies agreed until they did not, and where the
 disagreement was invisible from the seat the developer was sitting in. The
 durable fix is never a wider grep. **It is one implementation.**
+
+Nine of these were live bugs. The rest were loaded guns: correct today, wrong on
+the day someone appended an air kind, authored a second faction-specific
+building, or changed a rate. The audit is complete; what it leaves behind is a
+client where the rules that matter are each written once.
