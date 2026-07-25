@@ -173,6 +173,49 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- The end-of-match banner tells ME what happened ------------------
+        // _winner is an ABSOLUTE player id and the banner asked whether it was
+        // zero, so at seat 1 it was exactly inverted: the LAN joiner who had
+        // just won was shown DEFEAT and played the failure line, while the host
+        // who lost was congratulated. The last thing a match says, saying the
+        // opposite of what happened. Two directions, because a banner that
+        // inverts passes either check alone.
+        _game.EliminateForTest(_game.EnemyPlayerId);           // the OTHER player is out: I won
+        Check(_game.BannerVisibleForTest, "the match banner is raised on elimination");
+        Check(_game.BannerTextForTest.Contains("VICTORY"),
+              $"eliminating the OPPOSITION reads as VICTORY at seat 1 (\"{_game.BannerTextForTest.Split('\n')[0]}\")");
+        _game.ResetVictoryForTest();
+        _game.EliminateForTest(_game.LocalPlayerId);           // I am out: I lost
+        Check(_game.BannerTextForTest.Contains("DEFEAT"),
+              $"being eliminated MYSELF reads as DEFEAT (\"{_game.BannerTextForTest.Split('\n')[0]}\")");
+        _game.ResetVictoryForTest();
+
+        // --- A captured structure changes colour -----------------------------
+        // DressStructure ran only at actor creation, and only a wall-mask change
+        // or death rebuilds an actor - so a captured building kept the colour of
+        // the player who LOST it, and a claimed neutral outpost never grew a
+        // strip at all, which put the worst case on the newest mechanic.
+        int capturable = _game.FindEntity(EntityKind.Outpost, -1);
+        if (capturable >= 0)
+        {
+            Check(_game.ActorTeamOwnerForTest(capturable) == -1,
+                  "an unclaimed outpost is painted for nobody (the precondition)");
+            _game.SetOwnerForTest(capturable, _game.LocalPlayerId);
+            _game.PumpActorsForTest();
+            Check(_game.ActorTeamOwnerForTest(capturable) == _game.LocalPlayerId,
+                  $"a captured outpost is repainted for its NEW owner ({_game.ActorTeamOwnerForTest(capturable)})");
+            // HAND IT BACK. An owned outpost pays 15 cr/s, and leaving it
+            // claimed made the treasury RISE during the later build-and-refund
+            // checks - income masked the pay-as-you-build drain and the exact
+            // refund arithmetic came out 30 credits high. A check that changes
+            // the world the next check reads is not a check, it is a fixture
+            // bug waiting to be blamed on the product.
+            _game.SetOwnerForTest(capturable, -1);
+            _game.PumpActorsForTest();
+            Check(_game.ActorTeamOwnerForTest(capturable) == -1,
+                  "...and reverts to nobody when it changes hands back");
+        }
+
         // --- The cursor never promises a verb the click refuses --------------
         // CursorFor's own header claims it "runs the exact picks IssueOrder
         // runs". The refinery precondition was missing, so with no refinery
