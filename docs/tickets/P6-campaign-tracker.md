@@ -34,7 +34,8 @@ lands; this file is the resume point if a session dies.
 | C7b-i | LAN setup exchange (the Hello carries the host's match setup) | ADR-022 (ratified) | NEUTRAL (net layer) | DONE |
 | C7b-ii | LocalPlayerId through the battle scene (the joiner's seat) | C7b slice 2; CI seat-check guards it | NEUTRAL (client only) | DONE |
 | VERIFY | Headless client harness (tools/verify-client.sh) | closes the repo's oldest verification gap | NEUTRAL (client only) | DONE - 21 checks; found the AI-shares-the-joiner's-seat bug |
-| C7b-iii | LAN battle scene: drain gating, Host/Join | no ADR-gated work left; the harness can now verify it | neutral but WIDE | pending |
+| C7b-iii | LAN battle scene: lockstep-driven frame loop | verified by two real scenes playing each other in-process | NEUTRAL (client only) | DONE |
+| C7b-iv | Host/Join menu flow (the last mile) | the scene is ready; only the lobby UI remains | neutral | pending |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 

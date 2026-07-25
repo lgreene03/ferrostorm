@@ -197,5 +197,124 @@ public partial class VerifyRunner : Node
             Check(_game.CreditsNow == creditsBefore,
                   $"the refund was EXACT, to the credit ({midway} -> {_game.CreditsNow}, started {creditsBefore})");
         }
+
+        RunLanChecks();
+    }
+
+    /// <summary>
+    /// C7b-iii acceptance: TWO REAL BATTLE SCENES playing each other over an
+    /// in-process relay. Not the net layer in isolation, which the sim runner
+    /// already soaks - the actual SkirmishLive frame path, both seats, through
+    /// the lockstep poll.
+    ///
+    /// This is the check the whole LAN wave exists to satisfy, and until the
+    /// harness landed there was no way to write it at all.
+    /// </summary>
+    private void RunLanChecks()
+    {
+        GD.Print("  --    LAN: two battle scenes over an in-process relay");
+        // The host's setup blob carries the seed, so the joiner builds the
+        // host's world rather than one it was told about out of band (ADR-022).
+        const ulong seed = 4242UL;
+        var setup = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, seed);
+        var relay = new Ferrostorm.Net.Relay(playerCount: 2, setup: setup);
+        relay.Start();
+        var relayThread = new System.Threading.Thread(relay.Run) { IsBackground = true };
+        relayThread.Start();
+
+        Ferrostorm.Sim.World BuildFrom(ulong s)
+        {
+            var map = Ferrostorm.Sim.MapData.Load(GameFiles.Abs("data/maps/skirmish-02.fmap"));
+            var w = map.BuildWorld(s, players: 2, out _, SkirmishLive.RegisterCatalogue);
+            map.PlaceSkirmishStart(w, 8000);
+            return w;
+        }
+
+        SkirmishLive Seat(int seat, Ferrostorm.Net.LockstepClient client)
+        {
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.LocalSeat = seat;
+            SkirmishLive.PendingNet = client;
+            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-02.fmap");
+            var sc = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(sc);
+            return sc;
+        }
+
+        try
+        {
+            // Both clients are constructed CONCURRENTLY, on their own threads.
+            // The relay accepts every player before it sends a single Hello, and
+            // a LockstepClient's constructor blocks reading that Hello, so
+            // building them one after another on this thread deadlocks: the
+            // first waits for a Hello that cannot come until the second
+            // connects. Worth knowing for the real Host and Join flow too - a
+            // host cannot construct its own client inline and then wait for a
+            // joiner on the same thread.
+            Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+            System.Exception? connectError = null;
+            var hostThread = new System.Threading.Thread(() =>
+            {
+                try { hostClient = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, seed); }
+                catch (System.Exception e) { connectError = e; }
+            });
+            var joinThread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    // Handed a DELIBERATELY WRONG seed: it must build from the
+                    // Hello's setup blob instead (ADR-022).
+                    joinClient = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, 999999UL, null,
+                        blob => BuildFrom(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob)));
+                }
+                catch (System.Exception e) { connectError = e; }
+            });
+            hostThread.Start(); joinThread.Start();
+            hostThread.Join(15000); joinThread.Join(15000);
+            if (connectError != null) throw connectError;
+            if (hostClient == null || joinClient == null) throw new System.Exception("clients did not connect in time");
+            var host = Seat(0, hostClient);
+            var join = Seat(1, joinClient);
+
+            Check(host.IsNetworked && join.IsNetworked, "both scenes are running as lockstep clients");
+            Check(host.LocalPlayerId == 0 && join.LocalPlayerId == 1, "the two scenes took OPPOSITE seats");
+            Check(!host.CanSave && !join.CanSave, "saving is refused in a LAN match");
+
+            hostClient.Prime();
+            joinClient.Prime();
+
+            // Drive both scenes the way the frame loop does: each polls, and a
+            // tick only lands once BOTH have submitted for it. Interleaved on
+            // one thread precisely because neither call may block.
+            int spins = 0;
+            while (host.CurrentTick < 60 && spins++ < 4000)
+            {
+                int before = host.CurrentTick + join.CurrentTick;
+                host.StepTicks(1);
+                join.StepTicks(1);
+                // Yield when neither could advance. The merged batch arrives on
+                // the client's reader THREAD, so a spin loop that never gives
+                // the scheduler a chance simply burns its whole budget before a
+                // single batch lands - which is what a first attempt did, and it
+                // read exactly like a broken lockstep rather than an impatient
+                // test. A real frame loop gets this for free by rendering.
+                if (host.CurrentTick + join.CurrentTick == before)
+                    System.Threading.Thread.Sleep(1);
+            }
+            Check(host.CurrentTick >= 60, $"the host advanced under lockstep ({host.CurrentTick} ticks)");
+            Check(join.CurrentTick == host.CurrentTick,
+                  $"both seats advanced in lockstep ({host.CurrentTick} vs {join.CurrentTick})");
+            Check(host.StateHash == join.StateHash,
+                  $"the two seats hold IDENTICAL worlds (0x{host.StateHash:X16} vs 0x{join.StateHash:X16})");
+            Check(!relay.DesyncDetected, "the relay saw no desync");
+
+            host.QueueFree();
+            join.QueueFree();
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"the LAN match threw: {ex.Message}");
+        }
     }
 }

@@ -54,6 +54,24 @@ public partial class SkirmishLive : Node3D
     /// scaffolding - it is the mechanism the LAN join path uses to say "you are
     /// player 1" before the battle scene comes up.</summary>
     public static int LocalSeat;
+
+    /// <summary>C7b: the lockstep client this scene will play through, handed
+    /// over before it loads exactly as LocalSeat is. Null in every offline
+    /// match, which is every match today.
+    ///
+    /// It inverts world ownership: offline the scene builds its own World,
+    /// but in LAN the LockstepClient already built one (from the host's setup
+    /// blob, ADR-022) and is the only thing allowed to Step it, because a step
+    /// is only legal once the relay has merged both players' orders for that
+    /// tick. The scene renders that world and submits into it; it never drives
+    /// it directly.</summary>
+    public static Ferrostorm.Net.LockstepClient? PendingNet;
+    private Ferrostorm.Net.LockstepClient? _net;
+    /// <summary>The tick whose batch has already been submitted. The relay
+    /// counts one batch per player per tick and a second submission for the
+    /// same tick corrupts the merge, so this guard is not an optimisation.</summary>
+    private int _lastSubmittedTick = -1;
+    public bool IsNetworked => _net != null;
     /// <summary>The other seat in a two-player match, for the handful of reads
     /// that are genuinely about the opponent rather than about me.</summary>
     private int EnemyPlayerId => 1 - LocalPlayerId;
@@ -399,6 +417,8 @@ public partial class SkirmishLive : Node3D
         // verified offscreen) and a battle reached that way must still come up
         // with the player's volume, video and key bindings.
         LocalPlayerId = LocalSeat;
+        _net = PendingNet;
+        PendingNet = null;   // consumed: the next scene must not inherit this session
         Settings.EnsureLoaded();
 
         _models = new ModelLibrary();
@@ -414,9 +434,22 @@ public partial class SkirmishLive : Node3D
         {
             _setup = MatchConfig.CurrentSetup();
             map = MapData.Load(GameFiles.Abs(_setup.MapPath));
+            // C7b: in LAN the lockstep client ALREADY built the world, from the
+            // host's setup blob, and is the only thing allowed to Step it. The
+            // scene adopts that world rather than building a second one, which
+            // would be a different world on every machine.
             _world = BuildStartingWorld(_setup, map, out var tags);
-            if (_setup.IsMission) _mission = new MissionRunner(map, tags);
-            else _enemy = _setup.AiPreset switch
+            // C7b: in LAN the lockstep client ALREADY built the world, from the
+            // host's setup blob (ADR-022), and is the only thing allowed to Step
+            // it - a step is legal only once the relay has merged both players'
+            // orders for that tick. The scene adopts that world rather than
+            // keeping the one it just built, which would be a different world on
+            // every machine. The fresh build is not waste: it is what produces
+            // the mission tags, the same reason ResumeFromSave keeps it.
+            if (_net != null) _world = _net.World;
+            if (_setup.IsMission && _net == null) _mission = new MissionRunner(map, tags);
+            // ...and there is NO AI in a LAN match: both seats are humans.
+            else if (_net == null) _enemy = _setup.AiPreset switch
             {
                 // The opponent plays the OTHER seat, not a hardcoded player 1.
                 // With the seat hardcoded, a client sitting in seat 1 got an AI
@@ -435,7 +468,7 @@ public partial class SkirmishLive : Node3D
             // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
             if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath);
             else if (MatchConfig.ReplayPath is { } replayPath) BeginPlayback(replayPath);
-            else BeginRecording();
+            else if (_net == null) BeginRecording();   // C7b: no recording in LAN
         }
         catch (System.Exception e)
         {
@@ -678,7 +711,10 @@ public partial class SkirmishLive : Node3D
         _banner.Visible = true;
     }
 
-    public bool CanSave => _replay is null;
+    /// <summary>C7b: a LAN match cannot be saved either. A .frep is a command
+    /// stream from tick 0 and a save is a snapshot; neither can be resumed back
+    /// into a live lockstep session that the other player is still driving.</summary>
+    public bool CanSave => _replay is null && _net is null;
 
     public string ModeLine() => _replay != null
         ? $"REPLAY PLAYBACK   {_setup.Describe()}   TICK {_world.Tick} / {_replayTicks}"
@@ -1199,8 +1235,22 @@ public partial class SkirmishLive : Node3D
             while (_accumulator >= TickSeconds && Running)
             {
                 _accumulator -= TickSeconds;
-                RunOneTick();
+                if (!AdvanceOneTick())
+                {
+                    // C7b: the merged batch for this tick has not arrived. Give
+                    // the time back and STOP draining this frame - the render
+                    // carries on from the last snapshot, so the game keeps
+                    // drawing while the sim waits. Giving it back rather than
+                    // discarding it is what stops a recovered stall from
+                    // fast-forwarding a burst of ticks to "catch up", which in
+                    // lockstep is not catching up at all: every client steps the
+                    // same ticks in the same order regardless of wall clock.
+                    _accumulator += TickSeconds;
+                    break;
+                }
             }
+            // And a clamp, so a long stall cannot bank unbounded time.
+            if (_accumulator > TickSeconds * 2) _accumulator = TickSeconds * 2;
             if (!Running) _accumulator = 0;
         }
         AfterTicks(delta);
@@ -3666,6 +3716,9 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification read: the sim tick, so a harness can assert an
     /// exact number of steps rather than trusting the frame clock.</summary>
     public int CurrentTick => _world.Tick;
+    /// <summary>Verification read: the sim's state hash, for asserting two
+    /// lockstep seats hold identical worlds.</summary>
+    public ulong StateHash => _world.ComputeStateHash();
     /// <summary>Verification read: where the first selected entity is, read
     /// from the SIM rather than from _latest. _latest is a per-FRAME render
     /// cache filled during _Process, so under AutoStep=false - where a harness
@@ -3829,7 +3882,53 @@ public partial class SkirmishLive : Node3D
     // TICKET-P5-SAVE-01 verification surface. StepTicks drives the SHIPPING
     // tick body, not a copy of it, so an offscreen run and a played match reach
     // the same states by the same code.
-    public void StepTicks(int n) { for (int i = 0; i < n && Running; i++) RunOneTick(); }
+    public void StepTicks(int n) { for (int i = 0; i < n && Running; i++) AdvanceOneTick(); }
+
+    /// <summary>
+    /// C7b: advance exactly one tick, offline or networked, returning false when
+    /// the sim could NOT advance (a lockstep tick whose merged batch has not
+    /// arrived). Offline it always succeeds.
+    ///
+    /// The networked path submits this tick's batch EXACTLY ONCE - the relay
+    /// counts one batch per player per tick and a second submission for the
+    /// same tick corrupts the merge - then polls. TryAdvanceTick never blocks,
+    /// which is the property C7a shipped and the whole reason the frame loop
+    /// can be lockstep-driven without freezing on a socket.
+    /// </summary>
+    /// <summary>C7b: the post-step work a networked tick still owes, since the
+    /// lockstep client performed the Step itself. Deliberately the SUBSET of
+    /// RunOneTick's tail that a LAN match needs: the snapshot the renderer
+    /// samples, the local player's fog, and the victory latch. Missions and
+    /// replay recording do not run in LAN, so their tails are absent by
+    /// design rather than forgotten.</summary>
+    private void AfterNetTick()
+    {
+        SnapshotNow();
+        _fog.UpdateFrom(_world, LocalPlayerId);
+        if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
+    }
+
+    private bool AdvanceOneTick()
+    {
+        if (_net == null) { RunOneTick(); return true; }
+
+        int tick = _world.Tick;
+        if (tick != _lastSubmittedTick)
+        {
+            _net.SubmitCommands(_pending);
+            _pending.Clear();
+            _lastSubmittedTick = tick;
+        }
+        if (!_net.TryAdvanceTick(out bool desynced))
+        {
+            if (desynced) NetSession.NoteDesync(_world.Tick);
+            return false;
+        }
+        // The lockstep client Stepped the world itself, so everything the
+        // offline tick does AFTER the step still has to happen here.
+        AfterNetTick();
+        return true;
+    }
     public int DebugTick => _world.Tick;
     public ulong DebugStateHash() => _world.ComputeStateHash();
     public string RecordingPath => _recPath;
