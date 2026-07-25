@@ -15,6 +15,7 @@ using Ferrostorm.Sim;
 //   stancegate         - ADR-015: hold-fire discipline, guard leash-and-return, patrol cycling, save v7 round-trip
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
+//   firesalegate       - DR-10: the beaten AI's last stand - fire sale + final wave, once; yard control; MCV redeploy
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
@@ -3940,6 +3941,101 @@ int MapGate()
     return 0;
 }
 
+int FireSaleGate()
+{
+    // DR-10 gate. Additive, the repairgate/outpostgate pattern: a standalone
+    // mode and a Match battery stage, never a golden scenario, so the golden
+    // list stays 24. The neutrality proof is the golden diff itself: the
+    // trigger state (no Construction Yard AND no MCV) is one no golden ever
+    // reaches, and inside it the AI previously issued nothing at all, so in
+    // every golden the change is byte-identical dead code (C4c precedent).
+
+    // --- 1. The sale: a beaten AI sells everything and sends the last wave ---
+    {
+        var w = new World(2500, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);   // the enemy production structure the wave targets
+        int plant = w.SpawnPowerPlant(1, 40, 30);
+        int turret = w.SpawnTurret(1, 42, 30);
+        int rifle = w.SpawnUnit(1, Fix64.FromInt(44), Fix64.FromInt(32), Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+        long before = w.Credits(1);
+        for (int t = 0; t < 40; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (w.Entities[plant].Alive || w.Entities[turret].Alive)
+            return Fail("firesale: a beaten AI (no yard, no MCV) must sell its remaining structures");
+        // Relative, per the standing lesson: the defect DIRECTION is no sale
+        // and therefore no refund, so "rose" separates cleanly.
+        if (w.Credits(1) <= before)
+            return Fail($"firesale: the sale must bank the sell refunds (credits {w.Credits(1)}, started {before})");
+        // The last wave: the rifle was attack-moved at the enemy yard (8,8),
+        // so after 40 ticks it must have left its spawn column westward.
+        if (w.Entities[rifle].X >= Fix64.FromInt(44))
+            return Fail("firesale: the last wave must march (rifle never moved toward the enemy)");
+        // The latch: on the next AI beat the sale must NOT re-issue anything
+        // (without the once-only flag the AttackMoves would repeat forever).
+        while (w.Tick % 15 != 0) w.Step(default);
+        cmds.Clear();
+        ai.Act(w, cmds);
+        if (cmds.Count != 0)
+            return Fail($"firesale: the sale must fire ONCE (a later beat issued {cmds.Count} commands)");
+    }
+
+    // --- 2. The control: an AI holding its yard never fires the sale ---------
+    {
+        var w = new World(2501, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);
+        w.SpawnConstructionYard(1, 40, 30);
+        int plant = w.SpawnPowerPlant(1, 44, 30);
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+        for (int t = 0; t < 100; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (!w.Entities[plant].Alive)
+            return Fail("firesale control: an AI with a Construction Yard must never sell its base");
+    }
+
+    // --- 3. The comeback: decapitated but holding an MCV, it rebuilds --------
+    {
+        var w = new World(2502, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);
+        int plant = w.SpawnPowerPlant(1, 40, 30);
+        var mcvDef = w.GetUnitType(7);
+        w.SpawnUnit(1, Fix64.FromInt(46), Fix64.FromInt(40), mcvDef.Speed, mcvDef.Hp, mcvDef.Armour, 0, veterancy: false, unitType: 7);
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+        for (int t = 0; t < 40; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (!w.Entities[plant].Alive)
+            return Fail("firesale: an MCV in hand means NOT beaten - nothing may be sold");
+        bool rebuilt = false;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == 1 && e.Kind == EntityKind.ConstructionYard) rebuilt = true;
+        }
+        if (!rebuilt)
+            return Fail("firesale: a decapitated AI holding an MCV must deploy it (no yard reappeared in 40 ticks)");
+    }
+
+    Console.WriteLine("firesalegate: a beaten AI (no yard, no MCV) sold its structures for real refunds and attack-moved its last " +
+                      "unit at the enemy, exactly once (the next beat issued nothing); an AI holding its yard never sold; and a " +
+                      "decapitated AI holding an MCV deployed it into a new yard instead of selling");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -4007,6 +4103,9 @@ int Match(ulong seed)
     // ADR-021 / doc 18 Phase D: and every committed map loads and plays.
     int mapgate = MapGate();
     if (mapgate != 0) return mapgate;
+    // DR-10: and the beaten AI's last stand.
+    int firesale = FireSaleGate();
+    if (firesale != 0) return firesale;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -4848,6 +4947,7 @@ return args.Length == 0
         "bridgegate" => BridgeGate(),
         "lansetup" => LanSetupGate(),
         "mapgate" => MapGate(),
+        "firesalegate" => FireSaleGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),

@@ -1686,7 +1686,11 @@ public sealed partial class World
     // silent killer the ADRs name - sell, repair, capture, rubble-unblock,
     // placement adjacency and the VictorySystem short-game rule all hang off
     // this predicate with no compile error to catch the omission.
-    private static bool IsStructure(EntityKind k)
+    // Public since DR-10: the AI's Fire Sale asks the same question the sell
+    // handler asks ("would SellStructure accept this kind?"), and the standing
+    // rule is one conceptual rule, one implementation - the AI calls the sell
+    // path's own predicate rather than keeping a copy that could drift.
+    public static bool IsStructure(EntityKind k)
         => k is EntityKind.Refinery or EntityKind.Factory or EntityKind.PowerPlant
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
              or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall
