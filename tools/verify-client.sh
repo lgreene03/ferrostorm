@@ -12,6 +12,20 @@ GODOT="${GODOT:-$HOME/Applications/Godot_mono.app/Contents/MacOS/Godot}"
 [ -x "$GODOT" ] || { echo "godot not found at $GODOT (set GODOT=...)" >&2; exit 1; }
 
 dotnet build "$ROOT/game/Ferrostorm.Game.csproj" -c Debug
+
+# A FRESH CHECKOUT has no .godot/ (it is gitignored), and a project whose assets
+# have never been imported does not fail loudly: the models simply are not there,
+# the actor loop builds nothing, and every check that reads the view fails with
+# an empty-looking scene. Ten of them did, which is how this was found.
+#
+# The test is on .godot/IMPORTED, not on .godot itself, and that is the whole
+# trick: the dotnet build above writes .godot/mono, so a directory test on
+# .godot is ALWAYS true by the time it runs and the import is never triggered.
+if [ -z "$(ls -A "$ROOT/game/.godot/imported" 2>/dev/null)" ]; then
+  echo "verify: no imported assets, running one import pass first (fresh checkout)"
+  "$GODOT" --headless --audio-driver Dummy --path "$ROOT/game" --import
+fi
+
 LOG=$(mktemp)
 set +e
 "$GODOT" --headless --audio-driver Dummy --path "$ROOT/game" res://scenes/Verify.tscn > "$LOG" 2>&1
