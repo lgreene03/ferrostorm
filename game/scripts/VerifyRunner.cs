@@ -1,4 +1,5 @@
 using Godot;
+using Ferrostorm.Sim;
 using System.Collections.Generic;
 
 namespace Ferrostorm.Client;
@@ -53,7 +54,12 @@ public partial class VerifyRunner : Node
         // scene defers a change back to the menu - which frees this node and
         // hangs the run with no output. That cost one debugging cycle; the
         // timeout below means it can only ever cost one.
-        MatchConfig.MapPath = null;
+        // skirmish-02 rather than the default skirmish-01, because it carries
+        // OUTPOSTS and skirmish-01 does not. Everything else a check needs (the
+        // opening hand, a Construction Yard, ferrite) is on both, so this is
+        // free coverage rather than a compromise. Absolute, because
+        // CurrentSetup() relativises what it is given.
+        MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-02.fmap");
         MatchConfig.AiPreset = 0;
 
         var scene = GD.Load<PackedScene>("res://scenes/Skirmish.tscn");
@@ -131,5 +137,65 @@ public partial class VerifyRunner : Node
         // A joiner whose fog was still built for player 0 would see the host's
         // vision: their own base shrouded and the enemy's revealed.
         Check(_game.FogRevealsOwnBase(), "fog reveals the seat's own base");
+
+        // ================= BACKFILL =================
+        // Everything below guards a feature that SHIPPED with no way to check
+        // it. Each was believed to work; four such beliefs have already turned
+        // out to be wrong, so they are asserted now rather than trusted.
+
+        // --- The Outpost explains itself (C4 legibility fix) -----------------
+        // The mechanic was unreachable twice over: no map placed one, and then
+        // a placed one could not be selected because selection is own-only, so
+        // nothing in the game ever told a player it pays or how to take it.
+        int outpost = _game.FindEntity(EntityKind.Outpost, -1);
+        Check(outpost >= 0, "the map carries a neutral outpost to inspect");
+        if (outpost >= 0)
+        {
+            _game.InspectForTest(outpost);
+            string readout = _game.ReadoutText();
+            Check(_game.InspectedId == outpost, "an unowned outpost can be inspected without being selected");
+            Check(readout.Contains("OUTPOST"), $"the readout names it (\"{readout}\")");
+            Check(readout.Contains("cr/s"), "the readout says it PAYS, which is the whole mechanic");
+            Check(readout.Contains("engineer"), "the readout says HOW to take it");
+            Check(_game.SelectionCount == 0, "inspecting does not put a foreign entity in the selection");
+        }
+
+        // --- Formation slots (C1b) -------------------------------------------
+        // Slot assignment must be distinct per unit and STABLE: the same group
+        // ordered to the same point twice must get the same slots, or units
+        // shuffle every time an order is repeated.
+        _game.SelectAllOwn();
+        var slotsA = _game.ResolveFormationSlots(60f, 40f);
+        var slotsB = _game.ResolveFormationSlots(60f, 40f);
+        Check(slotsA.Count >= 2, $"a group move resolves into formation slots ({slotsA.Count})");
+        var distinct = new HashSet<(long, long)>();
+        foreach (var kv in slotsA) distinct.Add((kv.Value.RawX, kv.Value.RawY));
+        Check(distinct.Count == slotsA.Count, "every unit gets its OWN slot, none stacked");
+        bool stable = slotsA.Count == slotsB.Count;
+        foreach (var kv in slotsA)
+            if (!slotsB.TryGetValue(kv.Key, out var other) || other != kv.Value) stable = false;
+        Check(stable, "the same group ordered to the same point twice gets the SAME slots");
+
+        // --- Sidebar cancel and refund (C3) ----------------------------------
+        // The client could queue but never cancel, at all, until C3. The refund
+        // is pay-as-you-build, so cancelling the head returns exactly what was
+        // drained - asserted to the credit, because "roughly right" is how a
+        // refund bug hides.
+        int yard = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        Check(yard >= 0, "the seat owns a Construction Yard to queue at");
+        if (yard >= 0)
+        {
+            long creditsBefore = _game.CreditsNow;
+            _game.QueueStructure(1);              // power plant
+            _game.StepTicks(20);                  // pay-as-you-build drains a little
+            Check(_game.QueuedAt(yard) == 1, $"the order reached the yard's line ({_game.QueuedAt(yard)})");
+            long midway = _game.CreditsNow;
+            Check(midway < creditsBefore, $"building drained the treasury ({creditsBefore} -> {midway})");
+            _game.CancelStructure(1);
+            _game.StepTicks(1);
+            Check(_game.QueuedAt(yard) == 0, "cancelling cleared the line");
+            Check(_game.CreditsNow == creditsBefore,
+                  $"the refund was EXACT, to the credit ({midway} -> {_game.CreditsNow}, started {creditsBefore})");
+        }
     }
 }
