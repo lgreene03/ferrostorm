@@ -64,3 +64,20 @@ trigger entered 0 32 18 10 -> spawn 1 2 46 19 2
 trigger entered 0 32 18 10 -> assault 1 32 18
 trigger owned prize 0 -> message flags_change
 trigger owned prize 0 -> win 0
+# THE DEFEAT PATH. The prize is taken by ENGINEER and the wrench is the only
+# one you get, so losing it makes 'owned prize 0' unreachable and the mission
+# ran forever: unwinnable, unlosable, undeclared. This is not a design call
+# about when a raid has failed - it is the mission's own objective logic,
+# since with no engineer there is no capture and therefore no win.
+# 'rules noshortgame' above is correct and stays: this force has no
+# structures at all, so the elimination rule would declare it defeated at
+# tick 0. That is exactly why the loss has to be stated here instead.
+#
+# ORDER MATTERS AND MUST NOT BE CHANGED. The engineer is CONSUMED by a
+# successful capture, so on a WIN both conditions are true on the same tick.
+# Triggers evaluate in file order and DeclareWinner latches the first call,
+# so 'win 0' above must stay ABOVE this block or a victory would be reported
+# as a defeat. The mission02 gate holds this: it captures the prize, which
+# consumes the wrench, and asserts the winner is still 0.
+trigger destroyed wrench -> message the_wrench_is_lost
+trigger destroyed wrench -> win 1

@@ -44,6 +44,7 @@ lands; this file is the resume point if a session dies.
 | C7c | Dropped-peer handling: the survivor is TOLD | the last unexplained state in LAN; match RESULT filed as Q015, not guessed | NEUTRAL (net + client) | DONE - 72 harness checks |
 | VERDICT | The end-of-match banner told the winning JOINER they had lost (10th seat bug) + captured structures never changed colour | found by a verified survey of docs 18/22, not by the docs' own claims | NEUTRAL (presentation only) | DONE - 78 harness checks |
 | ECON-08 | Harvester load readout + ferrite field inspect | P5-ECON-08, verified outstanding in the PR#30 survey | NEUTRAL (presentation only) | DONE - 87 harness checks |
+| M02-DEFEAT | Mission 02 could not be lost, and ran forever if the engineer died | forced by the mission's own objective logic; mission 03's half filed as Q016 | NEUTRAL (data + gate; goldens byte-identical) | DONE |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 

@@ -1323,7 +1323,32 @@ ulong ScenarioMission02(ulong seed, Action<int, ulong>? cp = null, Action<string
     if (!flags || world.Winner != 0) throw new Exception($"mission02: capture objective failed (winner={world.Winner})");
     if (world.Entities[prize].PlayerId != 0) throw new Exception("mission02: the prize should fly flag 0");
     if (world.Entities[wrench].Alive) throw new Exception("mission02: the engineer is consumed by the act");
-    report?.Invoke($"mission02: Sodality raid ran as data - the alarm assault triggered, the engineer converted the depot under fire, scripted victory at tick {world.Tick}");
+    // THE DEFEAT PATH, in a SECOND world so the golden run above is untouched.
+    // Lose the wrench and 'owned prize 0' can never fire, because the prize is
+    // taken by engineer and there is only one - the mission used to run forever,
+    // unwinnable and undeclared. Killed outright rather than played to a loss:
+    // what is under test is that the trigger fires and declares, not the combat
+    // that got there.
+    {
+        var lost = MapData.Load(path).BuildWorld(seed, players: 2, out var lostTags);
+        var lostMission = new MissionRunner(MapData.Load(path), lostTags);
+        int doomed = lostTags["wrench"][0];
+        var e = lost.Entities[doomed];
+        e.Alive = false;
+        lost.SetEntityForTest(doomed, e);
+        var lostCmds = new List<Command>();
+        for (int t = 0; t < 60 && lost.Winner < 0; t++)
+        {
+            lost.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(lostCmds));
+            lostCmds.Clear();
+            lostMission.Tick(lost, lostCmds);
+        }
+        if (lost.Winner != 1)
+            throw new Exception($"mission02: losing the wrench must declare defeat, got winner={lost.Winner}");
+        if (!lostMission.Messages.Contains("the_wrench_is_lost"))
+            throw new Exception("mission02: the defeat should say why");
+    }
+    report?.Invoke($"mission02: Sodality raid ran as data - the alarm assault triggered, the engineer converted the depot under fire, scripted victory at tick {world.Tick}; and losing the wrench declares DEFEAT rather than running forever (the win still wins despite the engineer being consumed, which is the trigger-order invariant)");
     return world.ComputeStateHash();
 }
 
