@@ -48,6 +48,7 @@ lands; this file is the resume point if a session dies.
 | BD-05 | Selling a producer burned everything already PAID into it | wider than filed: 4 slots on a yard since ADR-023, not 1 | NEUTRAL (proven by a golden run, not assumed) | DONE |
 | CANCEL+STOP | Lane-2 cancel destroyed a DIFFERENT finished building; Stop left a patrol armed | found by a verified survey; the survey REFUTED my assumption that the queue was empty | NEUTRAL (client only) | DONE - and the cancel guard is now CHECKED too (95 checks, see CANCEL-CHECK) |
 | CANCEL-CHECK | Closed the stated gap: the lane-2 cancel guard has a check | SpawnPowerPlant opens the tech tree, which is what made the two-lane state buildable | NEUTRAL (client only) | DONE - 95 harness checks |
+| REVIEW | Design review as designer + reviewer: gaps and features register | docs/design/27 (evidence: balance tool, full inventory, cited genre canon); Q017 filed as its principal recommendation | NEUTRAL (docs only) | DONE |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
