@@ -59,7 +59,7 @@ hold-fire, G guard, Q patrol on selected units.
 - The Outpost has no sidebar icon; it is never buildable, so it has no button.
 - An outpost captured from the enemy keeps its old team strip until the actor is
   rebuilt (the same known limitation captured factories have, doc 18 N6).
-- Two-machine LAN still does not work; HOST and JOIN are disabled and say why.
+- Two-machine LAN is REACHABLE as of 2026-07-25 (C7b-i..iv): HOST and JOIN are live, the frame loop is lockstep-driven, and a departing peer is announced. The two-machine session itself is still the outstanding human step and say why.
 
 ## What I would most like an answer to
 

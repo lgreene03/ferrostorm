@@ -41,7 +41,11 @@ jobs:
           # radius while the command was issued as LocalPlayerId (a joiner could
           # not build ANYWHERE), and the minimap coloured by "me versus them"
           # while the battlefield coloured by player id.
-          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],|ValidPlacement\([01],' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+          # WIDENED A THIRD TIME after the end-of-match banner was found asking
+          # "_winner == 0" - did PLAYER 0 win, not did I win. At seat 1 that is
+          # exactly inverted: the joiner who had just won was shown DEFEAT and
+          # the host who lost was congratulated. The last thing a match says.
+          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],|ValidPlacement\([01],|_winner (==|!=) [01]\b' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
           if [ -n "$HITS" ]; then
             echo "$HITS"
             echo "::error::Hardcoded seat in the battle scene - use LocalPlayerId / EnemyPlayerId (C7b)"; exit 1

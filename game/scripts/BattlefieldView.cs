@@ -1972,6 +1972,36 @@ public static class BattlefieldView
     public static void DressStructure(Node3D node, int player, float span = 2.6f)
     {
         AddContactBlob(node, span);
+        ApplyTeamStrip(node, player, span);
+    }
+
+    /// <summary>
+    /// The OWNERSHIP half of dressing a structure, split out so it can be
+    /// applied again when ownership CHANGES.
+    ///
+    /// It only ever ran at actor creation, so a captured building kept the
+    /// colour of the player who lost it - and a captured NEUTRAL outpost had no
+    /// strip at all to recolour, because the player &lt; 0 early return had
+    /// skipped it, which landed the worst case on the newest mechanic. Taking
+    /// an outpost is the whole point of ADR-021 and the battlefield never said
+    /// it had happened.
+    ///
+    /// The contact blob deliberately stays in the caller: it is a shadow, not a
+    /// team mark, and re-adding one per capture would stack them.
+    /// </summary>
+    public static void ApplyTeamStrip(Node3D node, int player, float span = 2.6f)
+    {
+        // Rename BEFORE freeing. QueueFree lands at the end of the frame, so
+        // until it does the old strips are still children under the same name -
+        // and the next lookup would find a strip belonging to the previous
+        // owner. Same reason and same shape as the rally-pin teardown.
+        foreach (var c in node.GetChildren())
+            if (c is Node3D old && old.Name == "TeamStrip")
+            {
+                old.Name = "FreedTeamStrip";
+                old.Visible = false;
+                old.QueueFree();
+            }
         if (player < 0) return;
         var mark = MarkFor(player);
         var mat = new StandardMaterial3D

@@ -88,6 +88,11 @@ public partial class SkirmishLive : Node3D
     // change exists to remove. -1 means nothing inspected.
     private int _inspected = -1;
     private readonly Dictionary<int, Node3D> _actors = new();
+    /// <summary>Which player each actor's team strip was DRAWN for, so a change
+    /// of ownership can be noticed. Kept beside _actors rather than read off the
+    /// node, because the answer is "what is currently painted", not "what does
+    /// the sim say", and those differing is the entire point.</summary>
+    private readonly Dictionary<int, int> _actorOwner = new();
     private readonly Dictionary<int, Vector3> _targets = new();
     private readonly Dictionary<int, SnapshotInterpolator.ViewEntity> _latest = new();
     private ModelLibrary _models = null!;
@@ -2361,14 +2366,24 @@ public partial class SkirmishLive : Node3D
         // and in the browser before the player has finished reading the banner.
         FinishRecording();
         ClosePause();
-        _banner.Text = (_winner == 0 ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
+        // "DID I WIN", not "did player 0 win". _winner is an absolute player id,
+        // and this asked whether it was zero - correct at seat 0 by luck, and at
+        // seat 1 exactly inverted: the LAN joiner who had just won was shown
+        // DEFEAT in the loser's red and played the failure line, while the host
+        // who lost was congratulated. The last thing a match says, and it said
+        // the opposite of what happened.
+        bool iWon = _winner == LocalPlayerId;
+        _banner.Text = (iWon ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
+        // The winner's banner wears the winner's own team colour through the
+        // one-place law, which is identical to the old DirectorateMark at seat 0
+        // and correct at seat 1.
         _banner.AddThemeColorOverride("font_color",
-            _winner == 0 ? BattlefieldView.DirectorateMark : new Color(0.8f, 0.25f, 0.2f));
+            iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f));
         _banner.Visible = true;
         // TICKET-P6-VO-01: the closing line, beside the banner. One site
         // covers skirmish and campaign both: a mission verdict arrives here
         // through World.Winner exactly as an elimination does.
-        PlayVo(_winner == 0 ? "vo_mission_accomplished" : "vo_mission_failed");
+        PlayVo(iWon ? "vo_mission_accomplished" : "vo_mission_failed");
     }
 
     private bool _paused;
@@ -2663,7 +2678,7 @@ public partial class SkirmishLive : Node3D
             if (_actors.TryGetValue(v.Id, out var stale))
             {
                 stale.QueueFree();
-                _actors.Remove(v.Id);
+                _actors.Remove(v.Id); _actorOwner.Remove(v.Id);
                 _rigs.Remove(v.Id);
                 _wallRebuilds++;
             }
@@ -2741,6 +2756,7 @@ public partial class SkirmishLive : Node3D
                     });
                 AddChild(node);
                 _actors[v.Id] = node;
+                _actorOwner[v.Id] = v.PlayerId;   // what the team strip was drawn FOR
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
                 _rigs[v.Id] = newRig;
@@ -2881,6 +2897,18 @@ public partial class SkirmishLive : Node3D
             }
             if (node.GetNodeOrNull<MeshInstance3D>("SelRing") is { } sel)
                 sel.Visible = _selection.Contains(v.Id);
+            // OWNERSHIP CAN CHANGE. An engineer captures a building, or claims a
+            // neutral outpost, and the actor is not rebuilt for it - only a wall
+            // mask change or death rebuilds one - so the strip kept naming the
+            // player who LOST the structure, and a claimed outpost never grew
+            // one at all. Taking an outpost is the whole point of ADR-021, and
+            // the battlefield never showed it had happened.
+            if (_actorOwner.TryGetValue(v.Id, out int drawnFor) && drawnFor != v.PlayerId)
+            {
+                if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField && v.Kind != EntityKind.Wall)
+                    BattlefieldView.ApplyTeamStrip(node, v.PlayerId, 2.6f);
+                _actorOwner[v.Id] = v.PlayerId;
+            }
             // Fog: enemies are hidden unless their cell is currently visible
             node.Visible = DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y);
         }
@@ -2928,7 +2956,7 @@ public partial class SkirmishLive : Node3D
                     deadPips.P2.QueueFree();
                     _rankPips.Remove(id);
                 }
-                _actors.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
+                _actors.Remove(id); _actorOwner.Remove(id); _targets.Remove(id); _selection.Remove(id); _rigs.Remove(id); _aim.Remove(id); _lastTrack.Remove(id);
                 ForgetRally(id);              // TICKET-P5-BD-14: no orphan markers
                 _manuallyStopped.Remove(id);  // P5-ECON-07: ids are reused by nothing, but the set should not grow forever
                 _offlineDimmed.Remove(id);    // ADR-008: the dim state dies with the actor
@@ -4254,6 +4282,48 @@ public partial class SkirmishLive : Node3D
     /// be reported by stepping the sim, because the sim is what has stopped.
     /// Drives the shipped method, not a copy of it.</summary>
     public void PumpFrameForTest() => RefreshDesyncNotice();
+
+    /// <summary>Verification reads: the end-of-match banner AS SHOWN. Reads the
+    /// label's own text rather than recomputing the verdict, because
+    /// recomputing it is how a check comes to agree with the bug - and this
+    /// banner told a winning joiner they had lost.</summary>
+    public string BannerTextForTest => _banner.Text;
+    public bool BannerVisibleForTest => _banner.Visible;
+
+    /// <summary>Verification hook: end the match with this player eliminated,
+    /// through the REAL path the sim's victory latch calls.</summary>
+    public void EliminateForTest(int eliminatedPlayer) => OnEliminated(eliminatedPlayer);
+
+    /// <summary>Verification read: which player this actor's team strip is
+    /// currently painted FOR, or -2 if there is no actor. Reads what is drawn,
+    /// never what the sim says: the two differing is the whole defect.</summary>
+    public int ActorTeamOwnerForTest(int id) => _actorOwner.TryGetValue(id, out int p) ? p : -2;
+
+    /// <summary>Verification hook: clear the victory latch so a second verdict
+    /// can be driven in one run. Test-only by name and by nature - nothing in a
+    /// played match un-wins a match.</summary>
+    public void ResetVictoryForTest() { _winner = -1; _banner.Visible = false; }
+
+    /// <summary>Verification hook: hand an entity to another player, as a
+    /// capture does. Through the sim's own scenario-scripting SetEntity, so the
+    /// world stays internally consistent rather than the view being lied to.</summary>
+    public void SetOwnerForTest(int id, int player)
+    {
+        var e = _world.Entities[id];
+        e.PlayerId = player;
+        _world.SetEntityForTest(id, e);
+    }
+
+    /// <summary>Verification hook: take a snapshot and run one actor sync, which
+    /// is what a rendered frame does. The harness works inside a single frame,
+    /// so the actor loop does not run on its own - and the actor loop is exactly
+    /// where a change of ownership has to be noticed.</summary>
+    public void PumpActorsForTest()
+    {
+        SnapshotNow();
+        _renderTime = _world.Tick;
+        SyncActors(0f);
+    }
 
     // TICKET-P5-ALERT-02 verification surface: what the alert record holds
     // and where the camera actually is, not a recomputation of either.
