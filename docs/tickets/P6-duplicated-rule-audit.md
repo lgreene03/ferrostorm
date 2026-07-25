@@ -2,8 +2,9 @@
 
 Labels: persona:p3, gdd:s9, phase:6, owner:client-engineer
 
-Status: **AUDIT COMPLETE, 2026-07-25. Three HIGH findings FIXED in this wave;
-the remainder are filed below, unfixed, with severities.**
+Status: **AUDIT COMPLETE, 2026-07-25.** Wave 1 fixed three HIGH seat bugs.
+**Wave 2 (same day) cleared the LAST HIGH and the four most player-visible
+MEDIUMs: NO HIGH FINDINGS REMAIN.** What is left is filed below with severities.
 
 ## Why this audit happened
 
@@ -60,30 +61,70 @@ client copies carried comments asserting there was a single shared threshold.
 There was not. `AtLeast75` is now **public** and the client calls it, so the
 count is one across both projects and the comment is finally true.
 
+## FIXED in wave 2 (the last HIGH, and the four most player-visible MEDIUMs)
+
+### 5. The wall-drag path had no affordability test. HIGH, already divergent
+
+`CanPlace` (single click) tested credits; `UpdateDragGhosts` (drag) tested only
+the cap. A run drawn with 300 credits tinted **entirely green**, sent every
+segment, and the sim silently dropped each one past the money while the readout
+quoted a total it could not pay.
+
+**Why it lasted:** the opening treasury is 8000 and a segment costs 100, which is
+exactly the 80-segment cap. The money and the cap bite on the same segment at the
+start of every match, and only diverge once the player has spent anything.
+
+Both paths now go through `CanPlace(cell, type, aheadInRun)`, where `aheadInRun`
+counts the segments landing before this one, since a barrier is charged as it
+lands. At `aheadInRun = 0` the single-click behaviour is unchanged to the credit.
+The readout names the money as a reason: `ONLY 5 AFFORDABLE - RUN TRUNCATED`.
+
+**The commit is deliberately unchanged.** It still sends the whole run and lets
+the sim decide, because a client-side filter would be a second opinion that
+diverges the moment credits move between the draw and the release. The client
+**predicts**; the sim **decides**. That is what keeps the prediction safe.
+
+### 6. Combat effects ignored the visibility the actor loop computed. MEDIUM
+
+`Live` gated only on the actor **existing**, and a fog-hidden enemy's actor does
+exist, merely `Visible = false`. An unseen turret firing out of unexplored fog
+drew its muzzle flash, tracer and impact: the fog hid the shooter and the effects
+layer painted a bright arrow at it. Measured at **2 effect nodes** leaked per
+shot.
+
+`Live` now reads `node.Visible` rather than recomputing the rule, so the effects
+layer consumes the actor loop's decision instead of forming a rival one. Audio is
+deliberately not gated: a sound gives away no position.
+
+### 7. `UnitNames` was missing the repair vehicle. MEDIUM, already divergent
+
+ADR-019 added unit type 13 to the catalogue, the sidebar and the model library,
+and not to the name table, so a completed repair vehicle toasted `UNIT DEPLOYED`
+and read `UNIT`. Three lookup sites, **two carrying their own copy of the length
+guard**, which is what turned a missing entry into a silent shrug in three
+readouts rather than one obvious gap. Now one `UnitNameOf`.
+
+### 8. `ReplayTheater` still held the pre-fix ferrite expression. MEDIUM
+
+The exact defect P5-ECON-01 fixed on the live side, with the cap hardcoded at
+12000. Now calls `SkirmishLive.FieldFullness`, so the default lives in one place.
+
 ## NOT FIXED, filed with severity
-
-### HIGH
-
-**The wall-drag path has no affordability test.** `CanPlace` (single click)
-tests credits; `UpdateDragGhosts` (drag) tests only the cap. **They already
-disagree**, in single player, today: draw a twenty-segment run with 300 credits
-and every segment tints green, the whole run is sent, and the sim silently drops
-each segment past the money. The readout quotes the total cost and never says it
-cannot be paid. Wants the affordability clause plus a truncation notice in
-`WallDragSummary`.
 
 ### MEDIUM
 
-- **Combat effects ignore the visibility the actor loop computed.** `OnFired`
-  and `OnDied` gate only on the actor node existing, and a fog-hidden enemy's
-  node exists (it is merely `Visible = false`). **An unseen turret firing out of
-  unexplored fog draws its muzzle flash and tracer**, revealing the position the
-  fog exists to hide. Already divergent, visible in single player.
 - **The cursor promises a harvest the click refuses.** `CursorFor`'s comment
   claims it runs the exact picks `IssueOrder` runs. The enemy and field picks do
   match; the **refinery precondition does not**, so with no refinery standing the
   cursor shows the harvest verb over every deposit and the click yields only a
   `NO REFINERY` toast.
+- **An impact on a visible target is lost when the shooter is hidden.** Surfaced
+  BY the wave-2 fog fix rather than by it: `SpawnAutocannonBurst` gates the
+  tracer, the impact and the hit-pop on both ends, so a unit shot from fog no
+  longer flinches. Correct for the tracer (it is a line between the two) and
+  wrong for the impact, which happens on ground the player can see. Wants the
+  attacker-gated and target-gated effects separated per spawner, which is a
+  taste call per weapon family rather than a one-line change.
 - **The tech tree is reimplemented client-side** (`OwnsStructType` +
   `PrereqsMet` against `World.HasPrereqs`). Identical today. The failure mode on
   drift is a lit button whose order the sim silently drops.
@@ -107,11 +148,6 @@ cannot be paid. Wants the affordability clause plus a truncation notice in
   `ReplayTheater`. All agree until an air kind is appended, at which point the
   inlined copies classify aircraft as structures and the `BASE UNDER ATTACK`
   klaxon fires whenever an aircraft is shot at.
-- **`UnitNames` is missing the repair vehicle** (13 entries, unit type 13 added
-  to the sidebar and model library but not here). **Already divergent**: a
-  completed repair vehicle toasts `UNIT DEPLOYED` and reads `UNIT`.
-- **`ReplayTheater` still has the pre-fix ferrite expression** with the
-  hardcoded 12000, the exact defect P5-ECON-01 fixed in the live client.
 - **The own supply and draw tally exists three times** in one file.
 
 ### LOW

@@ -173,6 +173,60 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- The fog hides the SHOOTING too ----------------------------------
+        // CombatEffects gated only on the actor EXISTING, and a fog-hidden
+        // enemy's actor exists with Visible = false. So an unseen turret firing
+        // out of unexplored fog drew its muzzle flash and tracer: the fog hid
+        // the shooter and the effects layer painted a bright arrow at it.
+        // The second check is the control - it is what catches a "fix" that
+        // simply turned all effects off.
+        int hiddenFoe = _game.FindEntity(EntityKind.ConstructionYard, _game.EnemyPlayerId);
+        int myUnit = _game.FindEntity(EntityKind.Harvester, _game.LocalPlayerId);
+        if (hiddenFoe >= 0 && myUnit >= 0)
+        {
+            Check(!_game.DrawnForLocalSeatForTest(hiddenFoe), "the shooter is genuinely in fog (the precondition)");
+            int leaked = _game.EffectNodesFromFiredForTest(hiddenFoe, myUnit);
+            Check(leaked == 0, $"an enemy firing from unseen fog draws NOTHING ({leaked} effect nodes)");
+            int mine2 = _game.EffectNodesFromFiredForTest(myUnit, myUnit);
+            Check(mine2 > 0, $"...while my own visible unit still draws its muzzle flash ({mine2} nodes)");
+        }
+
+        // --- A wall run the player cannot afford SAYS SO ---------------------
+        // The single click tested the treasury and the drag did not, so the two
+        // paths disagreed about one rule and the drag was the one that never
+        // mentioned money: a run drawn with 300 credits tinted entirely green,
+        // sent every segment, and the sim silently dropped each one past the
+        // money while the readout quoted a total it could not pay.
+        //
+        // Invisible at the opening treasury, which is why it lasted: 8000
+        // credits buys exactly the 80-segment cap, so the two limits bite on the
+        // same segment until the player has spent something. The check therefore
+        // spends first.
+        const int wallType = 9;
+        int wallYard = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        if (wallYard >= 0)
+        {
+            var (wx, wy) = _game.CellOfForTest(wallYard);
+            _game.EnterPlacement(wallType);
+            _game.BeginWallDragAtCell(wx + 3, wy - 4);
+            _game.DragToCellForTest(wx + 3, wy + 7);          // a 12-cell run
+            int rich = _game.DragGhostsAcceptedForTest();
+            Check(rich >= 6, $"a long wall run is drawable with a full treasury ({rich} segments accept)");
+            Check(!_game.WallDragSummaryForTest().Contains("TRUNCATED"),
+                  $"...and the readout does not cry truncation (\"{_game.WallDragSummaryForTest()}\")");
+
+            // Down to 500 credits: five segments at 100 each, and no more.
+            long had = _game.CreditsNow;
+            _game.GrantCreditsForTest(500 - had);
+            _game.DragToCellForTest(wx + 3, wy + 7);          // redraw the same run
+            int poor = _game.DragGhostsAcceptedForTest();
+            Check(poor == 5, $"only what the treasury covers tints green ({poor} of {rich}, at 500 credits)");
+            string say = _game.WallDragSummaryForTest();
+            Check(say.Contains("ONLY 5 AFFORDABLE"), $"and the readout SAYS so (\"{say}\")");
+            _game.GrantCreditsForTest(had - 500);             // put the treasury back
+            _game.CancelPlacementForTest();
+        }
+
         // --- The ferrite drain reaches the renderer (P5-ECON-01) -------------
         // The first of the five defects of this shape, and the last to get a
         // check. The fix shipped; nothing asserted it, which is exactly how it
@@ -184,6 +238,12 @@ public partial class VerifyRunner : Node
         // constant, so a mined-out field drew exactly as large as a full one.
         Check(SkirmishLive.FieldFullness(fcap, fcap) > SkirmishLive.FieldFullness(fcap / 4, fcap),
               "a mined-out field draws SMALLER than a full one (the dead expression did not)");
+        // The repair vehicle reached the catalogue, the sidebar and the model
+        // library, and not the name table, so it already read "UNIT".
+        Check(_game.UnitNameForTest(World.RepairVehicleType) == "REPAIR VEHICLE",
+              $"unit type {World.RepairVehicleType} has a NAME (\"{_game.UnitNameForTest(World.RepairVehicleType)}\")");
+        Check(_game.UnitNameForTest(World.RepairVehicleType + 1) != "",
+              "and a type beyond the table still falls back rather than throwing");
 
         // --- The brown-out boundary is where ADR-008 says ---------------------
         // Four implementations of this threshold became one (the client now
