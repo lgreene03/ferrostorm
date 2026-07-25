@@ -15,9 +15,21 @@ namespace Ferrostorm.Presentation;
 /// </summary>
 public sealed class SnapshotInterpolator
 {
+    /// <summary>
+    /// P5-ECON-01: FerriteAmount and FerriteCap ride here so the client can draw
+    /// a field DRAINING. They are appended with defaults, so every existing
+    /// construction site and every consumer compiles unchanged.
+    ///
+    /// This is presentation state, outside the state hash by construction
+    /// (Ferrostorm.Presentation is the snapshot contract, ADR-001), so widening
+    /// it moves no golden. The client previously tried to scale a field by
+    /// v.Hp / 12000, which was dead: a field spawns with Hp = 1, so the
+    /// expression pinned to its own floor and every field rendered at a
+    /// constant size whether it was full or nearly exhausted.
+    /// </summary>
     public readonly record struct ViewEntity(
         int Id, bool Alive, int PlayerId, EntityKind Kind, double X, double Y, int Hp,
-        int UnitType = 0, int MaxHp = 0);
+        int UnitType = 0, int MaxHp = 0, int FerriteAmount = 0, int FerriteCap = 0);
 
     private readonly Dictionary<int, Entity[]> _snapshots = new();
     private readonly int _window;
@@ -73,11 +85,16 @@ public sealed class SnapshotInterpolator
                 var e1 = b[i];
                 double x = ToDouble(e0.X) + (ToDouble(e1.X) - ToDouble(e0.X)) * alpha;
                 double y = ToDouble(e0.Y) + (ToDouble(e1.Y) - ToDouble(e0.Y)) * alpha;
-                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp, e0.UnitType, e0.MaxHp));
+                // Ferrite amount is taken from the EARLIER snapshot rather than
+                // interpolated: it is a discrete stock, like Hp and Kind above,
+                // and a lerped ore count would render a fractional deposit.
+                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp, e0.UnitType, e0.MaxHp,
+                    e0.FerriteAmount, e0.FerriteCap));
             }
             else
             {
-                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp, e0.UnitType, e0.MaxHp));
+                output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp, e0.UnitType, e0.MaxHp,
+                    e0.FerriteAmount, e0.FerriteCap));
             }
         }
         return true;

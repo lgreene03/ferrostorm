@@ -4031,6 +4031,42 @@ int Spectate()
     foreach (var e in world.Entities) if (!e.Alive) corpses++;
     if (deathEvents != corpses) return Fail($"spectate: {deathEvents} death events vs {corpses} corpses");
     if (firedEvents == 0) return Fail("spectate: a battle with zero Fired events");
+
+    // P5-ECON-01: the snapshot contract must carry a field's REMAINING STOCK,
+    // or the client cannot draw a field draining. It could not: ViewEntity had
+    // no amount, so the client scaled fields by Hp, and a field spawns with
+    // Hp = 1, which pinned the expression to its floor and drew every field at
+    // a constant size forever. Asserted here rather than trusted, because the
+    // defect's whole character was code that LOOKED implemented and was dead.
+    {
+        var w = new World(4242, 64, 64, players: 1);
+        int field = w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(20), 12000);
+        int refinery = w.SpawnRefinery(0, 24, 20);
+        int harv = w.SpawnHarvester(0, Fix64.FromInt(22), Fix64.FromInt(20));
+        var hcmd = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(hcmd));
+        var vi = new SnapshotInterpolator(windowTicks: 4);
+        var view = new List<SnapshotInterpolator.ViewEntity>();
+        var (t0s, e0s, _) = w.TakeSnapshot();
+        vi.AddSnapshot(t0s, e0s);
+        vi.TrySample(t0s, view);
+        int startAmount = view[field].FerriteAmount, startCap = view[field].FerriteCap;
+        if (startAmount != 12000 || startCap != 12000)
+            return Fail($"spectate: a fresh field must report its full stock and cap through the view contract (got {startAmount}/{startCap})");
+        for (int t = 0; t < 200; t++) w.Step(default);
+        var (t1s, e1s, _) = w.TakeSnapshot();
+        vi.AddSnapshot(t1s, e1s);
+        vi.TrySample(t1s, view);
+        int nowAmount = view[field].FerriteAmount;
+        if (nowAmount >= startAmount)
+            return Fail($"spectate: a mined field must report a FALLING stock through the view contract ({nowAmount} vs {startAmount})");
+        if (nowAmount != w.Entities[field].FerriteAmount)
+            return Fail("spectate: the view's ferrite stock must equal the sim's, not a stale or interpolated value");
+        if (w.Entities[harv].Carry <= 0 && w.Credits(0) <= 0)
+            return Fail("spectate: the harvest never ran, so the drain assertion proved nothing");
+        Console.WriteLine($"spectate: the view contract carries a draining field ({startAmount} -> {nowAmount} of cap {startCap}), so the client can render it");
+    }
+
     Console.WriteLine($"spectate: interpolation contract verified over 400 ticks; event stream consistent ({deathEvents} deaths, {firedEvents} shots)");
 
     foreach (double sampleTime in new[] { finalTick - 6.0, finalTick - 3.5, finalTick - 1.0 })

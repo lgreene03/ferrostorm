@@ -2575,8 +2575,24 @@ public partial class SkirmishLive : Node3D
             }
             if (v.Kind == EntityKind.FerriteField)
             {
-                float g = Mathf.Max(0.2f, v.Hp / 12000f);
+                // P5-ECON-01: a field visibly SHRINKS as it is mined out, so the
+                // player can read the economy off the battlefield rather than
+                // discovering a patch is spent only when a harvester stops.
+                //
+                // This read used to be v.Hp / 12000, which was DEAD: a field
+                // spawns with Hp = 1, so the expression always pinned to its own
+                // 0.2 floor and every field drew at a constant size whether it
+                // was untouched or nearly exhausted. ViewEntity now carries the
+                // real stock, and the field's own cap rather than a hardcoded
+                // 12000, so a map that ever authors a richer or poorer deposit
+                // still drains across its full range.
+                float cap = v.FerriteCap > 0 ? v.FerriteCap : 12000f;
+                float g = Mathf.Max(0.2f, v.FerriteAmount / cap);
                 node.Scale = Vector3.One * (0.6f + g * 0.9f);
+                // The amber stain pooled under the deposit fades with it, or a
+                // spent field leaves a full-strength glow behind on bare ground.
+                if (node.GetNodeOrNull<Decal>("Stain") is { } stain)
+                    stain.EmissionEnergy = 0.6f * g;
             }
             if (node.GetNodeOrNull<MeshInstance3D>("SelRing") is { } sel)
                 sel.Visible = _selection.Contains(v.Id);
