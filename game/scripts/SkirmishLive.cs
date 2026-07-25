@@ -418,9 +418,18 @@ public partial class SkirmishLive : Node3D
             if (_setup.IsMission) _mission = new MissionRunner(map, tags);
             else _enemy = _setup.AiPreset switch
             {
-                1 => SkirmishAI.Rusher(1),
-                2 => SkirmishAI.Turtle(1),
-                _ => SkirmishAI.Standard(1),
+                // The opponent plays the OTHER seat, not a hardcoded player 1.
+                // With the seat hardcoded, a client sitting in seat 1 got an AI
+                // playing ITS OWN side: the AI's orders and the player's landed
+                // on the same buildings in the same tick, so a cancel removed
+                // one item while the AI added another and the player's own
+                // commands appeared to be ignored. Invisible in single player,
+                // where the seat is 0 and the AI's 1 happen to be opposite.
+                // Found by the headless harness the first time anything drove
+                // the scene from seat 1.
+                1 => SkirmishAI.Rusher(EnemyPlayerId),
+                2 => SkirmishAI.Turtle(EnemyPlayerId),
+                _ => SkirmishAI.Standard(EnemyPlayerId),
             };
 
             // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
@@ -3687,6 +3696,28 @@ public partial class SkirmishLive : Node3D
     /// <summary>ADR-021 verification read (the SelectionCount pattern): the id
     /// of the unowned entity being inspected, or -1.</summary>
     public int InspectedId => _inspected;
+    /// <summary>Verification hook: inspect an entity the player does not own,
+    /// as a click on it would. The click path itself needs a camera ray and a
+    /// screen position; this is the same end state without the projection, so
+    /// a harness can assert what the readout SAYS about an outpost.</summary>
+    public void InspectForTest(int id) { _selection.Clear(); _inspected = id; }
+    /// <summary>Verification read: the first living entity of a kind owned by
+    /// a given player (-1 for neutral), or -1. Lets a harness find the outpost
+    /// or the yard it wants to act on without hardcoding an entity id that
+    /// shifts whenever the opening hand changes.</summary>
+    public int FindEntity(EntityKind kind, int player)
+    {
+        var ents = _world.Entities;
+        for (int i = 0; i < ents.Count; i++)
+            if (ents[i].Alive && ents[i].Kind == kind && ents[i].PlayerId == player) return i;
+        return -1;
+    }
+    /// <summary>Verification read: how many items sit on a producer's line.</summary>
+    public int QueuedAt(int producerId) => _world.QueueLength(producerId);
+    /// <summary>Verification read: commands staged for the next tick.</summary>
+    public int PendingCount => _pending.Count;
+    /// <summary>Verification read: the cached yard id the sidebar feed resolves.</summary>
+    public int YardIdForTest => _yardId;
     /// <summary>ADR-021 verification read: the live readout line, so an
     /// offscreen check can assert the outpost actually explains itself rather
     /// than only that a click landed.</summary>
