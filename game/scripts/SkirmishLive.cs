@@ -3379,6 +3379,26 @@ public partial class SkirmishLive : Node3D
         // the overlay is the pause indicator the banner used to be, and it
         // is where saving, loading and abandoning live.
         if (ev.IsActionPressed("pause_menu")) { TogglePause(); return true; }
+        // DR-07: camera bookmarks on F1-F4, the GDD s10 promise. Ctrl+FN
+        // stores the ground point the camera is looking at (read from the
+        // camera's own retained target, so a bookmark taken mid-glide means
+        // where you were going); plain FN glides back. The modifier is read
+        // off the EVENT, the PR#39 precedent that keeps the path testable.
+        for (int bm = 0; bm < 4; bm++)
+        {
+            if (!ev.IsActionPressed($"bookmark_{bm + 1}")) continue;
+            if (ev is InputEventKey bk && (bk.CtrlPressed || bk.MetaPressed))
+            {
+                _bookmarks[bm] = _cam.GroundTarget;
+                _audio.Play("ui_click", -14);
+            }
+            else if (_bookmarks[bm] is { } spot)
+            {
+                _cam.FlyTo(spot);
+                _audio.Play("ui_click", -16);
+            }
+            return true;
+        }
         // Ten groups since DR-05: slots 0-8 are keys 1-9, slot 9 is key 0
         // (GDD s10 promised 0-9). The assign modifier is read off the EVENT
         // rather than polled from the device: identical for a real keyboard,
@@ -4329,6 +4349,11 @@ public partial class SkirmishLive : Node3D
         return _effects.GetChildCount() - before;
     }
 
+    /// <summary>Verification read: the ground point the camera is gliding
+    /// toward - the camera's own retained target, never its animated position,
+    /// because a same-frame check cannot watch a glide.</summary>
+    public Vector3 CameraGroundTargetForTest => _cam.GroundTarget;
+
     /// <summary>Verification read: the first own unit of a given catalogue
     /// type, or -1. From the sim, not the view cache.</summary>
     public int FindOwnUnitOfTypeForTest(int unitType)
@@ -4483,6 +4508,9 @@ public partial class SkirmishLive : Node3D
     /// the plant - which made the two-lane states impossible to build offscreen
     /// and left the lane-2 cancel guard unchecked for a wave.</summary>
     public int SpawnPowerPlantForTest(int cx, int cy) => _world.SpawnPowerPlant(LocalPlayerId, cx, cy);
+    /// <summary>DR-09's check needs a live radar: the minimap swallows every
+    /// click while dark, pings included, so the blackout must lift first.</summary>
+    public int SpawnRadarForTest(int cx, int cy) => _world.SpawnRadarUplink(LocalPlayerId, cx, cy);
 
     public void SetOwnerForTest(int id, int player)
     {
@@ -4779,6 +4807,10 @@ public partial class SkirmishLive : Node3D
     /// <summary>Doc 27 DR-06: cycle through idle own harvesters, camera to each.
     /// Reads the SIM's HState, because "idle" is a sim fact, not a render one.</summary>
     private int _idleHarvesterCycle;
+    /// <summary>DR-07: four camera bookmarks; null means never assigned, so a
+    /// stray FN press before any assign does nothing rather than snapping to
+    /// the origin.</summary>
+    private readonly Vector3?[] _bookmarks = new Vector3?[4];
     private void SelectIdleHarvester()
     {
         var idle = new List<int>();

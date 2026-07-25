@@ -534,6 +534,49 @@ public partial class VerifyRunner : Node
               $"group 0 assigns with ctrl and recalls plain ({_game.SelectionCount} of {armyCount})");
         _game.ClearSelectionForTest();
 
+        // --- Camera bookmarks (doc 27 DR-07, the GDD s10 promise) ------------
+        // Assign with ctrl+F1 (the modifier ON the event), move away, recall.
+        // Asserted against the camera's own RETAINED target, never its animated
+        // position - a same-frame check cannot watch a glide.
+        _game.FocusCameraOn(20f, 30f, 22f);
+        _game.PressKeyWithCtrl(Key.F1);              // assign bookmark 1 here
+        _game.FocusCameraOn(70f, 10f, 22f);          // wander off
+        _game.PressKey(Key.F1);                      // recall
+        var bmk = _game.CameraGroundTargetForTest;
+        Check(Mathf.Abs(bmk.X - 20f) < 0.5f && Mathf.Abs(bmk.Z - 30f) < 0.5f,
+              $"F1 recalls the bookmarked ground point ({bmk.X:0.0},{bmk.Z:0.0})");
+        // The control: an UNASSIGNED bookmark does nothing rather than snapping
+        // to the origin.
+        _game.PressKey(Key.F2);
+        var still = _game.CameraGroundTargetForTest;
+        Check(Mathf.Abs(still.X - 20f) < 0.5f && Mathf.Abs(still.Z - 30f) < 0.5f,
+              "an unassigned bookmark key does NOTHING");
+
+        // --- Minimap ping (doc 27 DR-09) -------------------------------------
+        // The minimap swallows every click while the radar is dark, pings
+        // included, so a radar is stood up first and the blackout lifting is
+        // the stated precondition.
+        var (pyx, pyy) = _game.CellOfForTest(_game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId));
+        _game.SpawnPowerPlantForTest(pyx - 6, pyy - 6);
+        _game.SpawnRadarForTest(pyx - 6, pyy - 3);
+        _game.StepOneTick();   // the radar gate lives in AfterTicks, the FRAME half - StepTicks alone never runs it
+        _game.StepOneTick();
+        Check(_game.MinimapRadarShown, "the radar lifts the blackout (the precondition)");
+        int pingsBefore = _game.MinimapView.PingCountForTest;
+        var mmCentre = _game.MinimapView.Size / 2f;
+        _game.MinimapView._GuiInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, AltPressed = true, Position = mmCentre });
+        Check(_game.MinimapView.PingCountForTest == pingsBefore + 1,
+              $"alt-click on the minimap drops a ping ({_game.MinimapView.PingCountForTest})");
+        // The control: a PLAIN click still navigates and does not ping.
+        var beforeNav = _game.CameraGroundTargetForTest;
+        _game.MinimapView._GuiInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = mmCentre });
+        Check(_game.MinimapView.PingCountForTest == pingsBefore + 1,
+              "a plain click does NOT ping");
+        Check((_game.CameraGroundTargetForTest - beforeNav).Length() > 1f,
+              "...it still navigates the camera, as it always has");
+
         // --- Cancel must not destroy a building you did not click ------------
         // The sim's lane branch checks `cl.Ready != 0` BEFORE it looks at the
         // index, so a cancel aimed at a QUEUED item while a DIFFERENT structure
