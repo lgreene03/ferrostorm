@@ -73,8 +73,10 @@ public partial class SkirmishLive : Node3D
     private int _lastSubmittedTick = -1;
     public bool IsNetworked => _net != null;
     /// <summary>The other seat in a two-player match, for the handful of reads
-    /// that are genuinely about the opponent rather than about me.</summary>
-    private int EnemyPlayerId => 1 - LocalPlayerId;
+    /// that are genuinely about the opponent rather than about me. Public so a
+    /// check can ask about the opposition without recomputing the arithmetic,
+    /// which is how a test comes to agree with a bug.</summary>
+    public int EnemyPlayerId => 1 - LocalPlayerId;
 
     private readonly HashSet<int> _selection = new();
     // ADR-021 legibility: the entity the player last clicked that they do NOT
@@ -1678,7 +1680,7 @@ public partial class SkirmishLive : Node3D
         foreach (var v in _view)
         {
             if (!v.Alive || v.Kind == EntityKind.FerriteField) continue;
-            if (v.PlayerId == EnemyPlayerId && !_world.IsVisible(0, (int)v.X, (int)v.Y)) continue;
+            if (!DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y)) continue;
             var c = v.PlayerId == LocalPlayerId ? BattlefieldView.DirectorateMark
                 : v.PlayerId == EnemyPlayerId ? BattlefieldView.SodalityMark
                 : new Color(0.79f, 0.63f, 0.36f);
@@ -2681,8 +2683,7 @@ public partial class SkirmishLive : Node3D
                 // real stock, and the field's own cap rather than a hardcoded
                 // 12000, so a map that ever authors a richer or poorer deposit
                 // still drains across its full range.
-                float cap = v.FerriteCap > 0 ? v.FerriteCap : 12000f;
-                float g = Mathf.Max(0.2f, v.FerriteAmount / cap);
+                float g = FieldFullness(v.FerriteAmount, v.FerriteCap);
                 node.Scale = Vector3.One * (0.6f + g * 0.9f);
                 // The amber stain pooled under the deposit fades with it, or a
                 // spent field leaves a full-strength glow behind on bare ground.
@@ -2692,7 +2693,7 @@ public partial class SkirmishLive : Node3D
             if (node.GetNodeOrNull<MeshInstance3D>("SelRing") is { } sel)
                 sel.Visible = _selection.Contains(v.Id);
             // Fog: enemies are hidden unless their cell is currently visible
-            node.Visible = v.PlayerId != 1 || _world.IsVisible(0, (int)v.X, (int)v.Y);
+            node.Visible = DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y);
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
@@ -3747,6 +3748,63 @@ public partial class SkirmishLive : Node3D
             }
         return (0f, 0f);
     }
+    /// <summary>
+    /// How full a ferrite deposit looks, 0.2 to 1. Both the node scale and the
+    /// stain's glow read it, so a drained field shrinks and dims together.
+    ///
+    /// STATIC AND PURE so a check can call it, which is the point: this used to
+    /// be `v.Hp / 12000` inline, and a field spawns with Hp = 1, so it pinned to
+    /// its own floor and every deposit drew at a constant size whether untouched
+    /// or nearly exhausted. That shipped, unnoticed, because nothing could ask
+    /// the renderer a question. The floor is deliberate - a nearly-spent field
+    /// stays visible enough to target - and the cap defaults only for a view
+    /// built before the field carried one.
+    /// </summary>
+    public static float FieldFullness(int amount, int cap) =>
+        Mathf.Max(0.2f, amount / (cap > 0 ? cap : 12000f));
+
+    /// <summary>Verification read: the first ferrite field as the RENDERER sees
+    /// it, sampled through the real snapshot pipeline (world to TakeSnapshot to
+    /// the interpolator to a ViewEntity) rather than read off the sim. That
+    /// pipeline is the thing that was broken: the sim always knew the stock and
+    /// the view had nowhere to put it.</summary>
+    public (int Amount, int Cap) FieldViewForTest()
+    {
+        var sampled = new List<SnapshotInterpolator.ViewEntity>();
+        if (!_interp.TrySample(_world.Tick - 1, sampled)) return (-1, -1);
+        foreach (var v in sampled)
+            if (v.Alive && v.Kind == EntityKind.FerriteField) return (v.FerriteAmount, v.FerriteCap);
+        return (-1, -1);
+    }
+
+    /// <summary>
+    /// Is an entity at this cell DRAWN for the local seat? Own and neutral
+    /// entities always; an enemy only where the local player can see the cell.
+    ///
+    /// One predicate, because there were two copies and BOTH read player 0
+    /// after C7b-ii swept the scene for hardcoded seats: the actor loop said
+    /// `v.PlayerId != 1 || IsVisible(0, ...)` and the minimap feed said
+    /// `v.PlayerId == EnemyPlayerId && !IsVisible(0, ...)`. Correct at seat 0 by
+    /// luck. For the JOINER at seat 1 the first clause inverted: their own army
+    /// was drawn only where the HOST had vision, and the host's entire army was
+    /// drawn unconditionally, fog bypassed. The shroud texture was right the
+    /// whole time (it has always used LocalPlayerId), which is precisely why the
+    /// existing fog check could not see this: the overlay was correct and the
+    /// units underneath it were filtered by the wrong player's eyes.
+    /// </summary>
+    private bool DrawnForLocalSeat(int playerId, int cx, int cy) =>
+        playerId != EnemyPlayerId || _world.IsVisible(LocalPlayerId, cx, cy);
+
+    /// <summary>Verification read: would the client draw this entity for the
+    /// local seat? Reads the SIM's own position rather than the per-frame view
+    /// cache, which is stale under AutoStep=false (the FirstSelectedPosition
+    /// precedent).</summary>
+    public bool DrawnForLocalSeatForTest(int id)
+    {
+        var e = _world.Entities[id];
+        return DrawnForLocalSeat(e.PlayerId, Map.CellOf(e.X), Map.CellOf(e.Y));
+    }
+
     /// <summary>Verification read: is the seat's OWN base revealed to it? A
     /// joiner whose fog was still computed for player 0 would see the host's
     /// vision - their own base shrouded and the enemy's revealed - which is

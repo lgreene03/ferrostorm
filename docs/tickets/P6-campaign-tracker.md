@@ -36,6 +36,7 @@ lands; this file is the resume point if a session dies.
 | VERIFY | Headless client harness (tools/verify-client.sh) | closes the repo's oldest verification gap | NEUTRAL (client only) | DONE - 21 checks; found the AI-shares-the-joiner's-seat bug |
 | C7b-iii | LAN battle scene: lockstep-driven frame loop | verified by two real scenes playing each other in-process | NEUTRAL (client only) | DONE |
 | C7b-iv | Host/Join menu flow (the last mile) | the scene is ready; only the lobby UI remains | NEUTRAL (client + net) | DONE - LAN is reachable; only the human two-machine session remains |
+| FOG | Two hardcoded seats that SURVIVED the C7b-ii sweep (joiner fog) | found by audit, not by a check; ticket P6-joiner-fog-survivors | NEUTRAL (client only) | DONE - 45 harness checks; CI seat guard widened |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
@@ -108,6 +109,25 @@ Q002 is Luke, two machines and a network: no in-process test can provide it, and
 the question has said so since it was filed. Also unbuilt and filed rather than
 smuggled in: dropped-peer handling, since today a player who quits leaves the
 other's world simply not advancing, which is honest but unexplained.
+
+THE JOINER FOG FIX (2026-07-25) is filed separately as
+docs/tickets/P6-joiner-fog-survivors.md and is worth reading, because it was
+found by AUDIT rather than by a failing check. Two lines still read a literal
+seat after C7b-ii swept ninety-three sites and CI grew a guard: the actor loop
+said "PlayerId != 1 or IsVisible(0, ...)" and the minimap feed asked player 0's
+eyes. Both are correct at seat 0 BY LUCK. At seat 1 the first clause inverts, so
+a joiner's own army was drawn only where the HOST had vision while the host's
+whole army was drawn through the shroud, and the minimap became a maphack. The
+existing fog check could not see any of it and was not lying: the shroud TEXTURE
+has always used LocalPlayerId, and what was wrong was the filtering of the actors
+drawn underneath it. Three separate reads of "who can see this" that nothing
+forced to agree are now ONE predicate, DrawnForLocalSeat, and the CI guard bans
+the literal seat in both directions and inside IsVisible/IsExplored. Two new
+harness checks fail in OPPOSITE directions against the old expression, which a
+single check would have missed. Also landed: the ferrite drain (P5-ECON-01, fixed
+in 1aa5e5b) finally has checks, including the factored FieldFullness that guards
+against the constant expression which shipped dead. This is the SIXTH defect of
+the shape "client-side, invisible from the seat the developer sat in".
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer
