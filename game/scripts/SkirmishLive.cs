@@ -3379,6 +3379,11 @@ public partial class SkirmishLive : Node3D
         // the overlay is the pause indicator the banner used to be, and it
         // is where saving, loading and abandoning live.
         if (ev.IsActionPressed("pause_menu")) { TogglePause(); return true; }
+        // DR-08: the sidebar from the keyboard. Tab cycles the tab; the digit
+        // keys gain a THIRD meaning under alt - plain recalls a group, ctrl
+        // assigns one, alt queues the Nth visible item of the active tab. One
+        // grammar, three modifiers, all read off the event.
+        if (ev.IsActionPressed("sidebar_tab")) { _sidebar.CycleTab(); _audio.Play("ui_click", -16); return true; }
         // DR-07: camera bookmarks on F1-F4, the GDD s10 promise. Ctrl+FN
         // stores the ground point the camera is looking at (read from the
         // camera's own retained target, so a bookmark taken mid-glide means
@@ -3408,6 +3413,13 @@ public partial class SkirmishLive : Node3D
         {
             string action = slot < 9 ? $"group_{slot + 1}" : "group_0";
             if (!ev.IsActionPressed(action)) continue;
+            // DR-08: alt+digit is the sidebar grid, not a group. Checked first
+            // because IsActionPressed matches regardless of modifiers.
+            if (ev is InputEventKey ak && ak.AltPressed)
+            {
+                if (_sidebar.TriggerSlot(slot)) _audio.Play("ui_click", -12);
+                return true;
+            }
             bool assign = ev is InputEventKey ik && (ik.CtrlPressed || ik.MetaPressed);
             if (assign)
                 _groups[slot] = new HashSet<int>(_selection);          // assign
@@ -4433,6 +4445,8 @@ public partial class SkirmishLive : Node3D
     /// <summary>DR-05: the modifier rides ON the event, which is exactly why
     /// the group-assign path reads it from the event rather than polling the
     /// device - a synthetic press can now carry ctrl, so assign is testable.</summary>
+    public void PressKeyWithAlt(Key k) =>
+        _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false, AltPressed = true });
     public void PressKeyWithCtrl(Key k) =>
         _UnhandledInput(new InputEventKey { Keycode = k, Pressed = true, Echo = false, CtrlPressed = true });
     /// <summary>DR-05: a real double-click through the real input path.</summary>

@@ -104,6 +104,7 @@ public static class Settings
         // else (the SET-01 rule); defaults E and I.
         ("select_all_army", "SELECT ARMY"),
         ("idle_harvester", "IDLE HARVESTER"),
+        ("sidebar_tab", "SIDEBAR TAB"),
         // ADR-015 / TICKET-P6-C1a: the three unit command stances. Hold-fire is
         // a toggle (aggressive when already held), guard sets a leashed hold in
         // place, and patrol arms a two-point cycle whose far point the next click

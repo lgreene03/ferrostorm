@@ -323,6 +323,37 @@ public partial class Sidebar : PanelContainer
     /// plant from a 20-second refinery except by watching one. Seconds, not
     /// ticks: ticks are the sim's unit, seconds are the player's. ADR-006: the
     /// cost arrives from the live catalogue delegates, never from a table.</summary>
+    /// <summary>DR-08: cycle the active tab, the keyboard's way around a
+    /// mouse-only sidebar. Wraps.</summary>
+    public void CycleTab() => _tabs.CurrentTab = (_tabs.CurrentTab + 1) % TabTitles.Length;
+    /// <summary>Verification read: the tab actually showing.</summary>
+    public int CurrentTabForTest => _tabs.CurrentTab;
+
+    /// <summary>
+    /// DR-08: queue the Nth VISIBLE item of the active tab - visible, because
+    /// the grid must mean what the player sees. Hidden buttons (faction and
+    /// campaign gates) shift later slots, which is the price of what-you-see
+    /// semantics and the same price the mouse pays.
+    ///
+    /// Fires the button's own Pressed signal, so the hotkey and the mouse run
+    /// THE SAME handler and cannot drift (the one-rule law): the affordability
+    /// disable, the placement entry for barriers and the cancel wiring all
+    /// come for free. A disabled slot refuses quietly and returns false.
+    /// </summary>
+    public bool TriggerSlot(int index)
+    {
+        int seen = 0;
+        foreach (var child in _tabPages[_tabs.CurrentTab].GetChildren())
+            if (child is Button b && b.Visible)
+            {
+                if (seen++ != index) continue;
+                if (b.Disabled) return false;
+                b.EmitSignal(Godot.BaseButton.SignalName.Pressed);
+                return true;
+            }
+        return false;
+    }
+
     private Button MakeButton(BuildItem it, System.Action onPress, int cost = 0, int buildTicks = 0,
         System.Action? onCancel = null)
     {
