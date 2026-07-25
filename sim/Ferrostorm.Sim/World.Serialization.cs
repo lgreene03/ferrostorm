@@ -60,12 +60,13 @@ public sealed partial class World
     private const uint SaveMagicV5 = 0x534C4135; // v5 adds the per-entity ferrite cap (ADR-012)
     private const uint SaveMagicV6 = 0x534C4136; // v6 adds the no-progress backstop state (Q013, ADR-014)
     private const uint SaveMagicV7 = 0x534C4137; // v7 adds the per-entity command stance tail (ADR-015)
+    private const uint SaveMagicV8 = 0x534C4138; // v8 adds the second build lane block (ADR-023)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV7);
+        w.Write(SaveMagicV8);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -115,6 +116,21 @@ public sealed partial class World
                 w.Write(c.EntityId); w.Write(c.AuxId); w.Write(c.X.Raw); w.Write(c.Y.Raw); w.Write(c.Queued);
             }
         }
+        // ADR-023 (v8): the second build lanes, sorted by yard id for the same
+        // reason the queues are. Written unconditionally as a count so the
+        // format stays strictly positional like every block before it; an
+        // inert world writes a zero and costs four bytes.
+        var lanes = new List<int>(_lanes.Keys);
+        lanes.Sort();
+        w.Write(lanes.Count);
+        foreach (int id in lanes)
+        {
+            var l = _lanes[id];
+            w.Write(id);
+            w.Write(l.Progress); w.Write(l.Paid); w.Write(l.Ready);
+            w.Write(l.Queue.Count);
+            foreach (int t in l.Queue) w.Write(t);
+        }
         w.Write(SaveTrailer);
     }
 
@@ -139,7 +155,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -148,13 +164,14 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7;
-        bool hasStance = magic == SaveMagicV7; // ADR-015: v7 entities carry the command stance tail
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8; // ADR-015: v7+ entities carry the command stance tail
+        bool hasBuildLanes = magic == SaveMagicV8; // ADR-023: v8 adds the second build lane block
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -215,6 +232,24 @@ public sealed partial class World
                 q.Add(new Command(ct, cp, type, ce, cx, cy, ca, cq));
             }
             world._orderQueues[id] = q;
+        }
+        // ADR-023: the second build lanes. A pre-v8 save has no block and so no
+        // lanes, which is exactly what those saves meant (no second lane
+        // existed), so they resume identically.
+        if (hasBuildLanes)
+        {
+            int laneCount = r.ReadInt32();
+            for (int i = 0; i < laneCount; i++)
+            {
+                int id = r.ReadInt32();
+                var l = new BuildLane { Progress = r.ReadInt32(), Paid = r.ReadInt32(), Ready = r.ReadInt32() };
+                int n = r.ReadInt32();
+                for (int k = 0; k < n; k++) l.Queue.Add(r.ReadInt32());
+                // An inert lane was never written, but refuse to resurrect one
+                // if a hand-edited file carries it: an inert entry would break
+                // the "present means active" invariant the hash guard rests on.
+                if (!l.Inert) world._lanes[id] = l;
+            }
         }
         if (r.ReadUInt32() != SaveTrailer) throw new InvalidDataException("save truncated or corrupt");
         return world;

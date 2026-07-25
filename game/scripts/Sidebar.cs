@@ -409,13 +409,23 @@ public partial class Sidebar : PanelContainer
     /// answers the middle one from live sim state.</summary>
     public void Refresh(long credits, int readyStructureType,
         ProducerLine yard, ProducerLine factory, ProducerLine barracks,
-        int supply, int draw, System.Func<int, bool> ownsStructType)
+        int supply, int draw, System.Func<int, bool> ownsStructType,
+        ProducerLine yardLane2 = default, int readyStructureType2 = 0)
     {
         bool hasYard = yard.Live;
         var yardQ = yard.Queue;
         float yardProgress = yard.HeadProgress;
+        // ADR-023: the yard's second lane. Empty on a yard that has never
+        // overflowed, which is the ordinary case and reads exactly as before.
+        var laneQ = yardLane2.Queue ?? System.Array.Empty<int>();
+        float laneProgress = yardLane2.HeadProgress;
         RefreshPower(supply, draw);
-        _readyType = readyStructureType;
+        // ADR-023: two lanes mean two possible ready structures. One PLACE
+        // prompt still, showing lane 1's first and lane 2's once that is
+        // placed, so the player works through them without a second widget
+        // competing for the same corner of the screen.
+        _readyType = readyStructureType != 0 ? readyStructureType : readyStructureType2;
+        readyStructureType = _readyType;
         _placeButton.Visible = readyStructureType > 0;
         if (readyStructureType > 0)
             _placeButton.Text = $"PLACE {NameOf(readyStructureType)} >>";
@@ -437,6 +447,9 @@ public partial class Sidebar : PanelContainer
         }
         var structCounts = new Dictionary<int, int>();
         foreach (int t in yardQ) structCounts[t] = structCounts.GetValueOrDefault(t) + 1;
+        // ADR-023: a type queued in EITHER lane counts once on its button; the
+        // player cares how many are coming, not which line they are on.
+        foreach (int t in laneQ) structCounts[t] = structCounts.GetValueOrDefault(t) + 1;
         foreach (var (typeId, b) in _structButtons)
         {
             var def = _structDef(typeId);
@@ -457,13 +470,22 @@ public partial class Sidebar : PanelContainer
             // DEF-08 clause 9: a full ready slot pauses the yard's queue and so
             // disables the queued structures, but a barrier never enters that
             // slot - it stays buildable while a finished structure waits.
+            // ADR-023: a full ready slot pauses ONE lane, not the yard. While
+            // the other lane is still free the player can keep queueing, which
+            // is the whole point of the second line; only both slots full
+            // disables the tab.
             b.Disabled = !hasYard || credits < def.Cost
-                         || (typeId != BarrierType && readyStructureType > 0);
+                         || (typeId != BarrierType && readyStructureType > 0 && readyStructureType2 > 0);
             int n = structCounts.GetValueOrDefault(typeId);
-            b.Text = _baseText[b] + QueueSuffix(n, yardQ.Count > 0 && typeId == yardQ[0],
-                def.BuildTicks, yardProgress);
+            // Head progress comes from whichever lane actually holds this type
+            // at its head; the sim decided that at order time, so the client
+            // looks rather than assumes.
+            bool headL1 = yardQ.Count > 0 && typeId == yardQ[0];
+            bool headL2 = laneQ.Count > 0 && typeId == laneQ[0];
+            float headProg = headL1 ? yardProgress : laneProgress;
+            b.Text = _baseText[b] + QueueSuffix(n, headL1 || headL2, def.BuildTicks, headProg);
             ((ColorRect)b.GetNode("Fill")).OffsetRight =
-                yardQ.Count > 0 && typeId == yardQ[0] ? b.Size.X * yardProgress : 0;
+                headL1 || headL2 ? b.Size.X * headProg : 0;
         }
         foreach (var (typeId, b) in _unitButtons)
         {
@@ -494,8 +516,9 @@ public partial class Sidebar : PanelContainer
         // queues: BUILDINGS and DEFENCE both read the yard, INFANTRY the
         // barracks, VEHICLES the factory. Credits still appear once, on the
         // status line, where they were already.
-        SetTabTitle(TabBuildings, yardQ.Count);
-        SetTabTitle(TabDefence, yardQ.Count);
+        // ADR-023: the yard's badge is both lanes, since both are its line.
+        SetTabTitle(TabBuildings, yardQ.Count + laneQ.Count);
+        SetTabTitle(TabDefence, yardQ.Count + laneQ.Count);
         SetTabTitle(TabInfantry, barracks.Queue.Count);
         SetTabTitle(TabVehicles, factory.Queue.Count);
         // An empty tab is the teaching moment, but a blank panel teaches

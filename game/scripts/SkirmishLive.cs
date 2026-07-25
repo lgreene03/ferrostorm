@@ -920,6 +920,25 @@ public partial class SkirmishLive : Node3D
             _audio.Play("ui_click", -8);
             return;
         }
+        // ADR-023: the second lane cancels first when it holds this type,
+        // because it is the LATER order and cancelling the most recent is what
+        // the player means. The lane rides in AuxId's high bit (World.LaneFlag);
+        // a lane-2 ready slot is addressed the same way with index 0.
+        var laneQ = _world.LaneContents(_yardId);
+        int laneReady = _world.LaneState(_yardId).Ready;
+        if (laneReady == structType)
+        {
+            _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag));
+            _audio.Play("ui_click", -8);
+            return;
+        }
+        for (int k = laneQ.Count - 1; k >= 0; k--)
+            if (laneQ[k] == structType)
+            {
+                _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, World.LaneFlag | k));
+                _audio.Play("ui_click", -8);
+                return;
+            }
         int idx = LastQueueIndexOf(_yardId, structType);
         if (idx < 0) return;
         _pending.Add(new Command(0, 0, CommandType.CancelProduce, _yardId, Fix64.Zero, Fix64.Zero, idx));
@@ -1617,10 +1636,19 @@ public partial class SkirmishLive : Node3D
         // player 0 own a living instance of this struct type? It is the same
         // question World.HasPrereqs asks, asked of the same state, so the
         // panel and the gate cannot drift.
+        // ADR-023: the yard's SECOND build lane, which exists only while it is
+        // active. The client cannot predict which lane an order lands in (the
+        // sim decides by overflow at order time), so it reads both and never
+        // guesses which one holds a given type.
+        var laneQ = _yardId >= 0 ? _world.LaneContents(_yardId) : System.Array.Empty<int>();
+        var laneSt = _yardId >= 0 ? _world.LaneState(_yardId) : (Progress: 0, Paid: 0, Ready: 0);
+        float laneProg = laneQ.Count > 0
+            ? laneSt.Progress / (_world.GetStructureType(laneQ[0]).BuildTicks * 100f) : 0f;
         _sidebar.Refresh(_world.Credits(0), ready,
             new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
             UnitLine(_factoryId), UnitLine(_barracksId),
-            supply, draw, OwnsStructType);
+            supply, draw, OwnsStructType,
+            new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
 
         if (_placingType > 0)
         {

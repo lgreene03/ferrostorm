@@ -23,7 +23,7 @@ lands; this file is the resume point if a session dies.
 | C1b | Formations: deterministic slot assignment on group orders | ADR-018 (ratified): client-side slot layer, sim unchanged | DONE (client-side); cohesion deferred |
 | C2 | Repair vehicle | ADR-019 (ratified): reuses the depot heal loop as a mobile aura | DONE (NEUTRAL, no regen) |
 | C3 | Four-queue sidebar (GDD line 45): the client cancel/refund | ADR-020 (ratified): client-only right-click cancel | DONE (client half, NEUTRAL) |
-| C3b | Parallel structure/defence queues (GDD line 45 remainder) | split out by ADR-020; second build head + ready slot | pending (golden move) |
+| C3b | Parallel build lanes (GDD line 45 remainder) | ADR-023 (ratified): overflow rule, pruned side lane | DONE (NEUTRAL, save v8) |
 | C4 | Neutral outposts | ADR-021 (ratified): capturable income Outpost, struct type 13 | DONE (NEUTRAL, no regen) |
 | C4b | Outposts placed on skirmish-02/-04 + the mapgate harness | under ADR-021; skirmish-01 (golden) and -03 (look-dev) untouched | DONE (NEUTRAL) |
 | C4c | The AI captures neutral outposts | under ADR-021; inert without an outpost, so no golden moves | DONE (NEUTRAL) |

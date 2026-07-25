@@ -471,6 +471,59 @@ public sealed partial class World
 
     private readonly Dictionary<int, List<int>> _queues = new(); // factory id -> queued type ids (keyed access only)
 
+    /// <summary>
+    /// ADR-023: the Construction Yard's SECOND build lane. A lane carries its own
+    /// queue, head progress, paid-so-far and ready slot, so a structure and a
+    /// second structure build simultaneously (GDD line 45).
+    ///
+    /// It lives here rather than as four more Entity fields deliberately: an
+    /// Entity tail append is hashed for EVERY entity in the game and would move
+    /// all 24 goldens mechanically (the ADR-014/015 pattern), to give a second
+    /// line to the one kind that can use it.
+    /// </summary>
+    public sealed class BuildLane
+    {
+        public readonly List<int> Queue = new();
+        public int Progress;
+        public int Paid;
+        public int Ready;
+        /// <summary>Nothing queued, nothing building, nothing waiting to place.
+        /// The PRUNE predicate and the HASH GUARD are the same expression on
+        /// purpose: "an entry exists" must mean "this lane is doing something",
+        /// or the guarded fold would skip state that gates behaviour, which is a
+        /// silent desync rather than an optimisation.</summary>
+        public bool Inert => Queue.Count == 0 && Progress == 0 && Paid == 0 && Ready == 0;
+    }
+    private readonly Dictionary<int, BuildLane> _lanes = new(); // yard id -> its second lane, ONLY while active
+
+    /// <summary>ADR-023 clause 6: the bit that marks a CancelProduce AuxId as
+    /// addressing the SECOND lane. High enough that no real queue index or
+    /// structure type can collide with it, and absent from every command
+    /// written before this ADR, so old replays decode unchanged.</summary>
+    public const int LaneFlag = 1 << 20;
+
+    /// <summary>ADR-023: the second lane of a yard, or null. Unlike _queues,
+    /// whose entries are sticky, a lane entry exists only while the lane is
+    /// active; see BuildLane.Inert.</summary>
+    private BuildLane? LaneOf(int yardId) => _lanes.TryGetValue(yardId, out var l) ? l : null;
+
+    /// <summary>Drop a lane the moment it goes inert, so "present" means
+    /// "active" by construction (ADR-023 clause 3).</summary>
+    private void PruneLane(int yardId)
+    {
+        if (_lanes.TryGetValue(yardId, out var l) && l.Inert) _lanes.Remove(yardId);
+    }
+
+    /// <summary>ADR-023: read-only view of a yard's second-lane queue, the
+    /// QueueContents twin the sidebar needs to show both lines.</summary>
+    public IReadOnlyList<int> LaneContents(int yardId)
+        => _lanes.TryGetValue(yardId, out var l) ? l.Queue : System.Array.Empty<int>();
+
+    /// <summary>ADR-023: the second lane's head progress in percent-ticks, its
+    /// paid-so-far and its ready structure type (0 = none), for the sidebar.</summary>
+    public (int Progress, int Paid, int Ready) LaneState(int yardId)
+        => _lanes.TryGetValue(yardId, out var l) ? (l.Progress, l.Paid, l.Ready) : (0, 0, 0);
+
     /// <summary>Test and scenario scripting only: overwrite an entity wholesale (e.g. pre-damaging units for a repair test).</summary>
     public void SetEntityForTest(int id, in Entity e) => _entities[id] = e;
 
@@ -1196,6 +1249,32 @@ public sealed partial class World
                 break;
             case CommandType.CancelProduce:
             {
+                // ADR-023 clause 6: the lane rides in AuxId's high bits, with
+                // lane 0 encoded as the unchanged small integer, so every
+                // command and every replay recorded before this ADR decodes
+                // identically and the .frep format is untouched.
+                if ((c.AuxId & LaneFlag) != 0 && e.Kind == EntityKind.ConstructionYard
+                    && LaneOf(e.Id) is { } cl)
+                {
+                    int li = c.AuxId & ~LaneFlag;
+                    if (cl.Ready != 0)
+                    {
+                        _credits[e.PlayerId] += GetStructureType(cl.Ready).Cost;
+                        cl.Ready = 0;
+                    }
+                    else if (li >= 0 && li < cl.Queue.Count)
+                    {
+                        if (li == 0)
+                        {
+                            _credits[e.PlayerId] += cl.Paid;
+                            cl.Paid = 0;
+                            cl.Progress = 0;
+                        }
+                        cl.Queue.RemoveAt(li);
+                    }
+                    PruneLane(e.Id);
+                    break;
+                }
                 // A finished structure waiting in the sidebar slot cancels
                 // first: it was fully paid, so it refunds in full, and the
                 // paused production line resumes on its own (the slot gates it).
@@ -1236,6 +1315,10 @@ public sealed partial class World
                 bool barrier = IsBarrier(sd.Kind);
                 int ax = Map.CellOf(c.X), ay = Map.CellOf(c.Y);
                 int readyCy = -1;
+                // ADR-023: which lane holds the readiness being consumed. -1 is
+                // lane 1 (the Entity's own ReadyStructure), otherwise the yard's
+                // second lane.
+                bool readyInLane2 = false;
                 if (barrier)
                 {
                     if (_credits[c.PlayerId] < sd.Cost) break;
@@ -1249,6 +1332,18 @@ public sealed partial class World
                         if (o.Alive && o.PlayerId == c.PlayerId && o.Kind == EntityKind.ConstructionYard
                             && o.ReadyStructure == c.AuxId) { readyCy = i; break; }
                     }
+                    // ADR-023: nothing ready in any lane 1, so try the second
+                    // lanes. Walked by ENTITY INDEX, never by dictionary order,
+                    // so the choice cannot depend on hash-table layout.
+                    if (readyCy < 0)
+                    {
+                        for (int i = 0; i < _entities.Count; i++)
+                        {
+                            var o = _entities[i];
+                            if (!o.Alive || o.PlayerId != c.PlayerId || o.Kind != EntityKind.ConstructionYard) continue;
+                            if (LaneOf(i) is { } l && l.Ready == c.AuxId) { readyCy = i; readyInLane2 = true; break; }
+                        }
+                    }
                     if (readyCy < 0) break;
                 }
                 // Order matters: validate before charging, charge before spawning.
@@ -1256,6 +1351,14 @@ public sealed partial class World
                 if (barrier)
                 {
                     _credits[c.PlayerId] -= sd.Cost;
+                }
+                else if (readyInLane2)
+                {
+                    // ADR-023: the second lane's slot clears, and the lane is
+                    // pruned if that was the last thing it was holding.
+                    var l = _lanes[readyCy];
+                    l.Ready = 0;
+                    PruneLane(readyCy);
                 }
                 else
                 {
@@ -1301,7 +1404,26 @@ public sealed partial class World
                 // the queue.
                 if (!HasPrereqs(c.PlayerId, bd.Prereqs)) break;
                 if (!_queues.TryGetValue(e.Id, out var bq)) _queues[e.Id] = bq = new List<int>();
-                bq.Add(c.AuxId);
+                // ADR-023, THE OVERFLOW RULE, and the whole reason this wave is
+                // hash-neutral. Lane 1 takes the order whenever lane 1 is IDLE;
+                // the second lane is reached only when lane 1 is already busy.
+                //
+                // The rejected alternative - route by category, defences always
+                // to lane 2 - moves goldens twice over: the construction
+                // scenario's turret would leave lane 1, and QueueLength(cy)
+                // would read 0 while a turret built in lane 2, so the AI (which
+                // only ever queues when that reads 0) would order extra
+                // buildings and every AI-driven golden would DIVERGE
+                // BEHAVIOURALLY. Under overflow, a serial commander never
+                // reaches the second lane at all, which is exactly why no
+                // golden scenario does.
+                if (bq.Count == 0 && e.BuildProgress == 0 && e.ReadyStructure == 0)
+                {
+                    bq.Add(c.AuxId);
+                    break;
+                }
+                if (!_lanes.TryGetValue(e.Id, out var lane)) _lanes[e.Id] = lane = new BuildLane();
+                lane.Queue.Add(c.AuxId);
                 break;
             }
             case CommandType.Deploy:
@@ -2679,6 +2801,58 @@ public sealed partial class World
             }
             _entities[i] = e;
         }
+
+        AdvanceBuildLanes(supply, draw);
+    }
+
+    /// <summary>
+    /// ADR-023: advance every yard's SECOND build lane. A separate pass rather
+    /// than a branch inside the main producer loop, deliberately: that loop
+    /// exits through half a dozen `continue`s, and threading a second head
+    /// through them would risk perturbing lane-1 behaviour, which is the one
+    /// thing that must stay byte-identical. This pass touches nothing unless a
+    /// lane entry exists, and no golden scenario ever creates one.
+    ///
+    /// Mirrors the lane-1 Construction Yard path exactly: same rate scaling,
+    /// same pay-as-you-build slice, same ready-slot handoff, same event. It is
+    /// simpler only because a yard's product is PLACED rather than spawned, so
+    /// there is no spawn-offset search and no held-at-100-per-cent case.
+    /// </summary>
+    private void AdvanceBuildLanes(ReadOnlySpan<int> supply, ReadOnlySpan<int> draw)
+    {
+        if (_lanes.Count == 0) return;   // the common case, and every golden
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (!e.Alive || e.Kind != EntityKind.ConstructionYard) continue;
+            if (LaneOf(i) is not { } lane) continue;
+            if (lane.Ready != 0) continue;               // placement pending pauses THIS lane only
+            if (lane.Queue.Count == 0) { PruneLane(i); continue; }
+
+            int p = e.PlayerId;
+            int rate = draw[p] <= 0 || supply[p] >= draw[p]
+                ? 100
+                : 50 + 50 * supply[p] / draw[p];
+
+            int queuedType = lane.Queue[0];
+            var sd = GetStructureType(queuedType);
+            int total = sd.BuildTicks * 100;
+            if (total <= 0) { lane.Queue.RemoveAt(0); PruneLane(i); continue; }
+            int tentative = Math.Min(lane.Progress + rate, total);
+            int owed = (int)((long)sd.Cost * tentative / total) - lane.Paid;
+            if (_credits[p] < owed) continue;            // broke: the lane holds, exactly as lane 1 does
+            _credits[p] -= owed;
+            lane.Paid += owed;
+            lane.Progress = tentative;
+            if (lane.Progress >= total)
+            {
+                lane.Progress = 0;
+                lane.Paid = 0;
+                _events.Add(new GameEvent(GameEventType.ProductionComplete, i, queuedType, C: i));
+                lane.Ready = queuedType;
+                lane.Queue.RemoveAt(0);
+            }
+        }
     }
 
     /// <summary>
@@ -2871,6 +3045,24 @@ public sealed partial class World
             // producer's queue is hashed now.
             if (IsProducer(e.Kind) && _queues.TryGetValue(e.Id, out var q))
             { h.Add(q.Count); foreach (int t in q) h.Add(t); }
+            // ADR-023: the second build lane, folded ONLY when one exists. The
+            // _orderQueues block below is the precedent for a guarded fold, and
+            // it is shipped and golden-covered; an unexecuted fold contributes
+            // literally nothing to an FNV accumulator. What makes the guard
+            // SOUND rather than merely convenient is that a lane entry is
+            // pruned the instant it goes inert, so "no entry" provably means
+            // "no state that could gate behaviour" (BuildLane.Inert).
+            //
+            // Folded here, inside the entity loop, rather than as a second
+            // top-level block: two adjacent variable-length untagged folds can
+            // in principle present the same int sequence, and scoping this one
+            // to its entity removes that ambiguity entirely.
+            if (_lanes.TryGetValue(e.Id, out var lane))
+            {
+                h.Add(lane.Progress); h.Add(lane.Paid); h.Add(lane.Ready);
+                h.Add(lane.Queue.Count);
+                foreach (int t in lane.Queue) h.Add(t);
+            }
         }
         if (_orderQueues.Count > 0)
         {

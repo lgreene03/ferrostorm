@@ -48,6 +48,17 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-023: RATIFIED 2026-07-25 - ADR-023-parallel-build-lanes.md (parallel
+  structure/defence build lanes at the Construction Yard, GDD line 45's
+  remainder; P6 Wave C3b). Number claimed here per the numbering law. Hash
+  impact NEUTRAL, overturning the C3b ticket's assumption: the lane rule is
+  OVERFLOW (lane 1 whenever idle, lane 2 only when lane 1 is busy), not
+  category, and no golden ever overflows because SkirmishAI is strictly serial
+  and the one scripted turret order lands in an idle yard. The second lane is a
+  pruned side collection with a guarded hash fold (the _orderQueues precedent),
+  never an Entity tail append. Save goes to v8, which costs no goldens because
+  the magic is not hashed. Ratified under Luke's directive to continue building
+  out the C-series.
 - ADR-022: RESERVED 2026-07-24 for the LAN setup exchange (TICKET-P6-C7b): a
   host-supplied match-setup blob appended to the lockstep Hello frame so a
   joiner builds the identical world. A WIRE-FORMAT change, so it takes this
