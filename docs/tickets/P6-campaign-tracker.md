@@ -89,7 +89,8 @@ LockstepClient.TryAdvanceTick is the non-blocking poll Q002's remainder asked
 for, and the lanpoll gate proves two clients complete 300 ticks hash-identical
 clean AND under 60ms+stall chaos with the poll missing tens of thousands of
 times and no call ever blocking - the frame-loop property the battle scene
-needs. C7b (the SkirmishLive integration, LocalPlayerId plumbing, Host/Join and
+needs. C7b was, AT THE TIME THIS PARAGRAPH WAS WRITTEN (the completion note below
+supersedes it): the SkirmishLive integration, LocalPlayerId plumbing, Host/Join and
 the ADR-022 Hello setup exchange) is filed pending with the full design in its
 ticket; it is the widest client change since Phase A and carries the real
 two-machine human verification.
@@ -110,11 +111,12 @@ closed three defects that only became reachable once LAN was: pausing stalled th
 PEER, because the accumulator drain is the only thing that submits a batch; the
 pause menu told a LAN player their live match was a replay; and ModeLine did not
 say the battle was still running. All of it NEUTRAL, sim and data untouched, 24
-goldens byte-identical, with the client harness now at 40 checks. What is left of
+goldens byte-identical, with the client harness at 40 checks AT THAT POINT (78 now; the status table
+above is authoritative). What is left of
 Q002 is Luke, two machines and a network: no in-process test can provide it, and
-the question has said so since it was filed. Also unbuilt and filed rather than
-smuggled in: dropped-peer handling, since today a player who quits leaves the
-other's world simply not advancing, which is honest but unexplained.
+the question has said so since it was filed. Dropped-peer handling was filed here as unbuilt and
+HAS SINCE SHIPPED as C7c: the relay announces a departure and the survivor is
+told, with the match RESULT question filed as Q015 rather than guessed.
 
 THE JOINER FOG FIX (2026-07-25) is filed separately as
 docs/tickets/P6-joiner-fog-survivors.md and is worth reading, because it was

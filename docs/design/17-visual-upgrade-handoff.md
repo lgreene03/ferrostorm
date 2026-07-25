@@ -1,5 +1,10 @@
 # Visual Upgrade Handoff (priority 2)
 
+**HISTORICAL, kept as a 2026-07-12 session handoff.** It is written in the
+imperative present tense and reads as a live instruction list; the visual work
+it hands off was subsequently delivered (see docs/design/25). Read it for the
+Blender-5 API notes, which are still accurate and still useful.
+
 Written 2026-07-12, end of the Godot-bring-up session, for whichever model
 picks this up next (possibly a smaller/cheaper one - this document is
 written to be followed mechanically, with exact commands and file paths, so

@@ -1,12 +1,19 @@
-# Godot client scaffold (TICKET-P1-07) - STATUS: UNTESTED IN AUTOMATION
+# Godot client bring-up
 
-The build container has no Godot editor and no nuget.org access, so nothing in
-/game has been compiled or run by CI. What IS verified headless: the snapshot
-interpolation contract this client consumes (runner mode `spectate`), and every
-sim API it calls.
+**STATUS, 2026-07-25: this document's original banner is obsolete and the
+sections below the bring-up steps are a historical session log.** It used to
+open "UNTESTED IN AUTOMATION ... nothing in /game has been compiled or run by
+CI", which was true when written and is now false: the `client-harness` job in
+.github/workflows/determinism.yml installs the Godot mono editor, builds this
+project and drives the real battle scene headless on every push
+(`tools/verify-client.sh`, 78 checks). The snapshot interpolation contract is
+still independently verified by the runner's `spectate` mode as well.
 
 ## Bring-up on your machine (~10 minutes)
-1. Install the Godot 4.2.x **.NET** editor and the .NET 8 SDK.
+1. Install the Godot **4.7.x .NET** editor and the .NET 8 SDK. (Earlier
+   revisions of this file said 4.2.x; the project targets 4.7 - see
+   `Ferrostorm.Game.csproj`, `Sdk="Godot.NET.Sdk/4.7.0"`, and the version CI
+   pins.)
 2. Open this folder as a project; let Godot generate the solution (Project >
    Tools > C# > Create C# solution) if prompted.
 3. Build (the hammer icon) - Godot.NET.Sdk restores from nuget.org here.
@@ -20,6 +27,12 @@ Order the harvester onto the field and watch credits rise; path units around;
 confirm the on-screen hash matches a headless `match` run driven by the same
 commands. Any divergence between this client and `spectate` behaviour is a bug
 in this client, not the sim.
+
+## Historical session log below this line (2026-07-11)
+
+Kept as a record of how the automation gap was diagnosed. It is no longer the
+current state: the gap was closed, and the proxy problem described below turned
+out not to be the real obstacle. See the STATUS note at the top.
 
 ## Headless validation attempt (2026-07-11)
 

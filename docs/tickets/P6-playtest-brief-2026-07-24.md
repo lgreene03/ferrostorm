@@ -57,9 +57,10 @@ hold-fire, G guard, Q patrol on selected units.
 - The Outpost and the Repair Vehicle both use stand-in models (refinery and MCV);
   bespoke models are owed to art-pipeline.
 - The Outpost has no sidebar icon; it is never buildable, so it has no button.
-- An outpost captured from the enemy keeps its old team strip until the actor is
-  rebuilt (the same known limitation captured factories have, doc 18 N6).
-- Two-machine LAN is REACHABLE as of 2026-07-25 (C7b-i..iv): HOST and JOIN are live, the frame loop is lockstep-driven, and a departing peer is announced. The two-machine session itself is still the outstanding human step and say why.
+- ~~An outpost captured from the enemy keeps its old team strip until the actor
+  is rebuilt.~~ **FIXED 2026-07-25 (VERDICT wave): captured structures, and
+  claimed neutral outposts, are now repainted for their new owner.**
+- Two-machine LAN is REACHABLE as of 2026-07-25 (C7b-i..iv): HOST and JOIN are live, the frame loop is lockstep-driven, and a departing peer is announced. The two-machine session itself is still the outstanding human step.
 
 ## What I would most like an answer to
 

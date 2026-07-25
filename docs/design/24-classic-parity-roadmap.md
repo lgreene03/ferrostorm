@@ -7,6 +7,17 @@ Luke's directive of 2026-07-17: "design out and build all these".
 
 **STATUS, 2026-07-21.** Much of this roadmap has been built. Tier 3 (the faction picker, music, placeholder VO and contextual cursors) shipped as P6 Wave A. The Tier 1 ADRs were ratified under the directive and built as the P6 Phase B campaign (ADR-006 the /data runtime, ADR-007 rally, ADR-008 power, ADR-009 the production roster, ADR-011 the starting hand, ADR-012 ferrite regrowth). Read the tiers below with that delivery in mind; the out-of-scope list at the end still stands.
 
+**STATUS UPDATE, 2026-07-25: TIER 2 IS NOW ALSO ALMOST ENTIRELY BUILT**, so the
+gap language below reads as owed when it is not. Delivered since: hold-fire,
+guard and patrol stances (ADR-015 - the text below says the sim "cannot express
+a hold-fire stance at all", which is no longer true), formations (ADR-018), the
+repair vehicle (ADR-019), the four-queue sidebar's cancel half (ADR-020) and its
+parallel-lane half (ADR-023), neutral outposts (ADR-021), destroyable bridges
+(ADR-025), and the whole of two-machine LAN except the human session (ADR-022,
+waves C7a to C7c). Save format is now v8, not v6. What genuinely remains from
+Tier 2: wall gates (C6b, deferred by ADR-005 clause 6) and multi-resource (C8,
+blocked on Q014). docs/tickets/P6-campaign-tracker.md is authoritative.
+
 ## How to read this
 
 Three tiers plus an out-of-scope list. Tier 1 is designed and carried by an

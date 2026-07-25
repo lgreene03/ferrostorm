@@ -91,7 +91,9 @@ time in the client; a ready-to-place structure can be cancelled; discoverability
 is a tooltip on every build item. No sim change, so no golden move and no save
 bump.
 
-Harder, or rather deferred: buildings and defences still share one serial queue,
+Harder, or rather deferred AT THE TIME (**C3b has since landed under ADR-023**:
+the yard now has two parallel build lanes and saves are format v8). As written
+at ratification: buildings and defences still share one serial queue,
 so line 45's parallel structure/defence promise is only half met until C3b lands
 the sim change. Recorded here and in the tracker so the wave is not mistaken for
 discharging line 45 in full.

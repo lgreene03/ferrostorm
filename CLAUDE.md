@@ -24,14 +24,19 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 6. Milestone gates (docs/design/05-production-plan.md) require sign-off from Producer, QA, Legal agents plus Luke.
 
 ## Phase gate status
-- Current phase: **P6 campaign build-out.** The deterministic core prototype shipped long ago: ADR-001 and ADR-002 are ratified, and the game is playable from source with green determinism CI. Campaign Phase B is complete (waves B1 to B6); Phase C (unit stances, C1) is in progress on a branch and not yet on main.
+- Current phase: **P6 campaign build-out.** The deterministic core prototype shipped long ago: ADR-001 and ADR-002 are ratified, and the game is playable from source with green determinism CI. Phase B is complete (B1 to B6). **Phase C is largely complete and all of it is on main** (2026-07-25): stances, formations, the repair vehicle, sidebar cancel/refund, parallel build lanes, neutral outposts, destroyable bridges and the entire LAN stack (setup exchange, seat plumbing, lockstep-driven frame loop, Host/Join lobby, dropped-peer notice). **docs/tickets/P6-campaign-tracker.md is the resume point** and its status table is authoritative; prefer it over any prose in the design docs, several of which lag by whole waves.
+- Still open, and all of it needs a human: C5 (air layer, needs an ADR and art), C6b wall gates (Luke must override ADR-005 clause 6), C8 multi-resource (Q014), C9 faction recipe (Luke's roster pick), plus the playtest of the packaged build and the two-machine LAN session.
 - Standing determinism rule: cross-platform determinism is enforced by the golden-hash CI gate. If it ever cannot be held, halt and rethink rather than patch around it.
 
 ## Build commands
 - Build sim + runner: `dotnet build sim/Ferrostorm.Sim.Runner -c Release` (requires .NET 8 SDK; NuGet sources disabled by design - zero package dependencies)
 - Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
 - Modes: `selftest`, `determinism [seed]`, `golden [seed]`, `match [seed]`, `lan [games]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs)
-- CI: .github/workflows/determinism.yml runs the sim purity grep and the cross-platform golden-hash check (sim/golden-hashes.txt) on Windows and Linux. Red determinism CI blocks all merges.
+- Client harness: `tools/verify-client.sh` drives the REAL battle scene headless from the joiner's seat and asserts on what it does (game/scripts/VerifyRunner.cs). **Run it for any /game change** - it has caught ten defects the sim battery is structurally blind to. Needs a Godot 4.7 mono editor; set `GODOT=` if yours is not at the default path.
+- CI: .github/workflows/determinism.yml, three jobs, and ANY of them red blocks the merge:
+  - `banned-tokens`: the sim purity grep, the ADR-004 portability grep, the hardcoded-seat guard (a literal seat in SkirmishLive.cs, which is invisible in single player and inverted for a LAN joiner) and the team-colour guard.
+  - `determinism` (Windows + Linux): selftest, double-run determinism, the cross-platform golden-hash check (sim/golden-hashes.txt), scenario assertions, `lan 5`, `lanchaos`, `spectate`, `replay`, `saveload`, `campaignsave` and the balance gate.
+  - `client-harness` (Linux): installs the Godot mono editor and runs the client harness above, ~2 minutes.
 - Changing a golden hash is a replay-compatibility break: ADR + Architect sign-off required.
 
 ## Data conventions

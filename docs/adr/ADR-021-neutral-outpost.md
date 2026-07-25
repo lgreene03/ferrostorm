@@ -3,6 +3,9 @@
 - Status: Ratified (Architect + game-designer drafted 2026-07-24 under Luke's
   directive to implement out the C-series; READY TO IMPLEMENT, design complete,
   not yet built at time of writing). Balance under A11 for the income rate.
+  **BUILT AND SHIPPED 2026-07-25** across C4 (the sim mechanic), C4b (placed on
+  skirmish-02 and -04), C4c (the AI captures them) and the VERDICT wave (the
+  captured outpost is repainted for its new owner).
 - Date: 2026-07-24
 - Deciders: Architect + game-designer + Luke, Balance under A11
 - GDD/TDD feature served: GDD line 41 (capturable neutral income structures);

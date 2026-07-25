@@ -1,5 +1,15 @@
 # Doc 26: Skirmish Map Design
 
+**STATUS, 2026-07-25:** this standard predates two features now in the map
+format, and a map authored strictly from it would omit both. (1) Neutral
+OUTPOSTS (ADR-021), placed in rotationally symmetric pairs on skirmish-02 (one
+pair) and skirmish-04 (two pairs): the fairness invariants below must cover
+outpost pairs as they already cover ferrite. (2) The destroyable BRIDGE deck
+character `b` (ADR-025), passable until felled and BLOCKING its cell afterwards,
+so a reachability proof that assumes bridges stay open is proving the wrong
+thing. tools/mapgen.py implements both and validates them; read it alongside
+this document.
+
 Owner: game-designer + tools. Phase: 6. Serves GDD (doc 02) pillars 2 and 4 and
 the TDD (doc 03) pathfinding and map-format sections. Authorised by ADR-013.
 

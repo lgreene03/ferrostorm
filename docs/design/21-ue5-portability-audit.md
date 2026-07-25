@@ -17,9 +17,9 @@ as tickets so no future work designs a blocker.
 | Data-oriented entities (ID/pos/owner/hp/state) | DONE | Entity struct array, fixed iteration order (TDD s3) |
 | Component system | PARTIAL BY DESIGN | one struct carries component fields at this scale; the ADR queue holds the SoA/ECS split for when variety demands it. Components exist at the DATA level (UnitTypeDef/WeaponDef); a churn refactor now would risk determinism for dogma. UE5 mapping is unaffected - the sim moves wholesale. |
 | Commands: move/attack/attack-move/stop/harvest/build/repair/capture, queued, shift | DONE | CommandType enum, Queued flag, wire+replay formats |
-| Commands: patrol, guard | GAP -> P4-PORT-01 | |
+| Commands: patrol, guard | DELIVERED 2026-07-21 (ADR-015, SetStance) | |
 | Units data-driven, no hardcoded stats | DONE | /data YAML validated against schema, selftest proves parity with compiled defs |
-| Infantry/vehicles/workers/heroes | DONE (heroes = specials) | catalogue types 1-12 |
+| Infantry/vehicles/workers/heroes | DONE (heroes = specials) | catalogue types 1-13 |
 | Aircraft | GAP -> P4-PORT-02 (design ticket; movement layer is ground-grid) | |
 | Buildings: construction/placement/footprints/power/queues/damage states | DONE except damage-state visuals (doc 18 Phase C) | |
 | Upgrades / tech tree / research buildings | DONE (sim prerequisites enforced via ADR-009; /data-driven tech tree via doc 22 BD-17; prerequisites gate Produce/BuildStructure) | |
@@ -28,7 +28,7 @@ as tickets so no future work designs a blocker.
 | Combat: damage/armour types, range, cooldowns, splash, death events; calc separated from FX | DONE | warhead x armour matrix; events feed FX |
 | Projectiles as entities | DELIBERATE DIFFERENCE | resolution is hitscan-with-cooldown inside the deterministic step; visible projectiles are presentation (doc 20 Wave 3). Revisit only if gameplay needs dodgeable shells. |
 | Pathfinding: click/groups/avoidance/separation | DONE | Dijkstra flow fields + separation buckets |
-| Formations | GAP -> P4-PORT-05 | |
+| Formations | DELIVERED 2026-07-24 (ADR-018, client-side slot layer) | |
 | "Future Unreal NavMesh replacement" | DELIBERATE REFUSAL | movement IS the deterministic sim; it must never be replaced by engine navigation, in Godot or UE5. The renderer only interpolates. |
 | Fog of war, stealth, not tied to rendering | DONE | hashed bitgrids, public read API |
 | AI through the command system, no cheating | DONE | SkirmishAI issues Commands only |

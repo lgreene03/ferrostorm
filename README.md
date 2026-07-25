@@ -14,8 +14,9 @@ This is an in-development repository for a playable game, public on GitHub with 
 - A settings scene: every key rebindable with conflict detection, audio buses, applied video options
 - Walls and barrier mechanics (ADR-005), and the full alert set (base and harvester attack warnings, low power, superweapon launch detection, jump-to-event)
 - A full visual overhaul (docs/design/25-visual-overhaul-roadmap.md): natural terrain shaders (ground biome, grass, foliage, water), re-baked materials, fog and ambient fixes, a camera FOV fix that closed the off-map void, and faction colour
-- Twelve unit types and ten buildings authored as YAML in /data, plus wall segments. All ten buildings are buildable in a match through the tabbed production sidebar with prerequisites enforced; the barracks has been buildable since ADR-009 and the radar uplink since ADR-008
-- A LAN lockstep transport (relay plus clients) that is real and soak-tested over loopback with zero desyncs; play between two machines is not yet possible because the battle scene's frame loop is not lockstep-driven (docs/questions/Q002)
+- Thirteen unit types and ten buildable buildings authored as YAML in /data, plus wall segments and two map-placed structures (the capturable neutral outpost and the destroyable bridge). All ten are buildable in a match through the tabbed production sidebar with prerequisites enforced; the barracks has been buildable since ADR-009 and the radar uplink since ADR-008
+- Unit command stances (hold-fire, guard, patrol; ADR-015), client-side formations (ADR-018), a mobile repair vehicle (ADR-019), right-click cancel and refund on every sidebar item (ADR-020), two parallel build lanes at the Construction Yard (ADR-023), capturable neutral outposts that pay their owner (ADR-021) and bridges that can be felled to cut a crossing (ADR-025)
+- **LAN play, reachable from the menu.** The relay and clients are soak-tested with zero desyncs, the battle scene's frame loop is lockstep-driven, HOST and JOIN are live, the host's match setup rides the handshake so a joiner builds the identical world (ADR-022), and a player who leaves is announced to the survivor. Two in-process battle scenes play each other to identical state hashes as a gate. **The one thing still owed is a real two-machine session**, which no in-process test can provide (docs/questions/Q002)
 
 ## Build and run
 
@@ -25,6 +26,7 @@ Requires the .NET 8 SDK. NuGet package sources are disabled by design; the sim h
 - Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
 - Individual modes: `selftest`, `determinism [seed]`, `match [seed]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs)
 - The client: open `game/` in Godot 4.7 (the .NET build) and run
+- **The client harness: `./tools/verify-client.sh`.** It boots the real battle scene headless from the joiner's seat and asserts on what it does. Run it for any `/game` change - it has caught ten defects the sim battery cannot see, and CI runs it on every push, so a failure blocks the merge either way
 
 ## The determinism story
 
@@ -35,6 +37,7 @@ Determinism is the project's law, not an aspiration:
 - 24 gated scenarios, each with a golden state hash in `sim/golden-hashes.txt`, verified byte-identical on Windows and Linux in CI (.github/workflows/determinism.yml)
 - Changing a golden hash is a replay-compatibility break and requires an ADR plus Architect sign-off
 - Replays and saves round-trip bit-exactly, and the lockstep soak runs full games with the relay comparing state hashes every 30 ticks
+- The client is gated too, by a headless harness that drives the real battle scene (`tools/verify-client.sh`, run in CI). The sim was always verified exhaustively while the client had nothing but "it compiles", and that asymmetry is why four features once shipped looking implemented and entirely dead
 
 ## Layout
 
