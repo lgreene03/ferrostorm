@@ -1581,7 +1581,15 @@ public sealed partial class World
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
     /// is excluded from the victory test, engineer capture and combat
-    /// auto-acquisition (ADR-005 clause 2). DEF-09 appends 'or EntityKind.Gate'.
+    /// auto-acquisition (ADR-005 clause 2).
+    ///
+    /// This used to promise "DEF-09 appends 'or EntityKind.Gate'", which was an
+    /// ORPHANED forward reference: TICKET-P5-DEF-09 is the client box-select and
+    /// mass-sell ticket and it shipped long ago without touching this, so the
+    /// append was owed by no ticket and pointed a reader at the wrong one. The
+    /// gate is still deferred by ADR-005 clause 6 with its revisit precondition
+    /// unmet (see docs/tickets/P6-wave-c6b-wall-gates.md), and when it lands it
+    /// is that ticket that appends here.
     /// </summary>
     private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
 
