@@ -106,10 +106,17 @@ public sealed class Relay
     /// half). No existing caller passes it, so behaviour is unchanged
     /// everywhere until a host screen chooses to.
     /// </summary>
-    public Relay(int playerCount, int port = 0, IPAddress? bind = null)
+    /// <summary>ADR-022: the host's match setup, broadcast in every Hello so a
+    /// joiner can build the identical world without being told the seed out of
+    /// band. OPAQUE here on purpose: the net layer knows nothing about maps,
+    /// factions or seeds, and never needs to.</summary>
+    private readonly byte[] _setup;
+
+    public Relay(int playerCount, int port = 0, IPAddress? bind = null, byte[]? setup = null)
     {
         _playerCount = playerCount;
         _listener = new TcpListener(bind ?? IPAddress.Loopback, port);
+        _setup = setup ?? System.Array.Empty<byte>();
     }
 
     public void Start()
@@ -132,7 +139,15 @@ public sealed class Relay
         for (int p = 0; p < _playerCount; p++)
         {
             int pid = p;
-            Wire.SendFrame(streams[p], Wire.Hello, w => { w.Write(pid); w.Write(_playerCount); });
+            // ADR-022: pid, player count, then the host's setup blob as a
+            // length-prefixed tail. A relay started without one writes a zero
+            // length, so every pre-ADR caller is byte-compatible.
+            Wire.SendFrame(streams[p], Wire.Hello, w =>
+            {
+                w.Write(pid); w.Write(_playerCount);
+                w.Write(_setup.Length);
+                if (_setup.Length > 0) w.Write(_setup);
+            });
         }
 
         // ADR-006: gather every player's catalogue checksum before a single
@@ -302,6 +317,11 @@ public sealed class LockstepClient : IDisposable
     public int PlayerId { get; private set; } = -1;
     public int PlayerCount { get; private set; }
     public bool DesyncNotified { get; private set; }
+    /// <summary>ADR-022: the host's match setup as broadcast in the Hello, or
+    /// empty. The joiner builds its world from THIS rather than from a seed it
+    /// was told separately, which is what makes a join reproduce the host's
+    /// world exactly.</summary>
+    public byte[] Setup { get; private set; } = System.Array.Empty<byte>();
 
     /// <summary>
     /// address is the relay to dial. The default, loopback, is the
@@ -309,7 +329,13 @@ public sealed class LockstepClient : IDisposable
     /// address (Q002, first half). No existing caller passes it, so
     /// behaviour is unchanged everywhere until one does.
     /// </summary>
-    public LockstepClient(int port, Func<ulong, World> worldFactory, ulong seed, IPAddress? address = null)
+    /// <param name="worldFromSetup">ADR-022: when supplied, the world is built
+    /// from the HOST'S setup blob (read out of the Hello) instead of from the
+    /// seed argument. That is what a joiner passes: it cannot know the host's
+    /// map, factions or seed until the Hello arrives, and building from
+    /// anything else is a guaranteed divergence wearing a lobby.</param>
+    public LockstepClient(int port, Func<ulong, World> worldFactory, ulong seed, IPAddress? address = null,
+        Func<byte[], World>? worldFromSetup = null)
     {
         _tcp = new TcpClient();
         _tcp.Connect(address ?? IPAddress.Loopback, port);
@@ -320,7 +346,14 @@ public sealed class LockstepClient : IDisposable
         if (type != Wire.Hello) throw new InvalidDataException("expected Hello");
         PlayerId = BitConverter.ToInt32(body, 0);
         PlayerCount = BitConverter.ToInt32(body, 4);
-        World = worldFactory(seed);
+        // ADR-022: the host's setup blob, if this relay sent one. Read
+        // defensively on length so a relay that predates the ADR (or one
+        // started without a setup) still hands back an empty array rather than
+        // throwing on a short body.
+        Setup = body.Length >= 12 && BitConverter.ToInt32(body, 8) is int n && n > 0 && body.Length >= 12 + n
+            ? body[12..(12 + n)]
+            : System.Array.Empty<byte>();
+        World = worldFromSetup != null ? worldFromSetup(Setup) : worldFactory(seed);
 
         // ADR-006: the catalogue checksum rides in the hello and the verdict
         // is waited for HERE, before the constructor returns, so a mismatched

@@ -81,7 +81,13 @@ the same commit.
   never an Entity tail append. Save goes to v8, which costs no goldens because
   the magic is not hashed. Ratified under Luke's directive to continue building
   out the C-series.
-- ADR-022: RESERVED 2026-07-24 for the LAN setup exchange (TICKET-P6-C7b): a
+- ADR-022: RATIFIED 2026-07-25 - ADR-022-lan-setup-exchange.md (the host's
+  match setup rides in the lockstep Hello so a joiner builds the identical
+  world; P6 Wave C7b, first slice). Ratified under the standing directive. The
+  blob is OPAQUE to the net layer, which keeps Ferrostorm.Net free of any
+  knowledge of maps, factions or seeds; hash impact NEUTRAL (net layer, outside
+  the state hash). Originally reserved 2026-07-24 as:
+ a
   host-supplied match-setup blob appended to the lockstep Hello frame so a
   joiner builds the identical world. A WIRE-FORMAT change, so it takes this
   ADR before code; the non-blocking poll half of Q002's remainder shipped
