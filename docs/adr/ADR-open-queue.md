@@ -48,6 +48,18 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-025: RATIFIED 2026-07-25 - ADR-025-destroyable-bridges.md (destroyable
+  bridges, doc 24's ratification-gated sketch formalised; P6 Wave C6a). Number
+  claimed here per the numbering law. Ratified under the 2026-07-17 directive by
+  the ADR-012 precedent (a doc 24 sketch formalised into an ADR, then built).
+  Hash impact NEUTRAL via a NEW grid character: the existing 'B' cells stay
+  inert client dressing, so skirmish-01 (which has twelve bridge rows and IS the
+  skirmish golden's map) and skirmish-03 and every mission map are untouched,
+  and only skirmish-04 gains destroyable crossings. Corrects doc 24's claim that
+  bridges need incremental flow repair: they do not, a bridge dies once.
+  GATES ARE NOT IN THIS ADR and are NOT authorised: ADR-005 clause 6 deferred
+  them with an explicit revisit precondition (per-player flow fields existing
+  for another reason) which is still unmet. See TICKET-P6-C6b.
 - ADR-024: PROPOSED 2026-07-25 - ADR-024-multi-resource.md (a second resource
   type, P4-PORT-04; P6 Wave C8). Number claimed here per the numbering law.
   NOT RATIFIED and deliberately not self-ratified: unlike every other C wave,

@@ -163,6 +163,18 @@ them destroyable is a map-format and passability change; ADR-gated, Phase C,
 and worth pairing with the gate work since both need incremental flow-field
 repair.
 
+**CORRECTION, 2026-07-25 (the C6 design pass, formalised as ADR-025).** The last
+clause above is wrong, and it is why this looked expensive. A gate needs
+incremental flow repair because it opens and closes as units approach, turning a
+rare passability event into a per-tick one. **A bridge dies once and stays
+dead**: that is a single passability change per bridge per match, exactly the
+frequency the existing wholesale flow-cache clear in Block/UnblockFootprint was
+built to absorb. Bridges need no new pathfinding machinery at all, and the
+pairing held a cheap complete feature hostage to an architecture wave. They are
+now split: ADR-025 ships bridges, and gates stay deferred by ADR-005 clause 6,
+whose revisit precondition is still unmet (see
+docs/tickets/P6-wave-c6b-wall-gates.md).
+
 ### Transports, acknowledgement voices, crates, map editor
 
 The transport helicopter rides with the air-layer ADR (GDD line 55). Unit
