@@ -30,6 +30,10 @@ public sealed class SkirmishAI
     private readonly int _actEvery;   // decision beat; larger = slower commander (difficulty knob)
     private readonly int _waveSize;   // units per attack wave (difficulty knob)
     private int _produced;
+    /// <summary>DR-10: the Fire Sale fires ONCE. AI-internal state, like every
+    /// field here: never hashed, never saved - the AI is sim-adjacent and its
+    /// commands are what enter the record, not its mind.</summary>
+    private bool _lastStandMade;
     private int _lastWaveTick = -10_000;
     private int _lastDefendTick = -10_000;
 
@@ -117,7 +121,41 @@ public sealed class SkirmishAI
                 else if (enemyStructure < 0) enemyStructure = i;
             }
         }
-        if (cy < 0) return; // decapitated: nothing to command with
+        if (cy < 0)
+        {
+            // DR-10: the last stand. This return used to be plain silence - a
+            // decapitated AI issued nothing, forever, and the endgame petered
+            // out while the player hunted its leftovers. The whole block lives
+            // inside that formerly-silent state, which is the neutrality
+            // argument: in any match where the AI keeps its yard (every
+            // golden), not one command changes.
+            //
+            // With a rebuild MCV in hand, the honest move is to USE it - the
+            // comeback rule exists and the AI never exercised it. Deploy is
+            // re-issued each beat until it lands (the sim refuses an invalid
+            // cell; the MCV keeps trying as it moves).
+            if (ownMcv >= 0)
+            {
+                output.Add(new Command(w.Tick, _player, CommandType.Deploy, ownMcv, Fix64.Zero, Fix64.Zero));
+                return;
+            }
+            // No yard, no MCV: beaten. Sell everything still standing and send
+            // every unit in one last wave - the classic Fire Sale, the ending
+            // that goes out with a bang instead of a mop-up. Once.
+            if (_lastStandMade || enemyStructure < 0) return;
+            _lastStandMade = true;
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                var e = w.Entities[i];
+                if (!e.Alive || e.PlayerId != _player) continue;
+                if (World.IsStructure(e.Kind))
+                    output.Add(new Command(w.Tick, _player, CommandType.SellStructure, i, Fix64.Zero, Fix64.Zero));
+                else if (e.Kind is EntityKind.Unit or EntityKind.Harvester)
+                    output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i,
+                        w.Entities[enemyStructure].X, w.Entities[enemyStructure].Y));
+            }
+            return;
+        }
 
         // --- ADR-021: take the free income. A neutral Outpost pays whoever
         // walks an engineer into it, and until now only a human ever did, so

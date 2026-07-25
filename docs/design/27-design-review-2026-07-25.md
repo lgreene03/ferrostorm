@@ -223,7 +223,7 @@ Existing blocked items are referenced, not relitigated.
 
 | Id | Item | Effort | Hash | Blocked on |
 |---|---|---|---|---|
-| DR-10 | AI Fire Sale: a beaten AI (no production path, or no economy and outnumbered) sells out and throws one last wave - the genre's accidental masterpiece of an ending | M | needs a neutrality proof (AI-driven goldens exist; the trigger state may be unreachable in them, as C4c's precedent was) | none if proven neutral, else ADR |
+| DR-10 | DELIVERED (TICKET-DR-10). AI Fire Sale: a beaten AI (no yard AND no MCV, strictly conservative) sells out and throws one last wave; an MCV in hand deploys instead. The branch lives in the formerly silent decapitated state, and the neutrality proof ran FIRST: 24 goldens byte-identical. Gated by firesalegate | M | NEUTRAL, PROVEN | nothing |
 | DR-11 | Surrender in LAN plus AI capitulation offer | M | NEUTRAL (client + net) for surrender; capitulation is AI | Q015 (already filed) owns the result semantics; do not build ahead of it |
 | DR-12 | The rifle-blob and static-defence convictions: promote the parked ADR-010 decision (rebalance defence or withdraw the expectation) and the per-cost review of TestRifle | M | MOVES | Balance + Game Designer co-sign (A11); the tool's rows stay visible every run meanwhile |
 
