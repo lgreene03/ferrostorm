@@ -82,7 +82,7 @@ public sealed class SkirmishAI
                         break;
                     case EntityKind.Harvester: harvesters++; break;
                     case EntityKind.Unit:
-                        if (e.UnitType == 7) ownMcv = i;
+                        if (e.UnitType == World.McvUnitType) ownMcv = i;
                         else if (e.UnitType == 6) scouts++; // support, not line strength
                         else
                         {
@@ -337,7 +337,7 @@ public sealed class SkirmishAI
         {
             var e = w.Entities[i];
             if (e.Alive && e.PlayerId == _player && e.Kind == EntityKind.Unit
-                && e.UnitType != 6 && e.UnitType != 7 && e.UnitType != 11
+                && e.UnitType != 6 && e.UnitType != World.McvUnitType && e.UnitType != EngineerType
                 && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9))
                 garrison[garrisonCount++] = i;
         }
@@ -449,7 +449,7 @@ public sealed class SkirmishAI
                 // MCVs found bases and sentinels are eyes, not spears: the
                 // wave conscripts fighting units only.
                 if (e.Alive && e.PlayerId == _player && e.Kind == EntityKind.Unit
-                    && e.UnitType != 7 && e.UnitType != 6 && e.UnitType != 11
+                    && e.UnitType != World.McvUnitType && e.UnitType != 6 && e.UnitType != EngineerType
                     && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
                     && !InGarrison(i))
                     output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, target.X, target.Y));
@@ -489,7 +489,8 @@ public sealed class SkirmishAI
     /// logic tests it in three places and a bare 11 in each is how one of them
     /// drifts (the McvUnitType precedent on the client side). Unit type 11 is
     /// the engineer; STRUCT type 11 is the barracks, a different namespace.</summary>
-    private const int EngineerType = 11;
+    /// <summary>Aliased to the sim-wide name rather than restating 11.</summary>
+    private const int EngineerType = World.EngineerUnitType;
 
     /// <summary>ADR-021: the nearest UNCAPTURED outpost to a point, ties to the
     /// lower entity id so the choice is stable, in the NearestField shape. An

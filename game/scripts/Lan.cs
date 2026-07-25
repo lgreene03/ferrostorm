@@ -455,6 +455,13 @@ public static class LanSmoke
                         for (int i = 0; i < client.World.EntityCount; i++)
                         {
                             var e = client.World.Entities[i];
+                            // By SPEED rather than by kind, and deliberately: the
+                            // smoke driver wants "things I can order to move", and
+                            // a zero-speed unit would make the order a no-op and
+                            // the soak a weaker test of the merge. Not a fourth
+                            // opinion on SkirmishLive.Mobile, which answers a
+                            // different question (what gets a ground ring, a
+                            // corpse tumble and a unit count).
                             if (e.Alive && e.PlayerId == client.PlayerId && e.Speed != Fix64.Zero) mine.Add(i);
                         }
                         client.Prime();

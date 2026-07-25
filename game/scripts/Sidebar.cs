@@ -72,15 +72,22 @@ public partial class Sidebar : PanelContainer
         // The button is gated on faction in Init - absent for the
         // Directorate, exactly as the sim itself refuses the command
         // (World.cs BuildStructure's faction check, which stays authoritative).
-        new("VEIL PROJECTOR", VeilType, "sod_veil_projector"),
+        new("VEIL PROJECTOR", World.VeilStructType, "sod_veil_projector"),
         new("SUPERWEAPON", 6, "dir_superweapon"),
     };
     /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
-    /// deferred gate).</summary>
+    /// deferred gate). The TABLE may name it, because a table of buttons is a
+    /// list of specific things - but nothing else here tests against it: the two
+    /// behavioural questions below ask the CATALOGUE whether a type is a
+    /// barrier, so ADR-005 clause 6's gate (type 10, also a Wall kind) is
+    /// classified correctly on the day it lands instead of queueing at a yard
+    /// and waiting for a ready slot a barrier never fills.</summary>
     private const int BarrierType = 9;
-    /// <summary>Struct type 7, the Veil Projector - Sodality doctrine
-    /// (TICKET-P5-PROD-01; the sim's gate lives in World.cs BuildStructure).</summary>
-    private const int VeilType = 7;
+
+    /// <summary>Is this struct type a barrier? From the live catalogue's Kind,
+    /// which is what SkirmishLive.IsBarrier already asks and what the sim's own
+    /// IsBarrier tests.</summary>
+    private bool IsBarrierType(int structType) => _structDef(structType).Kind == EntityKind.Wall;
     private static readonly BuildItem[] Units =
     {
         new("RIFLE SQUAD", 2, "com_rifle_squad"),
@@ -261,9 +268,7 @@ public partial class Sidebar : PanelContainer
             // refusal (World.cs: Faction must be common or the player's own),
             // hidden not greyed, and the sim's check stays the authority - a
             // hand-crafted wrong-faction Produce is still refused unchanged.
-            int fac = _unitFaction(it.TypeId);
-            b.Visible = (MatchConfig.AllowedUnits?.Contains(it.TypeId) ?? true)
-                && (fac == World.FactionCommon || fac == _game.FactionOf(_game.LocalPlayerId));
+            b.Visible = FixedGatesAllowUnit(it.TypeId);
             _unitButtons[it.TypeId] = b;
             page.AddChild(b);
         }
@@ -286,8 +291,8 @@ public partial class Sidebar : PanelContainer
         // its button enters placement rather than queueing.
         // C3 (ADR-020): a queued structure gets a right-click cancel; a barrier
         // has no queue (bought and placed outright), so it gets none.
-        var b = it.TypeId == BarrierType
-            ? MakeButton(it, () => _game.EnterPlacement(BarrierType), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks)
+        var b = IsBarrierType(it.TypeId)
+            ? MakeButton(it, () => _game.EnterPlacement(it.TypeId), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks)
             : MakeButton(it, () => _game.QueueStructure(it.TypeId), _structDef(it.TypeId).Cost, _structDef(it.TypeId).BuildTicks,
                 onCancel: () => _game.CancelStructure(it.TypeId));
         // Classic campaign tech gating: disallowed items are absent,
@@ -300,8 +305,7 @@ public partial class Sidebar : PanelContainer
         // mutated mid-match, so an Init-time read is sound. The LIVE
         // prerequisite half of ADR-009 clause 6's three-way AND is not here:
         // it changes as the base grows, so it belongs in Refresh.
-        b.Visible = (MatchConfig.AllowedStructures?.Contains(it.TypeId) ?? true)
-            && (it.TypeId != VeilType || _game.FactionOf(_game.LocalPlayerId) == World.FactionSodality);
+        b.Visible = FixedGatesAllow(it.TypeId);
         _structButtons[it.TypeId] = b;
         page.AddChild(b);
     }
@@ -405,11 +409,14 @@ public partial class Sidebar : PanelContainer
     /// tab reads its OWN producer, and per-item visibility becomes the AND of
     /// three things where it used to be one - the campaign allow-list and the
     /// faction gate (both fixed at Init), the live prerequisite check, and,
-    /// for units, a living producer of the right produced_at. ownsStructType
-    /// answers the middle one from live sim state.</summary>
+    /// for units, a living producer of the right produced_at. prereqsMet
+    /// answers the middle one by asking THE SIM'S OWN World.HasPrereqs, rather
+    /// than by a fold over an ownsStructType the client computed itself: two
+    /// implementations of the tech tree agree only until one is edited, and the
+    /// failure mode is a lit button whose order the sim silently drops.</summary>
     public void Refresh(long credits, int readyStructureType,
         ProducerLine yard, ProducerLine factory, ProducerLine barracks,
-        int supply, int draw, System.Func<int, bool> ownsStructType,
+        int supply, int draw, System.Func<int[]?, bool> prereqsMet,
         ProducerLine yardLane2 = default, int readyStructureType2 = 0)
     {
         bool hasYard = yard.Live;
@@ -462,10 +469,9 @@ public partial class Sidebar : PanelContainer
             // than as a wall of things you cannot have.
             if (b.Visible || _prereqHidden.Contains(typeId))
             {
-                bool treeMet = PrereqsMet(_structDef(typeId).Prereqs, ownsStructType);
+                bool treeMet = prereqsMet(_structDef(typeId).Prereqs);
                 if (!treeMet) _prereqHidden.Add(typeId); else _prereqHidden.Remove(typeId);
-                b.Visible = treeMet && (MatchConfig.AllowedStructures?.Contains(typeId) ?? true)
-                    && (typeId != VeilType || _game.FactionOf(_game.LocalPlayerId) == World.FactionSodality);
+                b.Visible = treeMet && FixedGatesAllow(typeId);
             }
             // DEF-08 clause 9: a full ready slot pauses the yard's queue and so
             // disables the queued structures, but a barrier never enters that
@@ -475,7 +481,7 @@ public partial class Sidebar : PanelContainer
             // is the whole point of the second line; only both slots full
             // disables the tab.
             b.Disabled = !hasYard || credits < def.Cost
-                         || (typeId != BarrierType && readyStructureType > 0 && readyStructureType2 > 0);
+                         || (!IsBarrierType(typeId) && readyStructureType > 0 && readyStructureType2 > 0);
             int n = structCounts.GetValueOrDefault(typeId);
             // Head progress comes from whichever lane actually holds this type
             // at its head; the sim decided that at order time, so the client
@@ -496,11 +502,10 @@ public partial class Sidebar : PanelContainer
             var line = _unitProducedAt(typeId) == World.BarracksStructType ? barracks : factory;
             if (b.Visible || _prereqHiddenUnits.Contains(typeId))
             {
-                bool met = line.Live && PrereqsMet(_unitPrereqs(typeId), ownsStructType);
+                bool met = line.Live && prereqsMet(_unitPrereqs(typeId));
                 if (!met) _prereqHiddenUnits.Add(typeId); else _prereqHiddenUnits.Remove(typeId);
                 int fac = _unitFaction(typeId);
-                b.Visible = met && (MatchConfig.AllowedUnits?.Contains(typeId) ?? true)
-                    && (fac == World.FactionCommon || fac == _game.FactionOf(_game.LocalPlayerId));
+                b.Visible = met && FixedGatesAllowUnit(typeId);
             }
             var q = line.Queue;
             int n = 0;
@@ -539,12 +544,21 @@ public partial class Sidebar : PanelContainer
     /// live-catalogue reason as every other read in this file.</summary>
     private System.Func<int, int[]?> _unitPrereqs = _ => null;
 
-    private static bool PrereqsMet(int[]? prereqs, System.Func<int, bool> ownsStructType)
-    {
-        if (prereqs == null) return true;
-        foreach (int p in prereqs) if (!ownsStructType(p)) return false;
-        return true;
-    }
+    /// <summary>The two clauses of item visibility that are FIXED before tick 0:
+    /// the campaign allow-list and the faction gate. One method, because Init
+    /// and Refresh each open-coded them and the pair is only ever true together
+    /// - and because Refresh runs only for items Init did not already hide, so a
+    /// change to one copy silently failed to reach what the other had hidden.
+    /// The LIVE prerequisite clause is deliberately NOT here: it changes as the
+    /// base grows, so it belongs to Refresh alone.</summary>
+    private bool FixedGatesAllow(int structType) =>
+        SkirmishLive.StructureAllowed(structType)
+        && World.StructureAllowedForFaction(structType, _game.FactionOf(_game.LocalPlayerId));
+
+    private bool FixedGatesAllowUnit(int unitType) =>
+        SkirmishLive.UnitAllowed(unitType)
+        && (_unitFaction(unitType) == World.FactionCommon
+            || _unitFaction(unitType) == _game.FactionOf(_game.LocalPlayerId));
 
     private void SetTabTitle(int tab, int queued)
         => _tabs.SetTabTitle(tab, queued > 0 ? $"{TabTitles[tab]} {queued}" : TabTitles[tab]);

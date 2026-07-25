@@ -1,4 +1,5 @@
 using Godot;
+using Ferrostorm.Sim;
 using System.Collections.Generic;
 using System.Text.Json;
 
@@ -54,7 +55,11 @@ public partial class ReplayTheater : Node3D
         BattlefieldView.BuildTerrain(this, map.GetProperty("w").GetInt32(), map.GetProperty("h").GetInt32(), blocked);
     }
 
-    private static bool Mobile(int kind) => kind == 0 || kind == 1; // units + harvesters
+    /// <summary>The exported JSON carries the kind as a raw int, so it is cast
+    /// back to the enum and asked of the ONE client answer rather than compared
+    /// against the two literals this used to spell out. Those literals were
+    /// correct only while Unit is 0 and Harvester is 1.</summary>
+    private static bool Mobile(int kind) => SkirmishLive.Mobile((EntityKind)kind);
 
     private Node3D Spawn(int id, int kind, int ut, int player, Vector3 at)
     {

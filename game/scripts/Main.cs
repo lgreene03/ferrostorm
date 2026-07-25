@@ -16,6 +16,12 @@ namespace Ferrostorm.Game;
 /// 4.2 .NET editor. The interpolation maths it relies on IS tested headless
 /// (runner mode: spectate). Treat any behaviour difference between this file
 /// and the spectate assertions as a bug in this file.
+///
+/// SEATS: this scene is SINGLE-PLAYER LOOPBACK, as the line above says, so its
+/// player-0 reads DEFINE the local player rather than copy one. SkirmishLive is
+/// the scene with two seats, which is why CI's hardcoded-seat guard covers that
+/// file and not this one. Recorded so a sweep for the same shape can tell
+/// design from defect (docs/tickets/P6-duplicated-rule-audit.md).
 /// </summary>
 public partial class Main : Node2D
 {
