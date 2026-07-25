@@ -46,6 +46,13 @@ public partial class ModelLibrary : Node
         // for a neutral owner (player < 0), so an uncaptured outpost renders
         // unclaimed for free. The bespoke model is owed to art-pipeline.
         { 17, "com_refinery" },
+        // 18 = destroyable Bridge deck (ADR-025). The terrain beneath is drawn
+        // as water and this actor IS the deck, so felling a span removes the
+        // actor and open water is what remains - the honest read. No
+        // com_bridge_deck.glb exists yet, so it takes the straight wall
+        // segment, a low slab that reads as decking; the bespoke model is owed
+        // to art-pipeline.
+        { 18, "com_wall_straight" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit

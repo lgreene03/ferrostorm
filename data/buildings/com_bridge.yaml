@@ -1,0 +1,32 @@
+# Destroyable Bridge deck (ADR-025, P6 Wave C6a). A single cell of a river
+# crossing that units walk over while it stands and that BLOCKS its cell once
+# felled, so a destroyed span forces the attack around to another ford. The only
+# thing in the game whose death makes ground less passable.
+#
+# MAP-PLACED ONLY, like the outpost: build_time_ticks 0 keeps it out of every
+# Construction Yard queue and no sidebar item names it. Maps place a deck with
+# the lowercase 'b' grid character; plain 'B' remains the permanently open,
+# indestructible crossing, so no existing map changes meaning.
+#
+# Neutral (player -1), so auto-acquire never targets it and stray fire never
+# fells a crossing by accident; an explicit Attack order is how a player brings
+# one down. Not capturable: an engineer walking into a river to claim a bridge
+# is nonsense, and the sim excludes it.
+id: com_bridge
+name: "Bridge Deck"
+faction: common
+cost: 400
+build_time_ticks: 0
+hp: 800
+power_supply: 0
+power_draw: 0
+sight_range: 0
+footprint: 1
+weapon_ids: []
+prerequisites: []
+notes: >
+  sight_range 0 for the barrier's reason: a long deck is many entities and none
+  of them belong in the fog pass. hp 800 makes felling a span a deliberate act
+  of several shots rather than something incidental splash accomplishes. The
+  map generator proves the two starts stay connected with every destroyable
+  span rubbled at once, so no single bridge can sever a map.

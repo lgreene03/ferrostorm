@@ -16,6 +16,7 @@ using Ferrostorm.Sim;
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
+//   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and its declared outposts stand neutral
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -3588,6 +3589,114 @@ int LaneGate()
     return 0;
 }
 
+int BridgeGate()
+{
+    // ADR-025 gate (P6 Wave C6a). Additive, the repairgate/outpostgate pattern:
+    // standalone mode plus a Match stage, never a golden scenario, so the golden
+    // list stays 24 lines by construction.
+    //
+    // The wave's one genuinely new mechanic is an entity death that makes ground
+    // LESS passable - every other death in the sim unblocks - so that is what
+    // this proves hardest, and it proves it through actual pathing rather than
+    // by reading a flag.
+
+    // A canyon: a solid wall at x=30 with a single gap at y=20, and the gap is
+    // a bridge deck. Cross it, then fell it and watch the route die.
+    World Canyon(ulong seed, out int span)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        for (int y = 0; y < 64; y++) if (y != 20) w.Map.SetBlocked(30, y, true);
+        span = w.SpawnBridge(30, 20);
+        w.InvalidateFlowCache();
+        return w;
+    }
+
+    // --- 1. A standing bridge is PASSABLE: a unit crosses the only gap -------
+    {
+        var w = Canyon(3400, out int span);
+        int u = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 0);
+        if (w.Map.IsBlocked(30, 20))
+            return Fail("bridge: a standing bridge must leave its cell PASSABLE - it is the crossing");
+        var go = new List<Command> { new(0, 0, CommandType.PathMove, u, Fix64.FromInt(45), Fix64.FromInt(20)) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(go));
+        for (int t = 0; t < 600; t++) w.Step(default);
+        if (w.Entities[u].X <= Fix64.FromInt(31))
+            return Fail($"bridge: a unit must cross a standing bridge (stalled at x {w.Entities[u].X.ToIntRound()})");
+    }
+
+    // --- 2. Felling it BLOCKS the cell, and the crossing is gone -------------
+    {
+        var w = Canyon(3401, out int span);
+        // An explicit Attack is how a bridge is felled. Weapon 1 at range 4.
+        int gunner = w.SpawnUnit(0, Fix64.FromInt(27), Fix64.FromInt(20), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 1);
+        var order = new List<Command> { new(0, 0, CommandType.Attack, gunner, Fix64.Zero, Fix64.Zero, span) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        // 800 hp against a test cannon is deliberately many shots: felling a
+        // span should be an act, not a stray. Give the gate the patience the
+        // design asks for rather than softening the bridge to suit the test.
+        int fellAt = -1;
+        for (int t = 0; t < 4000 && w.Entities[span].Alive; t++) { w.Step(default); if (!w.Entities[span].Alive) fellAt = w.Tick; }
+        if (w.Entities[span].Alive)
+            return Fail($"bridge: an explicit Attack must be able to fell a bridge (hp still {w.Entities[span].Hp} after 4000 ticks)");
+        if (!w.Map.IsBlocked(30, 20))
+            return Fail("bridge: a FELLED bridge must BLOCK its cell - this inversion is the whole wave");
+
+        // And the route is genuinely gone, not merely flagged: a unit ordered
+        // across can no longer reach the far side.
+        int u = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.FromFraction(1, 4), 300, ArmourClass.Heavy, weaponId: 0);
+        var go = new List<Command> { new(0, 0, CommandType.PathMove, u, Fix64.FromInt(45), Fix64.FromInt(20)) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(go));
+        for (int t = 0; t < 600; t++) w.Step(default);
+        if (w.Entities[u].X > Fix64.FromInt(30))
+            return Fail("bridge: with the span down there is no route across, so a unit must not reach the far bank");
+    }
+
+    // --- 3. Neutral means no stray fire and no engineer ----------------------
+    {
+        // Two separate worlds on purpose. The first cut put an armed enemy and
+        // an engineer in one, and the gunner simply shot the engineer, which
+        // failed the capture assertion for a reason that had nothing to do with
+        // bridges. One claim per world.
+        {
+            var w = Canyon(3402, out int span);
+            // An armed enemy parked beside it with NO order: auto-acquire skips
+            // neutrals, so a crossing is never felled by accident.
+            w.SpawnUnit(1, Fix64.FromInt(28), Fix64.FromInt(20), Fix64.Zero, 300, ArmourClass.Heavy, weaponId: 1);
+            for (int t = 0; t < 200; t++) w.Step(default);
+            if (w.Entities[span].Hp != w.Entities[span].MaxHp)
+                return Fail($"bridge: auto-acquire must never target a neutral bridge (hp {w.Entities[span].Hp})");
+        }
+        {
+            var w = Canyon(3403, out int span);
+            int eng = w.SpawnUnit(0, Fix64.FromInt(28), Fix64.FromInt(21), Fix64.FromFraction(1, 5), 60, ArmourClass.None, weaponId: 0, unitType: 11);
+            var order = new List<Command> { new(0, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, span) };
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+            for (int t = 0; t < 200; t++) w.Step(default);
+            if (w.Entities[span].PlayerId != -1)
+                return Fail("bridge: an engineer must NOT capture a bridge");
+            if (!w.Entities[eng].Alive)
+                return Fail("bridge: the engineer was consumed, so a capture happened after all");
+        }
+    }
+
+    // --- 4. A bridge is not hope: it cannot keep a player alive --------------
+    {
+        var w = new World(3404, 64, 64, players: 2);
+        w.SpawnBridge(20, 20);              // neutral, belongs to nobody
+        w.SpawnPowerPlant(1, 40, 40);       // player 1 has a real base
+        w.SpawnUnit(0, Fix64.FromInt(10), Fix64.FromInt(10), Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        for (int t = 0; t < 5 && w.Winner < 0; t++) w.Step(default);
+        if (w.Winner != 1)
+            return Fail($"bridge: a bridge is neutral and is nobody's hope; player 0 must still be eliminated (winner {w.Winner})");
+    }
+
+    Console.WriteLine("bridgegate: a standing bridge leaves its cell passable and a unit crosses it; an explicit Attack fells it, " +
+                      "the wreck BLOCKS the cell (the one death in the sim that makes ground less passable) and the route across is " +
+                      "genuinely gone; auto-acquire never touches a neutral span and an engineer cannot capture one; and a bridge is " +
+                      "nobody's hope for victory");
+    return 0;
+}
+
 int MapGate()
 {
     // The map validation harness doc 18 Phase D asked for and never got, now
@@ -3741,6 +3850,9 @@ int Match(ulong seed)
     // ADR-023: and the parallel build lanes.
     int lanegate = LaneGate();
     if (lanegate != 0) return lanegate;
+    // ADR-025: and the destroyable bridges.
+    int bridgegate = BridgeGate();
+    if (bridgegate != 0) return bridgegate;
     // ADR-021 / doc 18 Phase D: and every committed map loads and plays.
     int mapgate = MapGate();
     if (mapgate != 0) return mapgate;
@@ -4582,6 +4694,7 @@ return args.Length == 0
         "repairgate" => RepairGate(),
         "outpostgate" => OutpostGate(),
         "lanegate" => LaneGate(),
+        "bridgegate" => BridgeGate(),
         "mapgate" => MapGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),

@@ -299,6 +299,7 @@ public static class StructureCatalogue
         "com_barracks" => 11,
         "com_radar_uplink" => 12,
         "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
+        "com_bridge" => 14,    // ADR-025 (P6 Wave C6a): map-placed, never built
         _ => throw new FormatException($"unknown structure id '{id}'"),
     };
 
@@ -317,6 +318,7 @@ public static class StructureCatalogue
         11 => EntityKind.Barracks,
         12 => EntityKind.RadarUplink,
         13 => EntityKind.Outpost,   // ADR-021
+        14 => EntityKind.Bridge,    // ADR-025
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 

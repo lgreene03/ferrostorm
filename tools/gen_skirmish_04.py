@@ -47,7 +47,16 @@ c.river(centre, halfwidth, vertical=True)
 # chooses where the war happens. Each deck is six rows deep so a column crosses
 # in formation. Bands are symmetric about the centre row; mapgen closes them
 # under rotation regardless.
-c.bridges([(20, 26), (60, 68), (102, 108)])
+spans = c.bridges([(20, 26), (60, 68), (102, 108)])
+
+# ---- ADR-025: the CENTRAL ford is destroyable; the two flanking ones are not.
+# A felled span blocks its cell, so cutting the middle crossing is a real
+# tactical act: it forces the enemy's push out to a flank and buys time. The
+# band is self-symmetric under the 180-degree rotation (y and 127-y both fall
+# inside 60..67), so both players can cut exactly the same crossing. Leaving the
+# flanks permanent is what makes severing impossible: validate() re-proves the
+# map connects with every destroyable span rubbled at once.
+c.destroyable([(x, y) for (x, y) in spans if 60 <= y < 68])
 
 # ---- Terrain. Bluffs line the banks and frame the bases; ruins litter the
 # midfield; fences give light cover. Everything is a rotation pair, so the
