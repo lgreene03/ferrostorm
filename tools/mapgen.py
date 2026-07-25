@@ -25,7 +25,7 @@ project's zero-dependency posture.
 import math
 from collections import deque
 
-BLOCKING = set('#whrf')   # 'B' is a bridge: open to the sim
+BLOCKING = set('#whrf')   # 'B' and 'b' are bridges: open to the sim while they stand
 
 
 def rot(x, y, w, h):
@@ -68,6 +68,8 @@ class Canvas:
         # spawns (World.SpawnOutpost calls BlockFootprint), so writing it into
         # the grid would block those cells twice and inflate the density.
         self.outposts = []
+        # ADR-025: destroyable bridge deck cells ('b').
+        self.span_cells = set()
 
     def inb(self, x, y):
         return 0 <= x < self.w and 0 <= y < self.h
@@ -122,6 +124,21 @@ class Canvas:
             self.grid[y][x] = 'B'
         self.choke_cells |= sym
         return sym
+
+    def destroyable(self, cells):
+        """ADR-025: promote already-placed bridge cells to DESTROYABLE decks
+        ('b'). Plain 'B' stays the permanent, indestructible crossing, so a map
+        opts in span by span and nothing existing changes meaning.
+
+        Pass the return value of a bridges() call, or a subset of it. Every cell
+        must already be a bridge: promoting open ground would put a deck over
+        dry land. validate() then proves the map survives losing ALL of them at
+        once, which is what makes severing impossible to author by accident."""
+        for (x, y) in sorted(cells):
+            assert self.grid[y][x] in 'Bb', \
+                f"destroyable cell {(x, y)} is '{self.grid[y][x]}', not a bridge"
+            self.grid[y][x] = 'b'
+            self.span_cells.add((x, y))
 
     # -- terrain ----------------------------------------------------------
     def stamp(self, x0, y0, dx, dy, ch, choke=False):
@@ -307,6 +324,35 @@ class Canvas:
             assert cheb_out(self.starts[0]) == cheb_out(self.starts[1]), \
                 "outpost distance profiles differ between starts"
 
+        # 9. ADR-025: the map must survive losing EVERY destroyable span at
+        #    once. A rubbled bridge is a neutral blocker, so the DEF-05 breach
+        #    path will not fire against it (that path wants an enemy-owned
+        #    barrier) and an attack-move across a fully severed river would go
+        #    inert, halting the AI's waves. Rather than widen a sim predicate
+        #    every golden exercises, the severing is made impossible to author:
+        #    block every span and re-prove the map still connects.
+        if self.span_cells:
+            for (x, y) in self.span_cells:
+                assert grid[y][x] == 'b', f"span cell {(x, y)} is '{grid[y][x]}', not a destroyable deck"
+            saved = [(x, y, grid[y][x]) for (x, y) in self.span_cells]
+            for (x, y, _) in saved:
+                grid[y][x] = '#'
+            try:
+                for p_, s_ in self.starts.items():
+                    seen = self._flood(*s_)
+                    assert self.starts[1 - p_] in seen, \
+                        "with every destroyable bridge rubbled the starts are severed: the AI would halt at the bank"
+                    for f in fields:
+                        assert f in seen, \
+                            f"with every destroyable bridge rubbled player {p_} cannot reach ferrite at {f}"
+            finally:
+                for (x, y, ch) in saved:
+                    grid[y][x] = ch
+            # Fairness: spans are a rotation-symmetric set like everything else.
+            for (x, y) in self.span_cells:
+                assert rot(x, y, w, h) in self.span_cells, \
+                    f"destroyable span {(x, y)} has no rotation partner: one player can cut a crossing the other cannot"
+
         return fields, blocked, density
 
     # -- emit -------------------------------------------------------------
@@ -343,6 +389,8 @@ def report(name, canvas, fields, blocked, density, path, crossings):
     print(f"  starts:  {canvas.starts[0]} and {canvas.starts[1]}, "
           f"apron {canvas.apron * 2 + 1}x{canvas.apron * 2 + 1}")
     print(f"  crossings: {crossings}")
+    if canvas.span_cells:
+        print(f"  spans:   {len(canvas.span_cells)} destroyable bridge decks (ADR-025)")
     if canvas.outposts:
         print(f"  outposts: {len(canvas.outposts)} neutral (ADR-021) at {canvas.outposts}")
     print("  all symmetry, density, reachability, crossing and fairness checks passed")

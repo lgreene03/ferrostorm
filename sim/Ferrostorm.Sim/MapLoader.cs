@@ -32,6 +32,10 @@ public sealed class MapData
     public int Height { get; init; }
     public IReadOnlyList<(int Cx, int Cy)> Blocked { get; init; } = Array.Empty<(int, int)>();
     public IReadOnlyList<(int Cx, int Cy)> Fields { get; init; } = Array.Empty<(int, int)>();
+    /// <summary>ADR-025: destroyable bridge deck cells ('b'). A parallel list
+    /// rather than a type channel on Fields, so nothing that reads Fields (the
+    /// selftest fingerprint included) changes shape.</summary>
+    public IReadOnlyList<(int Cx, int Cy)> Spans { get; init; } = Array.Empty<(int, int)>();
     public IReadOnlyDictionary<int, (int Cx, int Cy)> Starts { get; init; } = new Dictionary<int, (int, int)>();
     public IReadOnlyDictionary<int, int> Factions { get; init; } = new Dictionary<int, int>();
     public bool ShortGame { get; init; } = true;
@@ -84,6 +88,7 @@ public sealed class MapData
         var blocked = new List<(int, int)>();
         var visual = new Dictionary<(int, int), char>();
         var fields = new List<(int, int)>();
+        var spans = new List<(int, int)>();
         for (int y = 0; y < h; y++)
         {
             string row = lines[gridAt + y];
@@ -98,6 +103,20 @@ public sealed class MapData
                         blocked.Add((x, y)); visual[(x, y)] = row[x]; break;
                     case 'B':
                         visual[(x, y)] = 'B'; break;   // bridge: open to the sim
+                    // ADR-025: a DESTROYABLE bridge deck. Open to the sim while
+                    // it stands, exactly as 'B' is, but it also becomes an
+                    // entity that can be shot down, and its wreck blocks the
+                    // cell. Plain 'B' keeps its old meaning untouched, which is
+                    // what leaves skirmish-01 (the skirmish golden's map, with
+                    // twelve rows of 'B') and every mission map unchanged.
+                    case 'b':
+                        // The terrain under a destroyable span is drawn as
+                        // WATER and the deck itself is the ENTITY on top. That
+                        // is deliberate: when the span is felled the actor goes
+                        // and the player sees open water, which is the truth.
+                        // Dressing the terrain as a deck would leave a bridge
+                        // drawn over a cell nobody can cross.
+                        visual[(x, y)] = 'w'; spans.Add((x, y)); break;
                     default: throw new FormatException($"grid ({x},{y}): unknown character '{row[x]}'");
                 }
         }
@@ -138,7 +157,7 @@ public sealed class MapData
         }
         return new MapData
         {
-            Width = w, Height = h, Blocked = blocked, Fields = fields, Starts = starts,
+            Width = w, Height = h, Blocked = blocked, Fields = fields, Spans = spans, Starts = starts,
             Factions = factions, ShortGame = shortGame, Units = units, Structures = structures, Triggers = triggers, Visual = visual,
         };
     }
@@ -160,6 +179,9 @@ public sealed class MapData
         var tagMap = new Dictionary<string, List<int>>();
         foreach (var (cx, cy) in Blocked) world.Map.SetBlocked(cx, cy, true);
         foreach (var (cx, cy) in Fields) world.SpawnFerriteField(Map.CellCentre(cx), Map.CellCentre(cy), StandardFieldAmount);
+        // ADR-025: bridge decks spawn WITHOUT blocking their cells - the deck is
+        // the crossing. The block happens when one dies.
+        foreach (var (cx, cy) in Spans) world.SpawnBridge(cx, cy);
         void Tag(string tag, int id)
         {
             if (tag.Length == 0) return;

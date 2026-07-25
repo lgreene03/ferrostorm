@@ -43,10 +43,11 @@ public readonly struct Command
 // kind; renumbering one silently rewrites every golden hash and every replay.
 // RadarUplink (struct type 12) is spawnable since ADR-008; Barracks (struct
 // type 11) is spawnable and produces the infantry since ADR-009; Airfield,
-// Emplacement, Bastion and Outpost are reservations only (doc 23 s4.1),
-// taken because reserving is free and a later collision with a saved byte is
-// silent and fatal.
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17 }
+// Emplacement and Bastion are reservations only (doc 23 s4.1), taken because
+// reserving is free and a later collision with a saved byte is silent and
+// fatal. Outpost (17) graduated under ADR-021 and Bridge (18) under ADR-025.
+// APPEND ONLY: the byte is written into saves.
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 // APPEND ONLY (like EntityKind): the hash stores (int)e.Stance and the save
@@ -642,6 +643,13 @@ public sealed partial class World
         // browns out the grid it funds. Unarmed; a modest Sight gives its owner
         // map-control vision beside the income.
         13 => new StructureTypeDef(500, EntityKind.Outpost, 0, Hp: 1000, SightCells: 5),
+        // Destroyable bridge (ADR-025, P6 Wave C6a). MAP-PLACED ONLY, like the
+        // outpost: BuildTicks 0 keeps it out of every yard queue and no sidebar
+        // item names it. Footprint 1, the wall's shape, because a bridge deck is
+        // a single cell wide. SightCells 0 for the wall's reason: a long deck is
+        // many entities and none of them should enter the fog pass. Hp 800 makes
+        // felling one a deliberate act rather than incidental splash.
+        14 => new StructureTypeDef(400, EntityKind.Bridge, 0, Hp: 800, SightCells: 0, Footprint: 1),
         _ => default,
     };
 
@@ -654,7 +662,7 @@ public sealed partial class World
     /// loops must also skip GateStructType: the gate
     /// is inside the bound but has no def and no file (ADR-005 clause 6).
     /// </summary>
-    public const int MaxStructType = 13;
+    public const int MaxStructType = 14;
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -965,6 +973,44 @@ public sealed partial class World
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
+    }
+
+    /// <summary>
+    /// ADR-025: a destroyable bridge deck cell. Map-placed and NEUTRAL
+    /// (PlayerId -1, the ferrite-field and outpost convention).
+    ///
+    /// The one spawn in the sim that deliberately does NOT call BlockFootprint:
+    /// a bridge IS the crossing, so its cell must stay passable while it stands.
+    /// The block happens on DEATH instead, which is the inversion this wave
+    /// exists to add (see FootprintOnDeath).
+    /// </summary>
+    public int SpawnBridge(int ax, int ay)
+    {
+        var def = GetStructureType(14);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = -1, Kind = EntityKind.Bridge,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 14,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1,
+        });
+    }
+
+    /// <summary>
+    /// ADR-025: what a destroyed structure does to its footprint. Everything
+    /// leaves passable rubble, EXCEPT a bridge, which was the crossing: its
+    /// wreck BLOCKS the cell, so routes re-form around the gap.
+    ///
+    /// This is the only place in the sim where an entity dying makes ground
+    /// LESS passable, and it is why the wave needed its own gate.
+    /// </summary>
+    private void FootprintOnDeath(in Entity t)
+    {
+        int ax = AnchorOf(t.X, t.StructType), ay = AnchorOf(t.Y, t.StructType);
+        int f = FootprintOf(t.StructType);
+        if (t.Kind == EntityKind.Bridge) BlockFootprint(ax, ay, f);
+        else UnblockFootprint(ax, ay, f);
     }
 
     /// <summary>Living barrier count for a player, enforcing MaxBarriersPerPlayer. Entity-index scan: deterministic.</summary>
@@ -1457,7 +1503,7 @@ public sealed partial class World
                 var sold = GetStructureType(e.StructType);
                 _credits[e.PlayerId] += sold.Cost / 2;
                 e.Alive = false;
-                UnblockFootprint(AnchorOf(e.X, e.StructType), AnchorOf(e.Y, e.StructType), FootprintOf(e.StructType));
+                FootprintOnDeath(in e);   // ADR-025
                 break;
             }
             case CommandType.SetRally:
@@ -1576,7 +1622,14 @@ public sealed partial class World
              // engineer-capturable through the untouched CaptureSystem (whose
              // only ownership test, t.PlayerId == e.PlayerId, a neutral -1
              // passes). VictorySystem excludes it from hope explicitly.
-             or EntityKind.Outpost;
+             or EntityKind.Outpost
+             // ADR-025: the Bridge is a structure so that it takes damage, dies,
+             // and runs the footprint path on death (where it BLOCKS rather than
+             // unblocks). It is not hope, because the hope test skips
+             // PlayerId < 0 and a bridge is always neutral; and it is not
+             // capturable, which CaptureSystem excludes explicitly, because
+             // capture is the outpost's whole point and would be nonsense here.
+             or EntityKind.Bridge;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
@@ -1929,7 +1982,13 @@ public sealed partial class World
             if (!ValidId(e.ExplicitTarget)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             var t = _entities[e.ExplicitTarget];
             // ADR-005 clause 2: engineers do not capture fences.
-            if (!t.Alive || !IsStructure(t.Kind) || IsBarrier(t.Kind) || t.PlayerId == e.PlayerId)
+            // ADR-025: a bridge is excluded here explicitly. It is neutral, so
+            // it would otherwise pass the only ownership test this guard has
+            // (PlayerId != mine) exactly as a neutral outpost does, and an
+            // engineer walking into a river crossing to "capture" it is
+            // nonsense. You fell a bridge with an explicit Attack instead.
+            if (!t.Alive || !IsStructure(t.Kind) || IsBarrier(t.Kind)
+                || t.Kind == EntityKind.Bridge || t.PlayerId == e.PlayerId)
             { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
             if (d <= Fix64.FromFraction(49, 16)) // within 1.75 cells of the footprint centre: through the door
@@ -2215,7 +2274,7 @@ public sealed partial class World
                 t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
                 // Destroyed structures leave passable rubble: the footprint
                 // unblocks and cached routes are discarded.
-                if (IsStructure(t.Kind)) UnblockFootprint(AnchorOf(t.X, t.StructType), AnchorOf(t.Y, t.StructType), FootprintOf(t.StructType));
+                if (IsStructure(t.Kind)) FootprintOnDeath(in t);   // ADR-025: a bridge BLOCKS instead
                 // Kill credit for veterancy: the first attacker this tick.
                 int killer = firstAttacker[i];
                 if (killer >= 0)
@@ -2917,7 +2976,7 @@ public sealed partial class World
             {
                 _events.Add(new GameEvent(GameEventType.Died, i, -1));
                 t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
-                if (IsStructure(t.Kind)) UnblockFootprint(AnchorOf(t.X, t.StructType), AnchorOf(t.Y, t.StructType), FootprintOf(t.StructType));
+                if (IsStructure(t.Kind)) FootprintOnDeath(in t);   // ADR-025: a bridge BLOCKS instead
             }
             _entities[i] = t;
         }

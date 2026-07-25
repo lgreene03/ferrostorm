@@ -28,7 +28,7 @@ lands; this file is the resume point if a session dies.
 | C4b | Outposts placed on skirmish-02/-04 + the mapgate harness | under ADR-021; skirmish-01 (golden) and -03 (look-dev) untouched | DONE (NEUTRAL) |
 | C4c | The AI captures neutral outposts | under ADR-021; inert without an outpost, so no golden moves | DONE (NEUTRAL) |
 | C5 | Air layer: airfield-slot model, strike aircraft, transport heli | new ADR required (P4-PORT-02; ADR-009 exclusion) | regeneration | pending |
-| C6a | Destroyable bridges | ADR-025 (ratified): new grid char, skirmish-04 only | NEUTRAL (bridges need no flow repair - doc 24 was wrong) | READY TO BUILD |
+| C6a | Destroyable bridges | ADR-025 (ratified): new grid char 'b', skirmish-04's central ford | NEUTRAL | DONE |
 | C6b | Wall gates | ADR-005 clause 6 DEFERRED them; its revisit precondition (per-player flow fields) is still unmet | measured, not neutral by construction | DEFERRED: needs Luke to override clause 6 |
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
 | C7b | The LAN battle scene: SkirmishLive integration, LocalPlayerId, Host/Join, Hello setup exchange | ADR-022 reserved (wire change); ticket filed | neutral but WIDE | pending |
