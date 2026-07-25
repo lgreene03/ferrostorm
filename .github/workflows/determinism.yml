@@ -36,10 +36,25 @@ jobs:
           # doc comment QUOTES the two bad expressions so the next reader knows
           # what the shape looks like, and a guard that forbids naming the bug
           # is a guard that gets the explanation deleted instead of the defect.
-          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+          # WIDENED AGAIN after an audit found three more, all correct at seat 0
+          # by luck: ValidPlacement(0, ...) asked whose base anchors the build
+          # radius while the command was issued as LocalPlayerId (a joiner could
+          # not build ANYWHERE), and the minimap coloured by "me versus them"
+          # while the battlefield coloured by player id.
+          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],|ValidPlacement\([01],' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
           if [ -n "$HITS" ]; then
             echo "$HITS"
             echo "::error::Hardcoded seat in the battle scene - use LocalPlayerId / EnemyPlayerId (C7b)"; exit 1
+          fi
+          # Team colour is a property of WHICH PLAYER an entity belongs to, not
+          # of who is looking, or the minimap and the battlefield disagree for
+          # the joiner. BattlefieldView.MarkFor is the only place allowed to
+          # decide it; a seat-relative ternary over the marks is the exact shape
+          # that was there.
+          HITS=$(grep -rnE '(LocalPlayerId|EnemyPlayerId).*\?.*(DirectorateMark|SodalityMark)' game/scripts/ | grep -vE ':[[:space:]]*//' || true)
+          if [ -n "$HITS" ]; then
+            echo "$HITS"
+            echo "::error::Team colour keyed on the viewer's seat - use BattlefieldView.MarkFor(player)"; exit 1
           fi
           if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs ; then
             echo "::error::Hardcoded player-0 faction gate in the sidebar - use _game.LocalPlayerId (C7b)"; exit 1

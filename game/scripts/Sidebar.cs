@@ -585,7 +585,7 @@ public partial class Sidebar : PanelContainer
         _powerFill.Size = new Vector2(BarWidth * supply / span, 8);
         _powerTick.Position = new Vector2(Mathf.Min(BarWidth * draw / span, BarWidth - 2), 0);
         _powerTick.Visible = draw > 0;
-        bool brownOut = draw > 0 && supply * 4 < draw * 3;   // integer maths: below 75 per cent
+        bool brownOut = SkirmishLive.BrownedOut(supply, draw);   // the one client threshold
         _powerFill.Color = supply >= draw ? FerriteGold
             : brownOut ? FillRed : FillAmber;
         // The pulse follows the exact lifecycle of the PLACE-button tween above,

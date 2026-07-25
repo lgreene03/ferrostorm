@@ -37,6 +37,7 @@ lands; this file is the resume point if a session dies.
 | C7b-iii | LAN battle scene: lockstep-driven frame loop | verified by two real scenes playing each other in-process | NEUTRAL (client only) | DONE |
 | C7b-iv | Host/Join menu flow (the last mile) | the scene is ready; only the lobby UI remains | NEUTRAL (client + net) | DONE - LAN is reachable; only the human two-machine session remains |
 | FOG | Two hardcoded seats that SURVIVED the C7b-ii sweep (joiner fog) | found by audit, not by a check; ticket P6-joiner-fog-survivors | NEUTRAL (client only) | DONE - 45 harness checks; CI seat guard widened |
+| DUP | Duplicated-rule audit: 3 more seat bugs fixed, rest filed | ticket P6-duplicated-rule-audit (full findings + severities) | NEUTRAL (client; one pure sim method exported) | DONE - 55 harness checks |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 

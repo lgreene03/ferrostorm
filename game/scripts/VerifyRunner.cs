@@ -154,6 +154,25 @@ public partial class VerifyRunner : Node
             Check(!_game.DrawnForLocalSeatForTest(enemyYard),
                   "an enemy in unseen fog is NOT drawn for me");
 
+        // --- Placement asks about MY base, not the other player's ------------
+        // ValidPlacement's player argument selects WHOSE structures anchor the
+        // build radius. The client asked as player 0 and then issued the command
+        // as LocalPlayerId: the same rule, two different players. At seat 1 the
+        // ghost was green only inside the HOST'S base and red inside the
+        // joiner's own, and since the commit gates on it, a joiner could not
+        // build anywhere at all. Two directions, because a seat that inverts
+        // passes either check alone.
+        const int powerPlant = 1;
+        int ownYard2 = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        int foeYard = _game.FindEntity(EntityKind.ConstructionYard, _game.EnemyPlayerId);
+        if (ownYard2 >= 0 && foeYard >= 0)
+        {
+            int nearMine = _game.PlaceableCellsNearForTest(ownYard2, powerPlant, 4);
+            int nearTheirs = _game.PlaceableCellsNearForTest(foeYard, powerPlant, 4);
+            Check(nearMine > 0, $"I can build in MY OWN base ({nearMine} cells accept a power plant)");
+            Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
+        }
+
         // --- The ferrite drain reaches the renderer (P5-ECON-01) -------------
         // The first of the five defects of this shape, and the last to get a
         // check. The fix shipped; nothing asserted it, which is exactly how it
@@ -165,6 +184,45 @@ public partial class VerifyRunner : Node
         // constant, so a mined-out field drew exactly as large as a full one.
         Check(SkirmishLive.FieldFullness(fcap, fcap) > SkirmishLive.FieldFullness(fcap / 4, fcap),
               "a mined-out field draws SMALLER than a full one (the dead expression did not)");
+
+        // --- The brown-out boundary is where ADR-008 says ---------------------
+        // Four implementations of this threshold became one (the client now
+        // calls the sim's), so there is nothing left to pin against. What a
+        // future edit CAN still move silently is the boundary itself, which
+        // ADR-008 clause 1 makes inclusive: at exactly 75 per cent the grid is
+        // healthy. That is one integer away from wrong in both directions, so
+        // both sides of it are asserted.
+        Check(!SkirmishLive.BrownedOut(75, 100), "exactly 75 per cent is NOT a brown-out (the boundary is inclusive)");
+        Check(SkirmishLive.BrownedOut(74, 100), "one unit below 75 per cent IS a brown-out");
+        Check(!SkirmishLive.BrownedOut(0, 0), "a grid with no draw at all is not browned out");
+
+        // --- Team colour is a property of the PLAYER, not of the viewer ------
+        // The minimap held a rival copy keyed on "me versus them", so at seat 1
+        // a joiner's own army was orange on the minimap and teal on the
+        // battlefield. Asserted from the seat that inverts: my own colour must
+        // be the SODALITY mark here, because I am player 1 - if this reads the
+        // Directorate mark, the "me versus them" copy is back.
+        Check(BattlefieldView.MarkFor(_game.LocalPlayerId) == BattlefieldView.SodalityMark,
+              "at seat 1 my own mark is Sodality's, not 'whoever is looking' orange");
+        Check(BattlefieldView.MarkFor(_game.EnemyPlayerId) == BattlefieldView.DirectorateMark,
+              "and the opposition at seat 0 wears Directorate's");
+        Check(BattlefieldView.MarkFor(-1) == BattlefieldView.NeutralMark,
+              "an unowned entity wears neither side's mark");
+        // ...and the same question asked of what the minimap will ACTUALLY
+        // draw, because the two checks above pin the law and a call site can
+        // still grow its own copy. At tick 0 the opposition is entirely in fog,
+        // so every dot on this minimap is mine or neutral. If any dot wears the
+        // OTHER side's mark, the feed is colouring by "me versus them" again.
+        var dots = _game.MinimapView.DotColoursForTest();
+        int mineOnMap = 0, foeOnMap = 0;
+        foreach (var c in dots)
+        {
+            if (c == BattlefieldView.SodalityMark) mineOnMap++;
+            else if (c == BattlefieldView.DirectorateMark) foeOnMap++;
+        }
+        Check(mineOnMap > 0, $"the minimap draws my own army in MY side's colour ({mineOnMap} dots)");
+        Check(foeOnMap == 0,
+              $"no dot wears the other side's mark while they are all in fog ({foeOnMap})");
 
         // ================= BACKFILL =================
         // Everything below guards a feature that SHIPPED with no way to check
