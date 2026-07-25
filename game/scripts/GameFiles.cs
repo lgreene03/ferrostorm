@@ -57,11 +57,21 @@ public static class GameFiles
 
     private static IEnumerable<string> DataRootCandidates()
     {
-        // 1. From source: res:// is game/, so its parent is the repo root.
+        // 1 and 2. From source: res:// is game/, so its parent is the repo root.
+        //
+        // GUARDED, and the guard is not defensive padding: in a PACKAGED build
+        // res:// lives inside the .pck and GlobalizePath returns an EMPTY
+        // STRING, on which Path.GetFullPath throws ArgumentException. That
+        // threw before the search ever reached the executable-directory
+        // candidate below, which is the one a package needs, so the packaged
+        // game died in MainMenu._Ready. It could only ever be caught by running
+        // a real export, which is exactly what found it.
         string res = ProjectSettings.GlobalizePath("res://");
-        yield return Path.GetFullPath(Path.Combine(res, ".."));
-        // 2. Inside the project folder, for a layout that keeps data under game/.
-        yield return Path.GetFullPath(res);
+        if (!string.IsNullOrEmpty(res))
+        {
+            yield return Path.GetFullPath(Path.Combine(res, ".."));
+            yield return Path.GetFullPath(res);
+        }
         // 3. Packaged: the folder holding the executable, the shipped layout
         //    (the game binary with a data folder beside it).
         string? exeDir = Path.GetDirectoryName(OS.GetExecutablePath());

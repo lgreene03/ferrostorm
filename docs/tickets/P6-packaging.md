@@ -2,11 +2,12 @@
 
 The README said "the game is playable from source; there are no packaged builds
 yet", which meant exactly one person on one machine could ever play it. This is
-the packaging path, and the three real defects that had to be fixed to get one.
+the packaging path, and the five real defects that had to be fixed to get one.
 
-`tools/package.sh` produces `build/macos/Ferrostorm.app` plus `build/macos/data`.
+`tools/package.sh [macos|linux|windows|all]` produces a build plus its data
+folder under `build/<platform>/`. All three platforms work.
 
-## The three defects, in the order they bit
+## The first three defects, in the order they bit
 
 **1. An exported build could never have found /data.** ADR-006 made /data the
 runtime source, and `GameFiles.RepoRoot` resolved it as the parent of `res://`.
@@ -53,8 +54,10 @@ the renderer's behaviour and never the sim.
 
 ## Using it
 
-    tools/package.sh            # release
-    tools/package.sh --debug    # debug template, for a console
+    tools/package.sh            # macOS release (the default)
+    tools/package.sh all        # all three platforms
+    tools/package.sh linux      # one platform
+    tools/package.sh windows --debug
 
 Requires the Godot 4.7 **mono** export templates, which are NOT installed by
 default; they go in
@@ -74,28 +77,69 @@ the game starts and then refuses every match with a catalogue error, because
 leaves a stale map behind, which would make the packaged build disagree with the
 repo.
 
+## Two more defects, found only by exporting for real (2026-07-25)
+
+The first packaging pass shipped a macOS build that LAUNCHED but could not run
+the game, and said so as though it were finished. Adding the Linux and Windows
+presets exposed both reasons, because comparing three packages made the hole
+obvious.
+
+**4. `dotnet/embed_build_outputs=false` shipped packages with NO managed code.**
+Every package contained zero game assemblies. `dotnet_publish_project` reported
+DONE and nothing arrived, so the .NET runtime had nothing to load. The macOS
+build survived `--version` only because that is the engine binary answering
+before any C# loads, which is precisely why `--version` was NOT sufficient
+evidence and should not have been reported as if it were. Setting
+`embed_build_outputs=true` fixes all three: Linux and Windows carry the
+assemblies inside the .pck, macOS in
+`Contents/Resources/data_Ferrostorm.Game_macos_arm64/` (346 files).
+
+**5. `GlobalizePath("res://")` returns an EMPTY STRING in a packaged build**, and
+`Path.GetFullPath("")` throws. The candidate search in `GameFiles` therefore
+threw ArgumentException on its second candidate, before it ever reached the
+executable-directory candidate a package actually needs, and the game died in
+`MainMenu._Ready`. Guarded now. This bug was introduced by the very change that
+made packaging possible and could ONLY be caught by running a real export, which
+is the whole argument for doing so rather than reasoning about it.
+
+The lesson worth keeping: a build that starts is not a build that runs, and on
+macOS a release export prints nothing, so "it launched" is the weakest possible
+evidence. The real signal is a headless run that exits 0 with no exception in the
+log, which is what is now recorded below.
+
 ## What is proven, and what is not
 
-Proven: the script runs clean end to end from a wiped `build/`; the bundle is a
-425 MB universal .app signed `adhoc` only; it LAUNCHES (`--version` exits 0 and
-prints the engine version, where before it was SIGKILLed); data stages beside it
-with all four maps; the sim is untouched (`git diff sim/ data/` empty), all 24
-goldens are byte-identical and the full battery exits 0.
+Proven, on all three platforms: `tools/package.sh [macos|linux|windows|all]`
+runs clean end to end from a wiped `build/`; every package carries its managed
+assemblies; `/data` stages beside each with all four maps; the sim is untouched
+(`git diff sim/ data/` empty), all 24 goldens are byte-identical and the full
+battery exits 0.
 
-NOT proven, and honestly owed to a human: that the packaged game actually shows
-its menu and plays a match. An exported release build writes nothing to stdout on
-macOS, so a headless run cannot report success or failure, and I cannot see a
-window. **Double-click `build/macos/Ferrostorm.app`.** Gatekeeper will refuse an
+Proven on macOS specifically, and this is the check that was missing before: the
+packaged build runs headless to **exit 0 with ZERO exceptions in the log**.
+Because `MainMenu._Ready` enumerates the map list through `GameFiles.RepoRoot`,
+a clean boot is positive evidence that the package found its data folder. Before
+the two fixes above the same run died at exec or threw in `_Ready`.
+
+Binary shapes verified: macOS a universal .app signed `adhoc`; Linux an
+`ELF 64-bit LSB x86-64`; Windows a `PE32+ GUI x86-64`. Linux and Windows carry
+an identical 196 MB .pck, as they should.
+
+NOT proven, and honestly owed to a human: that any package shows its menu on
+screen and plays a match. A headless run cannot judge that, and I cannot see a
+window. **Double-click `build/macos/Ferrostorm.app`.** Gatekeeper refuses an
 ad-hoc bundle on first launch: right-click and Open, or clear it with
-`xattr -dr com.apple.quarantine build/macos/Ferrostorm.app`.
+`xattr -dr com.apple.quarantine build/macos/Ferrostorm.app`. The Linux and
+Windows builds are structurally verified only; nobody has run them on their own
+operating system.
 
 ## Owed next
 
-- The human launch check above, which is the only remaining verification.
-- A Linux and a Windows preset. The templates for both are already installed with
-  the mono template set, and neither has macOS's signing problem, so they are
-  cheap; they simply need presets and a cross-check that the data folder lands
-  beside the binary.
+- The human launch check above, which is the only remaining verification on
+  macOS, and a run on a real Linux box and a real Windows box for those two.
+- Linux and Windows presets are DONE (2026-07-25). Neither has macOS's signing
+  problem: the Linux binary just needs its executable bit, which the script
+  sets, and Windows is unsigned by design here.
 - A real Developer ID signature and notarisation before this is given to anyone
   else; the hardened runtime returns at that point, since notarisation requires
   it, and the re-sign step in the script must then be dropped rather than kept.
