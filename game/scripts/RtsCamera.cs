@@ -68,6 +68,12 @@ public partial class RtsCamera : Camera3D
     public void FlyTo(Vector3 ground)
         => _target = new Vector3(ground.X, _target.Y, ground.Z + _target.Y * 0.55f);
 
+    /// <summary>DR-07: the ground point the camera is gliding TOWARD - the
+    /// inverse of FlyTo's mapping, so bookmark-store then FlyTo round-trips
+    /// exactly. Reads the RETAINED target, not the animated Position, which is
+    /// also what makes a bookmark assigned mid-glide mean where you were GOING.</summary>
+    public Vector3 GroundTarget => new(_target.X, 0, _target.Z - _target.Y * 0.55f);
+
     /// <summary>Teleport with no glide (initial placement).</summary>
     public void Snap(Vector3 pos)
     {

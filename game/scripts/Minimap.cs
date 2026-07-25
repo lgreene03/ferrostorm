@@ -103,6 +103,9 @@ public partial class Minimap : Control
 
     /// <summary>camAt is retained for call-site stability; the W3-20 frustum
     /// trapezoid replaces the old camera circle as the view indicator.</summary>
+    /// <summary>Verification read: how many pings are live right now.</summary>
+    public int PingCountForTest => _pings.Count;
+
     /// <summary>Verification read: the colours this minimap is actually about
     /// to DRAW, taken from the dots it holds rather than recomputed. A check
     /// that recomputed them would agree with a bug in the feed by construction,
@@ -170,6 +173,17 @@ public partial class Minimap : Control
             // Swallow rather than fall through: an unswallowed click on a dark
             // minimap would reach the battlefield as a stray order.
             if (ev is InputEventMouseButton or InputEventMouseMotion) AcceptEvent();
+            return;
+        }
+        // DR-09: alt-click PINGS instead of navigating - a self-note today, the
+        // ally signal the moment team play exists. Placed at the click's world
+        // point through the same conversion Navigate uses, in the ferrite-gold
+        // neutral mark so it reads as annotation, not as an alert.
+        if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true, AltPressed: true } pg)
+        {
+            var world = new Vector2(pg.Position.X / Size.X * _w, pg.Position.Y / Size.Y * _h);
+            Ping(world, new Color(0.79f, 0.63f, 0.36f));
+            AcceptEvent();
             return;
         }
         if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } mb)
