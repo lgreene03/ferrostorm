@@ -41,6 +41,7 @@ lands; this file is the resume point if a session dies.
 | DUP2 | The audit's last HIGH + the 4 most player-visible MEDIUMs | same ticket; NO HIGH FINDINGS REMAIN | NEUTRAL (client only) | DONE - 64 harness checks |
 | DUP3 | The audit's ENTIRE remainder: every MEDIUM and actionable LOW | same ticket, now CLOSED | NEUTRAL (client + 4 pure sim methods exported) | DONE - 67 harness checks |
 | CI-HARNESS | verify-client.sh runs in CI on every push | closes "it protects the repo as often as someone remembers to run it" | NEUTRAL (CI + wrapper only) | DONE - 67 checks on every push; found the fresh-checkout import gap |
+| C7c | Dropped-peer handling: the survivor is TOLD | the last unexplained state in LAN; match RESULT filed as Q015, not guessed | NEUTRAL (net + client) | DONE - 72 harness checks |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 

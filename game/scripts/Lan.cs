@@ -28,11 +28,21 @@ public static class NetSession
     public static bool Desynced;
     public static int DesyncTick = -1;
 
+    /// <summary>C7c: the other commander's connection ended. Latched, and held
+    /// APART from Desynced because the two are different facts with different
+    /// consequences - a desync voids the result, a departure does not - and a
+    /// notice that conflated them would tell a survivor their match was void
+    /// when it was merely over.</summary>
+    public static bool PeerLeft;
+    public static int PeerLeftId = -1;
+
     public static void Reset()
     {
         Active = false;
         Desynced = false;
         DesyncTick = -1;
+        PeerLeft = false;
+        PeerLeftId = -1;
     }
 
     /// <summary>The relay compared two clients' state hashes for this tick and
@@ -43,6 +53,16 @@ public static class NetSession
         if (Desynced) return;
         Desynced = true;
         DesyncTick = tick;
+    }
+
+    /// <summary>The relay reported that a player's connection ended. Latched for
+    /// the same reason a desync is: they are not coming back, and the survivor
+    /// may be looking at the map when it happens.</summary>
+    public static void NotePeerLeft(int playerId)
+    {
+        if (PeerLeft) return;
+        PeerLeft = true;
+        PeerLeftId = playerId;
     }
 }
 
