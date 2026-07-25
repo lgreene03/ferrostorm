@@ -46,7 +46,8 @@ lands; this file is the resume point if a session dies.
 | ECON-08 | Harvester load readout + ferrite field inspect | P5-ECON-08, verified outstanding in the PR#30 survey | NEUTRAL (presentation only) | DONE - 87 harness checks |
 | M02-DEFEAT | Mission 02 could not be lost, and ran forever if the engineer died | forced by the mission's own objective logic; mission 03's half filed as Q016 | NEUTRAL (data + gate; goldens byte-identical) | DONE |
 | BD-05 | Selling a producer burned everything already PAID into it | wider than filed: 4 slots on a yard since ADR-023, not 1 | NEUTRAL (proven by a golden run, not assumed) | DONE |
-| CANCEL+STOP | Lane-2 cancel destroyed a DIFFERENT finished building; Stop left a patrol armed | found by a verified survey; the survey REFUTED my assumption that the queue was empty | NEUTRAL (client only) | DONE - 91 harness checks; cancel guard UNCHECKED, reason in the ledger |
+| CANCEL+STOP | Lane-2 cancel destroyed a DIFFERENT finished building; Stop left a patrol armed | found by a verified survey; the survey REFUTED my assumption that the queue was empty | NEUTRAL (client only) | DONE - and the cancel guard is now CHECKED too (95 checks, see CANCEL-CHECK) |
+| CANCEL-CHECK | Closed the stated gap: the lane-2 cancel guard has a check | SpawnPowerPlant opens the tech tree, which is what made the two-lane state buildable | NEUTRAL (client only) | DONE - 95 harness checks |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
