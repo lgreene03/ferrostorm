@@ -350,10 +350,31 @@ public partial class CombatEffects : Node3D
         }
     }
 
+    /// <summary>
+    /// Is there an actor for this entity that the local player can actually SEE?
+    ///
+    /// The visibility clause is the fix for a real fog leak. This asked only
+    /// whether the actor EXISTED, and a fog-hidden enemy's actor does exist - it
+    /// is merely Visible = false. So an unseen turret firing out of unexplored
+    /// fog drew its muzzle flash, its tracer and its impact, and an enemy dying
+    /// in the dark drew an explosion and left a scorch decal. The fog hid the
+    /// shooter and the effects layer painted a bright arrow at it.
+    ///
+    /// It READS node.Visible rather than recomputing the rule. The actor loop
+    /// has already decided this through DrawnForLocalSeat, and a second opinion
+    /// here is how the visibility rule came to have three implementations in the
+    /// first place. Own and neutral actors are always visible, so nothing the
+    /// player owns loses an effect.
+    ///
+    /// Audio is deliberately NOT gated: the superweapon's charge cue plays
+    /// before this is called, and hearing distant gunfire you cannot see is
+    /// atmosphere rather than a leak - a sound gives away no position.
+    /// </summary>
     private static bool Live(IReadOnlyDictionary<int, Node3D> actors, int id, out Node3D node)
     {
         node = null!;
-        return actors.TryGetValue(id, out node!) && node != null && IsInstanceValid(node);
+        return actors.TryGetValue(id, out node!) && node != null && IsInstanceValid(node)
+               && node.Visible;
     }
 
     private MeshInstance3D SpawnMesh(Mesh mesh, Material mat, Vector3 pos)

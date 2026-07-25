@@ -1415,7 +1415,7 @@ public partial class SkirmishLive : Node3D
                     string msg = pe.Kind == EntityKind.ConstructionYard
                         ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY"
                             + (_replay is null ? "  -  PLACE >>" : "")
-                        : $"{(pe.UnitType > 0 && pe.UnitType < UnitNames.Length ? UnitNames[pe.UnitType] : "UNIT")} DEPLOYED";
+                        : $"{UnitNameOf(pe.UnitType)} DEPLOYED";
                     ShowToast(msg);
                     // TICKET-P6-VO-01: the battlefield voice, ALONGSIDE the
                     // toast, never instead of it (doc 24's rule for every line).
@@ -1783,7 +1783,22 @@ public partial class SkirmishLive : Node3D
         }
     }
 
-    private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR" };
+    // ADR-019 added unit type 13, the repair vehicle, to the catalogue, the
+    // sidebar and the model library - and not to here, so a completed one
+    // toasted "UNIT DEPLOYED" and its selection readout said "UNIT". The
+    // length guards at both lookups turned a missing entry into a shrug
+    // instead of an error, which is why it went unnoticed.
+    private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR", "REPAIR VEHICLE" };
+    /// <summary>The display name for a unit type, or "UNIT" past the table's
+    /// end. ONE lookup, because there were three and two carried their own copy
+    /// of the length guard - which turned a missing table entry into a silent
+    /// shrug in three separate readouts rather than one obvious gap.</summary>
+    private static string UnitNameOf(int type) =>
+        type > 0 && type < UnitNames.Length ? UnitNames[type] : "UNIT";
+
+    /// <summary>Verification read: what a unit type is CALLED on screen.</summary>
+    public string UnitNameForTest(int type) => UnitNameOf(type);
+
     // W3-19: structure names by type id (Sidebar's table is private).
     // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
     // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
@@ -1989,16 +2004,30 @@ public partial class SkirmishLive : Node3D
     public bool VoiceIsPlaying(string name) => _audio.IsVoicePlaying(name);
 
     /// <summary>DEF-08 clause 8: while drawing, the readout is the running cost
-    /// and whether the cap refuses the run - the two numbers that decide
-    /// whether to release the button.</summary>
+    /// and whether the run will be refused - the numbers that decide whether to
+    /// release the button.
+    ///
+    /// It now names the MONEY as a reason as well as the cap. It quoted a total
+    /// cost while saying nothing about being unable to pay it, so the honest
+    /// reading of "20 WALL SEGMENTS 2000 cr" with 300 credits in hand was that
+    /// twenty segments were about to be built. Three of them were.
+    ///
+    /// Reads _placingType rather than the literal 9: during a drag that IS the
+    /// barrier being drawn, and ADR-005 reserves a second barrier type.</summary>
     private string WallDragSummary()
     {
-        long cost = _dragRun * (long)_world.GetStructureType(9).Cost;
+        int type = _placingType;
+        long cost = _dragRun * (long)_world.GetStructureType(type).Cost;
         int have = OwnCount(EntityKind.Wall);
-        string cap = have + _dragRun > World.MaxBarriersPerPlayer
-            ? $"   CAP {have}/{World.MaxBarriersPerPlayer} - RUN TRUNCATED"
-            : $"   {have + _dragRun}/{World.MaxBarriersPerPlayer}";
-        return $"{_dragRun} WALL SEGMENTS   {cost} cr{cap}";
+        int landing = BarriersThatWillLand(type, _dragRun);
+        string tail;
+        if (landing >= _dragRun)
+            tail = $"   {have + _dragRun}/{World.MaxBarriersPerPlayer}";
+        else if (have + landing >= World.MaxBarriersPerPlayer)
+            tail = $"   CAP {have}/{World.MaxBarriersPerPlayer} - ONLY {landing} WILL LAND";
+        else
+            tail = $"   ONLY {landing} AFFORDABLE - RUN TRUNCATED";
+        return $"{_dragRun} WALL SEGMENTS   {cost} cr{tail}";
     }
 
     private string SelectionSummary()
@@ -2042,8 +2071,8 @@ public partial class SkirmishLive : Node3D
             foreach (int sid in _selection)
                 if (_latest.TryGetValue(sid, out var v))
                 {
-                    string name = v.Kind == EntityKind.Unit && v.UnitType < UnitNames.Length
-                        ? UnitNames[v.UnitType] : v.Kind.ToString().ToUpperInvariant();
+                    string name = v.Kind == EntityKind.Unit
+                        ? UnitNameOf(v.UnitType) : v.Kind.ToString().ToUpperInvariant();
                     string hp = v.MaxHp > 0 ? $"  {v.Hp}/{v.MaxHp}" : $"  {v.Hp} HP";
                     // TICKET-P5-REP-04: state the real rate - 2 hp per tick at
                     // 15 Hz is 30 hp/s for 15 cr/s, and the player should not
@@ -2205,7 +2234,7 @@ public partial class SkirmishLive : Node3D
                 var q = _world.QueueContents(i);
                 held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
                 if (held && _exitBlockedShown.Add(i))
-                    ShowToast($"EXIT BLOCKED  -  {(q[0] > 0 && q[0] < UnitNames.Length ? UnitNames[q[0]] : "UNIT")} WAITING");
+                    ShowToast($"EXIT BLOCKED  -  {UnitNameOf(q[0])} WAITING");
             }
             if (!held) _exitBlockedShown.Remove(i);
         }
@@ -2309,7 +2338,20 @@ public partial class SkirmishLive : Node3D
     /// defect, not a choice. Reads GetStructureType, the live catalogue, not
     /// DefaultStructureType.
     /// </summary>
-    private bool CanPlace(int ax, int ay, int type)
+    /// <param name="aheadInRun">How many segments of the SAME drag land before
+    /// this one. A barrier is charged as it lands, one at a time, so segment N
+    /// is paid for only if the treasury covers N+1 of them and the cap has room
+    /// for N+1 more. Zero for a single click, which is why that path's behaviour
+    /// is unchanged to the credit.
+    ///
+    /// This parameter is the whole fix. The drag path used to ask only about
+    /// geometry and the cap, so a run the player could not afford tinted
+    /// entirely green, sent every segment, and the sim silently dropped each one
+    /// past the money. It went unnoticed because the opening treasury is 8000
+    /// and a segment costs 100: exactly the 80-segment cap, so the two limits
+    /// coincide at the start of every match and only diverge once the player has
+    /// spent anything at all.</param>
+    private bool CanPlace(int ax, int ay, int type, int aheadInRun = 0)
     {
         // The SEAT matters here and was hardcoded: ValidPlacement's player
         // argument selects whose structures anchor the build radius (World.cs,
@@ -2321,9 +2363,31 @@ public partial class SkirmishLive : Node3D
         // structure down anywhere at all.
         if (!_world.ValidPlacement(LocalPlayerId, ax, ay, type)) return false;
         if (!IsBarrier(type)) return true;
-        return _world.Credits(LocalPlayerId) >= _world.GetStructureType(type).Cost
-            && OwnCount(EntityKind.Wall) < World.MaxBarriersPerPlayer;
+        return CanAffordAnotherBarrier(type, aheadInRun);
     }
+
+    /// <summary>How many segments of a run of this length will ACTUALLY land,
+    /// given the treasury and the cap. The ghosts tint by it and the readout
+    /// reports it, so the two cannot say different things about the same run.
+    /// A PREDICTION, never a filter: the commit still sends the whole run and
+    /// the sim decides, because a client-side filter would be a second opinion
+    /// that diverges the moment credits move between the draw and the release
+    /// (CommitWallDragAtCell's header states the same rule).</summary>
+    private int BarriersThatWillLand(int type, int runLength)
+    {
+        int n = 0;
+        while (n < runLength && CanAffordAnotherBarrier(type, n)) n++;
+        return n;
+    }
+
+    /// <summary>The money-and-cap half of CanPlace, asked without a cell,
+    /// because "how many more can I have" and "may this one go here" are
+    /// different questions over the same rule. CanPlace calls it too rather than
+    /// restating it: writing the expression twice here is how the drag and the
+    /// click came to disagree in the first place.</summary>
+    private bool CanAffordAnotherBarrier(int type, int aheadInRun) =>
+        _world.Credits(LocalPlayerId) >= (long)_world.GetStructureType(type).Cost * (aheadInRun + 1)
+        && OwnCount(EntityKind.Wall) + aheadInRun < World.MaxBarriersPerPlayer;
 
     /// <summary>
     /// DEF-01 clause 8: the selection ring was hardcoded at 1.5, which is the
@@ -2381,8 +2445,11 @@ public partial class SkirmishLive : Node3D
         }
         // Clause 8: the cap is a hard sim rule (ADR-005 clause 5), so the run
         // must read as refused BEFORE the credits leave. Segments past the cap
-        // tint red exactly as an illegal cell does.
-        int have = OwnCount(EntityKind.Wall);
+        // tint red exactly as an illegal cell does - and, since this wave, so do
+        // segments past the MONEY. Through CanPlace, the same predicate the
+        // single click uses, with i naming this segment's position in the run:
+        // the two paths asked different questions about one rule, and the drag
+        // was the one that never mentioned the treasury.
         for (int i = 0; i < _dragGhosts.Count; i++)
         {
             var g = _dragGhosts[i];
@@ -2390,9 +2457,7 @@ public partial class SkirmishLive : Node3D
             var (x, y) = run[i];
             g.Visible = true;
             g.Position = new Vector3(x + 0.5f, 0.25f, y + 0.5f);
-            bool ok = _world.ValidPlacement(LocalPlayerId, x, y, _placingType)
-                      && have + i < World.MaxBarriersPerPlayer;
-            g.MaterialOverride = ok ? GhostValidMat : GhostInvalidMat;
+            g.MaterialOverride = CanPlace(x, y, _placingType, i) ? GhostValidMat : GhostInvalidMat;
         }
         _dragRun = run.Count;
     }
@@ -3936,6 +4001,51 @@ public partial class SkirmishLive : Node3D
     public bool SidebarUnitVisible(int typeId) => _sidebar.UnitButtonVisible(typeId);
     /// <summary>Drive the S hotkey's handler rather than a copy of it.</summary>
     public void PressStop() => IssueStop();
+
+    /// <summary>Verification read: how many drag ghosts are wearing the VALID
+    /// material right now. Reads the ghosts' own MaterialOverride, not a
+    /// recomputation of what it ought to be - a check that recomputed the tint
+    /// would agree with a bug in the tinting by construction, which is how the
+    /// missing affordability test survived review.</summary>
+    public int DragGhostsAcceptedForTest()
+    {
+        int n = 0;
+        foreach (var g in _dragGhosts)
+            if (g.Visible && g.MaterialOverride == GhostValidMat) n++;
+        return n;
+    }
+    /// <summary>Verification read: the drag readout the player is shown.</summary>
+    public string WallDragSummaryForTest() => WallDragSummary();
+    /// <summary>Verification hook: extend an open drag to a cell, as moving the
+    /// mouse does. Drives the real UpdateDragGhosts rather than a copy.</summary>
+    public void DragToCellForTest(int cx, int cy) { if (_wallDrag) UpdateDragGhosts(cx, cy); }
+    /// <summary>Verification hook: leave placement mode the way Escape does.</summary>
+    public void CancelPlacementForTest() => ExitPlacement();
+    /// <summary>Verification hook: push ONE synthetic Fired event through the
+    /// REAL effects layer and report how many effect nodes it spawned. Drives
+    /// CombatEffects.OnTickEvents with the live actor dictionary, so what is
+    /// measured is what a real tick would draw.</summary>
+    public int EffectNodesFromFiredForTest(int attackerId, int targetId)
+    {
+        int before = _effects.GetChildCount();
+        _effects.OnTickEvents(
+            new[] { new GameEvent(GameEventType.Fired, attackerId, targetId) }, _actors, _audio);
+        return _effects.GetChildCount() - before;
+    }
+
+    /// <summary>Verification read: an entity's cell, from the SIM.</summary>
+    public (int X, int Y) CellOfForTest(int id)
+    {
+        var e = _world.Entities[id];
+        return (Map.CellOf(e.X), Map.CellOf(e.Y));
+    }
+    /// <summary>Verification hook: move the local treasury, so a check can put
+    /// the player in a state the opening hand never starts in. Through the sim's
+    /// own public GrantCredits; nothing here invents a second way to hold money.
+    /// Needed because the opening 8000 buys exactly the 80-segment cap, so at
+    /// the starting treasury the money and the cap bite at the same segment and
+    /// a funds-truncation check would pass for the wrong reason.</summary>
+    public void GrantCreditsForTest(long amount) => _world.GrantCredits(LocalPlayerId, amount);
     /// <summary>Verification surface: the real minimap, so a check can read the
     /// dots it will DRAW rather than a recomputation of them.</summary>
     public Minimap MinimapView => _minimap;

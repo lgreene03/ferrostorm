@@ -121,7 +121,14 @@ public partial class ReplayTheater : Node3D
             _targets[id] = new Vector3(x, gy, z);
             if (kind == 3) // ferrite fades as it drains
             {
-                float g = Mathf.Max(0.2f, e[6].GetInt32() / 12000f);
+                // Through the same predicate the live client uses. This held a
+                // copy with the cap hardcoded at 12000, which is the very defect
+                // P5-ECON-01 fixed on the other side: a map authoring a richer
+                // or poorer deposit drew every field at the wrong size here, or
+                // pinned to the floor. The exported JSON carries no cap column,
+                // so 0 is passed and FieldFullness applies its own default - the
+                // one place that default is now written down.
+                float g = SkirmishLive.FieldFullness(e[6].GetInt32(), 0);
                 node.Scale = Vector3.One * (0.6f + g * 0.9f);
             }
         }
