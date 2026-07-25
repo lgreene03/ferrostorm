@@ -31,7 +31,7 @@ lands; this file is the resume point if a session dies.
 | C6 | Wall gates + destroyable bridges | ADR-005 clause 6 revisit; needs incremental flow repair | regeneration | pending |
 | C7a | Non-blocking lockstep poll (TryAdvanceTick + lanpoll chaos gate) | Q002 remainder, first half | neutral (net layer) | DONE |
 | C7b | The LAN battle scene: SkirmishLive integration, LocalPlayerId, Host/Join, Hello setup exchange | ADR-022 reserved (wire change); ticket filed | neutral but WIDE | pending |
-| C8 | Multi-resource fields | P4-PORT-04, new ADR | regeneration | pending |
+| C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
 Phase B is complete: with B5 landed (2026-07-20), every B row (B1 through B6) is
