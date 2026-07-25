@@ -2140,6 +2140,21 @@ public partial class SkirmishLive : Node3D
             return $"OUTPOST ({owner})   {iv.Hp}/{iv.MaxHp}   "
                  + $"pays its owner {World.OutpostIncomePerSecond} cr/s   {how}";
         }
+        // P5-ECON-08: a ferrite field, inspected. The deposit a player is about
+        // to send a harvester twenty seconds across the map for could not be
+        // examined at all: no readout, and its only tell was the node's size,
+        // which is a floor-clamped approximation. The stock is what decides
+        // whether the trip is worth making.
+        if (_selection.Count == 0 && _inspected >= 0
+            && _latest.TryGetValue(_inspected, out var fv) && fv.Alive
+            && fv.Kind == EntityKind.FerriteField)
+        {
+            int cap = fv.FerriteCap > 0 ? fv.FerriteCap : fv.FerriteAmount;
+            string state = fv.FerriteAmount <= 0 ? "   SPENT"
+                : cap > 0 && fv.FerriteAmount < cap / 5 ? "   NEARLY SPENT" : "";
+            return $"FERRITE FIELD   {fv.FerriteAmount}/{cap} cr{state}"
+                 + "   send a harvester with a refinery standing";
+        }
         if (_selection.Count == 0) return "";
         // TICKET-P5-SET-01 rule, applied here too: the readout names the LIVE
         // bindings, never the default letters - hard-coded "R repair  X sell"
@@ -2233,7 +2248,28 @@ public partial class SkirmishLive : Node3D
                     // than as a building that did nothing.
                     string income = v.Kind == EntityKind.Outpost && v.PlayerId == LocalPlayerId
                         ? $"   +{World.OutpostIncomePerSecond} cr/s" : "";
-                    return name + hp + off + rep + income + acts + stance;
+                    // P5-ECON-08: what the harvester is CARRYING, and what it is
+                    // doing about it. The line above this reads "700/700", which
+                    // is HIT POINTS - so a full hopper and an empty one looked
+                    // identical, and the one number a harvester exists to produce
+                    // was the one number the game would not show. Read live from
+                    // the sim like the stance and repair states beside it.
+                    string load = "";
+                    if (v.Kind == EntityKind.Harvester && v.PlayerId == LocalPlayerId
+                        && sid >= 0 && sid < _world.EntityCount)
+                    {
+                        var he = _world.Entities[sid];
+                        string doing = he.HState switch
+                        {
+                            HarvestState.ToField => "  heading out",
+                            HarvestState.Loading => "  loading",
+                            HarvestState.ToRefinery => "  returning",
+                            HarvestState.Unloading => "  unloading",
+                            _ => IsParked(sid) ? "  parked" : "  idle",
+                        };
+                        load = $"   LOAD {he.Carry}/{World.HarvesterCapacity} cr{doing}";
+                    }
+                    return name + hp + off + rep + income + load + acts + stance;
                 }
             return "";
         }
@@ -3735,7 +3771,19 @@ public partial class SkirmishLive : Node3D
             // whole mechanic is undiscoverable: the building simply sits there
             // looking like scenery, with nothing anywhere saying it pays or
             // that an engineer takes it. Read-only, never selected.
+            //
+            // P5-ECON-08 widens the same affordance to FERRITE FIELDS, for the
+            // same reason and with the same read-only rule. A field is the other
+            // thing on the battlefield a player wants to interrogate and cannot
+            // own: how much is left in it decides whether a harvester's round
+            // trip is worth making, and the only tell was the node's size, which
+            // is clamped at a floor and so cannot distinguish "nearly spent"
+            // from "spent". The outpost is picked FIRST because the two never
+            // overlap in practice and an ordered pick is one less thing to
+            // reason about.
             _inspected = PickEntity(at, 1.4f, v => v.Kind == EntityKind.Outpost);
+            if (_inspected < 0)
+                _inspected = PickEntity(at, 1.4f, v => v.Kind == EntityKind.FerriteField);
             if (_inspected >= 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
             return;
         }
@@ -4088,6 +4136,23 @@ public partial class SkirmishLive : Node3D
     /// screen position; this is the same end state without the projection, so
     /// a harness can assert what the readout SAYS about an outpost.</summary>
     public void InspectForTest(int id) { _selection.Clear(); _inspected = id; }
+
+    /// <summary>Verification hook: select exactly one entity, so a readout check
+    /// reads the single-selection branch rather than the multi-select summary.</summary>
+    public void SelectOnlyForTest(int id) { _selection.Clear(); _inspected = -1; _selection.Add(id); }
+    /// <summary>Verification hook: clear selection and inspect together, so one
+    /// check cannot leave a readout standing for the next.</summary>
+    public void ClearSelectionForTest() { _selection.Clear(); _inspected = -1; }
+    /// <summary>Verification hook: put ore in a harvester's hopper, through the
+    /// sim's own scenario-scripting setter. Loading one for real means driving a
+    /// full round trip to a field, which is a slower and far more fragile way to
+    /// ask whether a readout prints a number it was handed.</summary>
+    public void SetCarryForTest(int id, int carry)
+    {
+        var e = _world.Entities[id];
+        e.Carry = carry;
+        _world.SetEntityForTest(id, e);
+    }
     /// <summary>Verification read: the first living entity of a kind owned by
     /// a given player (-1 for neutral), or -1. Lets a harness find the outpost
     /// or the yard it wants to act on without hardcoding an entity id that
@@ -4293,6 +4358,11 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification hook: end the match with this player eliminated,
     /// through the REAL path the sim's victory latch calls.</summary>
     public void EliminateForTest(int eliminatedPlayer) => OnEliminated(eliminatedPlayer);
+
+    /// <summary>Verification read: an entity's kind, for checks that care what
+    /// KIND was hit rather than which instance. Ferrite fields sit adjacent, so
+    /// a click aimed at one legitimately lands on its neighbour.</summary>
+    public EntityKind EntityKindForTest(int id) => _world.Entities[id].Kind;
 
     /// <summary>Verification read: which player this actor's team strip is
     /// currently painted FOR, or -2 if there is no actor. Reads what is drawn,

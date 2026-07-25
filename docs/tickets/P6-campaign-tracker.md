@@ -43,6 +43,7 @@ lands; this file is the resume point if a session dies.
 | CI-HARNESS | verify-client.sh runs in CI on every push | closes "it protects the repo as often as someone remembers to run it" | NEUTRAL (CI + wrapper only) | DONE - 67 checks on every push; found the fresh-checkout import gap |
 | C7c | Dropped-peer handling: the survivor is TOLD | the last unexplained state in LAN; match RESULT filed as Q015, not guessed | NEUTRAL (net + client) | DONE - 72 harness checks |
 | VERDICT | The end-of-match banner told the winning JOINER they had lost (10th seat bug) + captured structures never changed colour | found by a verified survey of docs 18/22, not by the docs' own claims | NEUTRAL (presentation only) | DONE - 78 harness checks |
+| ECON-08 | Harvester load readout + ferrite field inspect | P5-ECON-08, verified outstanding in the PR#30 survey | NEUTRAL (presentation only) | DONE - 87 harness checks |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
