@@ -48,6 +48,16 @@ the same commit.
   decide by Phase 3 start). Re-queued from the ADR-013 line above.
 - ADR-017: reserved for the deliberate save-format decision if it is ever
   reopened (see the ADR-006 line). Re-queued from the ADR-012 line above.
+- ADR-024: PROPOSED 2026-07-25 - ADR-024-multi-resource.md (a second resource
+  type, P4-PORT-04; P6 Wave C8). Number claimed here per the numbering law.
+  NOT RATIFIED and deliberately not self-ratified: unlike every other C wave,
+  the GDD is SILENT on a second resource and doc 21's own ticket says "GDD
+  decision first", so this is a design authority that does not exist yet rather
+  than a design to be implemented. Q014 asks for it. The ADR carries the
+  decisive engineering fact: YIELD into the one treasury is hash-NEUTRAL, while
+  separate currency POOLS move all 24 goldens by construction (the per-player
+  fold in ComputeStateHash cannot be guarded), so the cheap option and the
+  design-correct option are the same one.
 - ADR-023: RATIFIED 2026-07-25 - ADR-023-parallel-build-lanes.md (parallel
   structure/defence build lanes at the Construction Yard, GDD line 45's
   remainder; P6 Wave C3b). Number claimed here per the numbering law. Hash
