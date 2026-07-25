@@ -173,6 +173,23 @@ public partial class VerifyRunner : Node
             Check(nearTheirs == 0, $"I canNOT build inside the OPPOSITION'S base ({nearTheirs} cells)");
         }
 
+        // --- Stop disarms EVERY armed order ----------------------------------
+        // IssueStop disarmed attack-move and not patrol, and it was the only
+        // site in the family that treated them separately. Arm a patrol, change
+        // your mind, press stop: the units halted and the patrol stayed armed,
+        // so the next left click issued it to the whole selection and marched
+        // them back out. Both directions, since the pair must clear together.
+        _game.SelectAllOwn();
+        _game.PressKey(Settings.BindOf("patrol"));   // the LIVE binding, not a guessed letter
+        Check(_game.PatrolArmed, "a patrol can be armed (the precondition)");
+        _game.PressStop();
+        Check(!_game.PatrolArmed, "STOP disarms an armed patrol");
+        _game.PressKey(Settings.BindOf("attack_move"));
+        Check(_game.AttackMoveArmed, "an attack-move can be armed (the precondition)");
+        _game.PressStop();
+        Check(!_game.AttackMoveArmed, "...and still disarms an armed attack-move");
+        _game.ClearSelectionForTest();
+
         // --- A harvester says what it is CARRYING (P5-ECON-08) ---------------
         // The readout showed "700/700", which is HIT POINTS, so a full hopper
         // and an empty one were indistinguishable - the one number a harvester
@@ -555,12 +572,23 @@ public partial class VerifyRunner : Node
             // Drive both scenes the way the frame loop does: each polls, and a
             // tick only lands once BOTH have submitted for it. Interleaved on
             // one thread precisely because neither call may block.
+            //
+            // BOTH seats are driven to EXACTLY the same tick, and each is capped
+            // rather than the loop exiting on the host's count alone. That was a
+            // latent flaw in this test, not in the game: the seats advance
+            // independently once their merged batches land, so stepping both and
+            // then exiting on the host could leave them one tick apart - and the
+            // hash comparison below would then compare two DIFFERENT ticks and
+            // report a desync that had not happened. It passed locally every
+            // time and failed the first time a loaded CI runner changed the
+            // interleaving (60 vs 61).
+            const int lanTicks = 60;
             int spins = 0;
-            while (host.CurrentTick < 60 && spins++ < 4000)
+            while ((host.CurrentTick < lanTicks || join.CurrentTick < lanTicks) && spins++ < 4000)
             {
                 int before = host.CurrentTick + join.CurrentTick;
-                host.StepTicks(1);
-                join.StepTicks(1);
+                if (host.CurrentTick < lanTicks) host.StepTicks(1);
+                if (join.CurrentTick < lanTicks) join.StepTicks(1);
                 // Yield when neither could advance. The merged batch arrives on
                 // the client's reader THREAD, so a spin loop that never gives
                 // the scheduler a chance simply burns its whole budget before a
@@ -570,7 +598,7 @@ public partial class VerifyRunner : Node
                 if (host.CurrentTick + join.CurrentTick == before)
                     System.Threading.Thread.Sleep(1);
             }
-            Check(host.CurrentTick >= 60, $"the host advanced under lockstep ({host.CurrentTick} ticks)");
+            Check(host.CurrentTick >= lanTicks, $"the host advanced under lockstep ({host.CurrentTick} ticks)");
             Check(join.CurrentTick == host.CurrentTick,
                   $"both seats advanced in lockstep ({host.CurrentTick} vs {join.CurrentTick})");
             Check(host.StateHash == join.StateHash,
