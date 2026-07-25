@@ -1314,14 +1314,39 @@ public partial class SkirmishLive : Node3D
     /// replay that has reached the end of its stream all stop it.</summary>
     private bool Running => _winner < 0 && !_paused && !_replayDone;
 
-    /// <summary>TICKET-P5-SET-01: raise the desync notice if the session has one.
-    /// Polled rather than pushed because NetSession is written by a relay reader
-    /// thread, and a background thread may not touch a Godot node.</summary>
+    /// <summary>
+    /// TICKET-P5-SET-01: raise the match notice if the session has one. Polled
+    /// rather than pushed because NetSession is written by a relay reader
+    /// thread, and a background thread may not touch a Godot node.
+    ///
+    /// C7c: TWO reasons a LAN match ends without a winner, and they are said
+    /// differently on purpose. A desync means the players no longer share a
+    /// world and the result is VOID. A departure means the world was fine and
+    /// the other commander closed it - nothing diverged, so calling that void
+    /// would be a lie, and leaving it unexplained (which is what shipped) reads
+    /// as the game having crashed. The desync wins the widget when both are
+    /// somehow true, because it is the one that invalidates what came before.
+    /// </summary>
     private void RefreshDesyncNotice()
     {
-        if (!NetSession.Desynced || _desyncNotice.Visible) return;
-        _desyncNotice.Text =
-            $"DESYNC AT TICK {NetSession.DesyncTick}\nthis match's players no longer share a world; the result is void";
+        // Mirror the lockstep client's latches into the session first. This runs
+        // every frame rather than inside the tick drain, because a departure is
+        // precisely the case where NO TICK EVER RUNS AGAIN - hanging the notice
+        // off the drain would mean the one event that stops the sim could only
+        // be reported by the sim advancing.
+        if (_net is { PeerLeft: true }) NetSession.NotePeerLeft(_net.PeerLeftId);
+        if (_desyncNotice.Visible) return;
+        if (NetSession.Desynced)
+            _desyncNotice.Text =
+                $"DESYNC AT TICK {NetSession.DesyncTick}\nthis match's players no longer share a world; the result is void";
+        else if (NetSession.PeerLeft)
+            // It says what to DO, because there is nothing else the player can
+            // do: no further tick can ever arrive, so the only way out is the
+            // operations menu - which, since C7b-iv, does not stall anything by
+            // opening.
+            _desyncNotice.Text =
+                "THE OTHER COMMANDER HAS LEFT\nthe battle cannot continue; stand down from the operations menu";
+        else return;
         _desyncNotice.Visible = true;
         _audio.Play("alert_attack", -4);
     }
@@ -4214,8 +4239,21 @@ public partial class SkirmishLive : Node3D
         { ButtonIndex = MouseButton.Left, Pressed = true, Position = at });
 
     public bool AttackMoveArmed => _attackMoveArmed;
-    public bool DesyncNoticeVisible => _desyncNotice.Visible;
-    public string DesyncNoticeText => _desyncNotice.Text;
+    /// <summary>C7c: the widget now carries TWO causes (a desync and a
+    /// departure), so the reads are named for the widget rather than for one of
+    /// them. The Desync* pair stays as an alias so nothing that already asks in
+    /// those terms has to change.</summary>
+    public bool MatchNoticeVisible => _desyncNotice.Visible;
+    public string MatchNoticeText => _desyncNotice.Text;
+    public bool DesyncNoticeVisible => MatchNoticeVisible;
+    public string DesyncNoticeText => MatchNoticeText;
+
+    /// <summary>Verification hook: run the once-per-frame net poll. The harness
+    /// does its work inside a single frame, so nothing that lives in _Process
+    /// happens on its own - and a DEPARTURE is exactly the event that can never
+    /// be reported by stepping the sim, because the sim is what has stopped.
+    /// Drives the shipped method, not a copy of it.</summary>
+    public void PumpFrameForTest() => RefreshDesyncNotice();
 
     // TICKET-P5-ALERT-02 verification surface: what the alert record holds
     // and where the camera actually is, not a recomputation of either.

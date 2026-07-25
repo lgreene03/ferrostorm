@@ -497,6 +497,33 @@ public partial class VerifyRunner : Node
                   $"pausing does NOT stall the lockstep ({atPause} -> {host.CurrentTick})");
             host.ClosePause();
 
+            // --- C7c: the joiner walks out --------------------------------
+            // The last unexplained state in LAN. Lockstep starves when a player
+            // goes - the relay never gets their batch, so it never broadcasts
+            // another merged one - and the survivor's world stopped dead with
+            // nothing on screen, because nothing had DESYNCED either. A game
+            // that stops for no stated reason reads as a crash.
+            //
+            // Driven by disposing the joiner's real client, which is what
+            // closing the window does to the socket.
+            Check(!host.MatchNoticeVisible, "no notice while both commanders are present (the precondition)");
+            joinClient.Dispose();
+            int waitLeft = 0;
+            while (!host.MatchNoticeVisible && waitLeft++ < 5000)
+            {
+                host.StepTicks(1);            // the drain keeps polling; it just never advances
+                host.PumpFrameForTest();      // the notice is raised from the frame, not the tick
+                System.Threading.Thread.Sleep(1);
+            }
+            Check(host.MatchNoticeVisible, "the survivor is TOLD the other commander left");
+            Check(host.MatchNoticeText.Contains("LEFT"),
+                  $"...and the notice says so plainly (\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
+            // The distinction that matters: a departure is not a desync, and
+            // saying "you no longer share a world" to someone whose opponent
+            // simply quit would be a lie about their match.
+            Check(!host.MatchNoticeText.Contains("DESYNC"), "...and does NOT call it a desync");
+            Check(!Ferrostorm.Client.NetSession.Desynced, "the session records a departure, not a divergence");
+
             host.QueueFree();
             join.QueueFree();
         }

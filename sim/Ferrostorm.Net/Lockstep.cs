@@ -21,6 +21,7 @@ namespace Ferrostorm.Net;
 //   msgType 6 = Check  (client->relay): ulong catalogue checksum (ADR-006)
 //   msgType 7 = Start  (relay->client): all catalogues agree; the game may begin
 //   msgType 8 = Refuse (relay->client): ulong yours, ulong theirs; the game is off
+//   msgType 9 = Left   (relay->client): int playerId; that player is gone for good
 // Command wire layout: int playerId, byte type, int entityId, int auxId, long x, long y
 //
 // ADR-006: the hello is a handshake, not a greeting. Each client sends its
@@ -30,7 +31,8 @@ namespace Ferrostorm.Net;
 
 public static class Wire
 {
-    public const byte Hello = 1, Batch = 2, Merged = 3, Hash = 4, Desync = 5, Check = 6, Start = 7, Refuse = 8;
+    public const byte Hello = 1, Batch = 2, Merged = 3, Hash = 4, Desync = 5, Check = 6, Start = 7, Refuse = 8,
+                      Left = 9;
     public const int CommandBytes = 4 + 1 + 4 + 4 + 8 + 8 + 1;
 
     public static void WriteCommand(BinaryWriter w, in Command c)
@@ -98,6 +100,10 @@ public sealed class Relay
     /// game was refused before tick 0. Distinct from DesyncDetected on
     /// purpose: a refusal is the mitigation WORKING, a desync is it failing.</summary>
     public bool CatalogueRefused { get; private set; }
+    /// <summary>A player's connection ended after the match began. Latched, and
+    /// distinct from CatalogueRefused (a refusal happens BEFORE tick 0) and from
+    /// DesyncDetected (nothing diverged; someone simply left).</summary>
+    public bool PeerLeft { get; private set; }
 
     /// <summary>
     /// bind selects the local address the relay listens on. The default,
@@ -277,7 +283,29 @@ public sealed class Relay
                 }
             }
             catch (Exception) { /* client disconnected: match over from relay's perspective */ }
-            finally { if (Interlocked.Decrement(ref liveClients) == 0) _listener.Stop(); }
+            finally
+            {
+                // TELL THE SURVIVORS. Without this the departure is silent on
+                // the wire and lockstep simply starves: the relay never gets
+                // this player's batch again, so it never broadcasts another
+                // merged batch, so every remaining client's poll returns false
+                // forever. Their world stops dead with nothing on screen, and
+                // nothing has desynced, so the desync notice is (correctly)
+                // silent too. A game that stops for no stated reason reads as a
+                // crash; this makes the wire say what happened.
+                //
+                // Best effort by construction: a stream that is itself gone
+                // throws here, which is exactly the case where nobody is left
+                // to tell.
+                PeerLeft = true;
+                for (int q = 0; q < _playerCount; q++)
+                {
+                    if (q == p) continue;
+                    try { Wire.SendFrame(streams[q], Wire.Left, w => w.Write(p)); }
+                    catch (Exception) { /* also gone; nothing owed to them */ }
+                }
+                if (Interlocked.Decrement(ref liveClients) == 0) _listener.Stop();
+            }
         }
 
         var threads = new Thread[_playerCount];
@@ -342,6 +370,14 @@ public sealed class LockstepClient : IDisposable
     public int PlayerId { get; private set; } = -1;
     public int PlayerCount { get; private set; }
     public bool DesyncNotified { get; private set; }
+    /// <summary>Another player's connection ended after the match began, and
+    /// this client will therefore never receive another merged batch. Latched.
+    /// Deliberately SEPARATE from DesyncNotified: nothing diverged, so a match
+    /// that ends this way is not void in the way a desynced one is, and telling
+    /// the survivor "you no longer share a world" would be a lie.</summary>
+    public bool PeerLeft { get; private set; }
+    /// <summary>Which player left, or -1.</summary>
+    public int PeerLeftId { get; private set; } = -1;
     /// <summary>ADR-022: the host's match setup as broadcast in the Hello, or
     /// empty. The joiner builds its world from THIS rather than from a seed it
     /// was told separately, which is what makes a join reproduce the host's
@@ -422,6 +458,18 @@ public sealed class LockstepClient : IDisposable
                 else if (type == Wire.Desync)
                 {
                     DesyncNotified = true;
+                    lock (_gate) Monitor.PulseAll(_gate);
+                }
+                else if (type == Wire.Left)
+                {
+                    // Latched like the desync, and for the same reason: a
+                    // player who has gone is not coming back, so a notice that
+                    // fades is a notice the survivor can miss while looking at
+                    // the map. The pulse wakes any blocking AdvanceTick, which
+                    // would otherwise sit out its full timeout waiting for a
+                    // batch that can no longer arrive.
+                    PeerLeftId = BitConverter.ToInt32(body, 0);
+                    PeerLeft = true;
                     lock (_gate) Monitor.PulseAll(_gate);
                 }
             }
