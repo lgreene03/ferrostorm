@@ -217,39 +217,161 @@ public partial class MainMenu : Control
     // ---------------- TICKET-P5-SET-01: the LAN front door ----------------
 
     /// <summary>
-    /// HOST, JOIN, and the honest truth between them. The lockstep relay this
-    /// screen sits on is real and soak-tested, and since Q002's first half
-    /// landed it can bind a LAN address and its client can dial one (both
-    /// default to loopback, so nothing shipped changes). What still blocks
-    /// these buttons is the battle scene itself: AdvanceTick blocks on a
-    /// Monitor.Wait until the relay's merged batch arrives, and SkirmishLive's
-    /// 15 Hz accumulator cannot block the frame on a socket. That frame-loop
-    /// integration is real design work (Q002, second half). The screen says
-    /// so, on the screen, rather than offering a button that fails into a
-    /// socket timeout the player has to interpret.
+    /// C7b-iv: HOST and JOIN, live at last.
+    ///
+    /// These two buttons carried an honest disabled label for four waves, naming
+    /// what was missing: the battle scene did not drive its ticks from the
+    /// lockstep client. It does now (C7b-iii, proven by two real scenes playing
+    /// each other to identical hashes), so the only thing that was left was this
+    /// screen. The match options above the LAN button are the HOST'S: the joiner
+    /// gets the host's map, treasury and sides through the setup blob (ADR-022)
+    /// and its own selections are ignored, which is the only way two machines
+    /// can build the same world.
     /// </summary>
     private void ShowLan()
     {
         var overlay = FullOverlay();
-        var v = OverlayBox(overlay, "LAN", 380, 260);
+        var v = OverlayBox(overlay, "LAN", 380, 300);
 
         v.AddChild(UplinkUi.Note(
-            "the lockstep relay underneath this screen is real: it merges both players' orders per tick, compares their state hashes every 30 ticks, and the sim soaks 20 games against it with zero desyncs. the transport can now bind and dial a real address. what is NOT here is the battle scene driving its ticks from the lockstep client: advancing a tick blocks until the relay's merged batch arrives, and blocking the frame on a socket is how a dropped packet becomes a frozen window. that integration is real design work and this screen will not pretend otherwise.", 12));
+            "two machines, one relay, lockstep. the HOST chooses the theatre, treasury and sides above and opens a lobby; the other player joins by address and receives that setup over the wire, so both build the identical world. there is no computer opponent in a LAN match, and saving is off: a save is one machine's snapshot and the other player's battle carries on without it.", 12));
         v.AddChild(new HSeparator());
 
-        v.AddChild(UplinkUi.MenuButton("HOST GAME   (needs the lockstep frame loop in the battle scene)", () => { }, enabled: false));
-        v.AddChild(UplinkUi.MenuButton("JOIN BY ADDRESS   (needs the lockstep frame loop in the battle scene)", () => { }, enabled: false));
+        _lanStatus = UplinkUi.Note("", 12);
+
+        v.AddChild(UplinkUi.MenuButton("HOST GAME", StartHost));
+
+        // The address field and its own button, because a join needs a value
+        // typed before it can start and every other row on this screen acts on
+        // press alone.
+        var row = new HBoxContainer();
+        var addr = new LineEdit
+        {
+            PlaceholderText = "host address, e.g. 192.168.1.20",
+            Text = _lastJoinAddress,
+            SizeFlagsHorizontal = SizeFlags.ExpandFill,
+        };
+        row.AddChild(addr);
+        v.AddChild(row);
+        v.AddChild(UplinkUi.MenuButton("JOIN BY ADDRESS", () => StartJoin(addr.Text)));
+        // Enter in the address field joins, because that is what every other
+        // address box in the world does.
+        addr.TextSubmitted += t => StartJoin(t);
+
+        v.AddChild(_lanStatus);
         v.AddChild(new HSeparator());
 
-        // What CAN be honestly offered today: the transport, driven from inside
-        // this binary, against the real match world rather than the runner's
-        // synthetic fixture.
+        // Kept: the transport driven inside this one binary, which is still the
+        // fastest way to tell "the network is wrong" from "the game is wrong"
+        // when a real join fails.
         var report = UplinkUi.Note(
             "runs a relay and two lockstep clients inside this process over a real TCP socket, on the map and treasury selected above, and compares both worlds at the end.", 12);
         v.AddChild(UplinkUi.MenuButton("RUN THE TWO-CLIENT SMOKE TEST", () => StartSmoke(report)));
         v.AddChild(report);
         v.AddChild(new HSeparator());
-        v.AddChild(MenuButton("BACK", () => { _smoke = null; overlay.QueueFree(); }));
+        v.AddChild(MenuButton("BACK", () =>
+        {
+            _smoke = null;
+            // Stand the lobby down rather than orphaning it: a host that backs
+            // out leaves a relay bound to the fixed port, and the next HOST
+            // press would refuse with "address already in use".
+            _lobby?.Cancel();
+            _lobby = null;
+            _lanStatus = null;
+            overlay.QueueFree();
+        }));
+    }
+
+    private LanLobby? _lobby;
+    private Label? _lanStatus;
+    private static string _lastJoinAddress = "";
+
+    /// <summary>The match the host is about to open, taken from the same rows a
+    /// skirmish reads, so hosting "this map with these sides" means what the
+    /// screen above says it means.</summary>
+    private MatchSetup LanSetupFromMenu()
+    {
+        MatchConfig.MissionPath = null;
+        MatchConfig.AllowedStructures = null;
+        MatchConfig.AllowedUnits = null;
+        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.AiPreset = _aiPick.Selected;
+        MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
+        MatchConfig.Faction = _factionPick.Selected;
+        MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
+        return MatchConfig.CurrentSetup();
+    }
+
+    private void StartHost()
+    {
+        if (_lobby is { State: LanLobby.Phase.Connecting }) return;   // one at a time
+        _lobby = LanLobby.Host(LanSetupFromMenu());
+        var addresses = LanLobby.LocalAddresses();
+        string where = addresses.Count > 0
+            ? string.Join(" or ", addresses) + $":{LanLobby.DefaultPort}"
+            : $"this machine's LAN address, port {LanLobby.DefaultPort}";
+        SetLanStatus($"lobby open. the other player joins at {where}\nwaiting for them to connect...");
+    }
+
+    private void StartJoin(string address)
+    {
+        if (_lobby is { State: LanLobby.Phase.Connecting }) return;
+        _lastJoinAddress = address;
+        _lobby = LanLobby.Join(address);
+        SetLanStatus(_lobby.Status);
+    }
+
+    private void SetLanStatus(string text)
+    {
+        if (_lanStatus != null) _lanStatus.Text = text;
+    }
+
+    /// <summary>The lobby connects on a background thread (its header says why:
+    /// a host's own client blocks until the joiner arrives, which may be never).
+    /// This is the main-thread poll that turns Ready into a scene change.</summary>
+    private void PollLobby()
+    {
+        if (_lobby is not { } lobby) return;
+        if (lobby.State == LanLobby.Phase.Failed)
+        {
+            SetLanStatus(lobby.Status);
+            _lobby = null;
+            return;
+        }
+        if (lobby.State != LanLobby.Phase.Ready || lobby.Client is null || lobby.Setup is null) return;
+        _lobby = null;
+        LaunchNetBattle(lobby);
+    }
+
+    /// <summary>
+    /// Hand the connected session to the battle scene.
+    ///
+    /// The setup applied here is the LOBBY'S, not this menu's: a joiner's own
+    /// rows are meaningless, and applying them would render one map while the
+    /// adopted world ran another. The seat comes from the relay, which is the
+    /// only thing that knows it.
+    /// </summary>
+    private void LaunchNetBattle(LanLobby lobby)
+    {
+        var s = lobby.Setup!;
+        MatchConfig.MissionPath = null;
+        MatchConfig.AllowedStructures = null;
+        MatchConfig.AllowedUnits = null;
+        MatchConfig.MapPath = GameFiles.Abs(s.MapPath);
+        MatchConfig.AiPreset = s.AiPreset;
+        MatchConfig.StartCredits = s.StartCredits;
+        MatchConfig.Faction = s.Faction;
+        MatchConfig.OppositionFaction = s.OppFaction;
+        MatchConfig.LoadPath = null;
+        MatchConfig.ReplayPath = null;
+
+        SkirmishLive.LocalSeat = lobby.Client!.PlayerId;
+        SkirmishLive.PendingNet = lobby.Client;
+        // Reset FIRST, then raise: Reset clears the desync latch, so setting
+        // Active before it would arm a session and immediately disarm it.
+        NetSession.Reset();
+        NetSession.Active = true;
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
     }
 
     private LanSmokeResult? _smoke;
@@ -276,6 +398,7 @@ public partial class MainMenu : Control
             _smokeReport.Text = s.Summary;
             _smokeReport = null;
         }
+        PollLobby();
     }
 
     /// <summary>Offscreen verification hook: the smoke result, once it lands.</summary>

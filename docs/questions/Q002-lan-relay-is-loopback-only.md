@@ -4,6 +4,10 @@ Labels: persona:all, gdd:s11, phase:2-3, owner:netcode
 Raised by: client-engineer, during TICKET-P5-SET-01 (settings, hotkeys and the LAN front door).
 Decide-by: 2026-07-29 (before any further LAN client work, which is blocked on the answer, and before doc 18's LAN claim is repeated to anyone outside the project).
 
+**STATUS 2026-07-25: every code question here is ANSWERED and DELIVERED (see the
+third instalment at the foot). This stays open on ONE item, which was never a
+netcode ruling: the human two-machine session.**
+
 ## Question
 
 Should `Relay` and `LockstepClient` take a bind address and a host address, so a hosted game can be reached from another machine? And if so, does the client's real-time accumulator drive a blocking `AdvanceTick`, or does `AdvanceTick` grow a non-blocking poll?
@@ -83,3 +87,46 @@ build the identical world - that last one a wire change needing the reserved
 ADR-022), and the genuinely human two-machine verification this question has
 always said no in-process test can provide. This question stays open for the
 C7b half only.
+
+## Resolution, third and final code instalment (2026-07-25, P6 Wave C7b)
+
+**Every code question this document asked is now answered, implemented and
+verified. What remains is not a question.**
+
+Both halves of the original question resolved to yes. The addresses landed in
+July's first instalment; the second half, "does the accumulator drive a blocking
+AdvanceTick or does AdvanceTick grow a non-blocking poll", resolved to the poll
+(C7a), and C7b spent four slices making the client use it:
+
+- **C7b-i** put the host's match setup in the Hello as an opaque length-prefixed
+  blob (ADR-022). Without it a joiner could not know what match it was joining,
+  and would have built a different world and reported a desync, which reads as a
+  netcode bug rather than the lobby one it is.
+- **C7b-ii** plumbed `LocalPlayerId` through the ninety-three sites that
+  hardcoded player 0. The joiner IS player 1 and could not otherwise select a
+  unit, see its own fog, or read its own power.
+- **C7b-iii** made the frame loop lockstep-driven: submit once per tick, poll,
+  and on a miss give the time back and stop draining for the frame, so the render
+  carries on from the last snapshot while the sim waits. The frame never blocks
+  on a socket, which was the entire objection this question raised.
+- **C7b-iv** built the lobby: HOST opens a relay on a fixed port and JOIN dials
+  an address, both connecting off the main thread because a host's own client
+  blocks until the joiner arrives.
+
+**The acceptance this question set is met.** Two REAL battle scenes, on opposite
+seats, each with its own lockstep client against a relay, played 60 ticks to
+**identical state hashes with zero desyncs** through the actual SkirmishLive
+frame path rather than the net layer in isolation. Then the real lobby pair did
+the same handshake end to end, with the joiner told nothing but an address and
+arriving holding the host's map, seed, treasury and sides, both ends building the
+identical world before tick 0.
+
+**What stays open, and it is not a code question.** Real two-machine play over a
+real network, which this document has said from the day it was filed that no
+in-process test can provide, plus the feel of the stall behaviour under a laggy
+peer. That is Luke's session, not netcode's ruling.
+
+One thing this wave deliberately did not build, filed rather than smuggled in: if
+a player quits, the other's world simply stops advancing, because lockstep has
+nothing to advance with and nothing actually desynced. Honest, but unexplained on
+screen. Dropped-peer handling wants its own wave.

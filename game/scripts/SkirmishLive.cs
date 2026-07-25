@@ -716,7 +716,12 @@ public partial class SkirmishLive : Node3D
     /// into a live lockstep session that the other player is still driving.</summary>
     public bool CanSave => _replay is null && _net is null;
 
-    public string ModeLine() => _replay != null
+    public string ModeLine() => _net != null
+        // C7b-iv: and it says the battle is STILL RUNNING, because in LAN this
+        // menu does not pause it and a player who assumes otherwise walks away
+        // from a live match.
+        ? $"LAN BATTLE   {_setup.Describe()}   TICK {_world.Tick}   (the battle is still running)"
+        : _replay != null
         ? $"REPLAY PLAYBACK   {_setup.Describe()}   TICK {_world.Tick} / {_replayTicks}"
         : _resumed
             ? $"{_setup.Describe()}   TICK {_world.Tick}   (resumed - not recording)"
@@ -772,7 +777,14 @@ public partial class SkirmishLive : Node3D
     {
         if (_pauseMenu != null) { ClosePause(); return; }
         if (_winner >= 0 || _replayDone) return;
-        _paused = true;
+        // C7b-iv: a LAN match does NOT stop. _paused halts the accumulator
+        // drain, and the drain is the only thing that submits this client's
+        // command batch - so pausing would stop the OTHER player's world dead
+        // as well, with no explanation on their screen and no way for them to
+        // recover it. In LAN the menu opens over a running battle instead;
+        // there is no pause in a game with two commanders, which is what the
+        // classics did too.
+        _paused = _net == null;
         _banner.Visible = false;
         _pauseMenu = new PauseMenu { Name = "PauseMenu" };
         _hud.AddChild(_pauseMenu);

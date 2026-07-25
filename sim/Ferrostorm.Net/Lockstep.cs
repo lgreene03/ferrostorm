@@ -125,16 +125,41 @@ public sealed class Relay
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
     }
 
+    /// <summary>
+    /// C7b-iv: stand the relay down before anyone has joined. A host who opens
+    /// the lobby and then backs out leaves Run blocked in AcceptTcpClient, and
+    /// on a FIXED port (which a LAN host must use, or nobody can dial it) that
+    /// holds the port bound: hosting, backing out and hosting again would refuse
+    /// with "address already in use". Stopping the listener is what unblocks the
+    /// accept, so Run below treats a failed accept as a stand-down rather than
+    /// letting it escape as an unhandled exception on a background thread.
+    /// </summary>
+    public void Stop()
+    {
+        try { _listener.Stop(); } catch (Exception) { /* never started, or already down */ }
+    }
+
     /// <summary>Accept players and pump frames until every client disconnects. Blocking; run on its own thread.</summary>
     public void Run()
     {
-        var clients = new TcpClient[_playerCount];
+        var clients = new TcpClient?[_playerCount];
         var streams = new NetworkStream[_playerCount];
-        for (int p = 0; p < _playerCount; p++)
+        try
         {
-            clients[p] = _listener.AcceptTcpClient();
-            clients[p].NoDelay = true;
-            streams[p] = clients[p].GetStream();
+            for (int p = 0; p < _playerCount; p++)
+            {
+                var c = _listener.AcceptTcpClient();
+                clients[p] = c;
+                c.NoDelay = true;
+                streams[p] = c.GetStream();
+            }
+        }
+        catch (Exception)
+        {
+            // Stop() was called, or the socket failed. Either way no match
+            // begins; close whoever did arrive and leave quietly.
+            foreach (var c in clients) c?.Close();
+            return;
         }
         for (int p = 0; p < _playerCount; p++)
         {
@@ -171,7 +196,7 @@ public sealed class Relay
             // factory threw, or it disconnected). The match never starts; the
             // relay stands down quietly rather than taking the process with it
             // via an unhandled exception on this background thread.
-            foreach (var c in clients) c.Close();
+            foreach (var c in clients) c?.Close();
             _listener.Stop();
             return;
         }
@@ -190,7 +215,7 @@ public sealed class Relay
                 try { Wire.SendFrame(streams[p], Wire.Refuse, w => { w.Write(yours); w.Write(theirs); }); }
                 catch (Exception) { /* already gone; the refusal stands regardless */ }
             }
-            foreach (var c in clients) c.Close();
+            foreach (var c in clients) c?.Close();
             _listener.Stop();
             return;
         }

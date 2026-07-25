@@ -35,7 +35,7 @@ lands; this file is the resume point if a session dies.
 | C7b-ii | LocalPlayerId through the battle scene (the joiner's seat) | C7b slice 2; CI seat-check guards it | NEUTRAL (client only) | DONE |
 | VERIFY | Headless client harness (tools/verify-client.sh) | closes the repo's oldest verification gap | NEUTRAL (client only) | DONE - 21 checks; found the AI-shares-the-joiner's-seat bug |
 | C7b-iii | LAN battle scene: lockstep-driven frame loop | verified by two real scenes playing each other in-process | NEUTRAL (client only) | DONE |
-| C7b-iv | Host/Join menu flow (the last mile) | the scene is ready; only the lobby UI remains | neutral | pending |
+| C7b-iv | Host/Join menu flow (the last mile) | the scene is ready; only the lobby UI remains | NEUTRAL (client + net) | DONE - LAN is reachable; only the human two-machine session remains |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
@@ -86,6 +86,28 @@ needs. C7b (the SkirmishLive integration, LocalPlayerId plumbing, Host/Join and
 the ADR-022 Hello setup exchange) is filed pending with the full design in its
 ticket; it is the widest client change since Phase A and carries the real
 two-machine human verification.
+
+C7b IS COMPLETE (2026-07-25), across four slices, and with it every line of code
+between a player and a two-machine match. C7b-i put the host's match setup in the
+Hello as an opaque blob (ADR-022); C7b-ii plumbed LocalPlayerId through the
+ninety-three sites that hardcoded player 0, which is what lets a joiner select,
+see fog and read power at all; C7b-iii made the battle scene's frame loop
+lockstep-driven, gating the accumulator drain on the non-blocking poll with a
+once-per-tick submit guard, and proved it by playing TWO REAL SCENES against each
+other in one process to identical state hashes; C7b-iv built the lobby, which is
+the host's relay on a fixed port, a joiner that dials an address and builds its
+world from the host's blob rather than its own menu, and the connect-off-the-main-
+thread discipline the harness discovered was mandatory (a host cannot construct
+its own client inline and then wait for a joiner on the same thread). C7b-iv also
+closed three defects that only became reachable once LAN was: pausing stalled the
+PEER, because the accumulator drain is the only thing that submits a batch; the
+pause menu told a LAN player their live match was a replay; and ModeLine did not
+say the battle was still running. All of it NEUTRAL, sim and data untouched, 24
+goldens byte-identical, with the client harness now at 40 checks. What is left of
+Q002 is Luke, two machines and a network: no in-process test can provide it, and
+the question has said so since it was filed. Also unbuilt and filed rather than
+smuggled in: dropped-peer handling, since today a player who quits leaves the
+other's world simply not advancing, which is honest but unexplained.
 
 Excluded from the directive, needing separate sign-off: naval combat and FMV
 briefings (GDD amendments); crates and a map editor (GDD-silent, Producer

@@ -55,7 +55,11 @@ public partial class PauseMenu : Control
         v.AddChild(UplinkUi.MenuButton("ABANDON OPERATION", () => _game.QuitToMenu()));
         if (_flash.Length > 0) v.AddChild(UplinkUi.Note(_flash, 13));
         if (!_game.CanSave)
-            v.AddChild(UplinkUi.Note("saving is disabled during replay playback", 11));
+            // C7b-iv: CanSave is false for TWO reasons now, and telling a LAN
+            // player their live match is a replay is worse than saying nothing.
+            v.AddChild(UplinkUi.Note(_game.IsNetworked
+                ? "saving is disabled in a LAN match: a save is one machine's snapshot, and the other player's battle carries on without it"
+                : "saving is disabled during replay playback", 11));
     }
 
     private void ShowSlots(bool saving)
