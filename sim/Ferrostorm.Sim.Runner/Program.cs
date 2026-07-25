@@ -16,6 +16,7 @@ using Ferrostorm.Sim;
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
+//   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and its declared outposts stand neutral
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
@@ -3697,6 +3698,82 @@ int BridgeGate()
     return 0;
 }
 
+int LanSetupGate()
+{
+    // ADR-022 gate (P6 Wave C7b, first slice). Additive, standalone plus a
+    // Match stage, never a golden scenario.
+    //
+    // The question it answers: can a JOINER build the host's world without
+    // being told the seed out of band? Before this, LockstepClient took a seed
+    // from its own caller, so two machines agreeing was an article of faith
+    // arranged outside the protocol. The gate proves it is now arranged INSIDE
+    // it, by giving the joiner a DELIBERATELY WRONG fallback seed and checking
+    // the worlds still match.
+    const ulong hostSeed = 90210UL, joinerWrongSeed = 11111UL;
+    var setup = new byte[8];
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, hostSeed);
+
+    var relay = new Relay(playerCount: 2, setup: setup);
+    relay.Start();
+    new Thread(relay.Run) { IsBackground = true }.Start();
+
+    var hashes = new ulong[2];
+    var seen = new int[2];
+    var errors = new Exception?[2];
+    var threads = new Thread[2];
+    for (int p = 0; p < 2; p++)
+    {
+        int pid = p;
+        threads[p] = new Thread(() =>
+        {
+            try
+            {
+                // Player 0 is the host and knows its own seed. Player 1 is the
+                // joiner: it is handed the WRONG seed on purpose and must build
+                // from the Hello's setup blob instead.
+                using var client = pid == 0
+                    ? new LockstepClient(relay.Port, LanWorldFactory, hostSeed)
+                    : new LockstepClient(relay.Port, LanWorldFactory, joinerWrongSeed, null,
+                        blob =>
+                        {
+                            if (blob.Length < 8) throw new Exception("joiner received no setup in the Hello");
+                            ulong s = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob);
+                            return LanWorldFactory(s);
+                        });
+                seen[pid] = client.Setup.Length;
+                client.Prime();
+                while (client.World.Tick < 120)
+                {
+                    client.SubmitCommands(System.Array.Empty<Command>());
+                    if (!client.AdvanceTick()) throw new Exception("desync notified");
+                }
+                hashes[pid] = client.World.ComputeStateHash();
+            }
+            catch (Exception ex) { errors[pid] = ex; }
+        });
+        threads[p].Start();
+    }
+    foreach (var t in threads) t.Join();
+    foreach (var e in errors) if (e != null) return Fail($"lansetup: {e.Message}");
+    if (seen[0] != 8 || seen[1] != 8)
+        return Fail($"lansetup: both clients must receive the host's setup in the Hello (got {seen[0]}/{seen[1]} bytes)");
+    if (relay.DesyncDetected) return Fail("lansetup: relay flagged desync");
+    if (hashes[0] != hashes[1])
+        return Fail($"lansetup: the joiner built a DIFFERENT world despite the setup exchange " +
+                    $"(0x{hashes[0]:X16} vs 0x{hashes[1]:X16}) - a join would desync on the first divergent order");
+
+    // The negative control, which is what makes the assertion mean something:
+    // the joiner's own seed really would have built a different world, so the
+    // match above is the setup blob working rather than a coincidence.
+    if (LanWorldFactory(hostSeed).ComputeStateHash() == LanWorldFactory(joinerWrongSeed).ComputeStateHash())
+        return Fail("lansetup: the control seed builds an identical world, so this gate proves nothing - pick another");
+
+    Console.WriteLine($"lansetup: the host's setup rode the Hello to both clients (8 bytes each) and a joiner handed a " +
+                      $"DELIBERATELY WRONG seed still built the host's world exactly (0x{hashes[0]:X16} after 120 ticks, no desync); " +
+                      "the wrong seed is proven to build a different world, so the match is the exchange working");
+    return 0;
+}
+
 int MapGate()
 {
     // The map validation harness doc 18 Phase D asked for and never got, now
@@ -3850,6 +3927,9 @@ int Match(ulong seed)
     // ADR-023: and the parallel build lanes.
     int lanegate = LaneGate();
     if (lanegate != 0) return lanegate;
+    // ADR-022: and the LAN setup exchange.
+    int lansetup = LanSetupGate();
+    if (lansetup != 0) return lansetup;
     // ADR-025: and the destroyable bridges.
     int bridgegate = BridgeGate();
     if (bridgegate != 0) return bridgegate;
@@ -4695,6 +4775,7 @@ return args.Length == 0
         "outpostgate" => OutpostGate(),
         "lanegate" => LaneGate(),
         "bridgegate" => BridgeGate(),
+        "lansetup" => LanSetupGate(),
         "mapgate" => MapGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
