@@ -231,7 +231,7 @@ Existing blocked items are referenced, not relitigated.
 
 | Id | Item | Effort | Hash | Blocked on |
 |---|---|---|---|---|
-| DR-13 | AI repairs damaged structures (the most-noticed absent behaviour; it has the credits and the command exists) | S-M | needs neutrality proof on AI goldens | none if proven neutral |
+| DR-13 | DELIVERED (ADR-026). AI repairs damaged structures: one additive block flips Repair on once per damage episode. Proven NOT neutral (the concern the row named) - the skirmish golden moved because that AI-vs-AI match batters a structure the AI now mends - so it shipped under a ratified pre-first-public-build regen, not as a neutral change. Pinned by airepairgate | S-M | REGEN (skirmish only) | ADR-026 + Luke sign-off (done) |
 | DR-14 | AI difficulty as economy, not wave size: presets tune harvester count and income headroom (the genre-standard honest cheat), and actEvery actually varies | M | MOVES | a short design note naming the ladder; doc 02 s9's Easy-to-Brutal intent authorises it |
 | DR-15 | AI scouting honesty: fog-filter its entity reads so information play (stealth, feints) works against it | L | MOVES | ADR; substantial redesign of its target selection |
 

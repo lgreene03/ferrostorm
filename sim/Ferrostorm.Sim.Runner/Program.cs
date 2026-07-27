@@ -16,6 +16,7 @@ using Ferrostorm.Sim;
 //   repairgate         - ADR-019: the repair vehicle mends own mobile units in the field (not power gated, not itself/enemies/structures)
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
 //   firesalegate       - DR-10: the beaten AI's last stand - fire sale + final wave, once; yard control; MCV redeploy
+//   airepairgate       - ADR-026/DR-13: the AI mends a damaged own structure (not a healthy one, not while broke)
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
@@ -4036,6 +4037,114 @@ int FireSaleGate()
     return 0;
 }
 
+int AiRepairGate()
+{
+    // ADR-026 gate (DR-13). Additive, the firesalegate/repairgate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so
+    // the golden list stays 24. It is the POSITIVE proof that skirmish's moved
+    // hash is repair firing and nothing else - the AI mends a damaged own
+    // structure, never a healthy one, and never while broke. Each part gives
+    // the AI a Construction Yard so it is never in the fire-sale branch, and
+    // grants credits BELOW any structure cost so the construction ladder can
+    // afford nothing and Repair is the only command the commander can issue -
+    // the repair is read in isolation, not inferred from a busy beat. The
+    // default decision beat is 15 ticks and 0 % 15 == 0, so the AI acts on
+    // tick 0, which is where the first-beat assertion reads its command.
+
+    // --- 1. The mend: a damaged own structure is repaired to full, at the
+    //        sim's rate, and Repair is the ONE command the first beat issues --
+    {
+        var w = new World(2600, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);              // a harmless enemy; the AI is player 1
+        w.SpawnConstructionYard(1, 40, 30);            // the AI keeps its yard: not beaten
+        int plant = w.SpawnPowerPlant(1, 44, 30);
+        int maxHp = w.Entities[plant].MaxHp;
+        var p = w.Entities[plant]; p.Hp = maxHp - 100; w.SetEntityForTest(plant, p);  // scripted battle damage
+        w.GrantCredits(1, 60);                         // below any structure cost: only Repair is affordable
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+
+        // First beat (tick 0): the ONLY command must be Repair on the plant.
+        ai.Act(w, cmds);
+        int repairCount = 0; bool repairedPlant = false;
+        foreach (var c in cmds)
+            if (c.Type == CommandType.Repair) { repairCount++; if (c.EntityId == plant) repairedPlant = true; }
+        if (!repairedPlant)
+            return Fail("airepair: the AI must issue Repair on its damaged structure");
+        if (cmds.Count != repairCount || repairCount != 1)
+            return Fail($"airepair: with nothing else affordable, Repair must be the only command ({cmds.Count} issued, {repairCount} repairs)");
+
+        long before = w.Credits(1);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        for (int t = 1; t < 80; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (w.Entities[plant].Hp != maxHp)
+            return Fail($"airepair: the mend must reach full health ({w.Entities[plant].Hp}/{maxHp})");
+        if (w.Entities[plant].Repairing)
+            return Fail("airepair: repair must switch itself off at full health");
+        // 100 hp at 2/1 costs exactly 50; the once-per-episode toggle means no
+        // extra spend from re-issuing (which would toggle the mend back OFF).
+        long spent = before - w.Credits(1);
+        if (spent != 50)
+            return Fail($"airepair: 100 hp at 2hp/1cr must cost exactly 50 (spent {spent}) - a re-toggle would show here");
+    }
+
+    // --- 2. The healthy control: a full-health structure is never touched -----
+    {
+        var w = new World(2601, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);
+        w.SpawnConstructionYard(1, 40, 30);
+        int plant = w.SpawnPowerPlant(1, 44, 30);      // spawns at full health
+        w.GrantCredits(1, 60);
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+        bool anyRepair = false;
+        for (int t = 0; t < 60; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            foreach (var c in cmds) if (c.Type == CommandType.Repair) anyRepair = true;
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (anyRepair || w.Entities[plant].Repairing)
+            return Fail("airepair control: an undamaged structure must never be repaired");
+    }
+
+    // --- 3. The broke control: a damaged structure with no credits is left ----
+    {
+        var w = new World(2602, 64, 64, players: 2);
+        w.SpawnConstructionYard(0, 8, 8);
+        w.SpawnConstructionYard(1, 40, 30);
+        int plant = w.SpawnPowerPlant(1, 44, 30);
+        int maxHp = w.Entities[plant].MaxHp;
+        var p = w.Entities[plant]; p.Hp = maxHp - 100; w.SetEntityForTest(plant, p);
+        // no GrantCredits: the AI is broke, the credit floor must hold
+        var ai = new SkirmishAI(1);
+        var cmds = new List<Command>();
+        bool anyRepair = false;
+        for (int t = 0; t < 60; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            foreach (var c in cmds) if (c.Type == CommandType.Repair) anyRepair = true;
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (anyRepair || w.Entities[plant].Repairing)
+            return Fail("airepair broke control: a penniless AI must not toggle a repair it cannot begin to pay");
+        if (w.Entities[plant].Hp != maxHp - 100)
+            return Fail($"airepair broke control: the damaged structure must stay damaged ({w.Entities[plant].Hp}/{maxHp})");
+    }
+
+    Console.WriteLine("airepairgate: the AI mended a damaged own structure to full at 2hp/1cr per tick (Repair the only affordable " +
+                      "command, spent exactly 50, no re-toggle); it never touched a healthy structure; and while broke it toggled " +
+                      "nothing and the damage stood");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -4106,6 +4215,9 @@ int Match(ulong seed)
     // DR-10: and the beaten AI's last stand.
     int firesale = FireSaleGate();
     if (firesale != 0) return firesale;
+    // ADR-026 / DR-13: and the AI-repairs-its-structures gate.
+    int airepair = AiRepairGate();
+    if (airepair != 0) return airepair;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -4948,6 +5060,7 @@ return args.Length == 0
         "lansetup" => LanSetupGate(),
         "mapgate" => MapGate(),
         "firesalegate" => FireSaleGate(),
+        "airepairgate" => AiRepairGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
