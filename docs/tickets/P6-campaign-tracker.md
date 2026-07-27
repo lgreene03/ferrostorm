@@ -53,6 +53,7 @@ lands; this file is the resume point if a session dies.
 | DR-07+09 | Camera bookmarks F1-F4 + minimap alt-click ping | doc 27 tier 2, second delivery wave | NEUTRAL (client only) | DONE - 108 harness checks |
 | DR-08 | Grid build hotkeys: Tab cycles the sidebar, alt+digit queues a slot | doc 27 TIER 2 COMPLETE with this row | NEUTRAL (client only) | DONE - 113 harness checks |
 | DR-10 | AI Fire Sale: a beaten AI sells up and sends one last wave; an MCV in hand deploys instead | doc 27 tier 3; the whole branch lives in the formerly SILENT decapitated state (cy < 0 returned) | NEUTRAL, PROVEN: goldens byte-identical, diff run FIRST | DONE - firesalegate (3 stages, 4 probes) |
+| DR-13 | The AI repairs its damaged structures (doc 27 tier 4, "most-noticed absent behaviour") | ADR-026 (ratified 2026-07-27, Luke): structure damage is not map-specific, so unlike every prior AI wave this is NOT neutral | REGEN: skirmish 0x0EA347F18E08EA43 -> 0x9D396D315554D987, the other 23 byte-identical | DONE - airepairgate (mend + healthy control + broke control); pre-first-public-build regen authorised |
 | C8 | Multi-resource fields | ADR-024 PROPOSED; blocked on Q014 (the GDD names one resource) | NEUTRAL as yield, regeneration as pools | BLOCKED: needs Luke's decision |
 | C9 | Faction recipe deepening | P4-PORT-06 | depends | pending |
 
