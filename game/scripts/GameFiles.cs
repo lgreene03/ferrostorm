@@ -139,6 +139,15 @@ public sealed class MatchSetup
     public string MapPath = "data/maps/skirmish-01.fmap";  // repo-relative
     public int MissionIndex;          // 0 = skirmish, else the campaign index
     public int AiPreset;              // 0 standard, 1 rusher, 2 turtle
+    /// <summary>DR-14b: the rung on doc 28's ladder - 0 easy, 1 normal, 2 hard,
+    /// 3 brutal. A SEPARATE axis from AiPreset above, which is the opponent's
+    /// taste in wave size rather than its strength. Defaults to 1 and NOT to
+    /// enum-zero, here and in the sidecar reader, for the reason the faction
+    /// fields below spell out: every file written before this field existed
+    /// describes a match played against a Normal commander, so a missing value
+    /// must decode to Normal or every old save and replay resumes against a
+    /// different opponent and reports DIVERGED.</summary>
+    public int AiDifficulty = 1;
     public long StartCredits = 8000;
     public ulong Seed = 2026;
     // TICKET-P6-FACTION-01: the sides, applied by BuildStartingWorld before
@@ -197,6 +206,7 @@ public sealed class MatchMeta
             w.WriteString("saved_at", Stamp);
             w.WriteNumber("credits", Credits);
             w.WriteNumber("ai_preset", Setup.AiPreset);
+            w.WriteNumber("ai_difficulty", Setup.AiDifficulty);
             w.WriteNumber("start_credits", Setup.StartCredits);
             w.WriteNumber("seed", Setup.Seed);
             // TICKET-P6-FACTION-01: the .frep format stays untouched (seed,
@@ -226,6 +236,11 @@ public sealed class MatchMeta
                     MapPath = Str(r, "map_path", "data/maps/skirmish-01.fmap"),
                     MissionIndex = Num(r, "mission"),
                     AiPreset = Num(r, "ai_preset"),
+                    // DR-14b: absent in every sidecar written before the ladder,
+                    // and those matches were all played at Normal. Defaulting to
+                    // 1 rather than 0 is what keeps them resuming against the
+                    // opponent they actually faced.
+                    AiDifficulty = Num(r, "ai_difficulty", 1),
                     StartCredits = Num(r, "start_credits", 8000),
                     Seed = (ulong)Num(r, "seed", 2026),
                     // Absent in every pre-P6 sidecar: default 0/0, the legacy

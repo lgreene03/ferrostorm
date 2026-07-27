@@ -87,7 +87,14 @@ public static class MatchSetupBlob
     /// does not recognise the version refuses in the lobby, where the message is
     /// readable, rather than building a world it has misread and desyncing at
     /// the first order.</summary>
-    public const int Version = 1;
+    /// <summary>Version 2 (DR-14b): the difficulty rung joined the setup. Bumped
+    /// per the rule above rather than appended silently, because a version-1
+    /// joiner reading a version-2 blob would slide one field and misread the
+    /// seed, which is a desync at the first order instead of a sentence in the
+    /// lobby. There is no AI in a LAN match, so the rung changes no LAN
+    /// gameplay; it rides along because the blob carries the setup whole and a
+    /// joiner's saved sidecar should describe the match it actually played.</summary>
+    public const int Version = 2;
 
     public static byte[] Encode(MatchSetup s)
     {
@@ -97,6 +104,7 @@ public static class MatchSetupBlob
         w.Write(s.MapPath);
         w.Write(s.MissionIndex);
         w.Write(s.AiPreset);
+        w.Write(s.AiDifficulty);
         w.Write(s.StartCredits);
         w.Write(s.Seed);
         w.Write(s.Faction);
@@ -123,6 +131,7 @@ public static class MatchSetupBlob
             MapPath = r.ReadString(),
             MissionIndex = r.ReadInt32(),
             AiPreset = r.ReadInt32(),
+            AiDifficulty = r.ReadInt32(),
             StartCredits = r.ReadInt64(),
             Seed = r.ReadUInt64(),
             Faction = r.ReadInt32(),

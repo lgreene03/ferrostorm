@@ -28,6 +28,7 @@ public partial class MainMenu : Control
     private OptionButton _factionPick = null!;
     private OptionButton _mapPick = null!;
     private OptionButton _aiPick = null!;
+    private OptionButton _diffPick = null!;   // DR-14b: doc 28's ladder
     private OptionButton _creditPick = null!;
     private readonly List<string> _maps = new();
 
@@ -88,6 +89,16 @@ public partial class MainMenu : Control
         }
         _aiPick = Row(v, "OPPOSITION");
         _aiPick.AddItem("STANDARD"); _aiPick.AddItem("RUSHER"); _aiPick.AddItem("TURTLE");
+        // DR-14b / doc 28: strength, on its own axis from the taste above.
+        // BRUTAL names its handicap in the item itself, because GDD line 76
+        // requires the cheat be clearly labelled and a player choosing it is
+        // entitled to know the opponent is being given money rather than
+        // playing better. Normal is preselected: it is the opponent every
+        // match before this picker existed was played against.
+        _diffPick = Row(v, "DIFFICULTY");
+        _diffPick.AddItem("EASY"); _diffPick.AddItem("NORMAL"); _diffPick.AddItem("HARD");
+        _diffPick.AddItem("BRUTAL (+5000 CR HANDICAP)");
+        _diffPick.Select(1);
         _creditPick = Row(v, "TREASURY");
         _creditPick.AddItem("5000"); _creditPick.AddItem("8000"); _creditPick.AddItem("12000");
         _creditPick.Select(1);
@@ -296,6 +307,7 @@ public partial class MainMenu : Control
         MatchConfig.AllowedUnits = null;
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
+        MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         MatchConfig.Faction = _factionPick.Selected;
         MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
@@ -498,6 +510,7 @@ public partial class MainMenu : Control
         MatchConfig.AllowedUnits = null;
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
+        MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         // TICKET-P6-FACTION-01: the chosen side, and the opponent takes the
         // other one (doc 24). Selected is the faction constant by construction.
@@ -517,6 +530,11 @@ public static class MatchConfig
 {
     public static string? MapPath;
     public static int AiPreset;         // 0 standard, 1 rusher, 2 turtle
+    /// <summary>DR-14b: doc 28's rung - 0 easy, 1 normal, 2 hard, 3 brutal.
+    /// Defaults to Normal so a scene-direct launch (how the client is verified
+    /// offscreen) and any path that never touches the picker get the opponent
+    /// the game has always shipped.</summary>
+    public static int AiDifficulty = 1;
     public static long StartCredits = 8000;
     // TICKET-P6-FACTION-01: the sides. Defaults are the legacy pairing (both
     // Directorate), which is what a scene-direct launch and every pre-P6
@@ -549,6 +567,7 @@ public static class MatchConfig
             MapPath = GameFiles.Rel(map),
             MissionIndex = MissionPath != null ? MissionIndex : 0,
             AiPreset = AiPreset,
+            AiDifficulty = AiDifficulty,
             StartCredits = StartCredits,
             Faction = Faction,
             OppFaction = OppositionFaction,
@@ -564,6 +583,7 @@ public static class MatchConfig
     {
         var s = meta.Setup;
         AiPreset = s.AiPreset;
+        AiDifficulty = s.AiDifficulty;
         StartCredits = s.StartCredits;
         MissionIndex = s.MissionIndex;
         // TICKET-P6-FACTION-01: restore the recorded sides. A pre-P6 sidecar

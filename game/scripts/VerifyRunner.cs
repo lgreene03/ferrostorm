@@ -832,6 +832,83 @@ public partial class VerifyRunner : Node
         }
 
         RunLobbyChecks();
+        RunDifficultyChecks();
+    }
+
+    /// <summary>
+    /// DR-14b acceptance: the ladder a player can now actually reach (doc 28).
+    ///
+    /// The checks that matter here are the BACKWARD ones. A difficulty field is
+    /// easy to add and easy to get subtly wrong in a way no fresh match ever
+    /// shows: a sidecar written before the field existed describes a match
+    /// played at Normal, and if it decodes to enum-zero instead then every old
+    /// save and replay silently resumes against an EASY commander and a replay
+    /// reports DIVERGED with nothing in the diff to explain it. That is the
+    /// same shape as the faction-default trap TICKET-P6-FACTION-01 documented,
+    /// which is why it is checked rather than trusted.
+    /// </summary>
+    private void RunDifficultyChecks()
+    {
+        GD.Print("  --    DR-14b: the difficulty ladder");
+
+        // 1. The legacy sidecar. Written by hand with the field ABSENT, which
+        //    is precisely what every file on disk today looks like.
+        string legacy = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "ferrostorm-verify-legacy.json");
+        System.IO.File.WriteAllText(legacy,
+            "{\"map\":\"skirmish-01\",\"map_path\":\"data/maps/skirmish-01.fmap\",\"mission\":0,"
+            + "\"tick\":120,\"saved_at\":\"\",\"credits\":8000,\"ai_preset\":0,"
+            + "\"start_credits\":8000,\"seed\":2026,\"faction\":0,\"opp_faction\":0}");
+        var old = MatchMeta.Read(legacy);
+        Check(old != null && old.Setup.AiDifficulty == 1,
+              "a sidecar written before the ladder decodes to NORMAL, not to enum-zero");
+        System.IO.File.Delete(legacy);
+
+        // 2. The round trip through the sidecar, on a rung that is not the
+        //    default - a field that is never written would still pass at 1.
+        string sidecar = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "ferrostorm-verify-diff.json");
+        MatchMeta.For(new MatchSetup { AiDifficulty = 3 }, tick: 7, credits: 99).Write(sidecar);
+        var back = MatchMeta.Read(sidecar);
+        Check(back != null && back.Setup.AiDifficulty == 3,
+              "a chosen rung survives the sidecar round trip");
+        System.IO.File.Delete(sidecar);
+
+        // 3. The handicap is Brutal's alone, and it is the SIZE the menu item
+        //    advertises. A label that promised 5000 while the code granted
+        //    something else would be a lie GDD line 76 specifically forbids.
+        Check(SkirmishAI.StartingCreditHandicap(AiDifficulty.Brutal) == 5000,
+              "BRUTAL grants exactly the 5000 credits its menu label declares");
+        Check(SkirmishAI.StartingCreditHandicap(AiDifficulty.Easy) == 0
+              && SkirmishAI.StartingCreditHandicap(AiDifficulty.Normal) == 0
+              && SkirmishAI.StartingCreditHandicap(AiDifficulty.Hard) == 0,
+              "no rung below BRUTAL is given a credit");
+
+        // 4. The rung actually reaches the commander, asserted on the beat
+        //    itself. Every one of these is built through the SAME factory the
+        //    battle scene calls, so a factory overload that accepted a rung and
+        //    then dropped it on the floor - the whole failure mode this wave
+        //    could plausibly ship - fails right here.
+        //
+        //    An earlier version of this check inferred the beat from how many
+        //    commands each rung issued. It measured zero at every rung, because
+        //    the world it built left the AI unable to afford anything, and no
+        //    beat produced a command to count. The lesson is recorded rather
+        //    than just fixed: infer nothing you can read directly.
+        Check(SkirmishAI.Standard(1, AiDifficulty.Easy).DecisionBeat == 30,
+              "EASY reaches the commander as a 30-tick beat (half speed)");
+        Check(SkirmishAI.Standard(1, AiDifficulty.Normal).DecisionBeat == 15,
+              "NORMAL is the 15-tick beat the game has always shipped");
+        Check(SkirmishAI.Standard(1, AiDifficulty.Hard).DecisionBeat == 15,
+              "HARD shares NORMAL's beat: it is stronger by macro, not by speed");
+        Check(SkirmishAI.Standard(1, AiDifficulty.Brutal).DecisionBeat == 10,
+              "BRUTAL reaches the commander as a 10-tick beat");
+        // The default overload - what every pre-ladder caller compiles to - must
+        // still be Normal, or the ladder would have quietly moved the goldens.
+        Check(SkirmishAI.Standard(1).DecisionBeat == 15
+              && SkirmishAI.Rusher(1).DecisionBeat == 15
+              && SkirmishAI.Turtle(1).DecisionBeat == 15,
+              "a personality asked for WITHOUT a rung is still NORMAL (the identity rung)");
     }
 
     /// <summary>
@@ -856,6 +933,7 @@ public partial class VerifyRunner : Node
             MapPath = "data/maps/skirmish-04.fmap",
             MissionIndex = 0,
             AiPreset = 2,
+            AiDifficulty = 3,          // DR-14b: Brutal, the rung that carries a handicap
             StartCredits = 12345,
             Seed = 987654321UL,
             Faction = 1,
@@ -867,6 +945,12 @@ public partial class VerifyRunner : Node
               && round.Seed == original.Seed && round.Faction == original.Faction
               && round.OppFaction == original.OppFaction,
               "every setup field survives the wire round trip");
+        // DR-14b, asserted SEPARATELY rather than folded into the line above: a
+        // new field bolted into an existing conjunction is exactly how a field
+        // the encoder writes and the decoder never reads slips through, because
+        // one true clause among seven reads as green. This one fails alone.
+        Check(round.AiDifficulty == original.AiDifficulty,
+              "the difficulty rung survives the wire round trip");
 
         // A host running a build the joiner cannot read must be told so in the
         // lobby. The alternative is building a world from a misread blob and
