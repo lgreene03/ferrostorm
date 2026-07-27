@@ -17,6 +17,7 @@ using Ferrostorm.Sim;
 //   outpostgate        - ADR-021: the neutral Outpost - engineer capture, the 15/s income beat, neutral inertness, not-hope elimination
 //   firesalegate       - DR-10: the beaten AI's last stand - fire sale + final wave, once; yard control; MCV redeploy
 //   airepairgate       - ADR-026/DR-13: the AI mends a damaged own structure (not a healthy one, not while broke)
+//   difficultygate     - DR-14/doc 28: the Easy-to-Brutal ladder - Normal is the identity rung, the beat and the mining vary, the handicap is setup-only
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
@@ -4145,6 +4146,136 @@ int AiRepairGate()
     return 0;
 }
 
+int DifficultyGate()
+{
+    // DR-14 / doc 28 gate. Additive, the firesalegate/airepairgate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so
+    // the golden list stays 24. The claim it pins is the one the whole wave
+    // rests on - Normal is the IDENTITY rung, so a ladder was added without
+    // moving a single hash - plus the two honest knobs and the declared
+    // handicap's confinement to setup.
+
+    // --- 1. Normal is the identity rung: the ladder's default plays the
+    //        identical match to the commander that shipped before it existed.
+    //        This is the golden diff's claim restated as a check, so a future
+    //        edit that quietly changes Normal fails HERE and not six months
+    //        later in a hash nobody can explain. -----------------------------
+    {
+        ulong Play(bool viaLadder)
+        {
+            var w = BuildSkirmishWorld(2700);
+            var ais = viaLadder
+                ? new[] { new SkirmishAI(0, difficulty: AiDifficulty.Normal), new SkirmishAI(1, difficulty: AiDifficulty.Normal) }
+                : new[] { new SkirmishAI(0), new SkirmishAI(1) };
+            var cmds = new List<Command>();
+            for (int t = 0; t < 1200; t++)
+            {
+                cmds.Clear();
+                ais[0].Act(w, cmds);
+                ais[1].Act(w, cmds);
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            }
+            return w.ComputeStateHash();
+        }
+        ulong plain = Play(false), normal = Play(true);
+        if (plain != normal)
+            return Fail($"difficulty: Normal must be the identity rung (plain 0x{plain:X16} vs Normal 0x{normal:X16})");
+    }
+
+    // --- 2. The beat: Easy thinks at half speed and Brutal fastest. Counted as
+    //        commands issued over an identical window in an identical world,
+    //        which is the observable a player actually feels. -----------------
+    {
+        int Commands(AiDifficulty d)
+        {
+            var w = BuildSkirmishWorld(2701);
+            var ai = new SkirmishAI(0, difficulty: d);
+            var foe = new SkirmishAI(1);
+            var cmds = new List<Command>();
+            int issued = 0;
+            for (int t = 0; t < 900; t++)
+            {
+                cmds.Clear();
+                ai.Act(w, cmds);
+                issued += cmds.Count;      // count THIS commander only, before the foe adds any
+                foe.Act(w, cmds);
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            }
+            return issued;
+        }
+        int easy = Commands(AiDifficulty.Easy), normal = Commands(AiDifficulty.Normal), brutal = Commands(AiDifficulty.Brutal);
+        if (easy >= normal)
+            return Fail($"difficulty: Easy must act less often than Normal (easy {easy}, normal {normal})");
+        if (brutal <= normal)
+            return Fail($"difficulty: Brutal must act more often than Normal (brutal {brutal}, normal {normal})");
+    }
+
+    // --- 3. The economy knob, isolated: with a refinery, a factory and one
+    //        harvester already working, Normal wants no more and Hard buys a
+    //        second. Built directly rather than played into, so the rule is
+    //        read on its own instead of inferred from a whole match. ---------
+    {
+        bool BuysASecondHarvester(AiDifficulty d)
+        {
+            var w = new World(2702, 64, 64, players: 2);
+            w.SpawnConstructionYard(1, 8, 8);            // a harmless foe: never the fire-sale branch
+            w.SpawnConstructionYard(0, 40, 30);
+            w.SpawnPowerPlant(0, 44, 30);
+            w.SpawnRefinery(0, 36, 30);
+            w.SpawnFactory(0, 40, 34);
+            w.SpawnHarvester(0, Fix64.FromInt(37), Fix64.FromInt(32));   // one already mining
+            w.GrantCredits(0, 4000);                     // affords a 1400 harvester outright
+            var ai = new SkirmishAI(0, difficulty: d);
+            var cmds = new List<Command>();
+            ai.Act(w, cmds);
+            foreach (var c in cmds)
+                if (c.Type == CommandType.Produce && c.AuxId == 4) return true;   // unit type 4 is the harvester
+            return false;
+        }
+        if (BuysASecondHarvester(AiDifficulty.Normal))
+            return Fail("difficulty: Normal must keep one harvester per refinery (it bought a second)");
+        if (!BuysASecondHarvester(AiDifficulty.Hard))
+            return Fail("difficulty: Hard must run a second harvester per refinery (it bought none)");
+        if (!BuysASecondHarvester(AiDifficulty.Brutal))
+            return Fail("difficulty: Brutal inherits Hard's macro (it bought no second harvester)");
+    }
+
+    // --- 4. The handicap is DECLARED and lives in setup. The value is offered
+    //        to whoever builds the match; the AI itself must never conjure a
+    //        credit, because a replay re-runs the command stream with no AI
+    //        attached and a self-granting commander would desync its own match.
+    {
+        if (SkirmishAI.StartingCreditHandicap(AiDifficulty.Brutal) != 5000)
+            return Fail("difficulty: Brutal's declared handicap must be 5000 starting credits");
+        foreach (var d in new[] { AiDifficulty.Easy, AiDifficulty.Normal, AiDifficulty.Hard })
+            if (SkirmishAI.StartingCreditHandicap(d) != 0)
+                return Fail($"difficulty: {d} must carry NO handicap (GDD line 76 allows one only at Brutal)");
+
+        // The negative control: a Brutal commander whose setup granted it
+        // nothing stays penniless. Nothing it can issue makes money appear.
+        var w = new World(2703, 64, 64, players: 2);
+        w.SpawnConstructionYard(1, 8, 8);
+        w.SpawnConstructionYard(0, 40, 30);
+        var ai = new SkirmishAI(0, difficulty: AiDifficulty.Brutal);
+        var cmds = new List<Command>();
+        long opening = w.Credits(0);
+        for (int t = 0; t < 300; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (w.Credits(0) > opening)
+            return Fail($"difficulty: a Brutal AI must never grant ITSELF credits (opened {opening}, holds {w.Credits(0)})");
+    }
+
+    Console.WriteLine("difficultygate: Normal is the identity rung (a full match hashes identically to the pre-ladder commander); " +
+                      "Easy acts less often than Normal and Brutal more often; Normal keeps one harvester per refinery while Hard " +
+                      "and Brutal buy a second; and Brutal's 5000-credit handicap is declared to SETUP only - the AI itself never " +
+                      "made a credit appear");
+    return 0;
+}
+
 int Match(ulong seed)
 {
     var sw = Stopwatch.StartNew();
@@ -4218,6 +4349,10 @@ int Match(ulong seed)
     // ADR-026 / DR-13: and the AI-repairs-its-structures gate.
     int airepair = AiRepairGate();
     if (airepair != 0) return airepair;
+    // DR-14 / doc 28: and the difficulty ladder, whose first claim is that
+    // Normal did not move.
+    int difficulty = DifficultyGate();
+    if (difficulty != 0) return difficulty;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -5061,6 +5196,7 @@ return args.Length == 0
         "mapgate" => MapGate(),
         "firesalegate" => FireSaleGate(),
         "airepairgate" => AiRepairGate(),
+        "difficultygate" => DifficultyGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
