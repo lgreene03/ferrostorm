@@ -89,6 +89,18 @@ public sealed class SkirmishAI
         _harvestersPerRefinery = difficulty is AiDifficulty.Hard or AiDifficulty.Brutal ? 2 : 1;
     }
 
+    /// <summary>DR-14b: the resolved decision beat, in ticks. Read-only and
+    /// purely informational - nothing in Act consults it through this property,
+    /// so exposing it changes no behaviour and moves no hash. It exists because
+    /// the alternative way to check that a picked rung reached the commander is
+    /// to infer the beat from how many commands it issues, and that inference
+    /// is only valid in a world rich enough for every beat to produce one. The
+    /// client harness first tried it in a world where the AI could afford
+    /// nothing, measured zero beats at every rung, and failed on 0 &lt; 0. The
+    /// beat itself is the thing being asserted, so the beat itself is what the
+    /// check should read.</summary>
+    public int DecisionBeat => _actEvery;
+
     /// <summary>DR-14: Brutal's declared handicap, in starting credits, applied
     /// by whatever builds the match and NEVER by the AI itself. This is not
     /// squeamishness: SkirmishAI holds no privileged access and mutates nothing,
@@ -101,11 +113,16 @@ public sealed class SkirmishAI
         => difficulty == AiDifficulty.Brutal ? 5000 : 0;
 
     // Personality presets (TICKET-AI-03): the knobs make the SHAPE of the
-    // opponent. All three sit on Normal, so they are exactly what they were
-    // before the ladder existed (DR-14).
-    public static SkirmishAI Standard(int player) => new(player);
-    public static SkirmishAI Rusher(int player) => new(player, actEvery: 15, waveSize: 4);
-    public static SkirmishAI Turtle(int player) => new(player, actEvery: 15, waveSize: 10);
+    // opponent. Each now takes a rung as well, which is what lets a player pick
+    // taste and strength independently (DR-14b). The parameter DEFAULTS to
+    // Normal, so every caller written before the ladder - and therefore every
+    // golden scenario - builds the identical commander it always did.
+    public static SkirmishAI Standard(int player, AiDifficulty difficulty = AiDifficulty.Normal)
+        => new(player, difficulty: difficulty);
+    public static SkirmishAI Rusher(int player, AiDifficulty difficulty = AiDifficulty.Normal)
+        => new(player, actEvery: 15, waveSize: 4, difficulty: difficulty);
+    public static SkirmishAI Turtle(int player, AiDifficulty difficulty = AiDifficulty.Normal)
+        => new(player, actEvery: 15, waveSize: 10, difficulty: difficulty);
 
     // Difficulty presets (DR-14): the ladder GDD line 76 named. Each keeps the
     // standard personality, so a player picks strength here and taste above.

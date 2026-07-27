@@ -464,8 +464,15 @@ public partial class SkirmishLive : Node3D
             if (_net != null) _world = _net.World;
             if (_setup.IsMission && _net == null) _mission = new MissionRunner(map, tags);
             // ...and there is NO AI in a LAN match: both seats are humans.
-            else if (_net == null) _enemy = _setup.AiPreset switch
+            else if (_net == null)
             {
+                // DR-14b: the rung the player picked, clamped because a
+                // hand-edited or corrupt sidecar must not hand the sim an
+                // undefined enum - the established "a corrupt sidecar must not
+                // take the menu down with it" posture.
+                var rung = (AiDifficulty)System.Math.Clamp(_setup.AiDifficulty, 0, 3);
+                _enemy = _setup.AiPreset switch
+                {
                 // The opponent plays the OTHER seat, not a hardcoded player 1.
                 // With the seat hardcoded, a client sitting in seat 1 got an AI
                 // playing ITS OWN side: the AI's orders and the player's landed
@@ -475,10 +482,23 @@ public partial class SkirmishLive : Node3D
                 // where the seat is 0 and the AI's 1 happen to be opposite.
                 // Found by the headless harness the first time anything drove
                 // the scene from seat 1.
-                1 => SkirmishAI.Rusher(EnemyPlayerId),
-                2 => SkirmishAI.Turtle(EnemyPlayerId),
-                _ => SkirmishAI.Standard(EnemyPlayerId),
-            };
+                    1 => SkirmishAI.Rusher(EnemyPlayerId, rung),
+                    2 => SkirmishAI.Turtle(EnemyPlayerId, rung),
+                    _ => SkirmishAI.Standard(EnemyPlayerId, rung),
+                };
+                // Brutal's handicap, applied HERE by setup rather than by the
+                // commander itself (doc 28 s6): SkirmishAI mutates nothing, so
+                // an AI that granted itself credits would desync every replay
+                // of its own match, which re-runs the command stream with no AI
+                // attached. Granting it to the enemy seat is ordinary starting
+                // state, so a recording of a Brutal match replays exactly.
+                // Every other rung grants nothing, which is what makes this
+                // line invisible outside Brutal. A resumed save is unaffected:
+                // ResumeFromSave replaces this world entirely, so the saved
+                // treasury stands rather than being topped up on every load.
+                long handicap = SkirmishAI.StartingCreditHandicap(rung);
+                if (handicap > 0) _world.GrantCredits(EnemyPlayerId, handicap);
+            }
 
             // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
             if (MatchConfig.LoadPath is { } loadPath) ResumeFromSave(loadPath);

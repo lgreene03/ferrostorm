@@ -99,16 +99,38 @@ eventually exposes the ladder must name the handicap on the rung, in the
 player's own language, rather than presenting Brutal as merely a better
 opponent.
 
-## 7. Reachability, and what comes next
+## 7. Reachability
 
-The ladder is delivered in the sim and proven by `difficultygate`, but no
-player can select it yet: the client's menu still offers only the three
-personalities. That split follows the precedent set by the neutral outpost,
-which landed as a model in C4 and became reachable in C4b, and it keeps this
-wave to one change with one proof.
+The ladder landed in the sim first, proven by `difficultygate`, and became
+reachable in a second wave, which is the precedent the neutral outpost set when
+it landed as a model in C4 and was placed on the maps in C4b. Both halves are
+now delivered.
 
-The follow up wave owes: a difficulty picker in the skirmish menu carrying the
-Brutal label required above, the setting plumbed through `MatchConfig` and the
-saved setup (a save format revision), the LAN Hello blob, and the client
-applying `StartingCreditHandicap` when it builds a Brutal match. None of it
-touches the sim.
+The skirmish menu carries a DIFFICULTY row beneath OPPOSITION, so strength and
+taste are picked separately, and the Brutal item names its handicap in the item
+text itself ("BRUTAL (+5000 CR HANDICAP)") because section 6 requires the cheat
+be declared wherever it is offered. Normal is preselected. The rung rides
+through `MatchConfig`, the saved sidecar and the LAN Hello, and the battle scene
+applies the handicap to the opponent's seat as ordinary starting state when it
+builds a Brutal match.
+
+Two backward-compatibility points were load bearing and are checked rather than
+trusted. A sidecar written before the field existed must decode to Normal and
+not to enum zero, or every old save and replay silently resumes against an Easy
+commander and reports DIVERGED with nothing in the diff to explain it; this is
+the same trap the faction fields documented under TICKET-P6-FACTION-01. And the
+Hello blob's version was bumped to 2 rather than the field being appended
+quietly, because a version 1 joiner reading a version 2 blob would slide one
+field, misread the seed and desync at the first order instead of refusing
+readably in the lobby.
+
+The client harness carries all of it (123 checks). One of those checks failed
+first time and is worth recording: it inferred the decision beat from how many
+commands a rung issued, in a world where the AI could afford nothing, so it
+measured zero beats at every rung and failed on nought being less than nought.
+The ladder was correct and the check was wrong. `SkirmishAI.DecisionBeat` now
+exposes the resolved beat read only, so the check reads the thing it is
+asserting instead of inferring it.
+
+Nothing here is owed onward. What remains open on the ladder is section 5's
+honest-information clause, which belongs to DR-15.
