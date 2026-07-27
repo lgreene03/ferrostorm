@@ -24,11 +24,40 @@ namespace Ferrostorm.Sim;
 /// attacks. That is why the ladder, the routing and the per-producer queue
 /// guards below are not optional polish.
 /// </summary>
+/// <summary>DR-14 / doc 28: the difficulty ladder GDD line 76 promised, kept
+/// ORTHOGONAL to personality. Personality (Standard, Rusher, Turtle) is a
+/// commander's taste in wave size; difficulty is how good it is, and the review
+/// found the two had been conflated - the only knob a player could reach varied
+/// wave size, which changes an opponent's shape rather than its strength.
+/// Difficulty owns the decision beat and the economy, which is the genre's
+/// honest ladder: a worse commander thinks more slowly and mines less, and only
+/// the top rung is allowed a handicap, declared rather than hidden.</summary>
+public enum AiDifficulty
+{
+    /// <summary>GDD line 76 "no cheats, slow": a half-speed commander.</summary>
+    Easy = 0,
+    /// <summary>GDD line 76 "competent build orders": EXACTLY the commander
+    /// that has always shipped. Every value on this rung is the value the code
+    /// used before the ladder existed, which is what keeps the goldens
+    /// byte-identical - see doc 28 s4.</summary>
+    Normal = 1,
+    /// <summary>GDD line 76 "strong macro, honest information": the same beat,
+    /// twice the mining. No handicap, and no information cheat BEYOND the one
+    /// the AI has always had (doc 28 s5 states this honestly; DR-15 owns it).</summary>
+    Hard = 2,
+    /// <summary>GDD line 76 "resource handicap, clearly labelled as cheating":
+    /// Hard's macro on a faster beat, plus a starting-credit handicap that
+    /// SETUP applies. The AI never grants itself anything (see
+    /// StartingCreditHandicap).</summary>
+    Brutal = 3,
+}
+
 public sealed class SkirmishAI
 {
     private readonly int _player;
-    private readonly int _actEvery;   // decision beat; larger = slower commander (difficulty knob)
-    private readonly int _waveSize;   // units per attack wave (difficulty knob)
+    private readonly int _actEvery;   // decision beat; larger = slower commander (the ladder's honest knob)
+    private readonly int _waveSize;   // units per attack wave (PERSONALITY, not difficulty - DR-14)
+    private readonly int _harvestersPerRefinery;  // DR-14: the ladder's economy knob
     private int _produced;
     /// <summary>DR-10: the Fire Sale fires ONCE. AI-internal state, like every
     /// field here: never hashed, never saved - the AI is sim-adjacent and its
@@ -37,13 +66,52 @@ public sealed class SkirmishAI
     private int _lastWaveTick = -10_000;
     private int _lastDefendTick = -10_000;
 
-    public SkirmishAI(int player, int actEvery = 15, int waveSize = 6)
-    { _player = player; _actEvery = actEvery; _waveSize = waveSize; }
+    public SkirmishAI(int player, int actEvery = 15, int waveSize = 6,
+                      AiDifficulty difficulty = AiDifficulty.Normal)
+    {
+        _player = player;
+        _waveSize = waveSize;
+        // DR-14: the ladder scales the caller's beat rather than replacing it,
+        // so personality keeps whatever beat it asked for and difficulty says
+        // how fast that commander thinks. Normal multiplies by one, which is
+        // why every existing caller - and therefore every golden - is unmoved.
+        // The floor matters at a beat of 1: a zero would make Tick % 0 throw.
+        int beat = difficulty switch
+        {
+            AiDifficulty.Easy => actEvery * 2,       // 30 at the default: half-speed, no cheats
+            AiDifficulty.Brutal => actEvery * 2 / 3, // 10 at the default: thinks fastest
+            _ => actEvery,                           // Normal and Hard share the shipped beat
+        };
+        _actEvery = beat < 1 ? 1 : beat;
+        // Income headroom is the ladder's other honest knob: a strong commander
+        // runs a second harvester per refinery, which is macro rather than a
+        // gift. One per refinery is the rule that has always shipped.
+        _harvestersPerRefinery = difficulty is AiDifficulty.Hard or AiDifficulty.Brutal ? 2 : 1;
+    }
 
-    // Personality presets (TICKET-AI-03): the knobs make the tiers.
+    /// <summary>DR-14: Brutal's declared handicap, in starting credits, applied
+    /// by whatever builds the match and NEVER by the AI itself. This is not
+    /// squeamishness: SkirmishAI holds no privileged access and mutates nothing,
+    /// which is what makes an AI match replayable - a replay re-runs the bare
+    /// command stream with NO AI attached (ReplayCheck), so an AI that granted
+    /// itself credits would desync every replay of its own match. A handicap
+    /// that lives in setup is ordinary starting state and stays replay-safe.
+    /// GDD line 76 requires it be labelled as cheating wherever it is offered.</summary>
+    public static long StartingCreditHandicap(AiDifficulty difficulty)
+        => difficulty == AiDifficulty.Brutal ? 5000 : 0;
+
+    // Personality presets (TICKET-AI-03): the knobs make the SHAPE of the
+    // opponent. All three sit on Normal, so they are exactly what they were
+    // before the ladder existed (DR-14).
     public static SkirmishAI Standard(int player) => new(player);
     public static SkirmishAI Rusher(int player) => new(player, actEvery: 15, waveSize: 4);
     public static SkirmishAI Turtle(int player) => new(player, actEvery: 15, waveSize: 10);
+
+    // Difficulty presets (DR-14): the ladder GDD line 76 named. Each keeps the
+    // standard personality, so a player picks strength here and taste above.
+    public static SkirmishAI Easy(int player) => new(player, difficulty: AiDifficulty.Easy);
+    public static SkirmishAI Hard(int player) => new(player, difficulty: AiDifficulty.Hard);
+    public static SkirmishAI Brutal(int player) => new(player, difficulty: AiDifficulty.Brutal);
 
     public void Act(World w, List<Command> output)
     {
@@ -304,7 +372,12 @@ public sealed class SkirmishAI
         // units (produced_at com_factory), so these two guards already read
         // the right producer's queue and need no generalisation; the army
         // block below is the one that routes. ---
-        if (factory >= 0 && refinery >= 0 && harvesters < refineryCount && w.QueueLength(factory) == 0)
+        // DR-14: the harvester target is the ladder's economy knob. At Normal
+        // the multiplier is 1, so this reads exactly as it always did (one
+        // harvester per refinery); Hard and Brutal run a second per refinery,
+        // which is the honest way to be stronger - more mining, not free money.
+        if (factory >= 0 && refinery >= 0 && harvesters < refineryCount * _harvestersPerRefinery
+            && w.QueueLength(factory) == 0)
             output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
         else if (expansionDesired && w.Credits(_player) >= 3500 && w.QueueLength(factory) == 0)
             output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 7));
