@@ -242,6 +242,29 @@ public sealed class SkirmishAI
                 Fix64.Zero, Fix64.Zero, wanted));
         }
 
+        // --- DR-13: keep the base standing. A structure the AI could mend but
+        // never does is the endgame's most-noticed absent behaviour (doc 27
+        // tier 4): the command exists and, past the opening, the credits do
+        // too. The Repair command TOGGLES, and once flipped on the sim runs it
+        // to completion unaided (2 hp / 1 credit per tick, switching off at
+        // full health, stalling while broke), so the commander's whole job is
+        // to flip it ON ONCE per damage episode. The !Repairing guard is what
+        // stops this re-toggling a live repair back OFF the next beat, and the
+        // outer credit floor keeps it from issuing a mend it cannot pay a
+        // single tick of. Like the outpost and fire-sale blocks, this adds no
+        // command wherever no own structure is hurt; that it holds on the
+        // goldens is a MEASURED claim, proven by the byte-compare, not assumed.
+        if (w.Credits(_player) >= World.RepairCreditsPerTick)
+        {
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                var s = w.Entities[i];
+                if (!s.Alive || s.PlayerId != _player || !World.IsStructure(s.Kind)) continue;
+                if (s.Hp < s.MaxHp && !s.Repairing)
+                    output.Add(new Command(w.Tick, _player, CommandType.Repair, i, Fix64.Zero, Fix64.Zero));
+            }
+        }
+
         // --- Expansion (TICKET-AI-03): when no meaningful deposit remains
         // NEAR home (nearest-field is the wrong test - once home is dry the
         // nearest field IS the rich distant one), stop army spending, save
