@@ -112,18 +112,65 @@ the harder the jam. That is the explanation for the reading nobody could make
 sense of: the side that never arrives is the side with the LARGER army,
 twenty three against thirteen. It out-produced itself into gridlock.
 
-Stated precisely, because the difference matters to whoever fixes it. MEASURED:
-every row of the table above. INFERRED: that the mechanism is mutual blocking
-between friendly units. The trace shows units with live orders failing to
-translate on open ground with no other obstruction present, which leaves only
-each other; it does not read the movement system's avoidance logic directly, so
-the exact rule that fails - no local avoidance, a stuck-unit backstop that does
-not fire, spawn spacing, or something in flow-field following - is one file's
-reading away and has not been done here.
+## The rule that fails, from the code
+
+The previous revision left this as inference and said the exact failing rule
+was "one file's reading away". That reading has now been done, and it names
+three facts that together produce the jam. None of them is a bug on its own.
+
+**The flow field cannot see units.** `FlowField.Build` (Map.cs:53-121) is
+Dijkstra over `Map._blocked`, which holds terrain and structures only, and it
+never consults entity positions. It is cached per destination cell. So it
+always reports a clean route through a crowd it does not know exists, which is
+exactly why the flood-fill and blocked-neighbour measurements above came back
+clean: they were asking the same terrain-only question the sim asks.
+
+**Unit-on-unit is a soft push, not a path.** There is no occupancy grid for
+movement. `SeparationSystem` (World.cs:2561-2758) pushes overlapping units
+apart, at half strength against a moving neighbour and full strength against a
+stationary one, and re-tests the result against terrain only. There is no swap,
+no slide, no local avoidance. A unit that cannot advance simply does not
+advance, and `Moving` stays true, which is precisely the measured signature.
+
+**The sim's own backstops exist and DO fire.** `StallTicks` benches a unit
+after four seconds pressed against a stationary blocker; ADR-014's monotone
+backstop benches it after fourteen seconds without bettering its nearest
+approach. That is why the stalled units read 15 to 53 per cent Moving rather
+than 100: they are benched, idle, re-ordered, and benched again. The backstops
+are working. What they cannot do is make a route through a crowd exist.
+
+One further detail matters to whoever fixes this, because it is a trap:
+`ApplyCommandCore` (World.cs:1327, 1334-1335) zeroes `StallTicks`,
+`NearestApproachSq` and `NoProgressTicks` on ANY Move, PathMove or AttackMove,
+without checking whether the destination actually changed. A caller that
+re-issues the same order on a loop therefore re-arms both backstops forever.
+
+## A fix that was tried and did NOT work
+
+Recorded so nobody spends the same day on it. The AI's quiet-watch block
+re-issued an identical PathMove home on every decision beat the moment a
+garrison unit went idle, which is exactly the re-arming trap above; two units
+on skirmish-05 collected 237 and 153 orders while moving a net three and six
+cells. Rate-limiting that re-issue to one wave interval looked like the obvious
+narrow fix, and it is AI-only, so its blast radius is small.
+
+It was implemented and measured. **It changes nothing about the jam.**
+skirmish-05's stalled commander reads byte-identically after it: 147 orders
+over 26 units, 6 lost, 20 alive, closed to 53. And it MOVED the skirmish
+golden. It was reverted rather than landed, because a golden regeneration is a
+replay-compatibility break and spending one for no measured benefit is not a
+trade worth making.
+
+Why it failed is worth stating: the stalled units' orders are WAVE
+attack-moves, not the drift path-moves the rate limit touched. The drift loop
+is real, and is a genuine inefficiency worth tidying whenever the movement work
+happens, but it is not this. The re-arming trap is a contributing mechanism,
+not the cause.
 
 Note this is NOT the same defect as ADR-014's no-progress settle backstop or
-the spawn occupancy ADR-007 handled: those concern a unit leaving a producer.
-These units left their producers long ago and are stuck in the open yard.
+the spawn occupancy ADR-007 handled: those concern a unit leaving a producer,
+or orbiting a crowd rim. These units left their producers long ago and are
+stuck in the open yard.
 
 ## The question
 
@@ -134,15 +181,23 @@ and it is not a small one.
    commander behaves correctly throughout: it produces, it orders attacks, it
    keeps its units alive. What fails is unit movement in a crowd, which is
    sim-side and sits under the determinism rules.
-2. **What is the remedy, and how far does it reach?** Local avoidance, a
-   stuck-unit nudge, spacing units as they gather, or a formation-aware
-   approach are all candidates and they are not equivalent in cost. C1b already
-   deferred "cohesive formation movement" to a future ADR on evidence of need
-   (docs/design ADR-018); this is that evidence, and it may be the natural
-   place for the answer to land.
-3. **It carries a golden regeneration either way.** Any change to how units
-   move changes every scenario that moves a unit, which is all of them. That
-   needs an ADR and the standing authorisation before a line is written.
+2. **Which remedy, given the blast radii are not comparable?** The code
+   reading leaves three, and the difference between them is the whole cost of
+   the decision:
+
+   | Candidate | Where it changes | Reaches a lone unit? |
+   |-----------|------------------|----------------------|
+   | Rate-limit the AI's repeated identical orders | SkirmishAI only | No. **Tried; does not fix the jam. See above.** |
+   | Make ApplyCommandCore's backstop reset conditional on the destination actually changing | World.cs, one shared function | Only for units re-ordered to a point they are already pathing to |
+   | Give movement any awareness of other units: local avoidance, a slide, or a crowd-aware field | StepToward / SeparationSystem / FlowField | **Yes, every moving unit in every scenario** |
+
+   Only the third addresses the cause, and only the third is universal. C1b
+   already deferred "cohesive formation movement" to a future ADR on evidence
+   of need (ADR-018); this is that evidence, and it is the natural home.
+3. **It carries a golden regeneration either way.** Even the AI-only candidate
+   moved the skirmish golden when it was measured. The third moves every
+   scenario that moves a unit, which is all of them. That needs an ADR and the
+   standing authorisation before a line is written.
 
 A thing worth weighing in the design conversation rather than deciding here:
 the jam is a real dynamic that a human player also faces, and part of the
