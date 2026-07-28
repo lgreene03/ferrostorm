@@ -12,7 +12,7 @@ hp: 150
 armour_class: light
 speed: 32
 role: harass
-weapon_ids: [vanguard_autocannon]
+weapon_ids: [wpn_vanguard_autocannon]
 sight_range: 6
 stealth: false
 detector: false
