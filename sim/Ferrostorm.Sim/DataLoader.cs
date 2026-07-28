@@ -233,12 +233,15 @@ public static class UnitCatalogue
         "wpn_turret_gun" => 4,
         "wpn_howitzer" => 5,
         "wpn_bulwark_cannon" => 6,
-        // As authored in dir_vanguard_car.yaml (TICKET-P4-SLICE-01) - note the
-        // missing wpn_ prefix, which is the file's inconsistency, not this
-        // map's. Unmapped until TICKET-P5-PROD-02 made the unit round-trip a
-        // directory walk: the one unit file the selftest never loaded was
-        // hiding the one weapon name the map never learned (PROD-D9's point).
-        "vanguard_autocannon" => 7,
+        // The missing wpn_ prefix this entry used to carry and apologise for is
+        // gone: dir_vanguard_car.yaml now authors wpn_vanguard_autocannon like
+        // every sibling, so all seven weapon names share one shape and the
+        // comment no longer has to explain an exception. Found during DR-17 and
+        // filed rather than folded into it, because a naming ticket quietly
+        // growing a seventh rename is how a small change stops being reviewable.
+        // Checksum-safe on DR-17's argument: the checksum takes the resolved
+        // integer this map returns, never the string it matched on.
+        "wpn_vanguard_autocannon" => 7,
         _ => throw new FormatException($"unknown weapon id '{name}'"),
     };
 
