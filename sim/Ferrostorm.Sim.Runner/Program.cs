@@ -25,6 +25,7 @@ using Ferrostorm.Sim;
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and the AI CAPTURES at least one of its declared outposts (C4c inverted this from the original "stand neutral" assertion)
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
+//   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -4148,6 +4149,216 @@ int AiRepairGate()
     return 0;
 }
 
+int PinTrace()
+{
+    // Q018 stage two. pinprobe established that the stalled commander orders
+    // constantly, keeps its units alive and leaves them near home, and named
+    // two mechanisms that fit: AttackMove prosecuting local targets forever, or
+    // the wave and defence cadences re-ordering units before they travel. It
+    // could not separate them, because a command stream shows what was ORDERED
+    // and not what the unit then did.
+    //
+    // This traces the units themselves, and the discriminator is one number per
+    // unit: DISTANCE TRAVELLED against NET DISPLACEMENT.
+    //
+    //   Prosecution predicts a unit that barely moves at all: it stops to fight
+    //   whatever it meets, so travelled and net are BOTH small, and it spends
+    //   most of its ticks holding an ExplicitTarget.
+    //
+    //   Thrashing predicts the opposite signature: a unit that walks a long way
+    //   in total while ending up where it started, so travelled is LARGE and
+    //   net is small, with few ticks holding a target - it is being sent back
+    //   and forth, not fighting.
+    //
+    // The two are not variations of the same answer; they call for different
+    // fixes, and the ratio tells them apart without a judgement call.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapPath = Path.Combine(root, "data", "maps", "skirmish-05.fmap");
+    var map = MapData.Load(mapPath);
+    var world = map.BuildWorld(4242, players: 2, out _, w =>
+    {
+        CatalogueFiles.RegisterAll(w,
+            Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+        CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+    });
+    map.PlaceSkirmishStart(world, 8000);
+
+    var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
+    var cmds = new List<Command>();
+    // Per-unit accumulators, indexed by entity id. Player 1 is the stalled
+    // commander on this map and this seed (pinprobe: 147 orders, closed to 53).
+    var orders = new Dictionary<int, int>();
+    var travelled = new Dictionary<int, int>();
+    var engagedTicks = new Dictionary<int, int>();
+    var movingTicks = new Dictionary<int, int>();
+    var firstCell = new Dictionary<int, (int X, int Y)>();
+    var lastCell = new Dictionary<int, (int X, int Y)>();
+    const int ticks = 6000;
+
+    for (int t = 0; t < ticks; t++)
+    {
+        cmds.Clear();
+        ais[0].Act(world, cmds);
+        int mark0 = cmds.Count;
+        ais[1].Act(world, cmds);
+        for (int i = mark0; i < cmds.Count; i++)   // player 1's orders only
+            if (cmds[i].Type == CommandType.AttackMove || cmds[i].Type == CommandType.PathMove)
+                orders[cmds[i].EntityId] = orders.GetValueOrDefault(cmds[i].EntityId) + 1;
+
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (!e.Alive || e.PlayerId != 1 || e.Kind != EntityKind.Unit) continue;
+            var cell = (X: Map.CellOf(e.X), Y: Map.CellOf(e.Y));
+            if (!firstCell.ContainsKey(i)) firstCell[i] = cell;
+            else
+            {
+                var prev = lastCell[i];
+                // Chebyshev step between consecutive ticks, summed: the length
+                // of the walk, however much doubling back it contains.
+                travelled[i] = travelled.GetValueOrDefault(i)
+                    + Math.Max(Math.Abs(cell.X - prev.X), Math.Abs(cell.Y - prev.Y));
+            }
+            lastCell[i] = cell;
+            if (e.ExplicitTarget >= 0) engagedTicks[i] = engagedTicks.GetValueOrDefault(i) + 1;
+            if (e.Moving) movingTicks[i] = movingTicks.GetValueOrDefault(i) + 1;
+        }
+    }
+
+    Console.WriteLine("pintrace (Q018 stage two): skirmish-05, player 1, the stalled commander");
+    Console.WriteLine("  unit  orders  travelled  net  engaged%  moving%   reading");
+    int thrash = 0, prosecute = 0, neither = 0;
+    foreach (var id in orders.Keys.OrderBy(k => k))
+    {
+        if (!firstCell.ContainsKey(id) || !lastCell.ContainsKey(id)) continue;
+        int trav = travelled.GetValueOrDefault(id);
+        var a = firstCell[id];
+        var b = lastCell[id];
+        int net = Math.Max(Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y));
+        int seen = Math.Max(1, movingTicks.GetValueOrDefault(id) + 1);
+        int engPct = 100 * engagedTicks.GetValueOrDefault(id) / Math.Max(1, ticks);
+        int movPct = 100 * movingTicks.GetValueOrDefault(id) / Math.Max(1, ticks);
+        // Thrashing: walked at least three times its net displacement, and a
+        // real distance, so a unit that simply stood still cannot qualify.
+        // Prosecution: hardly walked at all and spent its time holding targets.
+        string reading;
+        if (trav >= 30 && trav >= net * 3) { reading = "THRASH (walked far, went nowhere)"; thrash++; }
+        else if (trav < 30 && engPct >= 5) { reading = "PROSECUTE (stayed put, engaged)"; prosecute++; }
+        else { reading = "-"; neither++; }
+        Console.WriteLine($"  {id,4}  {orders[id],6}  {trav,9}  {net,3}  {engPct,7}%  {movPct,6}%   {reading}");
+    }
+    Console.WriteLine($"  verdict counts: thrash {thrash}, prosecute {prosecute}, neither {neither}");
+
+    // The reading the two named mechanisms did not predict: units flagged
+    // MOVING for a large share of their life that travel zero cells. If they
+    // are walled in, the ring around them is blocked and the wall is made of
+    // their OWN commander's buildings, which the placement search put there.
+    // Count the blocked neighbours of every stalled unit and name what is
+    // standing on them.
+    Console.WriteLine("  --- enclosure check on the units that never travelled ---");
+    int walled = 0, open = 0;
+    foreach (var id in orders.Keys.OrderBy(k => k))
+    {
+        if (!lastCell.ContainsKey(id)) continue;
+        if (travelled.GetValueOrDefault(id) > 1) continue;         // it could move; not our case
+        if (movingTicks.GetValueOrDefault(id) * 100 / ticks < 5) continue;  // and it tried to
+        var c = lastCell[id];
+        int blocked = 0;
+        var owners = new List<string>();
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                int nx = c.X + dx, ny = c.Y + dy;
+                if (nx < 0 || ny < 0 || nx >= 96 || ny >= 64) { blocked++; continue; }
+                if (world.Map.IsBlocked(nx, ny)) blocked++;
+            }
+        // What structure sits nearest, and whose is it?
+        int near = -1, nearD = 99;
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (!e.Alive || !World.IsStructure(e.Kind)) continue;
+            int d = Math.Max(Math.Abs(Map.CellOf(e.X) - c.X), Math.Abs(Map.CellOf(e.Y) - c.Y));
+            if (d < nearD) { nearD = d; near = i; }
+        }
+        string owner = near >= 0
+            ? $"{world.Entities[near].Kind} of player {world.Entities[near].PlayerId} at {nearD} cells"
+            : "no structure nearby";
+        if (blocked >= 5) walled++; else open++;
+        Console.WriteLine($"  unit {id,4} at ({c.X},{c.Y}): {blocked}/8 neighbours blocked, nearest structure {owner}");
+    }
+    Console.WriteLine($"  enclosure: {walled} stalled units with 5+ blocked neighbours, {open} with fewer");
+
+    // Local openness is not an exit. Flood from a stalled unit over unblocked
+    // ground and ask how big its world is and whether the enemy is in it. A
+    // small pocket means the commander sealed its own base at the PERIMETER,
+    // which no neighbour count around an individual unit would ever show. A
+    // flood that reaches the far start means the ground is connected and the
+    // stall is something other than terrain.
+    Console.WriteLine("  --- reachable region from a stalled unit ---");
+    var start0 = map.Starts[0];
+    foreach (var id in orders.Keys.OrderBy(k => k).Take(40))
+    {
+        if (!lastCell.ContainsKey(id)) continue;
+        if (travelled.GetValueOrDefault(id) > 1) continue;
+        if (movingTicks.GetValueOrDefault(id) * 100 / ticks < 5) continue;
+        var c = lastCell[id];
+        var seen = new HashSet<(int, int)> { (c.X, c.Y) };
+        var q = new Queue<(int X, int Y)>();
+        q.Enqueue((c.X, c.Y));
+        while (q.Count > 0)
+        {
+            var (x, y) = q.Dequeue();
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= 96 || ny >= 64) continue;
+                    if (world.Map.IsBlocked(nx, ny)) continue;
+                    if (seen.Add((nx, ny))) q.Enqueue((nx, ny));
+                }
+        }
+        bool reachesFoe = seen.Contains((start0.Cx, start0.Cy));
+        Console.WriteLine($"  unit {id,4} at ({c.X},{c.Y}): can stand on {seen.Count} cells; "
+                          + $"enemy start reachable over open ground: {reachesFoe}");
+        break;   // one is enough: they are all in the same pocket or all not
+    }
+
+    // Terrain is connected and the units are in open ground, so the only thing
+    // left in their way is EACH OTHER. Map.IsBlocked sees terrain and
+    // structures; it does not see units. Count friendly bodies packed around
+    // each stalled unit, and how many share its exact cell.
+    Console.WriteLine("  --- crowding around the stalled units ---");
+    int totalNear = 0, samples = 0, stacked = 0;
+    foreach (var id in orders.Keys.OrderBy(k => k))
+    {
+        if (!lastCell.ContainsKey(id)) continue;
+        if (travelled.GetValueOrDefault(id) > 1) continue;
+        if (movingTicks.GetValueOrDefault(id) * 100 / ticks < 5) continue;
+        var c = lastCell[id];
+        int near = 0, same = 0;
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (!e.Alive || e.PlayerId != 1 || e.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
+            if (i == id) continue;
+            int d = Math.Max(Math.Abs(Map.CellOf(e.X) - c.X), Math.Abs(Map.CellOf(e.Y) - c.Y));
+            if (d <= 2) near++;
+            if (d == 0) same++;
+        }
+        totalNear += near; samples++; stacked += same;
+        Console.WriteLine($"  unit {id,4} at ({c.X},{c.Y}): {near} friendly bodies within 2 cells, {same} on its exact cell");
+    }
+    if (samples > 0)
+        Console.WriteLine($"  crowding: {totalNear} bodies within 2 cells across {samples} stalled units "
+                          + $"(mean {totalNear / (double)samples:F1}), {stacked} cell-sharing overlaps");
+    return 0;
+}
+
 int PinProbe()
 {
     // TEMPORARY diagnostic for Q018. The question as filed ASSERTED a mechanism
@@ -5514,6 +5725,7 @@ return args.Length == 0
         "difficultygate" => DifficultyGate(),
         "fordgate" => FordGate(),
         "pinprobe" => PinProbe(),
+        "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
