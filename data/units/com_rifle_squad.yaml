@@ -9,7 +9,7 @@ hp: 100
 armour_class: none
 speed: 25
 role: infantry
-weapon_ids: [wpn_test_rifle]
+weapon_ids: [wpn_service_rifle]
 sight_range: 5
 stealth: false
 detector: false

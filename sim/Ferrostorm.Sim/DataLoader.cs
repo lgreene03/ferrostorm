@@ -218,9 +218,16 @@ public static class UnitCatalogue
     /// <summary>Weapon id registry; /data weapon files land in Phase 2, so the name map is compiled for now.</summary>
     public static int WeaponIdOf(string name) => name switch
     {
-        "wpn_test_cannon" => 1,
-        "wpn_test_rifle" => 2,
-        "wpn_test_rocket" => 3,
+        // DR-17: these three shipped as wpn_test_cannon/rifle/rocket, prototype
+        // names that outlived the prototype and were the only "test" left in a
+        // catalogue a player's save file names. Renaming them is checksum-safe
+        // BY CONSTRUCTION, not by luck: CatalogueChecksum hashes the
+        // canonicalised defs and never the file bytes, and what it takes from a
+        // weapon is the resolved integer WeaponId, which this map still returns
+        // unchanged. Every existing save and replay therefore still loads.
+        "wpn_tank_cannon" => 1,
+        "wpn_service_rifle" => 2,
+        "wpn_rocket_tube" => 3,
         // 4 is the turret's gun: no unit carries it, but /data/buildings does
         // (TICKET-P5-BD-06), and one weapon-name map is the point of this switch.
         "wpn_turret_gun" => 4,

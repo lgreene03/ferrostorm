@@ -506,7 +506,7 @@ public partial class CombatEffects : Node3D
             else
                 switch (w)
                 {
-                    case 2: // TestRifle: thin hitscan tracer, instant impact
+                    case 2: // ServiceRifle: thin hitscan tracer, instant impact
                         SpawnTracer(from, to, TracerMat, 0.04f, 0.10f);
                         SpawnImpact(to, armour: true);
                         HitPop(target);
@@ -517,7 +517,7 @@ public partial class CombatEffects : Node3D
                     case 5: // Howitzer: high arc + splash-scaled dirt burst
                         SpawnHowitzerShell(actors, ev.B, from, to);
                         break;
-                    case 3: // TestRocket: arced rocket with smoke trail
+                    case 3: // RocketTube: arced rocket with smoke trail
                         SpawnRocket(actors, ev.B, from, to);
                         break;
                     default: // unknown weapon: the original generic tracer
