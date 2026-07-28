@@ -79,8 +79,8 @@ gate**), 11 barracks (ADR-009), 12 radar_uplink (ADR-008), 13 outpost
 (map-placed, neutral, capturable, pays 15 cr/s; ADR-021), 14 bridge
 (map-placed, neutral, felling it BLOCKS the cell; ADR-025).
 
-Weapons: 1 TestCannon r4/30/AA/15t, 2 TestRifle r3/12/AI/8t,
-3 TestRocket r4/40/AA/20t, 4 TurretGun r5/35/AA/12t,
+Weapons: 1 TankCannon r4/30/AA/15t, 2 ServiceRifle r3/12/AI/8t,
+3 RocketTube r4/40/AA/20t, 4 TurretGun r5/35/AA/12t,
 5 Howitzer r9/60/AB/45t min3 splash1.5 (splash is half damage, friend or
 foe, shooter spared).
 

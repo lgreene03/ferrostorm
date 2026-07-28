@@ -10,7 +10,7 @@ hp: 200
 armour_class: light
 speed: 24
 role: ambush_armour
-weapon_ids: [wpn_test_rocket]
+weapon_ids: [wpn_rocket_tube]
 sight_range: 5
 stealth: true
 detector: false

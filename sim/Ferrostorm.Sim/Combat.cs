@@ -43,9 +43,14 @@ public readonly struct WeaponDef
 public static class Weapons
 {
     public static readonly WeaponDef None = new(Fix64.Zero, 0, Warhead.Omni, int.MaxValue);
-    public static readonly WeaponDef TestCannon = new(Fix64.FromInt(4), 30, Warhead.AntiArmour, 15);
-    public static readonly WeaponDef TestRifle = new(Fix64.FromInt(3), 12, Warhead.AntiInfantry, 8);
-    public static readonly WeaponDef TestRocket = new(Fix64.FromInt(4), 40, Warhead.AntiArmour, 20);
+    // DR-17: the tank gun, the infantry rifle and the rocket tube. They were
+    // TestCannon, TestRifle and TestRocket until the design review pointed out
+    // that the prototype's names had reached the shipped catalogue. Numbers
+    // untouched by the rename: this is a naming wave, and any change to these
+    // values is DR-12's, which needs a Balance co-sign.
+    public static readonly WeaponDef TankCannon = new(Fix64.FromInt(4), 30, Warhead.AntiArmour, 15);
+    public static readonly WeaponDef ServiceRifle = new(Fix64.FromInt(3), 12, Warhead.AntiInfantry, 8);
+    public static readonly WeaponDef RocketTube = new(Fix64.FromInt(4), 40, Warhead.AntiArmour, 20);
     public static readonly WeaponDef TurretGun = new(Fix64.FromInt(5), 35, Warhead.AntiArmour, 12);
     // Howitzer: enormous reach, a 3-cell dead zone, slow, and splash that
     // does not care whose uniform you wear (TICKET-P2-SIM-14).
@@ -59,9 +64,9 @@ public static class Weapons
 
     public static WeaponDef Get(int id) => id switch
     {
-        1 => TestCannon,
-        2 => TestRifle,
-        3 => TestRocket,
+        1 => TankCannon,
+        2 => ServiceRifle,
+        3 => RocketTube,
         4 => TurretGun,
         5 => Howitzer,
         6 => BulwarkCannon,

@@ -11,7 +11,7 @@ hp: 150
 armour_class: light
 speed: 28
 role: harassment
-weapon_ids: [wpn_test_rifle]
+weapon_ids: [wpn_service_rifle]
 sight_range: 5
 stealth: true
 detector: false

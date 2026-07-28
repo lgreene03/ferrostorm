@@ -10,7 +10,7 @@ hp: 300
 armour_class: heavy
 speed: 20
 role: assault
-weapon_ids: [wpn_test_cannon]
+weapon_ids: [wpn_tank_cannon]
 sight_range: 5
 stealth: false
 detector: false

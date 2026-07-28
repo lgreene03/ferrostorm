@@ -3157,7 +3157,7 @@ int StanceGate()
     // waypoints; and a v7 save round-trips the stance while a v6 downgrade loads
     // Aggressive hash-identically.
     //
-    // Weapon 1 (TestCannon) has range 4 and no dead zone, and anti-armour vs a
+    // Weapon 1 (TankCannon) has range 4 and no dead zone, and anti-armour vs a
     // Heavy target is full damage (30), so one shot fells a 10-hp intruder.
     Fix64 crowdRadiusSq = Fix64.FromInt(16); // the 4-cell crowd-arrival radius, squared
 
