@@ -4268,6 +4268,89 @@ int FordGate()
                       + $"ordered across arrived southbound and northbound - over {spans} destroyable spans plus the "
                       + "permanent centre ford. Whether both COMMANDERS choose to march is a property of the AI and "
                       + "not of this map: it is filed as Q018");
+
+    // skirmish-06 (Sable Crossroads) rides the same proof, because it fails the
+    // same way if it fails at all: its four quadrants touch only at four gaps,
+    // and a gap the flow field will not thread is a map cut into quarters.
+    // Start-to-start rather than bank-to-bank, since there is no channel here
+    // to be one side or the other of - the whole question is whether the ring
+    // route through the neutral quadrants is walkable at all.
+    //
+    // Worth stating why mapgate's outpost assertion means MORE here than it did
+    // on the Ashford. There, both outposts stood on the bank of the base that
+    // took them, so the assertion passed without anything crossing. Here all
+    // four stand in the NEUTRAL quadrants, which no base starts in, so an AI
+    // that captures one has necessarily walked a gap. It captured four of four.
+    string crossPath = Path.Combine(root, "data", "maps", "skirmish-06.fmap");
+    if (!File.Exists(crossPath)) return Fail("ford: skirmish-06.fmap is missing");
+    MapData cross;
+    try { cross = MapData.Load(crossPath); }
+    catch (Exception ex) { return Fail($"ford: skirmish-06 failed to load: {ex.Message}"); }
+
+    // No opening hand, for the reason recorded above: a base on the destination
+    // cell blocks it, and -1 would then be the correct answer to a question
+    // this gate should not be asking.
+    //
+    // A FRESH world per direction, which is not fussiness. Both directions
+    // first shared one world and the reverse leg failed, because the outbound
+    // unit had settled four cells from the south-east start and was still
+    // standing there when the return leg tried to spawn and set off from that
+    // exact spot. The map was never the problem; the leftover was.
+    string where = "";
+    bool Arrives(int player, (int Cx, int Cy) from, (int Cx, int Cy) to)
+    {
+        World w;
+        try
+        {
+            w = cross.BuildWorld(4242, players: 2, out _, ww =>
+            {
+                CatalogueFiles.RegisterAll(ww,
+                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+                CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+            });
+        }
+        catch (Exception ex) { where = $"world build threw: {ex.Message}"; return false; }
+
+        int id = w.SpawnUnit(player, Map.CellCentre(from.Cx), Map.CellCentre(from.Cy),
+                             Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
+        var order = new List<Command>
+        {
+            new(w.Tick, player, CommandType.PathMove, id,
+                Map.CellCentre(to.Cx), Map.CellCentre(to.Cy)),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 6000; t++)
+        {
+            w.Step(default);
+            var e = w.Entities[id];
+            // Arrival with the slack movement itself allows. This was 3 first
+            // and reported the map unthreadable while the unit was sitting 4
+            // cells from the target with Moving false - it had walked the whole
+            // ring and settled, which is arrival by any honest reading. The
+            // sim's own arrival tolerances are looser than this: SkirmishAI
+            // treats an MCV as arrived at DistSq 144, twelve cells, precisely
+            // because a crowd or a stall settles a unit short of an exact cell.
+            // Six is inside that and far outside the eight-cell base apron, so
+            // it cannot pass a unit that failed to reach the quadrant at all.
+            if (Math.Max(Math.Abs(Map.CellOf(e.X) - to.Cx), Math.Abs(Map.CellOf(e.Y) - to.Cy)) <= 6)
+                return true;
+            where = $"stopped at ({Map.CellOf(e.X)},{Map.CellOf(e.Y)}) moving={e.Moving}";
+        }
+        return false;
+    }
+
+    var nw = cross.Starts[0];
+    var se = cross.Starts[1];
+    if (!Arrives(0, nw, se))
+        return Fail("ford: on Sable Crossroads a unit ordered from the north-west start to the south-east "
+                    + $"never arrived - the ring route through the neutral quadrants does not thread ({where})");
+    if (!Arrives(1, se, nw))
+        return Fail("ford: on Sable Crossroads a unit ordered from the south-east start to the north-west "
+                    + $"never arrived - the ring route does not thread in reverse ({where})");
+
+    Console.WriteLine("fordgate: Sable Crossroads threads too - a unit walked the ring route through the neutral "
+                      + "quadrants start to start in both directions, so its four gaps join the quadrants in "
+                      + "practice and not merely on the generator's graph");
     return 0;
 }
 
