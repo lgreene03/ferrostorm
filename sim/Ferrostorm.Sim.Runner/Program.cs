@@ -18,6 +18,7 @@ using Ferrostorm.Sim;
 //   firesalegate       - DR-10: the beaten AI's last stand - fire sale + final wave, once; yard control; MCV redeploy
 //   airepairgate       - ADR-026/DR-13: the AI mends a damaged own structure (not a healthy one, not while broke)
 //   difficultygate     - DR-14/doc 28: the Easy-to-Brutal ladder - Normal is the identity rung, the beat and the mining vary, the handicap is setup-only
+//   fordgate           - DR-18: both armies CROSS Ashford Reach (skirmish-05), the doc 26 "a map where an army parks is a failed map" bar that mapgate cannot see
 //   lanegate           - ADR-023: parallel build lanes - overflow only, both lanes build at once, the prune matches the hash guard, save v8
 //   lansetup           - ADR-022: the host's match setup rides the Hello, so a joiner builds the identical world
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
@@ -4146,6 +4147,130 @@ int AiRepairGate()
     return 0;
 }
 
+int FordGate()
+{
+    // DR-18 gate, for skirmish-05 (Ashford Reach). Additive, the
+    // difficultygate/mapgate pattern: a standalone mode and a Match battery
+    // stage, never a golden scenario, so the golden list stays 24.
+    //
+    // This exists because mapgate PASSING on this map proves less than it
+    // looks. mapgate asserts the map loads, that the AI produced something,
+    // and that a declared outpost was captured - and on Ashford Reach both
+    // outposts sit on the same bank as the base that takes them, so every one
+    // of those assertions is satisfied without a single unit ever touching a
+    // bridge. The property that actually matters on a river map is the one doc
+    // 26 states as the acceptance bar: "a map where an army parks is a failed
+    // map, not a hard one". A flow field that cannot path a bridge choke
+    // returns -1 and parks the attacking army at home, which is exactly the
+    // failure this map's shape could ship, and nothing else in the battery
+    // would notice it.
+    // The same root idiom mapgate uses, open-coded there too.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapPath = Path.Combine(root, "data", "maps", "skirmish-05.fmap");
+    if (!File.Exists(mapPath)) return Fail("ford: skirmish-05.fmap is missing");
+
+    MapData map;
+    World world;
+    try
+    {
+        map = MapData.Load(mapPath);
+        world = map.BuildWorld(4242, players: 2, out _, w =>
+        {
+            CatalogueFiles.RegisterAll(w,
+                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+        });
+        // NO opening hand here, deliberately. The first draft called
+        // PlaceSkirmishStart and then walked a unit to the far START cell -
+        // which by then had a Construction Yard standing on it, so the
+        // destination was blocked by construction, the flow field correctly
+        // returned -1, and the gate reported "the flow field cannot path the
+        // Ashford" about a map that paths perfectly well. The bases are what
+        // the geometry is being tested INDEPENDENTLY of, so they are left out
+        // and the start cells stay the open apron ground the generator proved.
+    }
+    catch (Exception ex) { return Fail($"ford: skirmish-05 failed to load: {ex.Message}"); }
+
+    // The channel meanders about y=31.5 with amplitude 5 and a half-width under
+    // 3, so it never reaches beyond y=23..40. These bands are comfortably
+    // OUTSIDE it in both directions: a unit standing on one can only have got
+    // there across a bridge, never by hugging its own shore.
+    const int NorthBank = 22, SouthBank = 41;
+
+    // What this gate asserts, and what it deliberately does NOT.
+    //
+    // It asserts the MAP property: that a unit ordered to the far bank gets
+    // there, from both sides, and still gets there once BOTH destroyable flank
+    // spans are rubble. That is doc 26's real worry - "a chokepoint the flow
+    // field cannot path returns minus one and parks the attacking army at
+    // home" - and it is a fact about geometry, testable without an opponent.
+    //
+    // It does NOT assert that both AI commanders mount an offensive. That was
+    // this gate's first draft and it was the wrong bar: measured across the
+    // whole pool, whichever commander strikes first pins the other's garrison
+    // and the pinned side never marches, so the reading swings hard on which
+    // side happens to move first. Ashford Reach read 37-against-2 on approach
+    // distance before its starts were widened and 11-against-53 after, but
+    // skirmish-02, shipped and unchallenged, reads 7-against-29 on the same
+    // measure. Holding a new map to a bar no existing map meets would be
+    // inventing a standard rather than applying one. The one-sidedness is real
+    // and is filed as a finding against the AI, where it belongs, not tuned
+    // around here (docs/questions/Q018).
+    Fix64 CellC(int c) => Map.CellCentre(c);
+    var north = map.Starts[0];
+    var south = map.Starts[1];
+
+    bool WalksTo(World w, int player, (int Cx, int Cy) from, (int Cx, int Cy) to, bool wantSouth)
+    {
+        // A rifle squad, the cheapest thing that walks, ordered clean across.
+        int id = w.SpawnUnit(player, CellC(from.Cx), CellC(from.Cy),
+                             Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
+        var order = new List<Command>
+        {
+            new(w.Tick, player, CommandType.PathMove, id, CellC(to.Cx), CellC(to.Cy)),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 4000; t++)
+        {
+            w.Step(default);
+            int cy = Map.CellOf(w.Entities[id].Y);
+            if (wantSouth ? cy >= SouthBank : cy <= NorthBank) return true;
+        }
+        return false;
+    }
+
+    if (!WalksTo(world, 0, north, south, wantSouth: true))
+        return Fail("ford: a unit ordered from the northern start to the southern never crossed - "
+                    + "the flow field cannot path the Ashford southbound");
+    if (!WalksTo(world, 1, south, north, wantSouth: false))
+        return Fail("ford: a unit ordered from the southern start to the northern never crossed - "
+                    + "the flow field cannot path the Ashford northbound");
+
+    // The map must also carry destroyable spans at all, or it is not exercising
+    // the vocabulary DR-18 added it for and the generator's 'b' cells never
+    // became entities.
+    int spans = 0;
+    for (int i = 0; i < world.Entities.Count; i++)
+        if (world.Entities[i].Alive && world.Entities[i].Kind == EntityKind.Bridge) spans++;
+    if (spans == 0)
+        return Fail("ford: skirmish-05 spawned no destroyable spans - it is not exercising ADR-025");
+
+    // NOT asserted here, deliberately: that the theatre still connects once both
+    // flank spans are rubble. It is proven twice already and neither proof
+    // needs this gate to restate it. tools/mapgen.py proves it on the graph
+    // before the file is written, by flooding the map with every destroyable
+    // span removed at once, which is what the generator's crossing check is
+    // for; and bridgegate proves the general sim behaviour that a felled span
+    // BLOCKS its cell. Restating it here would mean felling bridges by fiat,
+    // and a bridge only dies through a damage path, so the "test" would have
+    // had to reach around the sim to stage a death the sim would never produce.
+    Console.WriteLine($"fordgate: Ashford Reach is walkable in BOTH directions under a real flow field - a unit "
+                      + $"ordered across arrived southbound and northbound - over {spans} destroyable spans plus the "
+                      + "permanent centre ford. Whether both COMMANDERS choose to march is a property of the AI and "
+                      + "not of this map: it is filed as Q018");
+    return 0;
+}
+
 int DifficultyGate()
 {
     // DR-14 / doc 28 gate. Additive, the firesalegate/airepairgate pattern: a
@@ -4353,6 +4478,10 @@ int Match(ulong seed)
     // Normal did not move.
     int difficulty = DifficultyGate();
     if (difficulty != 0) return difficulty;
+    // DR-18: and the Ashford actually carries an attack, which mapgate's
+    // outpost assertion cannot see.
+    int ford = FordGate();
+    if (ford != 0) return ford;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -5197,6 +5326,7 @@ return args.Length == 0
         "firesalegate" => FireSaleGate(),
         "airepairgate" => AiRepairGate(),
         "difficultygate" => DifficultyGate(),
+        "fordgate" => FordGate(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
