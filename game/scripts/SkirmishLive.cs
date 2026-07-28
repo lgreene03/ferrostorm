@@ -218,6 +218,43 @@ public partial class SkirmishLive : Node3D
     private FogOfWar _fog = null!;
     private Minimap _minimap = null!;
     private readonly Dictionary<int, HashSet<int>> _groups = new();
+    /// <summary>DR-20: the owner each structure had BEFORE the current tick's
+    /// events, so a Captured event can tell "I lost it" from "somebody took a
+    /// neutral one" - the entity's own PlayerId has already flipped by then.
+    /// Presentation state: the sim never reads it and no save carries it.</summary>
+    private readonly System.Collections.Generic.Dictionary<int, int> _structureOwner = new();
+    /// <summary>DR-20: capture alerts raised, for the harness. Counted rather
+    /// than inspected because a toast is transient and a check that races it is
+    /// a flaky check (the LaunchAlerts precedent).</summary>
+    public int CaptureAlerts;
+
+    /// <summary>DR-20: which of the three capture alerts a change of ownership
+    /// earns, or none. Split out as a PURE decision because the case that most
+    /// needs checking is the one that is hardest to stage end to end: an enemy
+    /// quietly taking a neutral outpost inside the shroud, which must stay
+    /// SILENT. Driving that through a real engineer walk would need vision
+    /// state arranged just so, and a check that elaborate tests its own fixture
+    /// as much as the rule. The DUP audit set this precedent by exporting pure
+    /// methods for exactly this reason.</summary>
+    public enum CaptureAlertKind { None, Gained, Lost, Witnessed }
+
+    /// <summary>DR-20's rule, stated once. `visible` is whether the LOCAL seat
+    /// can see the captured cell.</summary>
+    public CaptureAlertKind CaptureAlertFor(int newOwner, int oldOwner, bool visible)
+    {
+        // You did it, or it was done to you: both are yours to know regardless
+        // of vision, because your own engineer walked in, or your own building
+        // stopped being yours. Gained is tested FIRST so that capturing back a
+        // structure you previously owned reads as a gain and not a loss.
+        if (newOwner == LocalPlayerId) return CaptureAlertKind.Gained;
+        if (oldOwner == LocalPlayerId) return CaptureAlertKind.Lost;
+        // Somebody else's business. Only if you can actually see it: alerting
+        // through the shroud would hand the player information the fog exists
+        // to withhold, which is the maphack shape the joiner-fog sweep spent a
+        // whole wave removing.
+        return visible ? CaptureAlertKind.Witnessed : CaptureAlertKind.None;
+    }
+
     private double _lastAttackAlert = -60;
     // GDD s7 line 85 names "harvester under attack" and "base under attack" as
     // SEPARATE alerts, so they carry separate cooldowns. Sharing one would let
@@ -1646,6 +1683,78 @@ public partial class SkirmishLive : Node3D
                 _minimap.Ping(launchPos, new Color(0.91f, 0.42f, 0.13f));
                 RecordAlert(launchPos, Time.GetTicksMsec() / 1000.0);
             }
+
+            // DR-20: the capture alert, the fifth alert. GameEventType.Captured
+            // has been raised by the sim since the engineer existed and consumed
+            // by NOTHING, so an outpost changing hands - the whole point of
+            // ADR-021 - happened in complete silence. Event semantics where it
+            // is raised (World.cs CaptureSystem): A is the captured structure,
+            // B is the NEW owner.
+            //
+            // Three cases, and they are not the same alert:
+            //
+            //  - You took it. A confirmation, not a warning: the soft cue and a
+            //    teal ping, no klaxon and no VO. Always fires, because you did
+            //    it and cannot be told something you do not know.
+            //  - You LOST it. The urgent register, because a captured building
+            //    is worse than a destroyed one: it is still standing and now
+            //    shooting for the other side. Always fires, same reason.
+            //  - Somebody else's capture, including an enemy taking a neutral
+            //    outpost. Fires ONLY where the local seat can see the cell.
+            //    Alerting on a capture in the shroud would be a maphack of
+            //    exactly the shape the joiner-fog sweep spent a wave removing,
+            //    and the superweapon alert above only fires unconditionally
+            //    because a launch is global knowledge by genre convention. A
+            //    quiet capture in the fog is not.
+            //
+            // Distinguishing "I lost it" from "they took a neutral" needs the
+            // PREVIOUS owner, and the entity's owner has already flipped by the
+            // time this event is read. _structureOwner is the client-side cache
+            // that remembers it - presentation state only, never consulted by
+            // the sim and never saved.
+            if (ev.Type == GameEventType.Captured && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var taken = _world.Entities[ev.A];
+                int newOwner = ev.B;
+                int oldOwner = _structureOwner.TryGetValue(ev.A, out int prev) ? prev : -1;
+                int cx = (int)(taken.X.Raw >> 32), cy = (int)(taken.Y.Raw >> 32);
+                var pos = new Vector2((float)(taken.X.Raw / 4294967296.0), (float)(taken.Y.Raw / 4294967296.0));
+                double now = Time.GetTicksMsec() / 1000.0;
+
+                switch (CaptureAlertFor(newOwner, oldOwner, _world.IsVisible(LocalPlayerId, cx, cy)))
+                {
+                    case CaptureAlertKind.Gained:
+                        CaptureAlerts++;
+                        _audio.Play("alert_harvester", -8);   // the soft cue, quieter: good news
+                        ShowToast("STRUCTURE CAPTURED");
+                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));   // teal: nothing else uses it
+                        RecordAlert(pos, now);
+                        break;
+                    case CaptureAlertKind.Lost:
+                        CaptureAlerts++;
+                        _audio.Play("alert_attack", -4);      // the klaxon: this is a loss
+                        ShowToast("STRUCTURE LOST TO CAPTURE");
+                        _minimap.Ping(pos, new Color(0.85f, 0.25f, 0.2f));    // the base-alert red
+                        RecordAlert(pos, now);
+                        break;
+                    case CaptureAlertKind.Witnessed:
+                        CaptureAlerts++;
+                        ShowToast("OUTPOST CAPTURED");        // seen, but not yours: no audio
+                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));
+                        break;
+                }
+            }
+        }
+
+        // DR-20: refresh the owner cache AFTER the event sweep, so the sweep
+        // above reads the ownership as it stood BEFORE this tick's captures.
+        // Structures only: nothing else can be captured, and walking every
+        // entity every tick to cache a field three lines use would be a cost
+        // with no reader.
+        for (int i = 0; i < _world.EntityCount; i++)
+        {
+            var e = _world.Entities[i];
+            if (e.Alive && World.IsStructure(e.Kind)) _structureOwner[i] = e.PlayerId;
         }
         // TICKET-P5-SPAWN-02: the sim refuses a Deploy on an obstructed
         // foundation by doing nothing at all (World.cs:874-891 - the rule is

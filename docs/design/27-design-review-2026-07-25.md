@@ -248,7 +248,7 @@ Existing blocked items are referenced, not relitigated.
 | Id | Finding | Disposition |
 |---|---|---|
 | DR-19 | SpawnHarvester hardcodes speed 1/5 and ignores the catalogue's authored speed 18 - the sim overriding its own /data, the exact class ADR-006 exists to prevent. Fixing it MOVES every harvester golden, so it needs the standing authorisation; until then the YAML number is a lie | needs ADR + regen authorisation; recorded here so it is not rediscovered |
-| DR-20 | GameEventType.Captured is still consumed by nothing (surfaced in an earlier survey; ADR-021 silent on notification). The capture alert is a natural fifth alert but is a UX + audio call | already on the not-taken list; referenced for completeness |
+| DR-20 | DELIVERED. The capture alert, the fifth alert: GameEventType.Captured had been raised by the sim and consumed by nothing since the engineer existed, so an outpost changing hands - ADR-021's whole point - happened in silence. THREE alerts, not one, because they are not the same event: taking one is a soft confirmation, LOSING one is the klaxon (a captured building still stands and now shoots for the other side), and somebody else's capture fires only where the local seat can see the cell, since alerting through the shroud would be a maphack. The UX call this row deferred is recorded in the code and here | DONE - client only, NEUTRAL; 128 harness checks (all four outcomes plus the re-capture ordering) |
 
 ### Explicitly out of scope, per standing decisions
 

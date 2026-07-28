@@ -289,6 +289,29 @@ public partial class VerifyRunner : Node
                   "...and reverts to nobody when it changes hands back");
         }
 
+        // --- DR-20: the capture alert decides correctly, fog included --------
+        // GameEventType.Captured was raised by the sim and consumed by nothing,
+        // so an outpost changing hands - the entire point of ADR-021 - happened
+        // in silence. All four outcomes are checked here rather than staged
+        // through a real engineer walk, because the one that matters most is
+        // the SILENT one and arranging vision state to prove a negative
+        // end-to-end would test the fixture as much as the rule.
+        int me = _game.LocalPlayerId, foe = _game.EnemyPlayerId;
+        Check(_game.CaptureAlertFor(me, -1, false) == SkirmishLive.CaptureAlertKind.Gained,
+              "capturing a neutral outpost tells you so, even with no vision of the cell");
+        Check(_game.CaptureAlertFor(foe, me, false) == SkirmishLive.CaptureAlertKind.Lost,
+              "LOSING a structure to capture always tells you, vision or not");
+        Check(_game.CaptureAlertFor(foe, -1, true) == SkirmishLive.CaptureAlertKind.Witnessed,
+              "an enemy taking a neutral outpost you can SEE is reported");
+        Check(_game.CaptureAlertFor(foe, -1, false) == SkirmishLive.CaptureAlertKind.None,
+              "...and the same capture inside the shroud is SILENT (it would be a maphack)");
+        // The re-capture case, which is why Gained is tested before Lost: a
+        // structure you once owned and have just taken back is a gain. Ordered
+        // the other way this would have reported a loss at the moment of
+        // winning it, and no end-to-end check would plausibly have caught it.
+        Check(_game.CaptureAlertFor(me, me, true) == SkirmishLive.CaptureAlertKind.Gained,
+              "re-taking a structure that was yours reads as a GAIN, not a loss");
+
         // --- The cursor never promises a verb the click refuses --------------
         // CursorFor's own header claims it "runs the exact picks IssueOrder
         // runs". The refinery precondition was missing, so with no refinery
