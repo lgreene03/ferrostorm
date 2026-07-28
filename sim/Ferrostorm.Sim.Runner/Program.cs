@@ -24,6 +24,7 @@ using Ferrostorm.Sim;
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and the AI CAPTURES at least one of its declared outposts (C4c inverted this from the original "stand neutral" assertion)
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
+//   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -4147,6 +4148,108 @@ int AiRepairGate()
     return 0;
 }
 
+int PinProbe()
+{
+    // TEMPORARY diagnostic for Q018. The question as filed ASSERTED a mechanism
+    // ("nothing ever says the raid is over, so a pinned commander has no path
+    // back to offence") on reasoning alone. Two mechanisms fit the same
+    // symptom and they predict OPPOSITE command streams:
+    //
+    //   A. the wave never fires  -> few or no AttackMove orders to non-garrison
+    //      units, because the wave condition is never met.
+    //   B. the wave fires and dies -> plenty of AttackMove orders to many
+    //      distinct units, which then fail to travel because they are engaged
+    //      or blocked on the way.
+    //
+    // Counting the commander's own command stream separates them, which is
+    // what this does. Defence orders go to garrison ids (the lowest few unit
+    // ids); the wave orders everything else, so the count of DISTINCT units
+    // ever given an AttackMove is the discriminator.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var maps = Directory.GetFiles(Path.Combine(root, "data", "maps"), "*.fmap");
+    Array.Sort(maps, StringComparer.Ordinal);
+    foreach (var mapPath in maps)
+    {
+        string name = Path.GetFileNameWithoutExtension(mapPath);
+        var map = MapData.Load(mapPath);
+        var world = map.BuildWorld(4242, players: 2, out _, w =>
+        {
+            CatalogueFiles.RegisterAll(w,
+                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+        });
+        map.PlaceSkirmishStart(world, 8000);
+        var s0 = map.Starts[0];
+        var s1 = map.Starts[1];
+        var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
+        var cmds = new List<Command>();
+        var ordered = new HashSet<int>[] { new(), new() };   // distinct units ever attack-moved
+        int[] amCount = new int[2];
+        int[] nearest = { 999, 999 };
+        for (int t = 0; t < 6000; t++)
+        {
+            cmds.Clear();
+            int mark0 = 0;
+            ais[0].Act(world, cmds);
+            mark0 = cmds.Count;                 // everything so far belongs to player 0
+            ais[1].Act(world, cmds);
+            for (int i = 0; i < cmds.Count; i++)
+            {
+                if (cmds[i].Type != CommandType.AttackMove) continue;
+                int p = i < mark0 ? 0 : 1;
+                amCount[p]++;
+                ordered[p].Add(cmds[i].EntityId);
+            }
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            for (int i = 0; i < world.Entities.Count; i++)
+            {
+                var e = world.Entities[i];
+                if (!e.Alive || e.Kind != EntityKind.Unit || e.PlayerId < 0) continue;
+                var goal = e.PlayerId == 0 ? s1 : s0;
+                int d = Math.Max(Math.Abs(Map.CellOf(e.X) - goal.Cx), Math.Abs(Map.CellOf(e.Y) - goal.Cy));
+                if (d < nearest[e.PlayerId]) nearest[e.PlayerId] = d;
+            }
+        }
+        // Attrition: of the units each commander ever attack-moved, how many
+        // are still standing? "Ordered many, lost many" is a wave dying on the
+        // way; "ordered many, still alive, still at home" would be a movement
+        // failure instead.
+        int[] lost = new int[2], survive = new int[2];
+        for (int p = 0; p < 2; p++)
+            foreach (int id in ordered[p])
+            {
+                if (id < 0 || id >= world.Entities.Count) continue;
+                if (world.Entities[id].Alive) survive[p]++; else lost[p]++;
+            }
+        Console.WriteLine($"pin {name}: p0 attackmoves {amCount[0]} over {ordered[0].Count} units (lost {lost[0]}, alive {survive[0]}), closed to {nearest[0]}; "
+                          + $"p1 attackmoves {amCount[1]} over {ordered[1].Count} units (lost {lost[1]}, alive {survive[1]}), closed to {nearest[1]}");
+
+        // Where do the survivors of a stalled wave actually stand, and is the
+        // ground they would have to cross still there? A felled span BLOCKS its
+        // cell (ADR-025), so a map can lose crossings DURING a match that the
+        // generator proved present before it.
+        int spansAlive = 0;
+        for (int i = 0; i < world.Entities.Count; i++)
+            if (world.Entities[i].Kind == EntityKind.Bridge && world.Entities[i].Alive) spansAlive++;
+        int spansTotal = 0;
+        for (int i = 0; i < world.Entities.Count; i++)
+            if (world.Entities[i].Kind == EntityKind.Bridge) spansTotal++;
+        if (spansTotal > 0 || nearest[0] > 30 || nearest[1] > 30)
+        {
+            var stuck = new List<string>();
+            foreach (int id in ordered[nearest[0] > nearest[1] ? 0 : 1])
+            {
+                if (id < 0 || id >= world.Entities.Count) continue;
+                var e = world.Entities[id];
+                if (!e.Alive) continue;
+                if (stuck.Count < 6) stuck.Add($"({Map.CellOf(e.X)},{Map.CellOf(e.Y)}){(e.Moving ? "m" : "-")}");
+            }
+            Console.WriteLine($"     spans {spansAlive}/{spansTotal} still standing; the worse side's survivors: {string.Join(" ", stuck)}");
+        }
+    }
+    return 0;
+}
+
 int FordGate()
 {
     // DR-18 gate, for skirmish-05 (Ashford Reach). Additive, the
@@ -5410,6 +5513,7 @@ return args.Length == 0
         "airepairgate" => AiRepairGate(),
         "difficultygate" => DifficultyGate(),
         "fordgate" => FordGate(),
+        "pinprobe" => PinProbe(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
         "pathdebug" => PathDebug(),
