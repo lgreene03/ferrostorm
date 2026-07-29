@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -4461,6 +4462,117 @@ int PinProbe()
     return 0;
 }
 
+int DecorGate()
+{
+    // The decorative terrain layer. Additive, the fordgate/difficultygate
+    // pattern: a standalone mode and a Match battery stage, never a golden
+    // scenario, so the golden list stays 24.
+    //
+    // One claim carries this whole feature: a decorated cell is DRAWN and
+    // PASSABLE. If that is ever false the layer stops being decoration and
+    // becomes invisible terrain, which is the worst failure a map can have -
+    // an obstacle the player cannot see. Every check below exists to pin it.
+    // 16x8 rather than the smallest grid that fits the characters: a cramped
+    // map leaves no room either side of the walk, and a failure there would be
+    // ambiguous between "decoration blocks" and "the unit had nowhere to go".
+    // A wall across the map whose ONLY gap is the four decorative cells.
+    // This is a far stronger test than walking along a decorated row: if a
+    // unit gets from the south half to the north half at all, it can only
+    // have walked over decoration, and if decoration blocked there would be
+    // no route to find. It also proves the FLOW FIELD routes through decor,
+    // not merely that the parser kept it out of Blocked.
+    const string src = "ferrostorm-map v1\nsize 48 24\nstart 0 4 20\nstart 1 43 3\ngrid:\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "####################,:=~########################\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n"
+                     + "................................................\n";
+    MapData map;
+    try { map = MapData.Parse(src); }
+    catch (Exception ex) { return Fail($"decor: a map using the decorative characters failed to parse: {ex.Message}"); }
+
+    // 1. Every decorative character is recorded as decor, and NONE of them is
+    //    recorded as blocked. The '#' beside them is the positive control: if
+    //    the parser stopped blocking things entirely this check would pass for
+    //    the wrong reason, so a real obstacle sits in the same row.
+    if (map.Decor.Count != 4)
+        return Fail($"decor: expected 4 decorated cells, got {map.Decor.Count}");
+    foreach (var (cx, cy) in map.Decor)
+        foreach (var (bx, by) in map.Blocked)
+            if (cx == bx && cy == by)
+                return Fail($"decor: cell ({cx},{cy}) is decorated AND blocked - decoration must never obstruct");
+    if (map.Blocked.Count != 44)
+        return Fail($"decor: the control wall must still block ({map.Blocked.Count} blocked cells, expected 44)");
+
+    // 2. Each decorative cell carries its own dressing through to the client,
+    //    or they would all render as the same thing and the vocabulary would
+    //    be a lie.
+    foreach (var ch in new[] { ',', ':', '=', '~' })
+    {
+        bool found = false;
+        foreach (var kv in map.Visual) if (kv.Value == ch) found = true;
+        if (!found) return Fail($"decor: '{ch}' reached no Visual entry, so the client cannot draw it");
+    }
+
+    // 3. The claim itself, in the sim rather than in the parser: a unit walks
+    //    THROUGH the decorated gap: the wall at y=12 has no other opening, so
+    //    a unit that reaches the far side crossed decoration to do it.
+    string droot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var w = map.BuildWorld(4242, players: 2, out _, ww =>
+    {
+        CatalogueFiles.RegisterAll(ww,
+            Path.Combine(droot, "data", "units"), Path.Combine(droot, "data", "buildings"));
+        CatalogueFiles.RegisterFields(ww, Path.Combine(droot, "data", "fields"));
+    });
+    int id = w.SpawnUnit(0, Map.CellCentre(21), Map.CellCentre(18),
+                         Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
+    var order = new List<Command>
+    {
+        new(w.Tick, 0, CommandType.PathMove, id, Map.CellCentre(21), Map.CellCentre(5)),
+    };
+    w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+    bool arrived = false;
+    for (int t = 0; t < 2000 && !arrived; t++)
+    {
+        w.Step(default);
+        var e = w.Entities[id];
+        // Arrival is CROSSING THE WALL, not reaching an exact cell. Asserting
+        // an exact destination failed here with the unit sitting four cells
+        // short and settled - the same arrival slack that has now caught three
+        // separate checks in this file. North of y=12 is the claim; getting
+        // there is only possible through the decorated gap.
+        if (Map.CellOf(e.Y) < 12) arrived = true;
+    }
+    if (!arrived)
+        return Fail($"decor: a unit never crossed the wall whose only gap is decorated - decoration is blocking, which is the "
+                    + $"one thing it must never do (stopped at ({Map.CellOf(w.Entities[id].X)},{Map.CellOf(w.Entities[id].Y)}), moving={w.Entities[id].Moving})");
+
+    Console.WriteLine("decorgate: the decorative characters , : = ~ parse as DECOR and never as blocked (with a '#' "
+                      + "control still blocking beside them), each carries its own dressing through to the client, "
+                      + "and a unit crossed a wall whose ONLY gap was decorated, so the flow field routes over "
+                      + "decoration - a map can now carry detail that costs pathing nothing");
+    return 0;
+}
+
 int FordGate()
 {
     // DR-18 gate, for skirmish-05 (Ashford Reach). Additive, the
@@ -4879,6 +4991,9 @@ int Match(ulong seed)
     // outpost assertion cannot see.
     int ford = FordGate();
     if (ford != 0) return ford;
+    // The decorative terrain layer: drawn, and provably passable.
+    int decorg = DecorGate();
+    if (decorg != 0) return decorg;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -5724,6 +5839,7 @@ return args.Length == 0
         "airepairgate" => AiRepairGate(),
         "difficultygate" => DifficultyGate(),
         "fordgate" => FordGate(),
+        "decorgate" => DecorGate(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),

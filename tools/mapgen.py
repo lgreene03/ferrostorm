@@ -26,6 +26,12 @@ import math
 from collections import deque
 
 BLOCKING = set('#whrf')   # 'B' and 'b' are bridges: open to the sim while they stand
+# Decoration: drawn by the client, PASSABLE to the sim, and deliberately absent
+# from BLOCKING so it never reaches the density budget, the reachability proof
+# or the crossing proof. Every previous visual character was an obstacle, so
+# the 8-to-10-per-cent density cap was also a cap on how much of a map could be
+# seen at all. These are how a map gets detail without getting harder to walk.
+DECOR = set(',:=~')       # scrub, gravel, road, shallows
 
 
 def rot(x, y, w, h):
@@ -162,6 +168,36 @@ class Canvas:
                 if choke:
                     self.choke_cells.add((x, y))
                     self.choke_cells.add((rx, ry))
+
+    def decor(self, x0, y0, dx, dy, ch, fill=1):
+        """Dress a dx-by-dy patch and its rotation image with a DECORATIVE
+        character. Passable, drawn, and invisible to every invariant.
+
+        Writes only over OPEN ground ('.'), never over terrain, ferrite, a
+        bridge deck or an apron - decoration must never overwrite something
+        that means anything, and a decor cell that landed on a ferrite cell
+        would silently cost the map part of its economy. `fill` thins the patch
+        deterministically (every nth cell by index, no randomness in a
+        generator whose output is committed), so a patch can read as scattered
+        scrub rather than a solid rectangle.
+        """
+        assert ch in DECOR, f"'{ch}' is not a decorative character"
+        n = 0
+        for y in range(y0, y0 + dy):
+            for x in range(x0, x0 + dx):
+                n += 1
+                if fill > 1 and n % fill: continue
+                if not self.inb(x, y):
+                    continue
+                rx, ry = rot(x, y, self.w, self.h)
+                # Both halves must be free, exactly as stamp() requires, or the
+                # pair lands half-placed and the map stops being symmetric.
+                if self.grid[y][x] != '.' or self.grid[ry][rx] != '.':
+                    continue
+                if (x, y) in self.apron_cells or (rx, ry) in self.apron_cells:
+                    continue
+                self.grid[y][x] = ch
+                self.grid[ry][rx] = ch
 
     def mark_pass(self, cells):
         """Record open cells as a load-bearing pass through a ridge: validate()
@@ -385,6 +421,14 @@ def report(name, canvas, fields, blocked, density, path, crossings):
     print(f"{name}: {canvas.w}x{canvas.h} -> {path}")
     print(f"  census:  {canvas.census()}")
     print(f"  blocked: {len(blocked)} / {canvas.w * canvas.h} = {density * 100:.2f}%")
+    # Reported beside the blocked figure on purpose: the two answer different
+    # questions and confusing them is how the pool ended up bare. Blocked is
+    # what the density CAP governs and what pathing pays for; decorated is how
+    # much of the map is actually drawn, and it is free.
+    dec = sum(1 for row in canvas.grid for ch in row if ch in DECOR)
+    if dec:
+        print(f"  decorated: {dec} cells = {dec / (canvas.w * canvas.h) * 100:.2f}% "
+              f"(passable; outside the density budget)")
     print(f"  ferrite: {len(fields)} cells = {len(fields) * 12000:,} credits")
     print(f"  starts:  {canvas.starts[0]} and {canvas.starts[1]}, "
           f"apron {canvas.apron * 2 + 1}x{canvas.apron * 2 + 1}")
