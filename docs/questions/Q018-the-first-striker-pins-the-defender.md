@@ -191,9 +191,10 @@ and it is not a small one.
    | Make ApplyCommandCore's backstop reset conditional on the destination actually changing | World.cs, one shared function | Only for units re-ordered to a point they are already pathing to |
    | Give movement any awareness of other units: local avoidance, a slide, or a crowd-aware field | StepToward / SeparationSystem / FlowField | **Yes, every moving unit in every scenario** |
 
-   Only the third addresses the cause, and only the third is universal. C1b
-   already deferred "cohesive formation movement" to a future ADR on evidence
-   of need (ADR-018); this is that evidence, and it is the natural home.
+   Only the third addresses the cause, and only the third is universal. The
+   first two have since been PROTOTYPED AND MEASURED, and both are rejected;
+   the option set, the numbers and the acceptance bar they revealed now live in
+   **ADR-027 (Proposed)**, which is where this question should be answered.
 3. **It carries a golden regeneration either way.** Even the AI-only candidate
    moved the skirmish golden when it was measured. The third moves every
    scenario that moves a unit, which is all of them. That needs an ADR and the
