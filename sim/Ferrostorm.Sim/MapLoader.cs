@@ -12,6 +12,11 @@ namespace Ferrostorm.Sim;
 /// client reads MapData.Visual to render them as what they are:
 ///   'w' water (blocked)   'h' hill (blocked)    'r' ruin (blocked)
 ///   'f' fence (blocked)   'B' bridge (OPEN: the pathable river crossing)
+/// DECORATION (drawn, PASSABLE, outside the density budget): every character
+/// above except the bridges blocks, and doc 26 caps blocked density at 8 to 10
+/// per cent, so between them they capped a map's whole visible content at a
+/// tenth of its cells. These four add detail that costs pathing nothing:
+///   ',' scrub    ':' gravel    '=' road    '~' shallows
 ///   ferrostorm-map v1
 ///   size W H
 ///   start PLAYER CX CY        (one per player; the CY footprint anchor)
@@ -44,6 +49,19 @@ public sealed class MapData
     public IReadOnlyList<MapTrigger> Triggers { get; init; } = Array.Empty<MapTrigger>();
     /// <summary>Client-only terrain dressing per cell; the sim never reads this.</summary>
     public IReadOnlyDictionary<(int Cx, int Cy), char> Visual { get; init; } = new Dictionary<(int, int), char>();
+    /// <summary>DECORATIVE cells: drawn, never blocking, and never counted in
+    /// the density budget. This category exists because until now EVERY
+    /// drawable terrain character also blocked movement - `#whrf` are the whole
+    /// visual vocabulary and all five are obstacles - while doc 26 caps blocked
+    /// density at 8 to 10 per cent for pathing and draw-call reasons. The two
+    /// rules together capped a map's total visible content at a tenth of its
+    /// cells, which is why the pool reads as bare ground with two or three
+    /// large masses on it (skirmish-06 spent 520 of its ~600 blocked cells on a
+    /// single ridge). Decoration is how the genre actually gets density, and it
+    /// costs pathing nothing by construction: these cells never reach Blocked,
+    /// so no flow field, no reachability proof and no fairness invariant can
+    /// see them. The sim does not read this any more than it reads Visual.</summary>
+    public IReadOnlyList<(int Cx, int Cy)> Decor { get; init; } = Array.Empty<(int, int)>();
     public const int StandardFieldAmount = 12000;
 
     public static MapData Load(string path) => Parse(File.ReadAllText(path));
@@ -89,6 +107,7 @@ public sealed class MapData
         var visual = new Dictionary<(int, int), char>();
         var fields = new List<(int, int)>();
         var spans = new List<(int, int)>();
+        var decor = new List<(int, int)>();   // decorative cells: drawn, never blocking
         for (int y = 0; y < h; y++)
         {
             string row = lines[gridAt + y];
@@ -101,6 +120,18 @@ public sealed class MapData
                     case 'F': fields.Add((x, y)); break;
                     case 'w': case 'h': case 'r': case 'f':
                         blocked.Add((x, y)); visual[(x, y)] = row[x]; break;
+                    // DECORATION: drawn, passable, and invisible to every rule.
+                    // Deliberately punctuation rather than letters, so a decor
+                    // character can never be confused at a glance with the
+                    // blocking set `#whrf` when reading a raw .fmap - the whole
+                    // point is that these do NOT block, and a legend where 'g'
+                    // blocks but 'h' does not would be a trap.
+                    //   ','  scrub, low vegetation
+                    //   ':'  gravel and cracked earth
+                    //   '='  road or made track
+                    //   '~'  shallows, the wet margin at a water edge
+                    case ',': case ':': case '=': case '~':
+                        visual[(x, y)] = row[x]; decor.Add((x, y)); break;
                     case 'B':
                         visual[(x, y)] = 'B'; break;   // bridge: open to the sim
                     // ADR-025: a DESTROYABLE bridge deck. Open to the sim while
@@ -158,7 +189,7 @@ public sealed class MapData
         return new MapData
         {
             Width = w, Height = h, Blocked = blocked, Fields = fields, Spans = spans, Starts = starts,
-            Factions = factions, ShortGame = shortGame, Units = units, Structures = structures, Triggers = triggers, Visual = visual,
+            Factions = factions, ShortGame = shortGame, Units = units, Structures = structures, Triggers = triggers, Visual = visual, Decor = decor,
         };
     }
 

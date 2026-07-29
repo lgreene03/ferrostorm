@@ -560,7 +560,7 @@ public partial class SkirmishLive : Node3D
         MatchConfig.ReplayPath = null;
 
         BattlefieldView.BuildEnvironment(this);
-        BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual);
+        BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual, map.Decor);
         _mapW = map.Width; _mapH = map.Height;
         _mapBlocked = map.Blocked;
         _fog = new FogOfWar();

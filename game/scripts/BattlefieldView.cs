@@ -638,7 +638,8 @@ public static class BattlefieldView
     /// says they are - water, hills, ruins, fences, bridges.</summary>
     public static void BuildTerrain(Node3D parent, int w, int h,
         IEnumerable<(int X, int Y)> blockedCells,
-        IReadOnlyDictionary<(int, int), char>? visual = null)
+        IReadOnlyDictionary<(int, int), char>? visual = null,
+        IEnumerable<(int X, int Y)>? decorCells = null)
     {
         visual ??= new Dictionary<(int, int), char>();
         // V-TERRAIN: a rebuild starts a fresh set of animated shaders, so drop
@@ -837,6 +838,39 @@ public static class BattlefieldView
             Roughness = 0.88f,
         };
 
+        // DECORATION materials. Deliberately flat and cheap: decoration exists
+        // to break up bare ground, and the moment it competes with a hill or a
+        // ruin for the eye it starts reading as an obstacle - the one thing it
+        // must never do, because it is passable. Nothing here rises above
+        // ankle height.
+        var scrubMat = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.26f, 0.29f, 0.18f),
+            Roughness = 0.95f,
+        };
+        var gravelMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(83, 0.05f,
+                dark: new Color(0.24f, 0.23f, 0.21f),
+                light: new Color(0.34f, 0.33f, 0.30f)),
+            Roughness = 0.95f,
+        };
+        var roadMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(89, 0.035f,
+                dark: new Color(0.29f, 0.27f, 0.24f),
+                light: new Color(0.38f, 0.36f, 0.32f)),
+            Roughness = 0.8f,
+        };
+        var shallowMat = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(0.30f, 0.45f, 0.50f, 0.55f),
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            Roughness = 0.35f,
+        };
+
         var rng = new System.Random(2026);
         // W4-13: talus debris at ridge feet folds into the rubble MultiMesh
         // as extra instances rather than per-piece nodes.
@@ -1019,6 +1053,62 @@ public static class BattlefieldView
                             new Vector3(px, ts * 0.2f + GroundHeight(px, pz), pz)),
                             new Color(tsh, tsh, tsh)));
                     }
+                    break;
+            }
+        }
+
+        // DECORATION: drawn, walked over, and outside every rule. This pass is
+        // separate from the loop above because that loop is driven by
+        // blockedCells, which is exactly the limitation this feature exists to
+        // lift: until now the renderer could only draw a cell that obstructed
+        // something, so a map's visible content was capped at the 8-to-10 per
+        // cent density budget and the pool read as bare ground with two or
+        // three big masses on it. These cells cost pathing nothing.
+        //
+        // Everything here is flat and low on purpose. Decoration that reads as
+        // an obstacle is worse than no decoration: a player who walks an army
+        // over scrub they thought was a hedge has learned to distrust the map.
+        foreach ((int dx0, int dy0) in decorCells ?? new List<(int X, int Y)>())
+        {
+            // Per-cell deterministic rng in the established idiom (W4-13), so
+            // editing one part of a map never reshuffles the rest of it.
+            var drng = new System.Random(dx0 * 40503 ^ dy0 * 65867);
+            float cxm = dx0 + 0.5f, czm = dy0 + 0.5f;
+            switch (visual.GetValueOrDefault((dx0, dy0), ','))
+            {
+                case ',':
+                    // Scrub: a few low tufts, none of them cell-filling, so the
+                    // ground splat still reads between them.
+                    int tufts = 2 + drng.Next(3);
+                    for (int t = 0; t < tufts; t++)
+                    {
+                        float ox = ((float)drng.NextDouble() - 0.5f) * 0.8f;
+                        float oz = ((float)drng.NextDouble() - 0.5f) * 0.8f;
+                        float th = 0.10f + (float)drng.NextDouble() * 0.14f;
+                        Emit(scrubMat, new Vector3(0.22f, th, 0.22f),
+                            new Vector3(cxm + ox, th * 0.5f, czm + oz),
+                            new Vector3(0, (float)drng.NextDouble() * Mathf.Tau, 0));
+                    }
+                    break;
+                case ':':
+                    // Gravel: a single flat slab just proud of the ground, with
+                    // a little yaw so a patch does not grid up.
+                    Emit(gravelMat, new Vector3(1.0f, 0.02f, 1.0f),
+                        new Vector3(cxm, 0.01f, czm),
+                        new Vector3(0, ((float)drng.NextDouble() - 0.5f) * 0.10f, 0));
+                    break;
+                case '=':
+                    // Road: flatter, wider and squarer than gravel - a made
+                    // surface should read as deliberate, and its value is that
+                    // it draws the eye along a route.
+                    Emit(roadMat, new Vector3(1.06f, 0.015f, 1.06f),
+                        new Vector3(cxm, 0.008f, czm), Vector3.Zero);
+                    break;
+                case '~':
+                    // Shallows: a translucent film for the wet margin at a
+                    // water edge. Passable, unlike the 'w' it sits beside.
+                    Emit(shallowMat, new Vector3(1.02f, 0.012f, 1.02f),
+                        new Vector3(cxm, 0.006f, czm), Vector3.Zero);
                     break;
             }
         }

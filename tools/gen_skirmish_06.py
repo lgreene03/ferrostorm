@@ -97,6 +97,27 @@ c.cluster(58, 16, CONTEST)       # contested patch in the neutral north-east
 c.outpost(62, 6)
 c.outpost(74, 26)
 
+# ---- Decoration: drawn, walked over, and outside every invariant. Until this
+# layer existed every drawable character was an obstacle, so the 8-to-10 per
+# cent density cap was also a cap on how much of the map could be SEEN, and the
+# result was bare ground with two big masses on it. None of the below changes
+# where a unit can go by a single cell.
+#
+# The roads are the point. A made track along each ridge and through each gap
+# tells a player where the routes are before they have learned the map, which
+# is a legibility gain as much as a visual one (GDD pillar 1).
+c.decor(0, HBAR_Y - 1, 96, 1, '=')        # the road that runs the ridge line
+c.decor(VBAR_X - 1, 0, 1, 64, '=')        # and its north-south counterpart
+c.decor(HGAP[0], HBAR_Y - 3, HGAP[1] - HGAP[0], 6, ':')   # gravel worn through the gap
+c.decor(VBAR_X - 2, VGAP[0], 4, VGAP[1] - VGAP[0], ':')   # and through the other
+
+# Scrub, thinned so it reads as scatter rather than a lawn. Placed across the
+# open quadrants, which are precisely the areas that read as empty.
+c.decor(6, 16, 30, 10, ',', fill=3)       # north-west quadrant
+c.decor(56, 4, 34, 20, ',', fill=4)       # north-east, the neutral ground
+c.decor(20, 2, 20, 8, ',', fill=5)        # the northern shoulder
+c.decor(4, 36, 30, 12, ',', fill=4)       # spilling south of the ridge
+
 fields, blocked, density = c.validate(expected_fields=20, density_range=(0.08, 0.10))
 
 path = sys.argv[1] if len(sys.argv) > 1 else "skirmish-06.fmap"
