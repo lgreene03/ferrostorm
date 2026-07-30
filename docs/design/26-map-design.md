@@ -147,6 +147,52 @@ must build a base, keep a harvester working, produce, path across the crossings
 and fight to a result. A map where an army parks is a failed map, not a hard
 one, and is widened until it flows. None of the three needed widening.
 
+## 5. Size: the ceiling, measured
+
+"The tested map ceiling" earlier in this document was a statement about what had
+been tried, not about what the sim can carry, and the pool inherited it as if it
+were a limit. It has now been measured (the runner's `sizeprobe` mode, 200 units
+held constant, 400 ticks, a walled map so every unit paths a real route).
+
+| Size | Cells | ms/tick | Flow-field build |
+|------|-------|---------|------------------|
+| 192x128 | 24,576 | 0.46 | 4.1 ms |
+| 256x192 | 49,152 | 0.25 | 7.0 ms |
+| 384x256 | 98,304 | 0.25 | 14.4 ms |
+| 512x384 | 196,608 | 0.24 | 29.7 ms |
+
+Two findings, and the second decides the ceiling.
+
+**Steady-state cost FALLS as a map grows.** It is not area that costs, it is unit
+DENSITY: two hundred units on a small map jam together and the separation pass
+dominates, while the same two hundred spread over a large one barely interact.
+Every size above sits under 6 per cent of the 8 ms budget, and the smallest map
+is the most expensive of them.
+
+**The flow field is the real constraint, and it is a spike rather than a load.**
+FlowField.Build is a Dijkstra over every cell, so its cost is linear in area, and
+it is paid whenever an order names a destination cell not already cached. At
+192x128 that is 4 ms, which ships today and is the honest baseline. 256x192
+costs 7 ms, still inside a single 60 fps frame. 384x256 costs 14 ms, about one
+frame, and would be felt as a hitch on a busy order. 512x384 costs 30 ms and
+would be felt plainly.
+
+**The ceiling is therefore 256x192 for a map meant to ship**, twice the area of
+the current big theatre and eight times a small one, at under one frame per new
+destination. 384x256 becomes viable only if flow-field building is made cheaper
+or amortised, which is not a map-design question and is not attempted here.
+
+## 6. Detail: decoration is not terrain
+
+Every drawable character in the format used to block movement, so the 8-to-10
+per-cent density band was also a cap on how much of a map could be SEEN, and
+maps read as bare ground carrying two or three large masses. The decorative
+characters (',' scrub, ':' gravel, '=' road, '~' shallows) are drawn, passable,
+and outside the density budget entirely, so detail and difficulty are no longer
+the same dial. The band above continues to govern BLOCKING terrain and is
+unchanged; decoration is reported separately by the generator and has no target,
+because it costs pathing nothing.
+
 ## Changed / Assumed / Needed next
 
 **Changed.** New standard document. skirmish-01, skirmish-02 and skirmish-04

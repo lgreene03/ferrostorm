@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   sizeprobe          - doc 26 s5: ms/tick and flow-field build cost against map area (not a gate; nothing asserts)
 //   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
@@ -4462,6 +4463,65 @@ int PinProbe()
     return 0;
 }
 
+int SizeProbe()
+{
+    // Doc 26 calls 192x128 "the tested map ceiling", which is a statement about
+    // what has been tried rather than about what the sim can carry. Making the
+    // pool bigger needs that turned into a measurement, because the thing that
+    // scales with AREA is not rendering, it is the flow field: FlowField.Build
+    // is a Dijkstra over every cell of the grid, cached per destination, so
+    // doubling both dimensions quadruples the cost of the first order issued to
+    // any new destination and quadruples the memory each cached field holds.
+    //
+    // The unit count is held CONSTANT across the sizes on purpose. Scaling
+    // units with area would measure the two together and answer neither
+    // question; what is wanted here is the cost of the ground alone.
+    const int units = 200, ticks = 400;
+    Console.WriteLine("sizeprobe: constant 200 units, 400 ticks, varying only the map");
+    Console.WriteLine("  size        cells   ms/tick   vs 8ms budget   first-tick ms (flow build)");
+    foreach (var (w, h) in new[] { (96, 64), (192, 128), (256, 192), (384, 256), (512, 384) })
+    {
+        var world = new World(4242, w, h, players: 2);
+        // A wall down the middle with one gap, so every unit must path a real
+        // route rather than walk a straight line: a flow field on empty ground
+        // is the easy case and would flatter the big sizes.
+        for (int y = 0; y < h; y++)
+            if (y < h / 2 - 4 || y > h / 2 + 4) world.Map.SetBlocked(w / 2, y, true);
+        for (int i = 0; i < units; i++)
+        {
+            int p = i % 2;
+            world.SpawnUnit(p, Fix64.FromInt(p == 0 ? 4 + i % 20 : w - 5 - i % 20),
+                            Fix64.FromInt(4 + (i * 7) % (h - 8)),
+                            Fix64.FromFraction(1, 4), 1_000_000, ArmourClass.None, weaponId: 2);
+        }
+        var cmds = new List<Command>();
+        foreach (var e in world.Entities)
+            if (e.Kind == EntityKind.Unit)
+                cmds.Add(new Command(0, e.PlayerId, CommandType.PathMove, e.Id,
+                    Fix64.FromInt(e.PlayerId == 0 ? w - 5 : 4), Fix64.FromInt(h / 2)));
+        // The FIRST tick is timed separately, because it is the one that pays
+        // for the flow-field build. Averaging it over 400 ticks would hide the
+        // only cost that actually scales with area, and a build spike is felt
+        // as a frame hitch the moment a player orders an army somewhere new.
+        var first = Stopwatch.StartNew();
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        first.Stop();
+        cmds.Clear();
+        var sw = Stopwatch.StartNew();
+        for (int t = 1; t < ticks; t++)
+        {
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        sw.Stop();
+        double ms = sw.Elapsed.TotalMilliseconds / (ticks - 1);
+        double spike = first.Elapsed.TotalMilliseconds;
+        Console.WriteLine($"  {w,3}x{h,-3}  {w * h,8}   {ms,7:F3}   {(ms / 8.0 * 100),6:F1}%   {spike,8:F2}");
+    }
+    Console.WriteLine("  (the 8 ms/tick budget is TDD s6, the same one the defence load gate holds)");
+    return 0;
+}
+
 int DecorGate()
 {
     // The decorative terrain layer. Additive, the fordgate/difficultygate
@@ -5840,6 +5900,7 @@ return args.Length == 0
         "difficultygate" => DifficultyGate(),
         "fordgate" => FordGate(),
         "decorgate" => DecorGate(),
+        "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
