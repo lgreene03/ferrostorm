@@ -105,13 +105,30 @@ the direct route and the widest, so it cannot be walled shut. Which pass an army
 commits to, and which the defender chooses to hold, is the whole game. The
 larger ferrite patch sits at the saddle, contested by design.
 
-**skirmish-03, the resource-contest map (96x64), unchanged.** skirmish-03 was
-already authored to this standard, with winding water, hills, ruins, fences and
-bridges, and it is the frozen reference map the look-dev camera constants and
-the committed reference save are tuned to. Redesigning it would break that
-harness for no design gain, so it is preserved as the resource-contest member of
-the set. It carries the whole terrain vocabulary and the most contested central
-economy of the four.
+**skirmish-03, the frozen look-dev reference (96x64), unchanged, and the
+weakest map in the pool.** The paragraph that stood here claimed skirmish-03
+"was already authored to this standard" and "carries the whole terrain
+vocabulary and the most contested central economy of the four". A review of the
+grid does not support any of that, and the claim is withdrawn rather than left
+to mislead whoever reads this next.
+
+What the file actually contains: a dead straight horizontal water band across
+the full width (grid rows 36 to 39) broken by exactly TWO three-wide bridge
+gaps, which is the "ruler-straight, imposed rather than grown" pattern section 1
+of this document disowns, and two crossings rather than the two-to-three this
+document calls the tested sweet spot; two literal straight blocked bars at rows
+22 and 53, the "scatter of straight rectangular blocks" named here as old
+skirmish-02's flaw; a hollow fenced rectangle at rows 14 to 20 containing
+nothing, marking nothing and doing no design work; and two ferrite clusters both
+at roughly equal distance from each start, with none of the safe-near versus
+contested-forward split every other map in the pool now authors deliberately.
+
+It is preserved for one reason only, and it is not a design one: the look-dev
+camera constants and the committed reference save are tuned to it, so
+regenerating it means re-taking the reference captures. That is a real cost and
+a real reason to leave it alone, but it is a harness reason. It should not be
+described as an exemplar of this standard, because it is the clearest violation
+of it in the set.
 
 **skirmish-04, Tarnwater Crossing (192x128), the big theatre.** The tested map
 ceiling. The Tarnwater meanders down the theatre, bridged three times, with bank

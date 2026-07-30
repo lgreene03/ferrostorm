@@ -91,6 +91,31 @@ c.cluster(37, 39, CONTEST)       # contested patch below the central saddle
 # blocks when it spawns) and neither base starts owning one. The pair is a
 # rotation image, so the Chebyshev profiles match and neither side is nearer.
 c.outpost(20, 20)                # in base 0's land, forward on the western lane
+# A SECOND pair (design review): one outpost pair was the thinnest provision of
+# any outpost-carrying map in the pool - skirmish-04 has two pairs and
+# skirmish-06 four - which left the mechanic barely present on the map whose
+# whole subject is choosing a lane. This one sits behind the left-flank pass,
+# so committing to that flank and taking its income are the same decision.
+c.outpost(28, 33)
+
+# ---- Decoration (doc 26 s6): drawn, passable, outside the density budget.
+# This map has no water and its entire identity is "which side of the Ironback
+# am I on", which makes it the map most exposed to the orientation problem a
+# rotationally symmetric layout creates: the two lands are geometrically
+# identical, so with no texture cue a player cannot tell their half from the
+# enemy's at a glance. The two lands are therefore dressed DIFFERENTLY on
+# purpose - gravel and made tracks on the western land, scrub on the eastern -
+# which is the one place in this pool where breaking visual symmetry is the
+# correct answer, because the fairness invariant governs terrain and ferrite,
+# not ground cover.
+c.decor(2, 2, 44, 26, ':', fill=3)       # the western land reads dry and worn
+c.decor(52, 38, 42, 24, ',', fill=3)     # the eastern reads overgrown
+
+# A road along the central saddle. Doc 26 already intends the saddle to be the
+# wide, unwallable, default route; the road says so to a player who has not yet
+# learned the map (GDD pillar 1, readable in one glance).
+c.decor(40, 26, 16, 2, '=')
+c.decor(18, 40, 14, 2, '=')              # and a track to the left-flank pass
 
 fields, blocked, density = c.validate(expected_fields=20, density_range=(0.08, 0.10))
 

@@ -111,6 +111,27 @@ c.cluster(46, 17, FORWARD)       # forward patch on the northern bank
 # clear of all three crossings, so holding one means holding river ground.
 c.outpost(30, 10)
 
+# ---- Decoration (doc 26 s6): drawn, passable, outside the density budget.
+# The shallows matter more here than on any other map. This map's hook is that
+# the two FLANK crossings can be felled and the centre ford cannot, so a player
+# has to read the channel and tell one kind of span from another; a wet margin
+# along the bank is what makes the channel read as a channel rather than as a
+# blue stripe. The design review raised the related question of whether a
+# destroyable deck and a permanent one are actually distinguishable at default
+# zoom, which decoration cannot answer and which is filed rather than papered
+# over.
+c.decor(0, 21, 96, 2, '~')           # the northern margin of the Ashford
+c.decor(0, 41, 96, 2, '~')           # and the southern
+
+# Roads to the three crossings, so the routes read before they are learned.
+c.decor(10, 14, 16, 2, '=')          # to the western flank bridge
+c.decor(40, 16, 14, 2, '=')          # to the centre ford
+c.decor(4, 6, 2, 9, '=')             # the link back to base 0
+
+c.decor(6, 2, 32, 9, ',', fill=4)    # scrub on the northern shoulder
+c.decor(58, 4, 32, 12, ',', fill=5)  # and across the north-eastern bank
+c.decor(22, 45, 36, 14, ':', fill=3) # gravel flats on the southern bank
+
 fields, blocked, density = c.validate(expected_fields=20, density_range=(0.08, 0.10))
 
 path = sys.argv[1] if len(sys.argv) > 1 else "skirmish-05.fmap"

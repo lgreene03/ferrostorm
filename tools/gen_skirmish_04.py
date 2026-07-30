@@ -108,6 +108,37 @@ for cx, cy in CLUSTERS:
 c.outpost(66, 40)                # western approach to the central ford
 c.outpost(30, 70)                # southern lane, behind the fence line
 
+# ---- Decoration (doc 26 s6): drawn, passable, outside the density budget.
+# The design review named this map the biggest missed opportunity in the pool
+# purely by area - 24,576 cells, none of them dressed, with whole quadrants away
+# from the river carrying no terrain, no ferrite and no reason to walk through
+# them. That reads as nothing, and on the largest canvas it is the most visible
+# fault in the set. None of the below moves a unit by a single cell.
+#
+# Shallows first, because they do real legibility work: a wet margin along the
+# channel says "this is the bank" before a player has learned where the fords
+# are, and the bank is the ground doc 26 says a defender wants.
+c.decor(78, 0, 5, 128, '~')          # the western margin, the length of the reach
+c.decor(112, 0, 5, 128, '~')         # and the eastern
+
+# Roads to the fords. A made track running to a crossing telegraphs the route
+# without conceding anything tactically: the crossings are already visible, and
+# what a new player lacks is knowing which ground leads to them.
+c.decor(0, 22, 74, 2, '=')           # the northern approach
+c.decor(0, 62, 74, 2, '=')           # the central, to the ford the map is named for
+c.decor(20, 24, 2, 38, '=')          # the link between them on player 0's bank
+
+# Gravel where traffic concentrates: bridgeheads and the base approach.
+c.decor(66, 18, 12, 8, ':')
+c.decor(66, 58, 12, 8, ':')
+c.decor(14, 14, 12, 6, ':')          # worn ground outside base 0
+
+# Scrub across the empty quadrants, thinned so it scatters rather than carpets.
+# These are precisely the regions the review called dead space.
+c.decor(4, 32, 56, 40, ',', fill=4)      # the western interior
+c.decor(120, 6, 56, 34, ',', fill=5)     # the north-eastern quarter
+c.decor(34, 86, 54, 32, ',', fill=4)     # the southern lane
+
 fields, blocked, density = c.validate(expected_fields=60, density_range=(0.08, 0.10))
 
 path = sys.argv[1] if len(sys.argv) > 1 else "skirmish-04.fmap"
