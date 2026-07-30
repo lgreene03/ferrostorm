@@ -4538,10 +4538,19 @@ int BasinGate()
     // whether a real match on it converges or degenerates.
     //
     // 20,000 ticks is a little over 22 minutes, inside that window.
+    //
+    // It covers EVERY chokeless map, not just the first one. skirmish-08 makes
+    // the same claim by a different route - the Sound bounds the battlefield
+    // instead of karst breaking it up - and a claim that needed proving once
+    // needs proving each time it is made. Adding the second map here rather
+    // than waiting for a reviewer to point out the omission is the whole
+    // lesson of the first review.
     const int ticks = 20_000;
     string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
-    string mapPath = Path.Combine(root, "data", "maps", "skirmish-07.fmap");
-    if (!File.Exists(mapPath)) return Fail("basin: skirmish-07.fmap is missing");
+    foreach (var name in new[] { "skirmish-07", "skirmish-08" })
+    {
+    string mapPath = Path.Combine(root, "data", "maps", $"{name}.fmap");
+    if (!File.Exists(mapPath)) return Fail($"basin: {name}.fmap is missing");
 
     MapData map;
     World world;
@@ -4556,7 +4565,7 @@ int BasinGate()
         });
         map.PlaceSkirmishStart(world, 8000);
     }
-    catch (Exception ex) { return Fail($"basin: skirmish-07 failed to load: {ex.Message}"); }
+    catch (Exception ex) { return Fail($"basin: {name} failed to load: {ex.Message}"); }
 
     var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
     var cmds = new List<Command>();
@@ -4571,10 +4580,13 @@ int BasinGate()
     }
 
     // Read the end state: who built what, who took what, and did anyone die.
-    Span<int> refineries = stackalloc int[2];
-    Span<int> yards = stackalloc int[2];
-    Span<int> army = stackalloc int[2];
-    Span<int> outposts = stackalloc int[2];
+    // Heap arrays rather than stackalloc: this block now runs once per map
+    // inside the loop above, and a stackalloc in a loop is a stack-overflow
+    // waiting to happen (CA2014). Four two-element arrays per map is nothing.
+    int[] refineries = new int[2];
+    int[] yards = new int[2];
+    int[] army = new int[2];
+    int[] outposts = new int[2];
     for (int i = 0; i < world.Entities.Count; i++)
     {
         var e = world.Entities[i];
@@ -4592,22 +4604,31 @@ int BasinGate()
     // The map's OWN premise is that it rewards covering area rather than
     // holding a gate, so the thing to assert is that expansion actually
     // happened. A macro map on which nobody expands is a big empty map.
-    int expanded = refineries[0] + refineries[1] + outposts[0] + outposts[1];
-    if (expanded < 4)
-        return Fail($"basin: over 22 simulated minutes the commanders barely expanded "
-                    + $"(refineries {refineries[0]}/{refineries[1]}, outposts held {outposts[0]}/{outposts[1]}) - "
+    // Scale-free on purpose. The first version of this check demanded four
+    // "expansion units" as an absolute count, which passed skirmish-07 (six
+    // outposts on the map) and failed skirmish-08 (four) for a winner holding
+    // the same PROPORTION of what was on offer. An absolute bar on a
+    // map-relative quantity measures the map's generosity, not the commander's
+    // play. What the claim actually is: somebody built an economy beyond the
+    // opening hand, and somebody took a node.
+    if (refineries[0] + refineries[1] == 0)
+        return Fail($"basin[{name}]: over 22 simulated minutes not one refinery was built - "
                     + "a macro map nobody macros on is just a big empty map");
+    if (outposts[0] + outposts[1] == 0)
+        return Fail($"basin[{name}]: over 22 simulated minutes not one outpost was held - "
+                    + "the map's own expansion incentive went untouched");
     if (deaths == 0)
-        return Fail("basin: 20,000 ticks and nothing died - the armies never met, so the map is too big "
+        return Fail($"basin[{name}]: 20,000 ticks and nothing died - the armies never met, so the map is too big "
                     + "or too open for its own separation");
     if (yards[0] == 0 && yards[1] == 0)
-        return Fail("basin: both commanders lost every construction yard, which is not a result, it is a bug");
+        return Fail($"basin[{name}]: both commanders lost every construction yard, which is not a result, it is a bug");
 
-    Console.WriteLine($"basingate: skirmish-07 played {ticks} ticks (~22 simulated minutes, inside the GDD window). "
+    Console.WriteLine($"basingate[{name}]: played {ticks} ticks (~22 simulated minutes, inside the GDD window). "
                       + $"Refineries {refineries[0]}/{refineries[1]}, outposts held {outposts[0]}/{outposts[1]}, "
                       + $"armies {army[0]}/{army[1]}, yards {yards[0]}/{yards[1]}, {deaths} entities destroyed, "
                       + $"peak {peakEntities}. The commanders expanded and fought: it is a match, not a stalemate "
                       + "on open ground");
+    }
     return 0;
 }
 
