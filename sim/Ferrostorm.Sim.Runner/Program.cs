@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   factiongate        - P7-1: a building's side comes from /data; common admits both, a declared side is obeyed
 //   basingate          - skirmish-07 played 20,000 ticks (~22 simulated minutes): the commanders expand and fight rather than stall
 //   sizeprobe          - doc 26 s5: ms/tick and flow-field build cost against map area (not a gate; nothing asserts)
 //   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
@@ -4523,6 +4524,63 @@ int SizeProbe()
     return 0;
 }
 
+int FactionGate()
+{
+    // P7-1. Additive, the decorgate/repairgate pattern: a standalone mode and a
+    // Match battery stage, never a golden scenario, so the golden list stays 24.
+    //
+    // The rule under test is that a building's FACTION comes from /data. Before
+    // this wave it did not: every building YAML authored a `faction:` line,
+    // DataLoader validated it, and the bridge into StructureTypeDef dropped it,
+    // while the sim hardcoded one expression naming the Veil. So the files said
+    // one thing and the game did another, which is the ADR-006 class of defect
+    // exactly - and it is invisible to every golden, because no golden scenario
+    // plays a Sodality commander who tries to build a Directorate building.
+    var w = new World(2800, 64, 64, players: 2);
+    w.SetFaction(0, World.FactionDirectorate);
+    w.SetFaction(1, World.FactionSodality);
+
+    // 1. A common building is buildable by BOTH. The turret is the case that
+    //    matters: its file said "directorate" and both sides could build it,
+    //    and the repair was to make the DATA true rather than to take the
+    //    turret away from a faction that has had it all along.
+    const int Turret = 5, Veil = 7, Plant = 1;
+    foreach (int f in new[] { World.FactionDirectorate, World.FactionSodality })
+    {
+        if (!w.StructureAllowedForFaction(Turret, f))
+            return Fail($"faction: the turret is common and faction {f} must be able to build it");
+        if (!w.StructureAllowedForFaction(Plant, f))
+            return Fail($"faction: a power plant is common and faction {f} must be able to build it");
+    }
+
+    // 2. A declared building is buildable ONLY by its side, and the declaration
+    //    now lives in sod_veil_projector.yaml rather than in a predicate.
+    if (!w.StructureAllowedForFaction(Veil, World.FactionSodality))
+        return Fail("faction: the Veil is Sodality's and the Sodality must be able to build it");
+    if (w.StructureAllowedForFaction(Veil, World.FactionDirectorate))
+        return Fail("faction: the Veil is Sodality's and the Directorate must NOT be able to build it");
+
+    // 3. The rule is READ, not hardcoded. Register a def that declares the
+    //    other side and watch the answer follow the data - this is the check
+    //    that would have failed before the wave no matter what the file said,
+    //    because nothing consulted the file at all.
+    var probe = new World(2801, 32, 32, players: 2);
+    probe.SetFaction(0, World.FactionDirectorate);
+    probe.RegisterStructureType(Turret,
+        new World.StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20,
+                                   SightCells: 6, WeaponId: 4, Faction: World.FactionSodality));
+    if (probe.StructureAllowedForFaction(Turret, World.FactionDirectorate))
+        return Fail("faction: a def declaring Sodality must refuse the Directorate - the gate is still hardcoded");
+    if (!probe.StructureAllowedForFaction(Turret, World.FactionSodality))
+        return Fail("faction: a def declaring Sodality must admit the Sodality");
+
+    Console.WriteLine("factiongate: a building's side now comes from /data - common buildings admit both factions, the "
+                      + "Veil admits only the Sodality, and a def that DECLARES a side is obeyed, so the rule is read "
+                      + "rather than named in code. The turret and superweapon are declared common, which is what they "
+                      + "have always been in play whatever their files said");
+    return 0;
+}
+
 int BasinGate()
 {
     // skirmish-07 played at the length it was DESIGNED for. Additive, the
@@ -5167,6 +5225,9 @@ int Match(ulong seed)
     // skirmish-07 at the length it was designed for, not a 100-second smoke test.
     int basin = BasinGate();
     if (basin != 0) return basin;
+    // P7-1: a building's faction comes from /data, not from a hardcoded name.
+    int factions = FactionGate();
+    if (factions != 0) return factions;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6014,6 +6075,7 @@ return args.Length == 0
         "fordgate" => FordGate(),
         "decorgate" => DecorGate(),
         "basingate" => BasinGate(),
+        "factiongate" => FactionGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
