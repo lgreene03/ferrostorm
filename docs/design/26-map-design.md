@@ -164,6 +164,30 @@ must build a base, keep a harvester working, produce, path across the crossings
 and fight to a result. A map where an army parks is a failed map, not a hard
 one, and is widened until it flows. None of the three needed widening.
 
+**skirmish-08, Tidewrack Sound (128x96), the mid tier.** The pool ran five maps
+at 96x64, then one at 192x128, then one at 256x192, with nothing between the
+fast duel and the big theatre. 12,288 cells fills that gap: twice a duel map,
+half the old big one.
+
+Its idea is water as a BOUNDARY rather than a barrier. Every other map here that
+carries water uses it as something to cross - the Serpentine, the Tarnwater and
+the Ashford are rivers with bridges, and the game on them is which crossing you
+commit to. This map has no bridge and nothing to cross. The Sound intrudes from
+two opposite corners and removes them, leaving a broad diagonal of land between
+the bases.
+
+That changes the shape of a fight rather than its route. With sea on one flank
+and sea on the other, neither commander can be turned: no long way round, no
+flank to protect, no gate to hold, so an attack arrives on a broad front and is
+answered on one. It is the only map in the pool where position is decided by
+depth rather than by width. Measured over a full match it produced the most
+combat of any map - 186 entities destroyed against the basin's 133 - which is
+what a map with nowhere to hide should do.
+
+The shore is stepped rather than ruled, for the reason section 1 gives about the
+old maps, and shallows are laid along it: the wet margin is what makes a coast
+read as a coast instead of as a blue region that starts abruptly.
+
 **skirmish-07, Karsthollow Basin (256x192), the epic theatre.** The first map
 built to the measured ceiling of section 5 rather than to the assumed one:
 49,152 cells, eight times a small map and twice skirmish-04. It also breaks this
@@ -189,8 +213,8 @@ Six outposts stand in total, the most of any map.
 It is also the first map proved at the length it was designed for. mapgate runs
 1,500 ticks, which at fifteen ticks per second is a hundred seconds - enough to
 show the AI is alive on a map and nothing more, and plainly not enough for a map
-whose whole rationale is the fifteen-to-thirty minute window. basingate plays it
-for 20,000 ticks, a little over twenty-two simulated minutes, and asserts that
+whose whole rationale is the fifteen-to-thirty minute window. basingate plays it and skirmish-08
+for 20,000 ticks each, a little over twenty-two simulated minutes, and asserts that
 the commanders actually expanded and actually fought rather than sitting on a
 large empty board. Measured on the committed map: one side finished holding
 three outposts, a refinery and 47 units against an opponent reduced to nothing,
