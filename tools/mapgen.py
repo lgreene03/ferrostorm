@@ -256,11 +256,33 @@ class Canvas:
                     q.append((nx, ny))
         return seen
 
-    def validate(self, expected_fields, density_range):
+    def validate(self, expected_fields, density_range, min_separation=None):
         w, h, grid = self.w, self.h, self.grid
         assert len(grid) == h
         for row in grid:
             assert len(row) == w
+
+        # 0. Start separation. This guard exists because a map can pass every
+        #    other check in this file and still be broken: skirmish-05's first
+        #    draft was perfectly symmetric, perfectly reachable, perfectly fair,
+        #    and an accidental rush map, because its starts were 47 cells apart
+        #    where the rest of the pool sits near 75. Measured AI-vs-AI it read
+        #    37 against 2 on approach distance and 8 against 17 on peak army:
+        #    whichever commander crossed first arrived before the other had an
+        #    army, and the match was decided there.
+        #
+        #    That fix lived only as a comment on one generator, so nothing
+        #    stopped the same mistake landing silently on the next map. It is a
+        #    rule now. The default scales with the map rather than being the
+        #    literal 75 that suited 96x64, because separation is only meaningful
+        #    relative to the ground it crosses.
+        sep = max(abs(self.starts[0][0] - self.starts[1][0]),
+                  abs(self.starts[0][1] - self.starts[1][1]))
+        floor = min_separation if min_separation is not None else int(0.7 * max(w, h))
+        assert sep >= floor, (
+            f"starts are {sep} cells apart (Chebyshev), below the {floor} this map size wants. "
+            f"A short run makes whoever attacks first the winner before the other has an army; "
+            f"pass min_separation= explicitly if a rush map is the INTENT.")
 
         # 1. Rotation symmetry of blocked cells, fields and bridges, cell by cell.
         for y in range(h):
