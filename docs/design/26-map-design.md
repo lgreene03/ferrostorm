@@ -186,6 +186,19 @@ richest ground dead centre beside a pair of outposts - a prize that is central,
 worth taking, and impossible to hold quietly because everything can reach it.
 Six outposts stand in total, the most of any map.
 
+It is also the first map proved at the length it was designed for. mapgate runs
+1,500 ticks, which at fifteen ticks per second is a hundred seconds - enough to
+show the AI is alive on a map and nothing more, and plainly not enough for a map
+whose whole rationale is the fifteen-to-thirty minute window. basingate plays it
+for 20,000 ticks, a little over twenty-two simulated minutes, and asserts that
+the commanders actually expanded and actually fought rather than sitting on a
+large empty board. Measured on the committed map: one side finished holding
+three outposts, a refinery and 47 units against an opponent reduced to nothing,
+with 133 entities destroyed and 324 alive at peak. The basin converges to a
+result; it does not degenerate into a stand-off on open ground. The margin is
+lopsided, but that is the first-striker asymmetry filed as Q018 and is a
+property of the commander rather than of the terrain.
+
 ## 5. Size: the ceiling, measured
 
 "The tested map ceiling" earlier in this document was a statement about what had

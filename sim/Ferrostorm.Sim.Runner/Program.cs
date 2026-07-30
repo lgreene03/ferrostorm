@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   basingate          - skirmish-07 played 20,000 ticks (~22 simulated minutes): the commanders expand and fight rather than stall
 //   sizeprobe          - doc 26 s5: ms/tick and flow-field build cost against map area (not a gate; nothing asserts)
 //   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -4522,6 +4523,94 @@ int SizeProbe()
     return 0;
 }
 
+int BasinGate()
+{
+    // skirmish-07 played at the length it was DESIGNED for. Additive, the
+    // fordgate/mapgate pattern: a standalone mode and a Match battery stage,
+    // never a golden scenario, so the golden list stays 24.
+    //
+    // This exists because the map was signed off on a smoke test. mapgate runs
+    // 1500 ticks, and at 15 ticks per second that is one hundred seconds of
+    // simulated time - against a map whose whole rationale is the GDD's 15 to
+    // 30 minute macro window, whose starts are 231 cells apart precisely so a
+    // crossing is a commitment, and which carries sixteen expansion sites. A
+    // hundred seconds proves the AI is alive on it. It proves nothing about
+    // whether a real match on it converges or degenerates.
+    //
+    // 20,000 ticks is a little over 22 minutes, inside that window.
+    const int ticks = 20_000;
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapPath = Path.Combine(root, "data", "maps", "skirmish-07.fmap");
+    if (!File.Exists(mapPath)) return Fail("basin: skirmish-07.fmap is missing");
+
+    MapData map;
+    World world;
+    try
+    {
+        map = MapData.Load(mapPath);
+        world = map.BuildWorld(4242, players: 2, out _, w =>
+        {
+            CatalogueFiles.RegisterAll(w,
+                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+        });
+        map.PlaceSkirmishStart(world, 8000);
+    }
+    catch (Exception ex) { return Fail($"basin: skirmish-07 failed to load: {ex.Message}"); }
+
+    var ais = new[] { new SkirmishAI(0), new SkirmishAI(1) };
+    var cmds = new List<Command>();
+    int deaths = 0, peakEntities = 0;
+    for (int t = 0; t < ticks; t++)
+    {
+        cmds.Clear();
+        ais[0].Act(world, cmds);
+        ais[1].Act(world, cmds);
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (world.EntityCount > peakEntities) peakEntities = world.EntityCount;
+    }
+
+    // Read the end state: who built what, who took what, and did anyone die.
+    Span<int> refineries = stackalloc int[2];
+    Span<int> yards = stackalloc int[2];
+    Span<int> army = stackalloc int[2];
+    Span<int> outposts = stackalloc int[2];
+    for (int i = 0; i < world.Entities.Count; i++)
+    {
+        var e = world.Entities[i];
+        if (!e.Alive) { if (e.PlayerId >= 0) deaths++; continue; }
+        if (e.PlayerId < 0) continue;
+        switch (e.Kind)
+        {
+            case EntityKind.Refinery: refineries[e.PlayerId]++; break;
+            case EntityKind.ConstructionYard: yards[e.PlayerId]++; break;
+            case EntityKind.Outpost: outposts[e.PlayerId]++; break;
+            case EntityKind.Unit: army[e.PlayerId]++; break;
+        }
+    }
+
+    // The map's OWN premise is that it rewards covering area rather than
+    // holding a gate, so the thing to assert is that expansion actually
+    // happened. A macro map on which nobody expands is a big empty map.
+    int expanded = refineries[0] + refineries[1] + outposts[0] + outposts[1];
+    if (expanded < 4)
+        return Fail($"basin: over 22 simulated minutes the commanders barely expanded "
+                    + $"(refineries {refineries[0]}/{refineries[1]}, outposts held {outposts[0]}/{outposts[1]}) - "
+                    + "a macro map nobody macros on is just a big empty map");
+    if (deaths == 0)
+        return Fail("basin: 20,000 ticks and nothing died - the armies never met, so the map is too big "
+                    + "or too open for its own separation");
+    if (yards[0] == 0 && yards[1] == 0)
+        return Fail("basin: both commanders lost every construction yard, which is not a result, it is a bug");
+
+    Console.WriteLine($"basingate: skirmish-07 played {ticks} ticks (~22 simulated minutes, inside the GDD window). "
+                      + $"Refineries {refineries[0]}/{refineries[1]}, outposts held {outposts[0]}/{outposts[1]}, "
+                      + $"armies {army[0]}/{army[1]}, yards {yards[0]}/{yards[1]}, {deaths} entities destroyed, "
+                      + $"peak {peakEntities}. The commanders expanded and fought: it is a match, not a stalemate "
+                      + "on open ground");
+    return 0;
+}
+
 int DecorGate()
 {
     // The decorative terrain layer. Additive, the fordgate/difficultygate
@@ -5054,6 +5143,9 @@ int Match(ulong seed)
     // The decorative terrain layer: drawn, and provably passable.
     int decorg = DecorGate();
     if (decorg != 0) return decorg;
+    // skirmish-07 at the length it was designed for, not a 100-second smoke test.
+    int basin = BasinGate();
+    if (basin != 0) return basin;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -5900,6 +5992,7 @@ return args.Length == 0
         "difficultygate" => DifficultyGate(),
         "fordgate" => FordGate(),
         "decorgate" => DecorGate(),
+        "basingate" => BasinGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
