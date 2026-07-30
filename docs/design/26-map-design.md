@@ -164,6 +164,28 @@ must build a base, keep a harvester working, produce, path across the crossings
 and fight to a result. A map where an army parks is a failed map, not a hard
 one, and is widened until it flows. None of the three needed widening.
 
+**skirmish-07, Karsthollow Basin (256x192), the epic theatre.** The first map
+built to the measured ceiling of section 5 rather than to the assumed one:
+49,152 cells, eight times a small map and twice skirmish-04. It also breaks this
+document's own "two to three crossings" guidance ON PURPOSE, and the deviation
+is stated rather than smuggled.
+
+Every other map in the pool is a crossing map, and the game on them is which
+choke you commit to. That formula is good and it is now used six times. This map
+has no river, no ridge and no load-bearing crossing at all; the basin is broken
+by scattered karst that leaves many routes rather than few. mapgen's crossing
+proof only runs on a map that DECLARES chokes, so a map with none is a shape
+chosen deliberately, not an invariant dodged.
+
+The point of the shape is what it rewards. With no gate to hold, holding ground
+becomes a question of area rather than of a chokepoint, which is the macro game
+the GDD's 15-to-30 minute window allows and which nothing in the pool asked for.
+The economy is laid to match: a four-cell safe patch behind each base that
+cannot win a game, sixteen expansion sites spread across the basin, and the
+richest ground dead centre beside a pair of outposts - a prize that is central,
+worth taking, and impossible to hold quietly because everything can reach it.
+Six outposts stand in total, the most of any map.
+
 ## 5. Size: the ceiling, measured
 
 "The tested map ceiling" earlier in this document was a statement about what had
