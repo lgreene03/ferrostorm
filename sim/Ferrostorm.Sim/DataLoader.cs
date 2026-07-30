@@ -352,7 +352,16 @@ public static class StructureCatalogue
         => new(s.Cost, KindOf(s.Id), s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
-               PrereqIds(s.Prerequisites));
+               PrereqIds(s.Prerequisites),
+               // P7-1: carry the faction the file already declares. It was
+               // parsed and validated here and then dropped, which is what made
+               // every building's `faction:` line decoration.
+               s.Faction switch
+               {
+                   "directorate" => World.FactionDirectorate,
+                   "sodality" => World.FactionSodality,
+                   _ => World.FactionCommon,
+               });
 }
 
 /// <summary>

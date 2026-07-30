@@ -70,14 +70,21 @@ the cost of that decision is visible in a way it was not before.
 
 ## Tier B: roster holes that distort play
 
-**B1. One defensive structure, and it is faction-locked.** `dir_turret` is the
-only defence in the game and its data file reads `faction: directorate`, so on
-current data **the Sodality has no base defence at all**. That is filed as a
-DEFECT rather than described as asymmetry, because nothing in the GDD says one
-side cannot defend. Beyond the lock, a single turret type cannot express the
-rock-paper-scissors the benchmarks built defence around - anti-infantry against
-anti-armour against anti-air - and doc 27's balance work already measured that
-static defence cannot hold. The two are the same finding from opposite ends.
+**B1. One defensive structure.** The turret is the only defence in the game.
+Its file used to read `faction: directorate`, and this document's first draft
+reported that as the Sodality being unable to defend at all. **That was wrong**,
+and the correction is worth keeping: nothing enforced the line. StructureTypeDef
+carried no Faction field, so a building's declared side was parsed, validated and
+then discarded, while the sim hardcoded one expression naming the Veil Projector.
+Both sides could always build the turret. P7-1 fixed the mechanism - the side now
+comes from /data - and declared the turret and superweapon `common`, which
+preserves what play always did.
+
+What remains true is the part that matters: ONE turret type cannot express the
+rock-paper-scissors the benchmarks built defence around, anti-infantry against
+anti-armour against anti-air, and doc 27's balance work already measured that
+static defence cannot hold. Neither side has a distinctive defensive structure.
+That is P7-2, and it is breadth rather than a defect.
 
 **B2. No storage, so the economy has no ceiling.** The benchmarks capped credits
 and made silos a real decision, with overflow lost. There is no silo and no cap

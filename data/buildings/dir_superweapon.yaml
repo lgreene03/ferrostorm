@@ -1,6 +1,6 @@
 id: dir_superweapon
 name: Superweapon
-faction: directorate
+faction: common
 cost: 4000
 build_time_ticks: 600
 hp: 1200

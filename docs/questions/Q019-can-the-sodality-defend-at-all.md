@@ -1,5 +1,44 @@
 # Q019: the Sodality has no base defence. Defect, or doctrine?
 
+**ANSWERED AND CLOSED, 2026-07-31, and the question's own premise was WRONG.**
+
+This file asked whether the Sodality being unable to build base defence was a
+defect or deliberate doctrine. It was neither, because **the Sodality could
+build the turret the whole time.** The premise was taken from
+`data/buildings/dir_turret.yaml` declaring `faction: directorate` without
+checking whether anything enforced it. Nothing did.
+
+`StructureTypeDef` carried no Faction field at all. A building's `faction:` line
+was parsed, validated against directorate/sodality/common, and then dropped when
+bridging into the sim catalogue, while the sim hardcoded a single expression -
+`structType != VeilStructType || faction == FactionSodality` - naming one
+structure. So the only faction-gated building in the game was the Veil
+Projector, and the turret and the superweapon were common in play whatever their
+files said.
+
+The real defect was better than the reported one: **authored data that did not
+drive the runtime**, the exact class ADR-006 exists to prevent, and the same
+family as DR-19. It is fixed in P7-1: StructureTypeDef carries a Faction, the
+loader passes the one the file declares, and the hardcoded predicate is gone.
+The turret and superweapon now DECLARE `common`, which preserves what play has
+always done rather than silently removing a capability the Sodality has always
+had. Proven by factiongate.
+
+The lesson is the one this session keeps relearning: a claim read off a data
+file is a claim about the file, not about the game. The duplicated-rule audit
+had already filed the missing Faction column as the permanent fix; had this
+question been checked against that ticket first, its premise would not have
+survived drafting.
+
+What remains genuinely open is not this question but a design one, and it is
+carried by P7-2 rather than here: with the turret common, NEITHER side has a
+distinctive defensive structure, and doc 27's DR-04 wants faction-distinct
+superweapons for the same reason. That is breadth, not a defect.
+
+---
+
+*Original question preserved below for the record.*
+
 Labels: persona:p2, gdd:s3, phase:7, owner:game-designer + producer
 Raised by: game-designer, during the doc 24 parity rewrite (2026-07-30).
 Decide-by: before P7-1, which is the first row of the parity plan and is held

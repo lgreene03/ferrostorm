@@ -1,6 +1,6 @@
 id: dir_turret
 name: Turret
-faction: directorate
+faction: common
 cost: 600
 build_time_ticks: 150
 hp: 400

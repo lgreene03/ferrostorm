@@ -568,9 +568,22 @@ public sealed partial class World
     /// second switch. Like the unit catalogue this is static config and is not
     /// part of the state hash.
     /// </summary>
+    /// P7-1: Faction joins this def, matching UnitTypeDef which has carried one
+    /// since the roster existed. It was missing, and the consequence was a lie
+    /// in the data: every building YAML authors a `faction:` line, DataLoader
+    /// parses it and VALIDATES it against directorate/sodality/common, and then
+    /// the bridge into this def dropped it on the floor. The field was
+    /// authored, checked, and enforced by nothing. In its place the sim
+    /// hardcoded a single exception naming one structure, so dir_turret.yaml
+    /// and dir_superweapon.yaml both said "directorate" while BOTH sides could
+    /// build them. That is the ADR-006 class of defect the /data runtime wave
+    /// exists to prevent: authored numbers that do not drive the runtime.
+    /// Defaults to FactionCommon so every compiled def and every caller that
+    /// omits it keeps exactly today's meaning.
     public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks,
         int Hp = 0, int PowerSupply = 0, int PowerDraw = 0, int SightCells = 0,
-        int Footprint = FootprintSize, int WeaponId = 0, int[]? Prereqs = null)
+        int Footprint = FootprintSize, int WeaponId = 0, int[]? Prereqs = null,
+        int Faction = FactionCommon)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -614,7 +627,11 @@ public sealed partial class World
         4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, PowerDraw: 20, SightCells: 6), // MCV-deployed, never queued
         5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4, Prereqs: new[] { 1 }),
         6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 }),
-        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }),
+        // P7-1: the Veil declares its side here as data rather than being
+        // named in a hardcoded predicate. The compiled default must agree
+        // with sod_veil_projector.yaml or the /data round-trip fails loudly,
+        // which is exactly the check that now protects the rule.
+        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
         // Yard queue by the existing guard in BuildStructure, exactly as type 4 is
@@ -1773,8 +1790,19 @@ public sealed partial class World
     /// with its own catalogue-checksum argument. This collapses the two copies
     /// to one in the meantime, at no hash cost: a pure static predicate.
     /// </summary>
-    public static bool StructureAllowedForFaction(int structType, int faction) =>
-        structType != VeilStructType || faction == FactionSodality;
+    /// P7-1 replaced the static special case with a read of the catalogue. It
+    /// used to be `structType != VeilStructType || faction == FactionSodality`
+    /// - one structure named in code, and every building's authored `faction:`
+    /// ignored. Now the def answers, so /data is the authority the ADR-006 wave
+    /// said it was. An unfactioned def is FactionCommon and buildable by both,
+    /// which is what every compiled default and every previously-ignored YAML
+    /// line resolved to in practice, so this reads exactly as before until a
+    /// building actually declares a side.
+    public bool StructureAllowedForFaction(int structType, int faction)
+    {
+        int owner = GetStructureType(structType).Faction;
+        return owner == FactionCommon || owner == faction;
+    }
 
     /// <summary>
     /// ADR-009 clause 2: does this player own a living instance of every

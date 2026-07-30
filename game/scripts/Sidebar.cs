@@ -584,7 +584,11 @@ public partial class Sidebar : PanelContainer
     /// base grows, so it belongs to Refresh alone.</summary>
     private bool FixedGatesAllow(int structType) =>
         SkirmishLive.StructureAllowed(structType)
-        && World.StructureAllowedForFaction(structType, _game.FactionOf(_game.LocalPlayerId));
+        // P7-1: an INSTANCE call now, because the rule moved out of a hardcoded
+        // predicate and into the catalogue. The client still ASKS the sim
+        // rather than deciding for itself, which is the point: one rule, one
+        // implementation, and the answer follows whatever /data declares.
+        && _game.LiveWorld.StructureAllowedForFaction(structType, _game.FactionOf(_game.LocalPlayerId));
 
     private bool FixedGatesAllowUnit(int unitType) =>
         SkirmishLive.UnitAllowed(unitType)

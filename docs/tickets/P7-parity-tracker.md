@@ -24,8 +24,8 @@ system removes a category of decision while a missing unit removes an option.
 
 | # | Row | Doc 24 | Blocked on | Hash | Status |
 |---|-----|--------|-----------|------|--------|
-| P7-1 | The Sodality has no base defence: `dir_turret` is the only defensive structure and is faction-locked | B1 | Luke: confirm it is a defect, not intent | catalogue: MOVES | **PENDING - recommended first** |
-| P7-2 | Defensive variety: a second and third defence type so defence can answer what attacks it | B1 | P7-1 first; then Balance co-sign (A11) | MOVES | pending |
+| P7-1 | A building's faction comes from /data instead of a hardcoded name (the reported "Sodality cannot defend" was a WRONG premise: nothing enforced the field) | B1 | - | **NEUTRAL, measured** | **DONE** - factiongate; checksum and 24 goldens unmoved |
+| P7-2 | Defensive variety: a second and third defence type so defence can answer what attacks it, and a distinctive one per side | B1 | Balance co-sign (A11); P7-1 unblocked the mechanism | MOVES | pending - **now the first open row** |
 | P7-3 | Transports: one carrier unit | A2 | ADR | MOVES | pending |
 | P7-4 | The air layer: airfield, one strike aircraft, one anti-air answer | A1 | ADR + art (C5) | MOVES | pending |
 | P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | Q017 (Luke's roster call) | MOVES | pending |
@@ -39,19 +39,31 @@ system removes a category of decision while a missing unit removes an option.
 Out of scope until a GDD amendment with Producer sign-off: naval, FMV briefings,
 crates, a map editor. Recorded in doc 24 so the comparison stays honest.
 
-## Why P7-1 leads
+## What P7-1 turned out to be
 
-It is the only row that is a DEFECT rather than a feature. `data/buildings/dir_turret.yaml`
-declares `faction: directorate` and is the only defensive structure in the
-catalogue, so a Sodality player cannot build base defence at all. Nothing in the
-GDD says that, doc 15's faction bible does not claim it, and no ADR records it as
-a decision. It is small, it is provable, and it is the kind of thing that reads
-as a balance mystery until somebody looks at the file.
+It was filed as a defect - the Sodality unable to build base defence - and the
+premise was wrong. Nothing enforced `faction:` on a building at all: the field
+was parsed, validated, and dropped, and the sim hardcoded one expression naming
+the Veil. Both sides could always build the turret.
 
-It needs one word from Luke before it is touched, because there is a reading in
-which it IS intent - a faction whose doctrine is raiding might be meant to have
-no static defence - and that reading would make the fix a design change rather
-than a repair.
+The real defect was better and is now fixed: authored data that did not drive
+the runtime, the ADR-006 class. StructureTypeDef carries a Faction, the loader
+passes what the file declares, the hardcoded predicate is gone, and the turret
+and superweapon declare `common` - preserving what play always did rather than
+silently taking a capability away. Neutral: catalogue checksum and all 24
+goldens unmoved, because no golden scenario plays a Sodality commander building
+a Directorate building.
+
+Recorded because the lesson generalises: **a claim read off a data file is a
+claim about the file, not about the game.** The duplicated-rule audit had
+already filed the missing Faction column as the permanent fix; checking there
+first would have caught the premise before it was written down.
+
+Left undone deliberately: `dir_turret` and `dir_superweapon` keep their ids
+although they are now `common`, which contradicts the repo's own prefix
+convention. Renaming them cascades into art (art/png/dir_turret.png,
+art/sprites/dir_turret.svg and the model library key), so it is a wave of its
+own rather than a rider on this one.
 
 ## What this phase does NOT do
 
