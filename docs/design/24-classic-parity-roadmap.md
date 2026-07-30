@@ -1,225 +1,152 @@
-# 24. Classic Parity Roadmap: what the genre's benchmark games have that Ferrostorm does not
+# 24. Classic parity: what the benchmark games have that Ferrostorm does not
 
-Author: game-designer + producer agents, 2026-07-17. Source: Luke's question
-"what features are we missing?" against the classic RTS games of the 90s,
-answered from the codebase as it stands at main ca481d3 and executed under
-Luke's directive of 2026-07-17: "design out and build all these".
+Author: game-designer + producer agents. Originally written 2026-07-17 against
+main ca481d3; **rewritten 2026-07-30 against the current tree.**
 
-**STATUS, 2026-07-21.** Much of this roadmap has been built. Tier 3 (the faction picker, music, placeholder VO and contextual cursors) shipped as P6 Wave A. The Tier 1 ADRs were ratified under the directive and built as the P6 Phase B campaign (ADR-006 the /data runtime, ADR-007 rally, ADR-008 power, ADR-009 the production roster, ADR-011 the starting hand, ADR-012 ferrite regrowth). Read the tiers below with that delivery in mind; the out-of-scope list at the end still stands.
+This document was rewritten rather than amended. The previous version carried
+three stacked status banners telling the reader that most of its body was no
+longer true, which is a document that has stopped being one. Everything below
+describes the tree as it stands. Where a gap has been closed it has been
+deleted rather than annotated.
 
-**STATUS UPDATE, 2026-07-25: TIER 2 IS NOW ALSO ALMOST ENTIRELY BUILT**, so the
-gap language below reads as owed when it is not. Delivered since: hold-fire,
-guard and patrol stances (ADR-015 - the text below says the sim "cannot express
-a hold-fire stance at all", which is no longer true), formations (ADR-018), the
-repair vehicle (ADR-019), the four-queue sidebar's cancel half (ADR-020) and its
-parallel-lane half (ADR-023), neutral outposts (ADR-021), destroyable bridges
-(ADR-025), and the whole of two-machine LAN except the human session (ADR-022,
-waves C7a to C7c). Save format is now v8, not v6. What genuinely remains from
-Tier 2: wall gates (C6b, deferred by ADR-005 clause 6) and multi-resource (C8,
-blocked on Q014). docs/tickets/P6-campaign-tracker.md is authoritative.
+Method: every count and every claim of absence below was taken from the working
+tree - the `/data` roster, the sim's own enums, and the committed maps - and not
+from memory.
 
-## How to read this
+## What already matches, so nobody rebuilds it
 
-Three tiers plus an out-of-scope list. Tier 1 is designed and carried by an
-ADR; building it is a matter of the ADR being ratified, which the directive
-above supplies. Tier 2 is known and pointed at, but the design work is still
-owed. Tier 3 is what THIS document exists to file: gaps that were on no list
-until the parity comparison surfaced them. Every claim of absence below was
-made by grep against the working tree, not by memory.
+The harvester economy with regrowth; construction yard with build radius and MCV
+deploy; per-producer queues with ready-and-place, parallel lanes and
+cancel-refund; selling; structure and vehicle repair, including an AI that now
+repairs its own buildings; walls; partial-power rules with brown-out and radar
+blackout; engineer capture; neutral capturable outposts; stealth, detection and a
+stealth-projector structure; veterancy with rank pips; a superweapon with charge,
+launch detection and impact alerts; infantry crushing; attack-move; destroyable
+bridges; fog of war; minimap with pings and jump-to-event.
 
-What already matches the classics, so nobody rebuilds it: the harvester
-economy, construction yard with build radius, MCV deploy, per-building queues
-with ready-and-place, selling, structure and vehicle repair, walls, partial
-power rules, engineer capture, stealth and detection, veterancy with rank
-pips, the superweapon with charge, launch-detection and impact alerts,
-infantry crushing, attack-move (ADR-010), fog of war, minimap with pings and
-jump-to-event, control groups, shift-queued orders, a three-mission campaign
-with tech gating, skirmish against three AI presets, save/load (format v6),
-and hash-verified replays, which the classics never had.
+And a set of things the benchmark games did NOT have, which this project should
+stop treating as catching up: unit stances (hold-fire, guard, patrol),
+formations, control groups and army-select keys, camera bookmarks, grid build
+hotkeys, an idle-harvester key, a difficulty ladder held separate from opponent
+personality, deterministic lockstep with hash-verified replays, and save/load
+that round-trips a live match.
 
-## Tier 1: designed, ratification supplied by the directive
+## The scale gap, measured
 
-Aircraft and the airfield (GDD line 55; sequenced behind the air-layer ADR
-that Phase C of the campaign authors, per ADR-009's own exclusion). The
-barracks split and the tabbed sidebar (ADR-009). Turrets offline below 75 per
-cent power and the radar blackout (ADR-008). Sim-side rally (ADR-007). The
-/data runtime source (ADR-006). The starting hand into the sim (ADR-011).
+| | Benchmark 1995 | Benchmark 1996 | Ferrostorm today |
+|---|---|---|---|
+| Units | ~20 per side | ~30 per side | **13 total** |
+| Structures | ~20 | ~25 | **13** |
+| Defensive structures | 4 | 6 to 7 | **1** |
+| Superweapons | 2 | 3 | **1** |
+| Campaign missions | ~15 per side | ~14 per side | **3** |
+| Simultaneous players | 4 | 8 | **2** |
 
-## Tier 2: known, design owed
+The thirteen units are six shared (engineer, harvester, MCV, repair vehicle,
+rifle squad, rocket squad), five Directorate and two Sodality. The thirteen
+structures are ten shared, two Directorate and one Sodality.
 
-Guard and patrol stances (P4-PORT-01). Formations (P4-PORT-05). A hold-fire
-stance, which the sim cannot express at all: there is no way to tell a unit
-not to shoot, and Q003 records the engineer-walking-past-a-sentry scenario
-that needs it. Wall gates (ADR-005 clause 6, blocked on per-player flow
-fields). Multi-resource fields (P4-PORT-04). Two-machine LAN (Q002's
-remainder: the client frame loop blocks on AdvanceTick's Monitor.Wait).
-The repair vehicle (GDD line 62; blocked on ADR-006 per doc 23). The
-four-queue sidebar promise of GDD line 45, which even doc 23 Wave 6 does not
-fully discharge.
+## Tier A: whole systems that do not exist
 
-## Tier 3: newly filed gaps
+These are not missing units. They are missing dimensions of play, and each
+removes a category of decision rather than an item from a list.
 
-### TICKET-P6-FACTION-01. The faction picker
+**A1. The air layer.** No aircraft, no airfield or helipad, and therefore no
+anti-air anywhere in the roster. Both benchmarks used air as a third dimension:
+fast strike craft that ground defence cannot answer, and the anti-air building
+that answers them. `EntityKind.Airfield` exists in the sim enum and the skirmish
+AI already lists it among its wave targets, so the shape was anticipated and
+never filled. Tracked as C5; needs an ADR and art.
 
-labels: persona:commander gdd:s4 phase:6 owner:client-engineer
+**A2. Transport.** None of any kind - no armoured carrier, no transport
+helicopter, no landing craft. This removes a family of play the benchmarks
+leaned on: the engineer delivered under fire, the infantry force that arrives
+somewhere unexpected, the retreat that saves an army. It is cheaper than A1
+because it needs no new dimension, only a unit that carries.
 
-`grep -in faction game/scripts/MainMenu.cs` returns nothing. The skirmish
-menu offers theatre, opposition and treasury; no shipped map declares
-factions (Q001); therefore no human being has ever played the Sodality in a
-live skirmish, despite the sim gating its whole roster correctly and the
-Veil Projector having a button since doc 23 Wave 1. In the classic genre the
-faction choice is the first screen.
+**A3. Naval.** Absent entirely, and out of scope by standing decision (below).
+Recorded because skirmish-08 now puts two seas on a map with nothing on them, so
+the cost of that decision is visible in a way it was not before.
 
-Design. A FACTION row in the skirmish menu (DIRECTORATE / SODALITY),
-carried on MatchSetup, applied in BuildStartingWorld via `World.SetFaction`
-for player 0 before tick 0, with the opponent's faction defaulting to the
-other side. The Sidebar's structure AND unit buttons gain faction-gated
-visibility mirroring the sim's own Produce and BuildStructure faction tests,
-exactly as the Wave 1 veil button already does; the sim's checks remain the
-authority and are unchanged. Client-only, hash-neutral: the golden scenarios
-never touch the menu.
+## Tier B: roster holes that distort play
 
-Acceptance: a Sodality skirmish shows the Sodality roster and builds it; a
-Directorate skirmish is byte-for-byte today's game; the sim still refuses a
-hand-crafted wrong-faction command; goldens byte-identical.
+**B1. One defensive structure, and it is faction-locked.** `dir_turret` is the
+only defence in the game and its data file reads `faction: directorate`, so on
+current data **the Sodality has no base defence at all**. That is filed as a
+DEFECT rather than described as asymmetry, because nothing in the GDD says one
+side cannot defend. Beyond the lock, a single turret type cannot express the
+rock-paper-scissors the benchmarks built defence around - anti-infantry against
+anti-armour against anti-air - and doc 27's balance work already measured that
+static defence cannot hold. The two are the same finding from opposite ends.
 
-### TICKET-P6-MUSIC-01. The score
+**B2. No storage, so the economy has no ceiling.** The benchmarks capped credits
+and made silos a real decision, with overflow lost. There is no silo and no cap
+here, so banking is free and there is never a reason not to hoard.
 
-labels: persona:commander gdd:s7 phase:6 owner:audio + client-engineer
+**B3. No support infantry.** No medic, no field mechanic, no scout animal. The
+repair vehicle covers part of the mechanic's role; nothing covers the rest.
 
-`grep -rin music game/scripts/` returns nothing; game/audio holds effects
-and one wind bed. Half the identity of the classic genre is its soundtrack;
-Ferrostorm is silent.
+**B4. No hero unit.** Each benchmark had one, and it carried a disproportionate
+share of that game's character.
 
-Design. A Music bus beside Sfx, Ui and Ambient (the AudioBuses idiom). Two
-procedural layers synthesised through art/audio/synth.py, which already has
-the primitives (sine, noise, band-pass, envelopes, the loudness discipline):
-a calm bed and a combat layer, crossfaded by a combat-intensity signal the
-client already possesses (recent Fired events involving player 0, decayed
-over a few seconds). A MUSIC volume slider joins the settings scene. This
-ticket ships the SYSTEM and an understated placeholder score; a composed
-soundtrack is a later art decision and is said here so nobody mistakes the
-placeholder for the destination.
+**B5. No infiltration.** Ferrostorm has stealth and detection, which is half of
+information warfare. It has nothing that steals, reveals, disables or denies: no
+spy, no thief, no jamming structure. The Sodality's written identity is raiding
+and economy denial, and the roster gives it no tool for the second half of that.
 
-Acceptance: music plays in a live skirmish, swells under fire, recedes in
-peace; the slider moves the bus; muting it silences music and nothing else;
-goldens byte-identical.
+**B6. No mines or minelayer.**
 
-### TICKET-P6-VO-01. The battlefield voice
+**B7. One wall type at a flat 100 credits**, where the benchmarks tiered
+barriers by cost and durability - and gates are still deferred (C6b).
 
-labels: persona:commander gdd:s7 phase:6 owner:audio + client-engineer + legal-review
+## Tier C: faction identity, the thinnest part of the game
 
-The spoken battlefield computer is the classic genre's most recognisable
-feel element and Ferrostorm has none of it: alerts are toasts and cues.
+The Sodality has **two** unique units and **one** unique structure; the
+Directorate has five and two. Sixteen of the twenty-six roster entries are
+shared. In the benchmark games the two sides genuinely played differently. Here
+most of the game is a common roster with a small garnish, and a player choosing
+a side is choosing a handful of items rather than a doctrine.
 
-Design. A VO clip set in game/audio/vo/, played on the Ui bus ALONGSIDE the
-existing toasts and cues, never instead of them: construction complete, unit
-ready, unit lost, base under attack, harvester under attack, low power,
-superweapon launch detected, silos needed nothing (omitted, no silo system),
-mission accomplished, mission failed. A per-line cooldown map (the alert
-cooldown idiom in SkirmishLive) so the voice never stacks or machine-guns.
-Generation is a regenerable script (art/audio/make_vo.sh) using macOS `say`
-to AIFF then afconvert to wav, so replacing the voice later is one command.
-LEGAL CAVEAT, stated rather than buried: system text-to-speech output is a
-PLACEHOLDER; redistribution licensing for Apple voices must be cleared by
-legal-review before any public release build ships these clips, and the
-regeneration script is the mitigation.
+Doc 27 reached the same conclusion from the other direction and called asymmetry
+the least-delivered of the GDD's five pillars. Its DR-02, DR-03 and DR-04
+(faction power economics, a Sodality detection answer, faction-distinct
+superweapons) are the designed response, and all three are blocked on Q017.
 
-Acceptance: queueing a power plant ends in a spoken "construction complete";
-losing a unit says so once, not eleven times for eleven walls; every line is
-also still a toast; goldens byte-identical.
+## Tier D: content volume
 
-### TICKET-P6-CURSOR-01. Contextual cursors
+**D1. Three campaign missions** against roughly fifteen per side in the
+benchmarks, with the voice set still placeholder TTS pending the legal check.
 
-labels: persona:commander gdd:s7 phase:6 owner:client-engineer + ux
+**D2. Two player seats.** Every committed map declares exactly two starts and
+`MapLoader.PlaceSkirmishStart` is hardcoded to two players, while GDD section 9
+promises skirmish against one to seven opponents and custom lobbies up to four
+against four, and the production plan lists 4v4 as in scope. This is the widest
+single divergence between what ships and what is written down. It is a sim
+change and needs Producer sign-off.
 
-Doc 18 N13 recorded it and nobody ticketed it: one OS cursor for every
-context. The classic genre reads its whole verb system off the cursor.
+## Deliberately out of scope, so the comparison stays honest
 
-Design. Small cursor PNGs (select, move, attack, harvest, enter, repair,
-sell, invalid) generated procedurally by a python script in art/ (stdlib
-only, matching the repo's tooling discipline), applied with
-Input.SetCustomMouseCursor from a hover test the client already computes
-pieces of (own unit, enemy in range, ferrite field, own structure, blocked
-ground). Hotspot at the point. The sell and repair cursors show only while
-the respective mode or key context is live.
-
-Acceptance: hovering an enemy with combat units selected shows the attack
-cursor; hovering ferrite with a harvester selected shows harvest; hovering
-open ground shows move; the OS default never appears in a live battle;
-goldens byte-identical.
-
-## Ratification-gated sketches (sim changes, golden moves, NOT in Phase A)
-
-### ADR-012 sketch: ferrite regrowth
-
-`grep -n regrow sim/Ferrostorm.Sim/World.cs` returns nothing: fields deplete
-permanently, capping match length and starving long sieges. Sketch: each
-field regrows a small fixed amount per interval up to its spawn cap,
-deterministically, in field-index order, only when a neighbouring cell
-within Chebyshev 1 still holds ferrite (growth spreads from remaining
-crystal, it does not resurrect a stripped field). Numbers to Balance under
-A11. Moves goldens; one regeneration; formal ADR before implementation.
-
-### Neutral tech structures
-
-EntityKind.Outpost = 17 is already reserved (World.cs enum, Wave 2) and doc
-22's P5-ECON-14 sketched capturable map structures. Sim change, ADR-gated,
-Phase C.
-
-### Destroyable bridges
-
-Bridges are permanently open cells ('B' in the map grid, MapLoader). Making
-them destroyable is a map-format and passability change; ADR-gated, Phase C,
-and worth pairing with the gate work since both need incremental flow-field
-repair.
-
-**CORRECTION, 2026-07-25 (the C6 design pass, formalised as ADR-025).** The last
-clause above is wrong, and it is why this looked expensive. A gate needs
-incremental flow repair because it opens and closes as units approach, turning a
-rare passability event into a per-tick one. **A bridge dies once and stays
-dead**: that is a single passability change per bridge per match, exactly the
-frequency the existing wholesale flow-cache clear in Block/UnblockFootprint was
-built to absorb. Bridges need no new pathfinding machinery at all, and the
-pairing held a cheap complete feature hostage to an architecture wave. They are
-now split: ADR-025 ships bridges, and gates stay deferred by ADR-005 clause 6,
-whose revisit precondition is still unmet (see
-docs/tickets/P6-wave-c6b-wall-gates.md).
-
-### Transports, acknowledgement voices, crates, map editor
-
-The transport helicopter rides with the air-layer ADR (GDD line 55). Unit
-acknowledgement voices ride on P6-VO-01's pipeline once it exists. Crates
-are GDD-silent and therefore need Producer sign-off before any ticket
-exists. A map editor is GDD-silent; tools/ holds generators and the modder
-persona's need is recorded; it stops there.
-
-## Deliberately out of scope, so the comparison is honest
-
-Naval combat, entirely: the GDD does not contain it, and adding it is a GDD
-amendment with Producer sign-off, not a ticket. Full-motion-video briefings:
-same. Neither is pursued under the current directive.
+Naval combat and full-motion-video briefings are GDD amendments needing Producer
+sign-off, not tickets. Crates and a map editor are GDD-silent and need the same.
+None is pursued under the current directive, and none is counted as a gap above
+except A3, which is recorded only because skirmish-08 made its cost visible.
 
 ## Hash impact
 
-Every Tier 3 ticket (P6-FACTION-01, P6-MUSIC-01, P6-VO-01, P6-CURSOR-01) is
-client-only and hash-neutral; the acceptance for the wave is
-`git diff sim/golden-hashes.txt` EMPTY. The ratification-gated sketches all
-move goldens and each needs its formal ADR and its own regeneration under
-the doc 23 section 6 discipline. Nothing in this document touches the
-current baseline, which already includes ADR-010's legitimate regeneration.
+Tier A and Tier B items are sim changes and every one of them moves goldens;
+each needs its own ADR and a regeneration under the doc 23 section 6 discipline.
+Tier C is largely `/data` and moves goldens through the catalogue. D1 is data and
+triggers; D2 is a sim change. Nothing here is hash-neutral, which is itself the
+argument for sequencing this work rather than picking it up piecemeal.
 
 ## Changed / Assumed / Needed next
 
-Changed: this document only.
+**Changed.** This document, rewritten against the current tree.
 
-Assumed: the directive "design out and build all these" covers the four
-Tier 3 tickets immediately and supplies ratification for the Tier 1 ADRs;
-GDD-silent items (crates, map editor) and GDD amendments (naval, FMV) stay
-outside it. The VO voice is a placeholder pending the legal check.
+**Assumed.** Nothing. Every count is from the roster or the sim's enums.
 
-Needed next (from whom): Phase A implementation of the four tickets
-(client-engineer + audio, one wave); the formal ADR-012 text before any
-regrowth code (architect); the legal-review check on TTS redistribution
-before a public build carries the VO set; Balance numbers for regrowth under
-A11 when ADR-012 is written.
+**Needed next, and from whom.** The ranked plan this analysis sets as the goal
+lives in `docs/tickets/P7-parity-tracker.md`. Three decisions there are Luke's
+and gate the rest: whether B1's faction-locked turret is a defect to fix now (it
+reads as one), whether the air layer or transports lead Tier A, and whether
+D2's player-count promise is kept or the GDD amended to match what shipped.

@@ -1,0 +1,86 @@
+# P7 parity tracker: close the gap to the benchmark games
+
+Authority: Luke, 2026-07-30, "update that documentation and set that as a goal",
+against the rewritten parity analysis in docs/design/24-classic-parity-roadmap.md.
+That document is the ANALYSIS; this file is the PLAN, and it is the resume point
+if a session dies.
+
+**This phase is not like P6.** Every P6 wave could be made hash-neutral or
+carried a single sanctioned regeneration, so waves could be picked up in any
+order. Nothing in P7 is hash-neutral: every row below is a sim or catalogue
+change that moves goldens. That is the argument for sequencing rather than
+picking items off, and it is why the ordering column exists.
+
+Standing law per wave, unchanged from P6: full battery exit 0, goldens measured
+and not assumed, an ADR where a hash moves, a gate that proves the behaviour,
+tracker updated, PR with green CI on both platforms.
+
+## Ordering principle
+
+Rows are ordered by PLAY IMPACT per unit of work, not by list position in doc 24.
+A defect that makes one faction unable to defend outranks a feature nobody has
+asked for. Whole missing systems outrank roster breadth, because a missing
+system removes a category of decision while a missing unit removes an option.
+
+| # | Row | Doc 24 | Blocked on | Hash | Status |
+|---|-----|--------|-----------|------|--------|
+| P7-1 | The Sodality has no base defence: `dir_turret` is the only defensive structure and is faction-locked | B1 | Luke: confirm it is a defect, not intent | catalogue: MOVES | **PENDING - recommended first** |
+| P7-2 | Defensive variety: a second and third defence type so defence can answer what attacks it | B1 | P7-1 first; then Balance co-sign (A11) | MOVES | pending |
+| P7-3 | Transports: one carrier unit | A2 | ADR | MOVES | pending |
+| P7-4 | The air layer: airfield, one strike aircraft, one anti-air answer | A1 | ADR + art (C5) | MOVES | pending |
+| P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | Q017 (Luke's roster call) | MOVES | pending |
+| P7-6 | Storage and a credit ceiling (silo) | B2 | Balance co-sign | MOVES | pending |
+| P7-7 | Infiltration: one unit that takes information or credits | B5 | design note; brushes Q017 | MOVES | pending |
+| P7-8 | More than two player seats | D2 | **Producer sign-off**: sim change to PlaceSkirmishStart plus multi-start maps | MOVES | pending |
+| P7-9 | Campaign missions 4 to 6 | D1 | Q012/Q016 (win/loss semantics) first | data only, MOVES | pending |
+| P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
+| P7-11 | Hero unit, mines, support infantry | B3/B4/B6 | Producer: roster additions | MOVES | pending |
+
+Out of scope until a GDD amendment with Producer sign-off: naval, FMV briefings,
+crates, a map editor. Recorded in doc 24 so the comparison stays honest.
+
+## Why P7-1 leads
+
+It is the only row that is a DEFECT rather than a feature. `data/buildings/dir_turret.yaml`
+declares `faction: directorate` and is the only defensive structure in the
+catalogue, so a Sodality player cannot build base defence at all. Nothing in the
+GDD says that, doc 15's faction bible does not claim it, and no ADR records it as
+a decision. It is small, it is provable, and it is the kind of thing that reads
+as a balance mystery until somebody looks at the file.
+
+It needs one word from Luke before it is touched, because there is a reading in
+which it IS intent - a faction whose doctrine is raiding might be meant to have
+no static defence - and that reading would make the fix a design change rather
+than a repair.
+
+## What this phase does NOT do
+
+It does not chase the unit counts in doc 24's table. Thirteen units against
+twenty or thirty is a real gap, but parity by headcount is the wrong target: the
+benchmarks' rosters carried duplicated roles, and this project has spent P6
+building things they never had. The goal is that no CATEGORY of decision is
+missing, not that the lists are the same length.
+
+## Prerequisites carried from P6
+
+These block rows above and are not P7's to solve:
+
+- **Q017**, the faction-identity sequencing question, blocks P7-5.
+- **Q014**, the second-resource question, is unrelated to parity and stays in P6.
+- **ADR-027**, the crowd-aware movement decision, blocks nothing here directly
+  but distorts every AI-vs-AI measurement any of these rows would be judged by,
+  so it should be answered before P7-2's balance work.
+- **Q012/Q016**, win and loss semantics, block P7-9.
+
+## Changed / Assumed / Needed next
+
+**Changed.** New file: the plan doc 24's analysis asks for.
+
+**Assumed.** That "set that as a goal" means the parity gap becomes the project's
+next phase after P6's remaining decision-gated rows, not that P6 is abandoned.
+P6's tracker stays authoritative for its own rows.
+
+**Needed next, and from whom.** Luke, three decisions, in this order: is P7-1 a
+defect or intent; does the air layer or transport lead Tier A; and is D2's
+player-count promise kept or the GDD amended to match what shipped. The first
+unblocks a small fix immediately; the other two decide the shape of the phase.
