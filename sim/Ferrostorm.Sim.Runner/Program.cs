@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
 //   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
@@ -4545,6 +4546,102 @@ int SizeProbe()
     return 0;
 }
 
+int InfiltratorGate()
+{
+    // P7-7. Additive, the factiondefencegate pattern: a standalone mode and a
+    // Match battery stage, never a golden scenario, so the golden list stays 24.
+    const int Infil = World.InfiltratorUnitType, Engineer = World.EngineerUnitType;
+
+    (World W, int Spy, int Vault) Setup(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int vault = w.SpawnRefinery(1, 30, 20);
+        w.GrantCredits(1, 5000);
+        var d = w.GetUnitType(Infil);
+        int spy = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp,
+                              d.Armour, 0, veterancy: false, unitType: Infil);
+        return (w, spy, vault);
+    }
+
+    // --- 1. It steals, the victim loses exactly what the thief gains, and the
+    //        act consumes it. Conservation is asserted because an economy tool
+    //        that MINTS credits rather than moving them is a different and much
+    //        worse feature.
+    {
+        var (w, spy, vault) = Setup(3300);
+        long theirs = w.Credits(1), mine = w.Credits(0);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, vault) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 60 && w.Entities[spy].Alive; t++) w.Step(default);
+        long taken = w.Credits(0) - mine;
+        if (taken <= 0) return Fail($"infiltrator: it must actually steal (gained {taken})");
+        if (theirs - w.Credits(1) != taken)
+            return Fail($"infiltrator: credits must MOVE, not appear - victim lost {theirs - w.Credits(1)}, thief gained {taken}");
+        if (w.Entities[spy].Alive)
+            return Fail("infiltrator: the act must consume the thief, as capture consumes an engineer");
+    }
+
+    // --- 2. It is a ROBBERY, not a capture. Conflating them would hand the
+    //        Sodality a second engineer instead of a different tool, which is
+    //        the opposite of what the identity pillar needs.
+    {
+        var (w, spy, vault) = Setup(3301);
+        int hp = w.Entities[vault].Hp;
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, vault) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 60 && w.Entities[spy].Alive; t++) w.Step(default);
+        if (w.Entities[vault].PlayerId != 1)
+            return Fail("infiltrator: the building must STAY the victim's - this is a robbery, not a capture");
+        if (w.Entities[vault].Hp != hp)
+            return Fail("infiltrator: the building must be unharmed - the thief is not a demolition charge");
+    }
+
+    // --- 3. A share, not a flat sum: robbing a rich enemy is worth more than
+    //        robbing a poor one, which is what makes it economy DENIAL rather
+    //        than a fixed bounty.
+    {
+        var (wRich, spyR, vaultR) = Setup(3302);
+        var (wPoor, spyP, vaultP) = Setup(3303);
+        wPoor.GrantCredits(1, -4000);   // same fixture, a fifth of the treasury
+        long rich0 = wRich.Credits(0), poor0 = wPoor.Credits(0);
+        foreach (var (w, spy, vault) in new[] { (wRich, spyR, vaultR), (wPoor, spyP, vaultP) })
+        {
+            var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, vault) };
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+            for (int t = 0; t < 60 && w.Entities[spy].Alive; t++) w.Step(default);
+        }
+        long tookRich = wRich.Credits(0) - rich0, tookPoor = wPoor.Credits(0) - poor0;
+        if (tookRich <= tookPoor)
+            return Fail($"infiltrator: the haul must scale with the victim's treasury ({tookRich} from the rich, "
+                        + $"{tookPoor} from the poor) - a flat sum would not punish hoarding");
+    }
+
+    // --- 4. The engineer is UNCHANGED. The contact system was generalised to
+    //        carry both, and a generalisation that quietly altered the older
+    //        behaviour would be a regression wearing a refactor's clothes.
+    {
+        var w = new World(3304, 64, 64, players: 2);
+        int plant = w.SpawnPowerPlant(1, 30, 20);
+        var d = w.GetUnitType(Engineer);
+        int eng = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp,
+                              d.Armour, 0, veterancy: false, unitType: Engineer);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, plant) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 60 && w.Entities[eng].Alive; t++) w.Step(default);
+        if (w.Entities[plant].PlayerId != 0)
+            return Fail("infiltrator: generalising the contact system must leave CAPTURE working");
+        if (w.Entities[eng].Alive)
+            return Fail("infiltrator: capture must still consume the engineer");
+    }
+
+    Console.WriteLine("infiltratorgate: the Infiltrator steals a share of the victim's treasury and the credits MOVE "
+                      + "rather than appear; the building stays the victim's and unharmed, so it is a robbery and not "
+                      + "a second capture; the haul scales with the target's wealth, which is economy denial rather "
+                      + "than a bounty; and the engineer's capture is untouched by the generalisation");
+    return 0;
+}
+
 int FactionDefenceGate()
 {
     // P7-2b. Additive, the airgate pattern: a standalone mode and a Match
@@ -5675,6 +5772,9 @@ int Match(ulong seed)
     // P7-2b: each side's own defence, held to written doctrine.
     int fdef = FactionDefenceGate();
     if (fdef != 0) return fdef;
+    // P7-7: the Infiltrator robs rather than captures.
+    int infil = InfiltratorGate();
+    if (infil != 0) return infil;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6527,6 +6627,7 @@ return args.Length == 0
         "transportgate" => TransportGate(),
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
+        "infiltratorgate" => InfiltratorGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),

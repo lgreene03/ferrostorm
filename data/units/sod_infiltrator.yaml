@@ -1,0 +1,25 @@
+# P7-7. Written doctrine, not invention: GDD s7 names an "Infiltrator (steals
+# intel/credits)" in the Sodality's roster, and GDD s3 gives that faction
+# "capture and sabotage tools" and an economy that is "raid-dependent".
+# Doc 24 B5 recorded the gap it fills - the game had stealth and detection,
+# which is half of information warfare, and nothing that STOLE.
+# Cloaked and unarmed. It walks into an enemy refinery and walks out with a
+# share of their treasury, and the act consumes it exactly as capture consumes
+# an engineer - the classic trade of a unit for a swing in tempo.
+id: sod_infiltrator
+name: Infiltrator
+faction: sodality
+tier: 2
+cost: 700
+build_time_ticks: 150
+hp: 90
+armour_class: none
+speed: 20
+role: support
+weapon_ids: []
+sight_range: 5
+stealth: true
+detector: false
+produced_at: com_barracks
+prerequisites: [com_radar_uplink]
+veterancy_enabled: false

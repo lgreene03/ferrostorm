@@ -106,7 +106,12 @@ anti-armour against anti-air, and doc 27's balance work already measured that
 static defence cannot hold. Neither side has a distinctive defensive structure.
 That is P7-2, and it is breadth rather than a defect.
 
-**B2. No storage, so the economy has no ceiling.** The benchmarks capped credits
+**B2. No storage, so the economy has no ceiling. NOT TAKEN, and deliberately.**
+GDD s4 specifies the economy in full - resource, harvester, refinery, design
+intent, secondary income - and says nothing about storage, a cap or overflow. A
+ceiling would change the "float at 2 refineries / 3 harvesters" intent the GDD
+DOES specify, which makes it a GDD-silent mechanic in the same category as
+crates and the map editor: Producer sign-off, not a judgement call. The benchmarks capped credits
 and made silos a real decision, with overflow lost. There is no silo and no cap
 here, so banking is free and there is never a reason not to hoard.
 
@@ -116,7 +121,11 @@ repair vehicle covers part of the mechanic's role; nothing covers the rest.
 **B4. No hero unit.** Each benchmark had one, and it carried a disproportionate
 share of that game's character.
 
-**B5. No infiltration.** Ferrostorm has stealth and detection, which is half of
+**B5. Infiltration: HALF DELIVERED (P7-7).** The Sodality's Infiltrator steals
+a share of an enemy treasury and is consumed by the act - the credits MOVE
+rather than appear, and the building is left unharmed and in enemy hands, so it
+is a robbery rather than a second capture. GDD s7 also names a Saboteur
+(disables buildings), which is not built. The original gap read: Ferrostorm has stealth and detection, which is half of
 information warfare. It has nothing that steals, reveals, disables or denies: no
 spy, no thief, no jamming structure. The Sodality's written identity is raiding
 and economy denial, and the roster gives it no tool for the second half of that.
