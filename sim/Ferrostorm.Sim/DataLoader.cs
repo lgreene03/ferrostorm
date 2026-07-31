@@ -318,6 +318,8 @@ public static class StructureCatalogue
         // deferred wall gates, so the free id is past the old ceiling.
         "com_emplacement" => 15,
         "com_airfield" => 16,         // ADR-028
+        "dir_bastion" => 17,          // P7-2b: the Directorate's defence
+        "sod_shroud_nest" => 18,      // P7-2b: the Sodality's
         "com_barracks" => 11,
         "com_radar_uplink" => 12,
         "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
@@ -339,6 +341,8 @@ public static class StructureCatalogue
         9 => EntityKind.Wall,
         15 => EntityKind.Emplacement,   // P7-2
         16 => EntityKind.Airfield,      // ADR-028
+        17 => EntityKind.Bastion,       // P7-2b
+        18 => EntityKind.Emplacement,   // P7-2b: a nest is an emplacement that hides
         11 => EntityKind.Barracks,
         12 => EntityKind.RadarUplink,
         13 => EntityKind.Outpost,   // ADR-021
