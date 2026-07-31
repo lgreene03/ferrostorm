@@ -709,6 +709,11 @@ public sealed partial class World
         15 => new StructureTypeDef(350, EntityKind.Emplacement, 90, Hp: 300, PowerDraw: 10, SightCells: 5, WeaponId: 8, Prereqs: new[] { 1 }),
         // ADR-028: the Airfield, behind the radar uplink (struct type 12).
         16 => new StructureTypeDef(1800, EntityKind.Airfield, 260, Hp: 1100, PowerDraw: 50, SightCells: 6, Prereqs: new[] { 12 }),
+        // P7-2b: the faction defences, both from written GDD s3 doctrine - the
+        // Directorate's buildings are "tough but expensive", the Sodality has
+        // "cloaked units AND structures".
+        17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate),
+        18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
@@ -761,7 +766,7 @@ public sealed partial class World
     // free despite the gap in the id map: it is GateStructType, reserved by
     // ADR-005 for the deferred wall gates, and SeedStructureTypes skips it.
     // Taking it would have silently collided with C6b the day it lands.
-    public const int MaxStructType = 16;   // ADR-028 raised it for the Airfield
+    public const int MaxStructType = 18;   // P7-2b raised it for the two faction defences
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -1081,6 +1086,28 @@ public sealed partial class World
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 16,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>P7-2b: the Directorate's Bastion and the Sodality's Shroud
+    /// Nest. One spawner for both, taking the struct type, because they differ
+    /// only in their def and their cloak - writing two near-identical methods
+    /// is how the pair drifts apart later.</summary>
+    public int SpawnFactionDefence(int player, int structType, int ax, int ay)
+    {
+        var def = GetStructureType(structType);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = def.Kind,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = structType,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+            // GDD s3: the Sodality's structures cloak. CanTarget and the
+            // decloak-on-firing rule are already entity-level, so a stealthed
+            // STRUCTURE inherits both halves with no new machinery.
+            Stealth = def.Faction == FactionSodality,
         });
     }
 
@@ -1641,8 +1668,15 @@ public sealed partial class World
                     case EntityKind.Refinery: SpawnRefinery(c.PlayerId, ax, ay); break;
                     case EntityKind.ConstructionYard: SpawnConstructionYard(c.PlayerId, ax, ay); break;
                     case EntityKind.Turret: SpawnTurret(c.PlayerId, ax, ay); break;
-                    case EntityKind.Emplacement: SpawnEmplacement(c.PlayerId, ax, ay); break;   // P7-2
+                    case EntityKind.Emplacement:
+                        if (c.AuxId == 18) SpawnFactionDefence(c.PlayerId, 18, ax, ay);
+                        else SpawnEmplacement(c.PlayerId, ax, ay);
+                        break;   // P7-2 / P7-2b
                     case EntityKind.Airfield: SpawnAirfield(c.PlayerId, ax, ay); break;         // ADR-028
+                    // P7-2b: routed by STRUCT TYPE rather than kind, because the
+                    // Shroud Nest shares EntityKind.Emplacement with the common
+                    // one and only its type tells them apart.
+                    case EntityKind.Bastion: SpawnFactionDefence(c.PlayerId, 17, ax, ay); break;
                     case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay); break;
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;

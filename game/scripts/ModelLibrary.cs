@@ -29,6 +29,7 @@ public partial class ModelLibrary : Node
         // P7-2: EntityKind.Emplacement (15) takes the turret model as an
         // interim, the ADR-019 precedent; a bespoke model is owed to art.
         { 15, "dir_turret" },
+        { 16, "dir_turret" },   // P7-2b: Bastion, interim model
         // ADR-028: interim models, the ADR-019 precedent. Bespoke ones owed to art.
         { 14, "com_factory" },
         { 3, "ferrite_cluster" },

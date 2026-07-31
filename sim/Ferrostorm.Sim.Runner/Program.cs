@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
 //   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
 //   emplacementgate    - P7-2: the Emplacement beats infantry and LOSES to armour, so defence is a choice; and it obeys the power gate
@@ -4544,6 +4545,87 @@ int SizeProbe()
     return 0;
 }
 
+int FactionDefenceGate()
+{
+    // P7-2b. Additive, the airgate pattern: a standalone mode and a Match
+    // battery stage, never a golden scenario, so the golden list stays 24.
+    //
+    // Both defences are written GDD s3 doctrine rather than invention - the
+    // Directorate's buildings are "tough but expensive", the Sodality has
+    // "cloaked units AND structures" - and this gate holds them to it. A pair
+    // that differed only in cost would be two turrets with a price tag.
+    const int Bastion = 17, Nest = 18, Turret = 5;
+
+    // --- 1. Each side can build its own and NOT the other's. This is the
+    //        first row in the game where that is true of a defence at all.
+    {
+        var w = new World(3200, 64, 64, players: 2);
+        if (!w.StructureAllowedForFaction(Bastion, World.FactionDirectorate))
+            return Fail("faction defence: the Directorate must be able to build its Bastion");
+        if (w.StructureAllowedForFaction(Bastion, World.FactionSodality))
+            return Fail("faction defence: the Bastion is the Directorate's and the Sodality must NOT have it");
+        if (!w.StructureAllowedForFaction(Nest, World.FactionSodality))
+            return Fail("faction defence: the Sodality must be able to build its Shroud Nest");
+        if (w.StructureAllowedForFaction(Nest, World.FactionDirectorate))
+            return Fail("faction defence: the Nest is the Sodality's and the Directorate must NOT have it");
+    }
+
+    // --- 2. The Bastion is what the doctrine says: tougher than the common
+    //        turret by a wide margin, and dearer. Asserted as a RATIO rather
+    //        than a literal, so a balance pass can move the numbers without
+    //        silently turning the Directorate's identity into a reskin.
+    {
+        var w = new World(3201, 64, 64, players: 2);
+        var bast = w.GetStructureType(Bastion);
+        var turr = w.GetStructureType(Turret);
+        if (bast.Hp < turr.Hp * 3)
+            return Fail($"faction defence: 'tough but expensive' needs the Bastion far tougher than a turret "
+                        + $"({bast.Hp} vs {turr.Hp})");
+        if (bast.Cost <= turr.Cost)
+            return Fail("faction defence: 'tough but expensive' means EXPENSIVE - a tougher, cheaper building is "
+                        + "not a trade");
+    }
+
+    // --- 3. The Nest is genuinely CLOAKED, which is the Sodality's whole
+    //        identity and the half that needed no new machinery: CanTarget and
+    //        the decloak-on-firing rule are already entity-level, so a
+    //        stealthed structure inherits both.
+    {
+        var w = new World(3202, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int nest = w.SpawnFactionDefence(0, Nest, 20, 20);
+        if (!w.Entities[nest].Stealth)
+            return Fail("faction defence: the Shroud Nest must be cloaked - GDD s3 says 'cloaked units AND structures'");
+        var bastion = w.SpawnFactionDefence(1, Bastion, 40, 40);
+        if (w.Entities[bastion].Stealth)
+            return Fail("faction defence: the Bastion must NOT be cloaked - it is a wall, not an ambush");
+    }
+
+    // --- 4. And it DECLOAKS when it fires, which is the GDD's own stealth
+    //        rule and the reason the cloak is fair. An ambush that stays hidden
+    //        while shooting is not an ambush, it is an invisible turret.
+    {
+        var w = new World(3203, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int nest = w.SpawnFactionDefence(0, Nest, 20, 20);
+        w.SpawnPowerPlant(0, 30, 30, supply: 500);
+        var d = w.GetUnitType(2);
+        w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(20), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                    veterancy: false, unitType: 2);
+        bool revealed = false;
+        for (int t = 0; t < 400 && !revealed; t++) { w.Step(default); revealed = w.Entities[nest].RevealTicks > 0; }
+        if (!revealed)
+            return Fail("faction defence: the Nest must decloak when it fires - a cloak that survives firing is "
+                        + "an invisible turret, and the GDD's stealth rule says every stealth tool has a counter");
+    }
+
+    Console.WriteLine("factiondefencegate: each side builds its OWN defence and not the other's - the first time that "
+                      + "is true in this game; the Directorate's Bastion is far tougher and dearer than a turret, as "
+                      + "'tough but expensive' requires; and the Sodality's Shroud Nest is genuinely cloaked and "
+                      + "DECLOAKS when it fires, which is the GDD's own stealth rule inherited with no new machinery");
+    return 0;
+}
+
 int AirGate()
 {
     // ADR-028 (P7-4). Additive, the transportgate pattern: a standalone mode and
@@ -5590,6 +5672,9 @@ int Match(ulong seed)
     // ADR-028: the air layer, and the answer it is bound to.
     int air = AirGate();
     if (air != 0) return air;
+    // P7-2b: each side's own defence, held to written doctrine.
+    int fdef = FactionDefenceGate();
+    if (fdef != 0) return fdef;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6441,6 +6526,7 @@ return args.Length == 0
         "emplacementgate" => EmplacementGate(),
         "transportgate" => TransportGate(),
         "airgate" => AirGate(),
+        "factiondefencegate" => FactionDefenceGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),

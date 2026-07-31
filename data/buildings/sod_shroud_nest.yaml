@@ -1,0 +1,20 @@
+# P7-2b. The Sodality's defence, and it is also written doctrine: GDD s3 gives
+# the Sodality "cloaked units AND STRUCTURES" in as many words. The Shroud Nest
+# is a cheap hidden hardpoint that an attacker does not see until it fires.
+# It obeys the GDD's own stealth rule without needing new machinery - "cloaked
+# units decloak on firing and near detectors" is already entity-level in the
+# sim, so a stealthed structure inherits both halves.
+# Cheap and fragile on purpose. Against the Directorate's Bastion this is the
+# asymmetry the pillar asks for: one side buys a wall, the other buys an ambush.
+id: sod_shroud_nest
+name: "Shroud Nest"
+faction: sodality
+cost: 400
+build_time_ticks: 110
+hp: 260
+power_supply: 0
+power_draw: 15
+sight_range: 6
+footprint: 2
+weapon_ids: [wpn_emplacement_gun]
+prerequisites: [com_power_plant]

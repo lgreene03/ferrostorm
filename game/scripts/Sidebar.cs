@@ -71,6 +71,11 @@ public partial class Sidebar : PanelContainer
         // ADR-028: the Airfield. Listed under defences because that is where the
         // tech buildings sit; it produces aircraft rather than defending.
         new("AIRFIELD", 16, "com_factory"),
+        // P7-2b: each side's own defence. Both are listed; the faction gate
+        // hides whichever is not yours, which is the mechanism P7-1 made real -
+        // FixedGatesAllow asks the sim, and the sim now reads /data.
+        new("BASTION", 17, "dir_turret"),
+        new("SHROUD NEST", 18, "sod_veil_projector"),
         // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
         // slot and no build time, so it is never queued at the yard - the button
         // enters placement directly and the treasury is charged per segment as

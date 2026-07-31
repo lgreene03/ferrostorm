@@ -90,6 +90,12 @@ Both sides could always build the turret. P7-1 fixed the mechanism - the side no
 comes from /data - and declared the turret and superweapon `common`, which
 preserves what play always did.
 
+P7-2b then gave each SIDE its own defence - the Directorate's Bastion (tough
+and dear, GDD s3's "buildings are tough but expensive") and the Sodality's
+Shroud Nest (cloaked, GDD s3's "cloaked units AND structures", decloaking when
+it fires per the same section's stealth rule). It is the first row in the game
+where a faction can build something the other cannot, beyond the Veil.
+
 P7-2 added the first of the missing legs: the Emplacement, anti-infantry,
 cheap, and deliberately WORSE against armour than the turret is - measured at
 32 ticks against a rifle squad where the turret takes 91, and 632 against
