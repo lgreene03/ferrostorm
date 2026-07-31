@@ -80,7 +80,11 @@ Both sides could always build the turret. P7-1 fixed the mechanism - the side no
 comes from /data - and declared the turret and superweapon `common`, which
 preserves what play always did.
 
-What remains true is the part that matters: ONE turret type cannot express the
+P7-2 added the first of the missing legs: the Emplacement, anti-infantry,
+cheap, and deliberately WORSE against armour than the turret is - measured at
+32 ticks against a rifle squad where the turret takes 91, and 632 against
+armour where the turret takes 143. Defence is now a choice rather than a
+ladder. What remains true is the rest: ONE more type cannot express the
 rock-paper-scissors the benchmarks built defence around, anti-infantry against
 anti-armour against anti-air, and doc 27's balance work already measured that
 static defence cannot hold. Neither side has a distinctive defensive structure.

@@ -62,6 +62,12 @@ public partial class Sidebar : PanelContainer
     private static readonly BuildItem[] Defences =
     {
         new("TURRET", 5, "dir_turret"),
+        // P7-2: the anti-infantry hardpoint. Listed next to the turret because
+        // the two ARE the choice - the turret answers armour, this answers
+        // infantry, and a player should see them together. It wears the
+        // turret's model for now; a bespoke one is owed to art-pipeline, the
+        // same interim the repair vehicle took (ADR-019).
+        new("EMPLACEMENT", 15, "dir_turret"),
         // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
         // slot and no build time, so it is never queued at the yard - the button
         // enters placement directly and the treasury is charged per segment as

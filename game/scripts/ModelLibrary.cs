@@ -26,6 +26,9 @@ public partial class ModelLibrary : Node
         { 1, "com_harvester" }, { 2, "com_refinery" }, { 4, "com_power_plant" },
         { 5, "com_factory" }, { 6, "com_construction_yard" }, { 7, "dir_turret" },
         { 8, "dir_superweapon" }, { 9, "sod_veil_projector" }, { 10, "com_service_depot" },
+        // P7-2: EntityKind.Emplacement (15) takes the turret model as an
+        // interim, the ADR-019 precedent; a bespoke model is owed to art.
+        { 15, "dir_turret" },
         { 3, "ferrite_cluster" },
         // 12 = Barracks (ADR-009 clause 5). No com_barracks.glb exists yet, so
         // it takes the established interim: the service depot, chosen over the

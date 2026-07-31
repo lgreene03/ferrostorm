@@ -61,6 +61,11 @@ public static class Weapons
     // Vanguard autocannon (TICKET-P4-SLICE-01): a fast-cycling anti-infantry
     // gun - the per-cost edge over massed rifles that justifies the car.
     public static readonly WeaponDef VanguardGun = new(Fix64.FromInt(3), 18, Warhead.AntiInfantry, 6);
+    // P7-2: the Emplacement's gun. Range 4 deliberately OUT-RANGES the service
+    // rifle's 3, because a defence that must be walked into by the thing it
+    // counters is not a counter. Anti-infantry warhead, so armour walks through
+    // it and the rock-paper-scissors is real rather than a damage number.
+    public static readonly WeaponDef EmplacementGun = new(Fix64.FromInt(4), 22, Warhead.AntiInfantry, 7);
 
     public static WeaponDef Get(int id) => id switch
     {
@@ -71,6 +76,7 @@ public static class Weapons
         5 => Howitzer,
         6 => BulwarkCannon,
         7 => VanguardGun,
+        8 => EmplacementGun,
         _ => None,
     };
 }
