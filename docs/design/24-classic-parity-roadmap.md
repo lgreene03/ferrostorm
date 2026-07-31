@@ -58,11 +58,16 @@ that answers them. `EntityKind.Airfield` exists in the sim enum and the skirmish
 AI already lists it among its wave targets, so the shape was anticipated and
 never filled. Tracked as C5; needs an ADR and art.
 
-**A2. Transport.** None of any kind - no armoured carrier, no transport
-helicopter, no landing craft. This removes a family of play the benchmarks
-leaned on: the engineer delivered under fire, the infantry force that arrives
-somewhere unexpected, the retreat that saves an army. It is cheaper than A1
-because it needs no new dimension, only a unit that carries.
+**A2. Transport. DELIVERED (P7-3).** The Carrier: unarmed, carries five, and
+what it carries is a data question rather than a hardcoded list - anything the
+barracks produces, which includes the engineer, so the classic delivery gambit
+is now possible. A carried unit is DESPAWNED rather than flagged, because a
+live-but-skipped entity would have to be remembered by movement, combat,
+separation, selection and drawing, and this phase has already been bitten three
+times by exactly that kind of enumeration. A destroyed carrier takes its cargo
+with it, so the hold is not somewhere to hide an army. Save format v9 carries
+the hold; without it a player who saved with troops aboard would have loaded to
+find them gone.
 
 **A3. Naval.** Absent entirely, and out of scope by standing decision (below).
 Recorded because skirmish-08 now puts two seas on a map with nothing on them, so

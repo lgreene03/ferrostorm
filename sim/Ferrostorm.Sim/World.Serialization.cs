@@ -61,12 +61,13 @@ public sealed partial class World
     private const uint SaveMagicV6 = 0x534C4136; // v6 adds the no-progress backstop state (Q013, ADR-014)
     private const uint SaveMagicV7 = 0x534C4137; // v7 adds the per-entity command stance tail (ADR-015)
     private const uint SaveMagicV8 = 0x534C4138; // v8 adds the second build lane block (ADR-023)
+    private const uint SaveMagicV9 = 0x534C4139; // v9 adds the transport cargo block (P7-3)
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV8);
+        w.Write(SaveMagicV9);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -131,6 +132,23 @@ public sealed partial class World
             w.Write(l.Queue.Count);
             foreach (int t in l.Queue) w.Write(t);
         }
+        // P7-3 (v9): what each transport is carrying, sorted by transport id
+        // for the same reason the lanes and queues are - dictionary iteration
+        // order must never leak into a serialized artefact. Written
+        // unconditionally as a count, so the format stays strictly positional
+        // and a world with no transport costs four bytes. Without this block a
+        // player who saved with troops aboard would load to find them gone,
+        // which is data loss rather than a missing feature.
+        var carriers = new List<int>(_cargo.Keys);
+        carriers.Sort();
+        w.Write(carriers.Count);
+        foreach (int id in carriers)
+        {
+            var hold = _cargo[id];
+            w.Write(id);
+            w.Write(hold.Count);
+            foreach (var cu in hold) { w.Write(cu.UnitType); w.Write(cu.Hp); w.Write(cu.Rank); }
+        }
         w.Write(SaveTrailer);
     }
 
@@ -155,7 +173,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -164,14 +182,20 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8;
-        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8; // ADR-015: v7+ entities carry the command stance tail
-        bool hasBuildLanes = magic == SaveMagicV8; // ADR-023: v8 adds the second build lane block
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9; // ADR-015: v7+ entities carry the command stance tail
+        // P7-3: every version from v8 ONWARD carries the lane block, not v8
+        // alone. Written as an equality it silently skipped the block on a v9
+        // save and the reader then fell out of step with the writer, which
+        // surfaced as "save truncated or corrupt" - a version test that names
+        // one version is the same enumeration trap as a rule that names one
+        // kind, and it will bite again at v10 unless it is written as a floor.
+        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9; // ADR-023
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -249,6 +273,26 @@ public sealed partial class World
                 // if a hand-edited file carries it: an inert entry would break
                 // the "present means active" invariant the hash guard rests on.
                 if (!l.Inert) world._lanes[id] = l;
+            }
+        }
+        // P7-3 (v9): the transport holds. A pre-v9 save carries no block and
+        // loads with nothing aboard, which is exactly what those saves meant,
+        // so they resume identically.
+        if (magic == SaveMagicV9)
+        {
+            int carrierCount = r.ReadInt32();
+            for (int i = 0; i < carrierCount; i++)
+            {
+                int id = r.ReadInt32();
+                int n = r.ReadInt32();
+                var hold = new List<CargoUnit>(n);
+                for (int k = 0; k < n; k++)
+                    hold.Add(new CargoUnit(r.ReadInt32(), r.ReadInt32(), r.ReadInt32()));
+                // An empty hold was never written, but refuse to resurrect one
+                // from a hand-edited file: an empty entry would break the
+                // "present means carrying" invariant the hash guard rests on,
+                // the same reason an inert lane is refused above.
+                if (hold.Count > 0) world._cargo[id] = hold;
             }
         }
         if (r.ReadUInt32() != SaveTrailer) throw new InvalidDataException("save truncated or corrupt");

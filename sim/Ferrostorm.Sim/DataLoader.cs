@@ -268,6 +268,7 @@ public static class UnitCatalogue
         "com_engineer" => 11,
         "dir_vanguard_car" => 12,
         "com_repair_vehicle" => 13,   // ADR-019 (P6 Wave C2)
+        "com_carrier" => 14,          // P7-3: the transport
         _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 

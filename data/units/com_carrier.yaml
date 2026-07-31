@@ -1,0 +1,26 @@
+# P7-3. The transport, and the first unit in the game that exists to move OTHER
+# units. The benchmark games leaned on this: the engineer delivered under fire,
+# the infantry force that arrives somewhere unexpected, the retreat that saves
+# an army. None of those plays was possible here at all.
+# Unarmed on purpose. A transport that fights is a light tank that happens to
+# carry, and deciding whether to escort it is the whole point.
+# What it carries is a DATA question rather than a hardcoded list: anything the
+# barracks produces fits, which includes the engineer, and that is the classic
+# gambit doc 24 named as missing.
+id: com_carrier
+name: "Carrier"
+faction: common
+tier: 2
+cost: 600
+build_time_ticks: 140
+hp: 350
+armour_class: light
+speed: 22
+role: support
+weapon_ids: []
+sight_range: 6
+stealth: false
+detector: false
+produced_at: com_factory
+prerequisites: [com_barracks]
+veterancy_enabled: false
