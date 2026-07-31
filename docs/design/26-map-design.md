@@ -153,6 +153,31 @@ start is identical; and that terrain density sits inside 8 to 10 percent, below
 which the map reads as empty and above which pathing and the draw-call budget
 suffer. A bad edit fails in the generator, not in a match.
 
+**A MISSION map is generated too, and proves different things** (ADR-029). The
+rule above is that a map comes from a committed script; the reason given for it,
+rotation symmetry, is a SKIRMISH reason. A campaign mission is asymmetric on
+purpose - the player and the scripted enemy are not meant to be evenly matched,
+and a mirrored mission would be a skirmish with dialogue. So `symmetric=False`
+drops the checks that are about fairness between two starts (rotation symmetry,
+the ferrite and outpost distance profiles, the start-separation guard, none of
+which have a second start to speak about) and keeps every check that is about
+the map being playable: aprons open, density in band, reachability. It adds two
+that a skirmish map does not need. Every cell the script sends the player to
+must be walkable from the start, because a mission whose objective sits behind a
+sealed ridge is unwinnable and would only be found by playing it. And every
+authored `unit` and `structure` line is parsed back and proved to stand on open
+ground, which is the thing a hand-typed mission gets wrong. Where a mission
+marks crossings, the load-bearing proof is restated as "close them and the
+OBJECTIVE becomes unreachable" rather than "the two starts fall apart".
+
+Both additions caught a defect on their first run: a tank standing on a ferrite
+patch, and a river that was not a river, its centre function snapping back
+fifteen cells at the period boundary and leaving a corridor straight through
+itself. That is the argument of this section, made once more and not by
+assertion. Missions 01 to 03 predate all of this and are still hand-typed 64x48
+grids; bringing them under the generator would move two golden hashes, so it is
+a row of its own rather than a rider.
+
 **The AI must still play.** This is the constraint that makes a hard map
 different from a broken one. Units move by flow field, and a chokepoint the flow
 field cannot path returns minus one and parks the attacking army at home. The

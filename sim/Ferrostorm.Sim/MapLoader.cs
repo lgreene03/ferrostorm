@@ -27,8 +27,15 @@ public readonly record struct MapUnit(int Player, int UnitType, int Cx, int Cy, 
 public readonly record struct MapStructure(int Player, int StructType, int Ax, int Ay, string Tag);
 
 /// <summary>One mission trigger: a condition and an action, fired once (TICKET-P2-SIM-20).
-/// Conditions: elapsed T | destroyed TAG | credits P AMOUNT | entered P CX CY R.
-/// Actions: grant P AMOUNT | spawn P UNITTYPE CX CY COUNT | win P | message ID.</summary>
+/// Conditions: elapsed T | destroyed TAG | credits P AMOUNT | entered P CX CY R
+///             | owned TAG P | eliminated P.
+/// Actions: grant P AMOUNT | spawn P UNITTYPE CX CY COUNT | win P | message ID
+///          | assault P CX CY.
+/// One condition per trigger, no conjunction: to express "A and B", tag the
+/// entities so a single condition covers both, or state the mission so it does
+/// not need one. Triggers evaluate in FILE ORDER and DeclareWinner latches the
+/// first call, so where a win and a defeat can come true on the same tick, the
+/// one written first is the one that happens.</summary>
 public readonly record struct MapTrigger(string[] When, string[] Do);
 
 public sealed class MapData
@@ -243,7 +250,28 @@ public sealed class MapData
                 // with player -1 (int.Parse accepts it; no format bump, the
                 // reason P5-ECON-14 was chosen over BD-22's new grid char).
                 EntityKind.Outpost => world.SpawnOutpost(st.Player, st.Ax, st.Ay),
-                _ => throw new FormatException($"map structure: unknown struct type {st.StructType}"),
+                // P7-9: the four kinds P7 added. Every one of them was
+                // spawnable, buildable and gated MONTHS before a map could
+                // place one, because this switch is a rule keyed on the KIND
+                // and nothing made adding a kind add an arm - the exact defect
+                // PROD-D7 above records, repeating. It is caught in CI now
+                // rather than by a player: campaigngate loads every mission in
+                // the manifest, so a map placing a kind with no arm here fails
+                // the build.
+                // The Shroud Nest (18) SHARES EntityKind.Emplacement with the
+                // common one (15) - a nest is an emplacement that hides - so
+                // only the struct type tells them apart, exactly as the build
+                // path has to. Keyed on st.StructType rather than on a literal,
+                // which is the one thing the build path does not do.
+                EntityKind.Emplacement => st.StructType == 15
+                    ? world.SpawnEmplacement(st.Player, st.Ax, st.Ay)
+                    : world.SpawnFactionDefence(st.Player, st.StructType, st.Ax, st.Ay),
+                EntityKind.Airfield => world.SpawnAirfield(st.Player, st.Ax, st.Ay),
+                EntityKind.Bastion => world.SpawnFactionDefence(st.Player, st.StructType, st.Ax, st.Ay),
+                _ => throw new FormatException(
+                    $"map structure: struct type {st.StructType} is kind "
+                    + $"{world.GetStructureType(st.StructType).Kind} and has no spawn arm here. "
+                    + "Add one - a new EntityKind is not placeable until it does."),
             };
             Tag(st.Tag, id);
         }

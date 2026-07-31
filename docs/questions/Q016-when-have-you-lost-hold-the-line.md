@@ -1,5 +1,10 @@
 # Q016: when have you LOST mission 03, "Hold the Line"?
 
+**ANSWERED AND CLOSED, 2026-08-01: option 1, and it needed a new trigger
+condition rather than the obvious fix.** Decided under the standing P7 directive
+rather than by the game-designer, because it was blocking P7-9. See "The answer"
+at the foot of this file.
+
 Labels: persona:p1, gdd:s8, phase:6, owner:game-designer + producer
 Raised by: client-engineer, while giving mission 02 a defeat path (the same wave).
 Decide-by: before mission-03 acceptance tests are written, which is the same
@@ -70,3 +75,63 @@ Q012 asks whether elimination is a legitimate mission win, and fork 2 of that
 question ("a scripted mission's objective is the only win") explicitly requires
 that "the player-loss path must be re-specified explicitly" - which is this
 question for mission 03. Answer Q012 first if the two are taken together.
+
+
+## The answer
+
+**Option 1: you have lost when you hold nothing that counts as being in the
+game** - which is to say, when the sim's own elimination predicate is true of
+you.
+
+Option 3 (the forward position specifically) is still the better mission and
+still not mine to take: it changes what mission 03 IS, from a survival timer
+into a hold objective. Option 2 needs a conjunction the trigger vocabulary does
+not have. Option 1 is the one that invents nothing.
+
+### The obvious fix does not work, and this is why it needed a condition
+
+The tempting reading of option 1 is "just stop suppressing short game". It
+cannot be done: **player 1 in mission 03 owns no structures at all.** It is a
+wave-spawning attacker with nothing but the units the triggers give it. Turn
+short game back on and the sim eliminates the ATTACKER on tick 0 and hands the
+player an instant win. `rules noshortgame` is load-bearing, and this is the
+general case rather than a quirk of one mission - missions 04 and 06 set it too.
+
+So the mission has to be able to STATE its own defeat, and the vocabulary had
+nothing that could. The new condition is `eliminated P`, and the one thing that
+matters about it is that it does not restate the rule:
+
+```
+"eliminated" => !w.HasHope(I(cond[1])),
+```
+
+`World.HasHope` is the elimination predicate, extracted from inside
+`VictorySystem` where it had been inlined, and now asked by both. A campaign
+defeat therefore cannot drift from a skirmish one, and the ADR-005 clause 2
+barrier exclusion and the ADR-021 outpost exclusion are inherited rather than
+re-typed. Restating it would have been the eighth instance this phase of this
+project's most common defect: a rule written twice and then only fixed once.
+
+### Trigger order is load-bearing, exactly as this file warned
+
+The defeat is written BELOW the win in every mission that has both. On the tick
+where a player both survives to 4200 and loses their last building, they have
+held the line. `MissionRunner` evaluates in file order and `DeclareWinner`
+latches the first call, so file order is the tie-break - the same property
+mission 02 depends on, now depended upon deliberately rather than by luck.
+
+### What changed
+
+- `World.HasHope(int)` and `World.IsHope(in Entity)`: the predicate, extracted.
+- `MissionRunner`: the `eliminated P` condition.
+- `mission-03.fmap`: `eliminated 0 -> the_line_broke`, `win 1`. The mission that
+  ran forever now ends.
+- Missions 04 and 06, written after this answer, use it from the start. Mission
+  06 uses it in BOTH directions, so the finale owns its whole ending.
+- `campaigngate` stages 3 and 4 assert it: for each noshortgame mission, erase
+  the loser's holdings and require a declared winner and a message. The gate
+  checks `ShortGameEnabled` is actually false first, so the test cannot pass
+  vacuously.
+
+**Measured neutral:** all 24 goldens byte-identical. `MissionRunner` state has
+always lived outside the world hash.

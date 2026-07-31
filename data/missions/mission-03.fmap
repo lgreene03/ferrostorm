@@ -78,3 +78,13 @@ trigger elapsed 2800 -> spawn 1 2 58 24 4
 trigger elapsed 2800 -> assault 1 26 24
 trigger elapsed 4200 -> message the_line_held
 trigger elapsed 4200 -> win 0
+# Q016 answered: option 1, defeat when the player holds nothing that counts as
+# being in the game. 'rules noshortgame' above is load-bearing and cannot
+# simply be dropped - player 1 owns no structures at all, so short game would
+# eliminate the ATTACKER on tick 0 and hand the player an instant win. So the
+# mission states its own defeat, and 'eliminated' asks the same predicate the
+# short-game rule asks rather than inventing a second answer.
+# Written BELOW the win: on the tick where both come true the player has held
+# the line, and file order is what decides that.
+trigger eliminated 0 -> message the_line_broke
+trigger eliminated 0 -> win 1

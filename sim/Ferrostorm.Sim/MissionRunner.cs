@@ -75,6 +75,12 @@ public sealed class MissionRunner
         "destroyed" => _tags.TryGetValue(cond[1], out var ids)
                        && ids.TrueForAll(id => !w.Entities[id].Alive),
         "entered" => AnyEntityIn(w, I(cond[1]), I(cond[2]), I(cond[3]), I(cond[4])),
+        // Q016: a defeat condition a mission can state for itself. It asks
+        // World.HasHope, the SAME predicate the short-game rule asks, so a
+        // mission that suppresses short game (every one of them does, because
+        // a wave-spawning attacker owns no structures and would be eliminated
+        // at tick 0) still loses on exactly the skirmish terms.
+        "eliminated" => !w.HasHope(I(cond[1])),
         "owned" => _tags.TryGetValue(cond[1], out var owned)
                    && owned.TrueForAll(id => w.Entities[id].Alive && w.Entities[id].PlayerId == I(cond[2])),
         _ => throw new FormatException($"unknown trigger condition '{cond[0]}'"),

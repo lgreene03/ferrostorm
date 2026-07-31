@@ -49,15 +49,18 @@ class Canvas:
     proves it, along with density, reachability, load-bearing crossings and
     ferrite fairness."""
 
-    def __init__(self, w, h, starts, apron=4):
+    def __init__(self, w, h, starts, apron=4, symmetric=True):
         self.w, self.h = w, h
         self.starts = dict(starts)          # {0:(x,y), 1:(x,y)}
         self.apron = apron
+        self.symmetric = symmetric
         self.grid = [['.' for _ in range(w)] for _ in range(h)]
-        # The starts must themselves be a rotation pair, or nothing built on top
-        # of the symmetry can rescue the fairness.
-        assert rot(*self.starts[0], w, h) == self.starts[1], \
-            f"starts {self.starts[0]} and {self.starts[1]} are not a 180-rotation pair"
+        if symmetric:
+            # The starts must themselves be a rotation pair, or nothing built on
+            # top of the symmetry can rescue the fairness.
+            assert len(self.starts) == 2, "a symmetric map has exactly two starts"
+            assert rot(*self.starts[0], w, h) == self.starts[1], \
+                f"starts {self.starts[0]} and {self.starts[1]} are not a 180-rotation pair"
         # Cells the aprons own. Nothing may be stamped into them, so they never
         # have to be re-cleared (which would silently delete a feature).
         self.apron_cells = set()
@@ -80,6 +83,15 @@ class Canvas:
     def inb(self, x, y):
         return 0 <= x < self.w and 0 <= y < self.h
 
+    def _imgs(self, x, y):
+        """The cells a single authored cell stands for. On a symmetric map that
+        is the cell and its rotation image, written together so a pair can never
+        land half-placed; on an asymmetric mission map it is the cell alone.
+        Every mutator goes through this, so the two modes cannot drift."""
+        if not self.symmetric:
+            return ((x, y),)
+        return ((x, y), rot(x, y, self.w, self.h))
+
     # -- rivers -----------------------------------------------------------
     def river(self, centre_fn, halfwidth_fn, vertical=True):
         """Mark a winding river as water. centre_fn(t) and halfwidth_fn(t) take
@@ -99,8 +111,7 @@ class Canvas:
                     cells.add((x, y))
         sym = set()
         for (x, y) in cells:
-            sym.add((x, y))
-            sym.add(rot(x, y, self.w, self.h))
+            sym.update(self._imgs(x, y))
         for (x, y) in sym:
             assert (x, y) not in self.apron_cells, f"river runs through an apron at {(x, y)}"
             self.grid[y][x] = 'w'
@@ -124,8 +135,7 @@ class Canvas:
                 bcells.add((x, y))
         sym = set()
         for (x, y) in bcells:
-            sym.add((x, y))
-            sym.add(rot(x, y, self.w, self.h))
+            sym.update(self._imgs(x, y))
         for (x, y) in sym:
             self.grid[y][x] = 'B'
         self.choke_cells |= sym
@@ -158,16 +168,15 @@ class Canvas:
             for x in range(x0, x0 + dx):
                 if not self.inb(x, y):
                     continue
-                rx, ry = rot(x, y, self.w, self.h)
-                if self.grid[y][x] in 'wB' or self.grid[ry][rx] in 'wB':
+                imgs = self._imgs(x, y)
+                if any(self.grid[iy][ix] in 'wB' for (ix, iy) in imgs):
                     continue
-                if (x, y) in self.apron_cells or (rx, ry) in self.apron_cells:
+                if any(i in self.apron_cells for i in imgs):
                     continue
-                self.grid[y][x] = ch
-                self.grid[ry][rx] = ch
-                if choke:
-                    self.choke_cells.add((x, y))
-                    self.choke_cells.add((rx, ry))
+                for (ix, iy) in imgs:
+                    self.grid[iy][ix] = ch
+                    if choke:
+                        self.choke_cells.add((ix, iy))
 
     def decor(self, x0, y0, dx, dy, ch, fill=1):
         """Dress a dx-by-dy patch and its rotation image with a DECORATIVE
@@ -189,23 +198,21 @@ class Canvas:
                 if fill > 1 and n % fill: continue
                 if not self.inb(x, y):
                     continue
-                rx, ry = rot(x, y, self.w, self.h)
+                imgs = self._imgs(x, y)
                 # Both halves must be free, exactly as stamp() requires, or the
                 # pair lands half-placed and the map stops being symmetric.
-                if self.grid[y][x] != '.' or self.grid[ry][rx] != '.':
+                if any(self.grid[iy][ix] != '.' for (ix, iy) in imgs):
                     continue
-                if (x, y) in self.apron_cells or (rx, ry) in self.apron_cells:
+                if any(i in self.apron_cells for i in imgs):
                     continue
-                self.grid[y][x] = ch
-                self.grid[ry][rx] = ch
+                for (ix, iy) in imgs:
+                    self.grid[iy][ix] = ch
 
     def mark_pass(self, cells):
         """Record open cells as a load-bearing pass through a ridge: validate()
         proves that blocking them disconnects the two starts."""
         for (x, y) in cells:
-            rx, ry = rot(x, y, self.w, self.h)
-            self.choke_cells.add((x, y))
-            self.choke_cells.add((rx, ry))
+            self.choke_cells.update(self._imgs(x, y))
 
     def cluster(self, cx, cy, shape):
         """Place a ferrite field and its rotation image. Both cells of every
@@ -213,12 +220,13 @@ class Canvas:
         and the symmetry, so fail loudly instead."""
         for dx, dy in shape:
             x, y = cx + dx, cy + dy
-            rx, ry = rot(x, y, self.w, self.h)
             assert self.inb(x, y), f"cluster ({cx},{cy}) runs off-map at {(x, y)}"
-            assert self.grid[y][x] == '.', f"cluster cell {(x, y)} is '{self.grid[y][x]}', not open"
-            assert self.grid[ry][rx] == '.', f"cluster cell {(rx, ry)} is '{self.grid[ry][rx]}', not open"
-            self.grid[y][x] = 'F'
-            self.grid[ry][rx] = 'F'
+            imgs = self._imgs(x, y)
+            for (ix, iy) in imgs:
+                assert self.grid[iy][ix] == '.', \
+                    f"cluster cell {(ix, iy)} is '{self.grid[iy][ix]}', not open"
+            for (ix, iy) in imgs:
+                self.grid[iy][ix] = 'F'
 
     def outpost(self, ax, ay):
         """ADR-021: place a neutral capturable Outpost and its rotation image.
@@ -228,8 +236,11 @@ class Canvas:
         of the load-bearing crossings (an outpost is 2x2 and would part-seal a
         pass it stood in). The rotation image of the block anchored at (ax, ay)
         is anchored at rot(ax+1, ay+1), the min corner of the rotated cells."""
-        rax, ray = rot(ax + 1, ay + 1, self.w, self.h)
-        for (bx, by) in ((ax, ay), (rax, ray)):
+        # The rotation image of the 2x2 block anchored at (ax, ay) is anchored
+        # at rot(ax+1, ay+1) - the min corner of the rotated cells.
+        anchors = ((ax, ay), rot(ax + 1, ay + 1, self.w, self.h)) if self.symmetric \
+            else ((ax, ay),)
+        for (bx, by) in anchors:
             for y in range(by, by + 2):
                 for x in range(bx, bx + 2):
                     assert self.inb(x, y), f"outpost ({bx},{by}) runs off-map at {(x, y)}"
@@ -239,8 +250,9 @@ class Canvas:
                         f"outpost cell {(x, y)} sits in a start apron: a base would own it for free"
                     assert (x, y) not in self.choke_cells, \
                         f"outpost cell {(x, y)} sits on a load-bearing crossing"
-        assert (ax, ay) != (rax, ray), "an outpost placed on the map centre is its own mirror"
-        self.outposts.extend([(ax, ay), (rax, ray)])
+        if self.symmetric:
+            assert len(set(anchors)) == 2, "an outpost placed on the map centre is its own mirror"
+        self.outposts.extend(anchors)
 
     # -- proof ------------------------------------------------------------
     def _flood(self, sx, sy, grid=None):
@@ -256,7 +268,13 @@ class Canvas:
                     q.append((nx, ny))
         return seen
 
-    def validate(self, expected_fields, density_range, min_separation=None):
+    def validate(self, expected_fields, density_range, min_separation=None, objectives=()):
+        """Prove the map. `objectives` is the mission-map addition: cells every
+        start must be able to walk to. A skirmish map's objectives are implicit
+        (the far start, the ferrite, the aprons) and rotation makes them fair; a
+        mission map has NO far start and no fairness to prove, so what has to be
+        checked instead is that the thing the script tells the player to go and
+        do is somewhere they can actually reach."""
         w, h, grid = self.w, self.h, self.grid
         assert len(grid) == h
         for row in grid:
@@ -276,22 +294,32 @@ class Canvas:
         #    rule now. The default scales with the map rather than being the
         #    literal 75 that suited 96x64, because separation is only meaningful
         #    relative to the ground it crosses.
-        sep = max(abs(self.starts[0][0] - self.starts[1][0]),
-                  abs(self.starts[0][1] - self.starts[1][1]))
-        floor = min_separation if min_separation is not None else int(0.7 * max(w, h))
-        assert sep >= floor, (
-            f"starts are {sep} cells apart (Chebyshev), below the {floor} this map size wants. "
-            f"A short run makes whoever attacks first the winner before the other has an army; "
-            f"pass min_separation= explicitly if a rush map is the INTENT.")
+        #
+        #    A mission map has one player start and a scripted opponent, so
+        #    there is no second start to be separated FROM and the guard has
+        #    nothing to say. It is skipped rather than weakened.
+        if self.symmetric:
+            sep = max(abs(self.starts[0][0] - self.starts[1][0]),
+                      abs(self.starts[0][1] - self.starts[1][1]))
+            floor = min_separation if min_separation is not None else int(0.7 * max(w, h))
+            assert sep >= floor, (
+                f"starts are {sep} cells apart (Chebyshev), below the {floor} this map size wants. "
+                f"A short run makes whoever attacks first the winner before the other has an army; "
+                f"pass min_separation= explicitly if a rush map is the INTENT.")
 
         # 1. Rotation symmetry of blocked cells, fields and bridges, cell by cell.
-        for y in range(h):
-            for x in range(w):
-                rx, ry = rot(x, y, w, h)
-                a, b = grid[y][x], grid[ry][rx]
-                assert (a in BLOCKING) == (b in BLOCKING), f"blocked asymmetry at {(x, y)}"
-                assert (a == 'F') == (b == 'F'), f"ferrite asymmetry at {(x, y)}"
-                assert (a == 'B') == (b == 'B'), f"bridge asymmetry at {(x, y)}"
+        #    This is the FAIRNESS invariant and it is meaningless on a mission
+        #    map: a campaign mission is asymmetric on purpose - the player and
+        #    the scripted enemy are not meant to be evenly matched, and a
+        #    mirrored mission would be a skirmish with dialogue.
+        if self.symmetric:
+            for y in range(h):
+                for x in range(w):
+                    rx, ry = rot(x, y, w, h)
+                    a, b = grid[y][x], grid[ry][rx]
+                    assert (a in BLOCKING) == (b in BLOCKING), f"blocked asymmetry at {(x, y)}"
+                    assert (a == 'F') == (b == 'F'), f"ferrite asymmetry at {(x, y)}"
+                    assert (a == 'B') == (b == 'B'), f"bridge asymmetry at {(x, y)}"
 
         # 2. Aprons fully open, so the 2x2 CY footprint and the MCV always fit.
         for (x, y) in self.apron_cells:
@@ -319,24 +347,49 @@ class Canvas:
                 assert s2 in seen, f"player {p} cannot reach start {q} at {s2}"
             for c in self.apron_cells:
                 assert c in seen, f"player {p} cannot reach apron cell {c}"
+            # 5b. Mission objectives. The one reachability question a mission
+            #     map has that a skirmish map does not: a scripted objective
+            #     the player cannot walk to is a mission that cannot be
+            #     finished, and it would only be found by playing it.
+            for o in objectives:
+                assert o in seen, f"player {p} cannot reach objective cell {o}"
 
         # 6. The crossings are load-bearing: close them and prove the two starts
         #    fall into separate components. A river without this is decoration.
+        #
+        #    A mission map has no second start to be cut off from, so the same
+        #    proof is restated against what the mission actually cares about:
+        #    close the crossings and the OBJECTIVE must become unreachable.
+        #    Without this the check simply vanished on a one-start map, and a
+        #    ridge with an accidental gap round the end of it would have been
+        #    described in the generator's own report as a pass to be fought
+        #    over while the army quietly walked past it.
         if self.choke_cells:
             saved = [(x, y, grid[y][x]) for (x, y) in self.choke_cells]
             for (x, y, _) in saved:
                 grid[y][x] = '#'
-            assert self.starts[1] not in self._flood(*self.starts[0]), \
-                "starts stay connected with every crossing closed: the crossings are not load-bearing"
-            for (x, y, ch) in saved:
-                grid[y][x] = ch
+            try:
+                if len(self.starts) >= 2:
+                    assert self.starts[1] not in self._flood(*self.starts[0]), \
+                        "starts stay connected with every crossing closed: the crossings are not load-bearing"
+                elif objectives:
+                    seen = self._flood(*next(iter(self.starts.values())))
+                    for o in objectives:
+                        assert o not in seen, (
+                            f"objective {o} is still reachable with every crossing closed: "
+                            f"the crossings are not load-bearing and there is a way round")
+            finally:
+                for (x, y, ch) in saved:
+                    grid[y][x] = ch
 
         # 7. Chebyshev-distance fairness: the multiset of distances from each
         #    start to all fields must be identical, or one player is closer to
         #    the economy. Rotation guarantees it; this proves it held.
-        def cheb(s):
-            return sorted(max(abs(x - s[0]), abs(y - s[1])) for x, y in fields)
-        assert cheb(self.starts[0]) == cheb(self.starts[1]), "ferrite distance profiles differ between starts"
+        if self.symmetric:
+            def cheb(s):
+                return sorted(max(abs(x - s[0]), abs(y - s[1])) for x, y in fields)
+            assert cheb(self.starts[0]) == cheb(self.starts[1]), \
+                "ferrite distance profiles differ between starts"
 
         # 8. ADR-021 outposts. They are entities, not terrain, so they are absent
         #    from the grid and from the density above; what has to be proved is
@@ -345,7 +398,8 @@ class Canvas:
         #    the reachability proof: an outpost that seals a lane or walls off a
         #    field would otherwise only be discovered in a match.
         if self.outposts:
-            assert len(self.outposts) % 2 == 0, "outposts must be placed in rotation pairs"
+            if self.symmetric:
+                assert len(self.outposts) % 2 == 0, "outposts must be placed in rotation pairs"
             saved = []
             for (ax, ay) in self.outposts:
                 for y in range(ay, ay + 2):
@@ -357,10 +411,14 @@ class Canvas:
                     seen = self._flood(*s)
                     for f in fields:
                         assert f in seen, f"with outposts standing, player {p} cannot reach ferrite at {f}"
-                    assert self.starts[1 - p] in seen, \
-                        f"with outposts standing, player {p} cannot reach the far start"
+                    for q, s2 in self.starts.items():
+                        assert s2 in seen, \
+                            f"with outposts standing, player {p} cannot reach start {q}"
                     for c in self.apron_cells:
                         assert c in seen, f"with outposts standing, player {p} cannot reach apron cell {c}"
+                    for o in objectives:
+                        assert o in seen, \
+                            f"with outposts standing, player {p} cannot reach objective cell {o}"
             finally:
                 for (x, y, ch) in saved:
                     grid[y][x] = ch
@@ -376,11 +434,12 @@ class Canvas:
             # symmetric. The centre is what the sim itself uses
             # (World.FootprintCentre) and it is the only measure that rotates
             # cleanly. (Written the naive way first; this check caught it.)
-            def cheb_out(s):
-                return sorted(max(abs((2 * x + 1) - 2 * s[0]), abs((2 * y + 1) - 2 * s[1]))
-                              for x, y in self.outposts)
-            assert cheb_out(self.starts[0]) == cheb_out(self.starts[1]), \
-                "outpost distance profiles differ between starts"
+            if self.symmetric:
+                def cheb_out(s):
+                    return sorted(max(abs((2 * x + 1) - 2 * s[0]), abs((2 * y + 1) - 2 * s[1]))
+                                  for x, y in self.outposts)
+                assert cheb_out(self.starts[0]) == cheb_out(self.starts[1]), \
+                    "outpost distance profiles differ between starts"
 
         # 9. ADR-025: the map must survive losing EVERY destroyable span at
         #    once. A rubbled bridge is a neutral blocker, so the DEF-05 breach
@@ -398,28 +457,71 @@ class Canvas:
             try:
                 for p_, s_ in self.starts.items():
                     seen = self._flood(*s_)
-                    assert self.starts[1 - p_] in seen, \
-                        "with every destroyable bridge rubbled the starts are severed: the AI would halt at the bank"
+                    for q_, s2_ in self.starts.items():
+                        assert s2_ in seen, \
+                            "with every destroyable bridge rubbled the starts are severed: the AI would halt at the bank"
                     for f in fields:
                         assert f in seen, \
                             f"with every destroyable bridge rubbled player {p_} cannot reach ferrite at {f}"
+                    for o in objectives:
+                        assert o in seen, \
+                            f"with every destroyable bridge rubbled player {p_} cannot reach objective cell {o}"
             finally:
                 for (x, y, ch) in saved:
                     grid[y][x] = ch
             # Fairness: spans are a rotation-symmetric set like everything else.
-            for (x, y) in self.span_cells:
-                assert rot(x, y, w, h) in self.span_cells, \
-                    f"destroyable span {(x, y)} has no rotation partner: one player can cut a crossing the other cannot"
+            if self.symmetric:
+                for (x, y) in self.span_cells:
+                    assert rot(x, y, w, h) in self.span_cells, \
+                        f"destroyable span {(x, y)} has no rotation partner: one player can cut a crossing the other cannot"
 
         return fields, blocked, density
 
+    def check_entities(self, lines, struct_footprint=2):
+        """Prove every mission entity stands on ground it can stand on.
+
+        The entity and trigger section is raw text, because the vocabulary
+        belongs to the map format and this generator has no business owning a
+        second copy of it. That leaves exactly one thing unchecked, and it is
+        the thing a hand-typed mission gets wrong: a building anchored half
+        inside a ridge, or a squad placed in a river. Parse the lines back and
+        assert the cells are open - a structure over its whole 2x2 footprint,
+        a unit over its cell - and report how many were proved, so a silent
+        parse failure cannot masquerade as a pass."""
+        checked = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            p = line.split()
+            if p[0] not in ('unit', 'structure'):
+                continue        # trigger lines address cells, not occupy them
+            cx, cy = int(p[3]), int(p[4])
+            span = struct_footprint if p[0] == 'structure' else 1
+            for y in range(cy, cy + span):
+                for x in range(cx, cx + span):
+                    assert self.inb(x, y), f"{p[0]} at {(cx, cy)} runs off-map at {(x, y)}"
+                    ch = self.grid[y][x]
+                    assert ch not in BLOCKING, \
+                        f"{p[0]} at {(cx, cy)} stands on '{ch}' at {(x, y)}: blocked ground"
+                    assert ch != 'F', \
+                        f"{p[0]} at {(cx, cy)} stands on ferrite at {(x, y)}: it would sit on the economy"
+            checked += 1
+        return checked
+
     # -- emit -------------------------------------------------------------
-    def emit(self, path, header_lines):
-        lines = ["ferrostorm-map v1"]
+    def emit(self, path, header_lines, version=1, pre_grid=(), post_grid=()):
+        """Write the map. `version` selects the format line; `pre_grid` carries
+        header directives a mission needs and a skirmish map does not (faction,
+        rules), and `post_grid` carries its entity and trigger lines. Both are
+        raw lines, because the mission vocabulary is the map format's and this
+        generator has no business owning a second copy of it."""
+        lines = [f"ferrostorm-map v{version}"]
         lines.extend(header_lines)
         lines.append(f"size {self.w} {self.h}")
         for p, (cx, cy) in sorted(self.starts.items()):
             lines.append(f"start {p} {cx} {cy}")
+        lines.extend(pre_grid)
         lines.append("grid:")
         lines.extend("".join(row) for row in self.grid)
         # ADR-021: entity lines follow the grid, the mission-map convention.
@@ -428,6 +530,7 @@ class Canvas:
         # negative player, so this needs no map-format bump.
         for (ax, ay) in self.outposts:
             lines.append(f"structure -1 13 {ax} {ay}")
+        lines.extend(post_grid)
         with open(path, "w") as fh:
             fh.write("\n".join(lines) + "\n")
 
@@ -452,11 +555,15 @@ def report(name, canvas, fields, blocked, density, path, crossings):
         print(f"  decorated: {dec} cells = {dec / (canvas.w * canvas.h) * 100:.2f}% "
               f"(passable; outside the density budget)")
     print(f"  ferrite: {len(fields)} cells = {len(fields) * 12000:,} credits")
-    print(f"  starts:  {canvas.starts[0]} and {canvas.starts[1]}, "
+    print(f"  starts:  {', '.join(str(s) for _, s in sorted(canvas.starts.items()))}, "
           f"apron {canvas.apron * 2 + 1}x{canvas.apron * 2 + 1}")
     print(f"  crossings: {crossings}")
     if canvas.span_cells:
         print(f"  spans:   {len(canvas.span_cells)} destroyable bridge decks (ADR-025)")
     if canvas.outposts:
         print(f"  outposts: {len(canvas.outposts)} neutral (ADR-021) at {canvas.outposts}")
-    print("  all symmetry, density, reachability, crossing and fairness checks passed")
+    if canvas.symmetric:
+        print("  all symmetry, density, reachability, crossing and fairness checks passed")
+    else:
+        print("  asymmetric MISSION map: density, reachability and objective-reachability "
+              "checks passed (symmetry and fairness do not apply and were not claimed)")
