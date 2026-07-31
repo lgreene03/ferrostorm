@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
 //   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
 //   emplacementgate    - P7-2: the Emplacement beats infantry and LOSES to armour, so defence is a choice; and it obeys the power gate
 //   factiongate        - P7-1: a building's side comes from /data; common admits both, a declared side is obeyed
@@ -4543,6 +4544,111 @@ int SizeProbe()
     return 0;
 }
 
+int AirGate()
+{
+    // ADR-028 (P7-4). Additive, the transportgate pattern: a standalone mode and
+    // a Match battery stage, never a golden scenario, so the golden list stays
+    // 24.
+    //
+    // The ADR binds this gate to prove BOTH halves. An aircraft nothing can
+    // shoot is a dominant strategy rather than a feature, so "ground weapons
+    // cannot touch it" and "the answer kills it" are one claim in two parts and
+    // neither is worth having alone.
+    const int Flyer = 15, Flak = 16, Rifle = 2, Tank = 1;
+
+    int SpawnOf(World w, int type, int player, int cx, int cy)
+    {
+        var d = w.GetUnitType(type);
+        return w.SpawnUnit(player, Fix64.FromInt(cx), Fix64.FromInt(cy), d.Speed, d.Hp,
+                           d.Armour, d.WeaponId, veterancy: false, unitType: type);
+    }
+
+    // --- 1. Ground weapons cannot engage an aircraft, by AUTO-ACQUIRE. A rifle
+    //        squad and a tank stand under it and neither can do a thing.
+    {
+        var w = new World(3100, 64, 64, players: 2);
+        int flyer = SpawnOf(w, Flyer, 1, 20, 20);
+        SpawnOf(w, Rifle, 0, 21, 20);
+        SpawnOf(w, Tank, 0, 20, 21);
+        int hp = w.Entities[flyer].Hp;
+        for (int t = 0; t < 600; t++) w.Step(default);
+        if (w.Entities[flyer].Hp != hp)
+            return Fail($"air: ground weapons must not reach an aircraft ({w.Entities[flyer].Hp} of {hp} hp) - "
+                        + "an aircraft everything can shoot is just a fast tank");
+    }
+
+    // --- 2. And not by an EXPLICIT ORDER either. This is the half a scan-only
+    //        rule would have missed: told to attack the plane, a rifle squad
+    //        must drop the order rather than execute it.
+    {
+        var w = new World(3101, 64, 64, players: 2);
+        int flyer = SpawnOf(w, Flyer, 1, 20, 20);
+        int rifle = SpawnOf(w, Rifle, 0, 21, 20);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, rifle, Fix64.Zero, Fix64.Zero, flyer) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        int hp = w.Entities[flyer].Hp;
+        for (int t = 0; t < 600; t++) w.Step(default);
+        if (w.Entities[flyer].Hp != hp)
+            return Fail("air: an EXPLICIT attack order from a ground weapon must not reach an aircraft");
+    }
+
+    // --- 3. The answer works. Same aircraft, same range, one flak track.
+    {
+        var w = new World(3102, 64, 64, players: 2);
+        int flyer = SpawnOf(w, Flyer, 1, 20, 20);
+        SpawnOf(w, Flak, 0, 23, 20);
+        bool killed = false;
+        for (int t = 0; t < 900 && !killed; t++) { w.Step(default); killed = !w.Entities[flyer].Alive; }
+        if (!killed)
+            return Fail("air: the flak track must kill an aircraft standing in its range - without an answer the "
+                        + "layer is a dominant strategy, and ADR-028 clause 4 refuses to land without one");
+    }
+
+    // --- 4. The answer is NOT a general-purpose escort: an anti-air weapon
+    //        leaves the ground alone, or it would be a better tank as well.
+    {
+        var w = new World(3103, 64, 64, players: 2);
+        int tank = SpawnOf(w, Tank, 1, 20, 20);
+        SpawnOf(w, Flak, 0, 23, 20);
+        int hp = w.Entities[tank].Hp;
+        for (int t = 0; t < 600; t++) w.Step(default);
+        if (w.Entities[tank].Hp != hp)
+            return Fail("air: the flak track must NOT shoot the ground - a counter that also fights ground units "
+                        + "is just a better tank");
+    }
+
+    // --- 5. Terrain means nothing to an aircraft. A wall of blocked cells that
+    //        stops a tank dead does not slow the flyer at all, which is the
+    //        whole of what "air" means in this sim.
+    {
+        int Crosses(int unitType)
+        {
+            var w = new World(3104, 64, 64, players: 2);
+            for (int y = 0; y < 64; y++) if (y is < 28 or > 34) w.Map.SetBlocked(32, y, true);
+            for (int y = 28; y <= 34; y++) w.Map.SetBlocked(32, y, true);   // sealed: no gap at all
+            int u = SpawnOf(w, unitType, 0, 10, 31);
+            var order = new List<Command> { new(w.Tick, 0, CommandType.PathMove, u, Fix64.FromInt(55), Fix64.FromInt(31)) };
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+            for (int t = 0; t < 1200; t++)
+            {
+                w.Step(default);
+                if (Map.CellOf(w.Entities[u].X) > 32) return t;
+            }
+            return -1;
+        }
+        if (Crosses(Flyer) < 0)
+            return Fail("air: an aircraft must cross a sealed wall - terrain is nothing to it");
+        if (Crosses(Tank) >= 0)
+            return Fail("air control: a TANK must NOT cross a sealed wall, or this check proves nothing about air");
+    }
+
+    Console.WriteLine("airgate: a rifle squad and a tank standing under an aircraft cannot scratch it, and neither can "
+                      + "an EXPLICIT attack order; the flak track kills it; the flak track leaves the ground alone; and "
+                      + "the aircraft crosses a sealed wall a tank cannot, so terrain means nothing to it. Both halves "
+                      + "of ADR-028 clause 4 hold: the layer and its answer landed together");
+    return 0;
+}
+
 int TransportGate()
 {
     // P7-3. Additive, the emplacementgate pattern: a standalone mode and a
@@ -5481,6 +5587,9 @@ int Match(ulong seed)
     // P7-3: the transport carries, refuses armour, and dies with its cargo.
     int transport = TransportGate();
     if (transport != 0) return transport;
+    // ADR-028: the air layer, and the answer it is bound to.
+    int air = AirGate();
+    if (air != 0) return air;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6331,6 +6440,7 @@ return args.Length == 0
         "factiongate" => FactionGate(),
         "emplacementgate" => EmplacementGate(),
         "transportgate" => TransportGate(),
+        "airgate" => AirGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),

@@ -1,0 +1,16 @@
+# ADR-028 (P7-4). The airfield: where aircraft are made, and the gate that keeps
+# them behind the radar. It reuses ADR-009's producer routing wholesale rather
+# than inventing an air-specific path - an air unit's produced_at names this
+# building exactly as a rifle's names the barracks.
+id: com_airfield
+name: Airfield
+faction: common
+cost: 1800
+build_time_ticks: 260
+hp: 1100
+power_supply: 0
+power_draw: 50
+sight_range: 6
+footprint: 2
+weapon_ids: []
+prerequisites: [com_radar_uplink]

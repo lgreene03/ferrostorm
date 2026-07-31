@@ -32,11 +32,17 @@ public readonly struct WeaponDef
     public readonly Fix64 MinRange;     // targets closer than this cannot be engaged (artillery dead zone)
     public readonly Fix64 SplashRadius; // 0 = single target; else half damage to everything else in radius (friend or foe)
 
+    /// <summary>ADR-028: can this weapon engage an aircraft? Defaults FALSE, so
+    /// every weapon written before the air layer is ground-only from the moment
+    /// it lands. That is the point rather than an omission: an aircraft
+    /// everything can shoot is just a fast tank.</summary>
+    public readonly bool AntiAir;
+
     public WeaponDef(Fix64 range, int damage, Warhead warhead, int cooldownTicks,
-                     Fix64 minRange = default, Fix64 splashRadius = default)
+                     Fix64 minRange = default, Fix64 splashRadius = default, bool antiAir = false)
     {
         Range = range; Damage = damage; Warhead = warhead; CooldownTicks = cooldownTicks;
-        MinRange = minRange; SplashRadius = splashRadius;
+        MinRange = minRange; SplashRadius = splashRadius; AntiAir = antiAir;
     }
 }
 
@@ -66,6 +72,11 @@ public static class Weapons
     // counters is not a counter. Anti-infantry warhead, so armour walks through
     // it and the rock-paper-scissors is real rather than a damage number.
     public static readonly WeaponDef EmplacementGun = new(Fix64.FromInt(4), 22, Warhead.AntiInfantry, 7);
+    // ADR-028 clause 4: the ONLY AntiAir weapon in the game, and the reason the
+    // air layer is allowed to land. Ground-blind by omission of nothing - it
+    // simply never engages a target that is not airborne, because the flak
+    // track carries no second weapon.
+    public static readonly WeaponDef FlakGun = new(Fix64.FromInt(6), 40, Warhead.AntiArmour, 10, antiAir: true);
 
     public static WeaponDef Get(int id) => id switch
     {
@@ -77,6 +88,7 @@ public static class Weapons
         6 => BulwarkCannon,
         7 => VanguardGun,
         8 => EmplacementGun,
+        9 => FlakGun,
         _ => None,
     };
 }

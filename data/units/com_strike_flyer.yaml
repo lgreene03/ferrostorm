@@ -1,0 +1,23 @@
+# ADR-028 (P7-4). The strike aircraft, and the first thing in this game that no
+# ground weapon can touch. It is fast, fragile and expensive per hit point: the
+# trade is that it arrives anywhere immediately and terrain means nothing to it.
+# Anti-armour, because the thing air is FOR in this genre is punishing the slow
+# expensive column that ground defence was built to stop.
+id: com_strike_flyer
+name: "Strike Flyer"
+faction: common
+tier: 3
+cost: 1100
+build_time_ticks: 200
+hp: 180
+armour_class: light
+speed: 45
+role: assault
+weapon_ids: [wpn_tank_cannon]
+sight_range: 8
+stealth: false
+detector: false
+produced_at: com_airfield
+prerequisites: [com_airfield]
+veterancy_enabled: true
+air: true

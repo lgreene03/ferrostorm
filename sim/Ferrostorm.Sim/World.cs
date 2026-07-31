@@ -399,7 +399,7 @@ public sealed partial class World
     /// </summary>
     public readonly record struct UnitTypeDef(int Cost, int BuildTicks, int Hp, ArmourClass Armour, int WeaponId, Fix64 Speed,
         EntityKind Kind = EntityKind.Unit, bool Stealth = false, bool Detector = false, bool Veterancy = true, int SightCells = 5,
-        int Faction = FactionCommon, int[]? Prereqs = null, int ProducedAt = 2)
+        int Faction = FactionCommon, int[]? Prereqs = null, int ProducedAt = 2, bool Air = false)
     {
         public bool Equals(UnitTypeDef other)
             => Cost == other.Cost && BuildTicks == other.BuildTicks && Hp == other.Hp
@@ -470,6 +470,14 @@ public sealed partial class World
         // whole point. Prereq the barracks (struct type 11), because what it
         // carries is what the barracks makes.
         { 14, new UnitTypeDef(600, 140, 350, ArmourClass.Light, 0, Fix64.FromFraction(22, 100), Veterancy: false, SightCells: 6, Prereqs: new[] { 11 }) }, // com_carrier
+        // ADR-028: the strike aircraft. Air true is what takes it off the flow
+        // field and out of reach of every ground weapon; produced at the
+        // airfield (struct type 16), which is its own prerequisite.
+        { 15, new UnitTypeDef(1100, 200, 180, ArmourClass.Light, 1, Fix64.FromFraction(45, 100), SightCells: 8, Prereqs: new[] { 16 }, ProducedAt: 16, Air: true) }, // com_strike_flyer
+        // ADR-028 clause 4: the answer, and it ships in the same wave by the
+        // ADR's own binding. Mobile, because what air threatens most is the
+        // army in the field rather than the base.
+        { 16, new UnitTypeDef(550, 130, 260, ArmourClass.Light, 9, Fix64.FromFraction(26, 100), SightCells: 7, Prereqs: new[] { 12 }) }, // com_flak_track
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -535,6 +543,30 @@ public sealed partial class World
     /// question, not a hardcoded list - anything the barracks produces fits.
     /// That admits the engineer, which is the point: delivering one under fire
     /// is the play this unit exists to make possible.</summary>
+    /// <summary>ADR-028: does this entity fly? Answered from the CATALOGUE by
+    /// unit type, never from a hashed per-entity flag - a flag would move all
+    /// 24 goldens for no behavioural change, which is the cost ADR-012 refused
+    /// for FerriteCap. Structures never fly, whatever their type id happens to
+    /// collide with in the unit table.</summary>
+    public bool IsAirborne(in Entity e)
+        => e.Kind == EntityKind.Unit && GetUnitType(e.UnitType).Air;
+
+    /// <summary>ADR-028 clause 3, stated ONCE: a weapon engages air if and only
+    /// if it is an anti-air weapon. Read the equality both ways, because both
+    /// directions are load-bearing - a ground gun cannot reach a plane, AND a
+    /// dedicated anti-air gun cannot shoot the ground. The first draft wrote
+    /// this as `AntiAir || !IsAirborne`, meaning "can ALSO hit air", and the
+    /// gate caught the consequence immediately: the flak track was a better
+    /// tank as well as the answer to aircraft, which would have made the
+    /// counter a straight upgrade.
+    ///
+    /// All THREE target-selection paths ask this - the explicit order, the main
+    /// auto-acquire scan and the guard stance's leash scan - rather than each
+    /// testing the flag itself. A first pass guarded two of the three and the
+    /// gate shot a plane down with a rifle.</summary>
+    public bool WeaponCanEngage(in WeaponDef w, in Entity target)
+        => w.AntiAir == IsAirborne(target);
+
     public bool IsCarryable(int unitType)
         => unitType != CarrierUnitType && GetUnitType(unitType).ProducedAt == BarracksStructType;
 
@@ -675,6 +707,8 @@ public sealed partial class World
         // P7-2: the Emplacement. Cheap, short-lived under armour, and the only
         // thing in the game that answers massed infantry from a fixed position.
         15 => new StructureTypeDef(350, EntityKind.Emplacement, 90, Hp: 300, PowerDraw: 10, SightCells: 5, WeaponId: 8, Prereqs: new[] { 1 }),
+        // ADR-028: the Airfield, behind the radar uplink (struct type 12).
+        16 => new StructureTypeDef(1800, EntityKind.Airfield, 260, Hp: 1100, PowerDraw: 50, SightCells: 6, Prereqs: new[] { 12 }),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
@@ -727,7 +761,7 @@ public sealed partial class World
     // free despite the gap in the id map: it is GateStructType, reserved by
     // ADR-005 for the deferred wall gates, and SeedStructureTypes skips it.
     // Taking it would have silently collided with C6b the day it lands.
-    public const int MaxStructType = 15;
+    public const int MaxStructType = 16;   // ADR-028 raised it for the Airfield
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -1034,6 +1068,22 @@ public sealed partial class World
     /// in shape to SpawnTurret because it IS a turret in every structural
     /// sense - the difference that matters is its weapon, which is authored in
     /// /data and read from the def rather than written here.</summary>
+    /// <summary>ADR-028: the Airfield. Structurally an ordinary producer - the
+    /// air units name it in produced_at and ADR-009's routing does the rest.</summary>
+    public int SpawnAirfield(int player, int ax, int ay)
+    {
+        var def = GetStructureType(16);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Airfield,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 16,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
     public int SpawnEmplacement(int player, int ax, int ay)
     {
         var def = GetStructureType(15);
@@ -1316,6 +1366,12 @@ public sealed partial class World
                             if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId
                                 || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
                             if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
+                            // ADR-028. This is the THIRD target-selection path -
+                            // the guard stance's leash scan - and it needs the
+                            // rule as much as the other two. Finding it only
+                            // because the shared predicate failed to compile
+                            // here is the argument for the shared predicate.
+                            if (!WeaponCanEngage(Weapons.Get(e.WeaponId), in t)) continue;
                             Fix64 d = Fix64.DistSq(t.X - e.PostX, t.Y - e.PostY);
                             if (d <= leashSq && d < bestD) { bestD = d; target = j; }
                         }
@@ -1586,6 +1642,7 @@ public sealed partial class World
                     case EntityKind.ConstructionYard: SpawnConstructionYard(c.PlayerId, ax, ay); break;
                     case EntityKind.Turret: SpawnTurret(c.PlayerId, ax, ay); break;
                     case EntityKind.Emplacement: SpawnEmplacement(c.PlayerId, ax, ay); break;   // P7-2
+                    case EntityKind.Airfield: SpawnAirfield(c.PlayerId, ax, ay); break;         // ADR-028
                     case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay); break;
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
@@ -2167,6 +2224,27 @@ public sealed partial class World
     {
         Fix64 aimX = e.TargetX, aimY = e.TargetY;
 
+        // ADR-028: an aircraft does not consult the flow field. It steps
+        // straight at its destination and no terrain, structure or unit is in
+        // its way, which is the whole of what "air" means in this sim. Gated on
+        // the TYPE, so a world with no aircraft in it never reaches this branch
+        // and executes exactly the code it did before the air layer existed -
+        // which is why the goldens do not move.
+        if (IsAirborne(e))
+        {
+            Fix64 adx = aimX - e.X, ady = aimY - e.Y;
+            Fix64 adistSq = Fix64.DistSq(adx, ady);
+            Fix64 astepSq = e.Speed * e.Speed;
+            if (adistSq <= astepSq) { e.X = aimX; e.Y = aimY; e.Moving = false; }
+            else
+            {
+                Fix64 adist = Fix64.Sqrt(adistSq);
+                e.X += adx * e.Speed / adist;
+                e.Y += ady * e.Speed / adist;
+            }
+            return;
+        }
+
         if (e.UseFlow)
         {
             // Crowd arrival: combat units consider a PathMove complete within 4
@@ -2438,7 +2516,12 @@ public sealed partial class World
             // target is cleared so the unit falls back to auto-acquire next
             // tick instead of standing idle or chasing a ghost.
             if (e.ExplicitTarget >= 0 && (!ValidId(e.ExplicitTarget) || !_entities[e.ExplicitTarget].Alive
-                || !CanTarget(e.PlayerId, _entities[e.ExplicitTarget])))
+                || !CanTarget(e.PlayerId, _entities[e.ExplicitTarget])
+                // ADR-028: a ground weapon ordered at an aircraft drops the
+                // order rather than executing it. Without this an explicit
+                // Attack would shoot a plane down with a rifle and the whole
+                // point of the layer would be a scan-only rule.
+                || !WeaponCanEngage(in w, _entities[e.ExplicitTarget])))
                 e.ExplicitTarget = -1;
 
             if (e.ExplicitTarget >= 0)
@@ -2488,6 +2571,13 @@ public sealed partial class World
                     // auto-acquisition declines to.
                     if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
                     if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
+                    // ADR-028: a ground weapon cannot reach an aircraft. This is
+                    // the MAIN auto-acquire scan and it is the third of three
+                    // target-selection paths that need the rule; a first pass at
+                    // this wave patched the other two and left this one, which
+                    // the gate caught immediately by shooting a plane down with
+                    // a rifle.
+                    if (!WeaponCanEngage(in w, in t)) continue;
                     Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
                     if (d >= w.MinRange * w.MinRange && d <= w.Range * w.Range && d < bestD) { bestD = d; target = j; }
                     if (e.AMove && d <= e.Sight * e.Sight && d < bestSightD) { bestSightD = d; sightTarget = j; }
@@ -2769,6 +2859,10 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
+            // ADR-028: aircraft do not shove and are not shoved. They are not on
+            // the ground, so nothing there is in their way and they are in
+            // nothing's way either.
+            if (IsAirborne(e)) continue;
             int cell = Map.CellIndex(Map.CellOf(e.X), Map.CellOf(e.Y));
             if (!_buckets.TryGetValue(cell, out var list)) _buckets[cell] = list = new List<int>();
             list.Add(i);
