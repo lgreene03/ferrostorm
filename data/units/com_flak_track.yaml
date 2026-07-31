@@ -1,0 +1,24 @@
+# ADR-028 clause 4 (P7-4). The ANSWER, and it ships in the same wave by the
+# ADR's own binding: an air layer without an answer is not a feature, it is a
+# dominant strategy. Mobile rather than static on purpose - a fixed anti-air
+# building would only defend a base, and what air threatens most is the army in
+# the field and the harvester on its run.
+# Anti-air ONLY. It cannot shoot the ground at all, which is what keeps it a
+# counter rather than a general-purpose escort.
+id: com_flak_track
+name: "Flak Track"
+faction: common
+tier: 2
+cost: 550
+build_time_ticks: 130
+hp: 260
+armour_class: light
+speed: 26
+role: support
+weapon_ids: [wpn_flak_gun]
+sight_range: 7
+stealth: false
+detector: false
+produced_at: com_factory
+prerequisites: [com_radar_uplink]
+veterancy_enabled: true

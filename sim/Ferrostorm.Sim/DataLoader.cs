@@ -15,7 +15,8 @@ public static class DataLoader
         string Id, string Name, string Faction, int Tier, int Cost, int BuildTimeTicks,
         int Hp, ArmourClass Armour, Fix64 Speed, string Role,
         IReadOnlyList<string> WeaponIds, int SightRange, bool Stealth, bool Detector,
-        IReadOnlyList<string> Prerequisites, string ProducedAt, bool VeterancyEnabled, string Notes);
+        IReadOnlyList<string> Prerequisites, string ProducedAt, bool VeterancyEnabled, string Notes,
+        bool Air = false);   // ADR-028
 
     /// <summary>TICKET-P5-BD-06: a placeable structure as authored in /data/buildings, validated against schema.structure.json.</summary>
     public sealed record StructureData(
@@ -125,6 +126,7 @@ public static class DataLoader
             WeaponIds: m.TryGetValue("weapon_ids", out var w) ? ParseInlineList(w) : new List<string>(),
             SightRange: m.TryGetValue("sight_range", out var sr) ? ReqInt(m, "sight_range") : 0,
             Stealth: OptBool(m, "stealth", false),
+            Air: OptBool(m, "air", false),   // ADR-028: absent means ground, so every existing file is unchanged
             Detector: OptBool(m, "detector", false),
             Prerequisites: m.TryGetValue("prerequisites", out var p) ? ParseInlineList(p) : new List<string>(),
             // Required (TICKET-P5-PROD-03): the structure id whose queue
@@ -243,6 +245,7 @@ public static class UnitCatalogue
         // integer this map returns, never the string it matched on.
         "wpn_vanguard_autocannon" => 7,
         "wpn_emplacement_gun" => 8,   // P7-2
+        "wpn_flak_gun" => 9,          // ADR-028: the only AntiAir weapon in the game
         _ => throw new FormatException($"unknown weapon id '{name}'"),
     };
 
@@ -269,6 +272,8 @@ public static class UnitCatalogue
         "dir_vanguard_car" => 12,
         "com_repair_vehicle" => 13,   // ADR-019 (P6 Wave C2)
         "com_carrier" => 14,          // P7-3: the transport
+        "com_strike_flyer" => 15,     // ADR-028 (P7-4)
+        "com_flak_track" => 16,       // ADR-028 clause 4: the answer
         _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 
@@ -284,7 +289,8 @@ public static class UnitCatalogue
                // producer link ride into the def so the tech-tree tickets gate
                // on values that already round-trip; nothing branches on them yet.
                StructureCatalogue.PrereqIds(u.Prerequisites),
-               StructureCatalogue.TypeIdOf(u.ProducedAt));
+               StructureCatalogue.TypeIdOf(u.ProducedAt),
+               u.Air);   // ADR-028
 }
 
 /// <summary>
@@ -311,6 +317,7 @@ public static class StructureCatalogue
         // P7-2. NOT 10: that is GateStructType, reserved by ADR-005 for the
         // deferred wall gates, so the free id is past the old ceiling.
         "com_emplacement" => 15,
+        "com_airfield" => 16,         // ADR-028
         "com_barracks" => 11,
         "com_radar_uplink" => 12,
         "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
@@ -331,6 +338,7 @@ public static class StructureCatalogue
         8 => EntityKind.ServiceDepot,
         9 => EntityKind.Wall,
         15 => EntityKind.Emplacement,   // P7-2
+        16 => EntityKind.Airfield,      // ADR-028
         11 => EntityKind.Barracks,
         12 => EntityKind.RadarUplink,
         13 => EntityKind.Outpost,   // ADR-021

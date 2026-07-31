@@ -51,8 +51,13 @@ structures are ten shared, two Directorate and one Sodality.
 These are not missing units. They are missing dimensions of play, and each
 removes a category of decision rather than an item from a list.
 
-**A1. The air layer.** No aircraft, no airfield or helipad, and therefore no
-anti-air anywhere in the roster. Both benchmarks used air as a third dimension:
+**A1. The air layer. DELIVERED (P7-4, ADR-028).** The Airfield, the Strike
+Flyer and the Flak Track landed together, because the ADR binds them: an air
+layer without an answer is a dominant strategy rather than a feature. Aircraft
+ignore terrain entirely and no ground weapon can touch them; the flak track
+kills them and cannot shoot the ground. What is NOT delivered, so the row is not
+read as finished: no reload cycle, the AI neither builds nor answers aircraft,
+and the models are interim. The original gap read: Both benchmarks used air as a third dimension:
 fast strike craft that ground defence cannot answer, and the anti-air building
 that answers them. `EntityKind.Airfield` exists in the sim enum and the skirmish
 AI already lists it among its wave targets, so the shape was anticipated and

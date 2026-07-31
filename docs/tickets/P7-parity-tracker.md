@@ -28,8 +28,8 @@ system removes a category of decision while a missing unit removes an option.
 | P7-2 | Defensive variety: the Emplacement, the anti-infantry leg, so defence is a CHOICE rather than a ladder | B1 | - | goldens NEUTRAL; catalogue checksum MOVES (a new building changes it by construction) | **DONE** - emplacementgate; 32 ticks vs infantry against the turret's 91, 632 vs armour against its 143 |
 | P7-2b | A third defence type, and a distinctive one per SIDE (neither faction has a signature defence) | B1/C | Balance co-sign (A11); brushes Q017 | MOVES | pending |
 | P7-3 | Transports: the Carrier, the first unit that exists to move OTHER units | A2 | - | goldens NEUTRAL; catalogue checksum MOVES; save format v9 | **DONE** - transportgate (6 stages incl. save round-trip and cargo dying with its carrier) |
-| P7-4 | The air layer: airfield, one strike aircraft, one anti-air answer | A1 | ADR + art (C5) | MOVES | pending - **now the first open row** |
-| P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | Q017 (Luke's roster call) | MOVES | pending |
+| P7-4 | The air layer: Airfield, Strike Flyer, Flak Track | A1 | ADR-028 (ratified under the standing directive) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - airgate (5 stages, both halves of clause 4); no reload cycle and the AI does not fly, both stated in the ADR |
+| P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | **Q017 (Luke's roster call)** | MOVES | pending - **first open row, and it needs a human** |
 | P7-6 | Storage and a credit ceiling (silo) | B2 | Balance co-sign | MOVES | pending |
 | P7-7 | Infiltration: one unit that takes information or credits | B5 | design note; brushes Q017 | MOVES | pending |
 | P7-8 | More than two player seats | D2 | **Producer sign-off**: sim change to PlaceSkirmishStart plus multi-start maps | MOVES | pending |

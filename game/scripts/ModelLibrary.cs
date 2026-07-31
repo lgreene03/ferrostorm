@@ -29,6 +29,8 @@ public partial class ModelLibrary : Node
         // P7-2: EntityKind.Emplacement (15) takes the turret model as an
         // interim, the ADR-019 precedent; a bespoke model is owed to art.
         { 15, "dir_turret" },
+        // ADR-028: interim models, the ADR-019 precedent. Bespoke ones owed to art.
+        { 14, "com_factory" },
         { 3, "ferrite_cluster" },
         // 12 = Barracks (ADR-009 clause 5). No com_barracks.glb exists yet, so
         // it takes the established interim: the service depot, chosen over the

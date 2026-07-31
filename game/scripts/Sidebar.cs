@@ -68,6 +68,9 @@ public partial class Sidebar : PanelContainer
         // turret's model for now; a bespoke one is owed to art-pipeline, the
         // same interim the repair vehicle took (ADR-019).
         new("EMPLACEMENT", 15, "dir_turret"),
+        // ADR-028: the Airfield. Listed under defences because that is where the
+        // tech buildings sit; it produces aircraft rather than defending.
+        new("AIRFIELD", 16, "com_factory"),
         // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
         // slot and no build time, so it is never queued at the yard - the button
         // enters placement directly and the treasury is charged per segment as
