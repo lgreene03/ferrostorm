@@ -242,6 +242,7 @@ public static class UnitCatalogue
         // Checksum-safe on DR-17's argument: the checksum takes the resolved
         // integer this map returns, never the string it matched on.
         "wpn_vanguard_autocannon" => 7,
+        "wpn_emplacement_gun" => 8,   // P7-2
         _ => throw new FormatException($"unknown weapon id '{name}'"),
     };
 
@@ -306,6 +307,9 @@ public static class StructureCatalogue
         "sod_veil_projector" => 7,
         "com_service_depot" => 8,
         "com_wall" => 9,
+        // P7-2. NOT 10: that is GateStructType, reserved by ADR-005 for the
+        // deferred wall gates, so the free id is past the old ceiling.
+        "com_emplacement" => 15,
         "com_barracks" => 11,
         "com_radar_uplink" => 12,
         "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
@@ -325,6 +329,7 @@ public static class StructureCatalogue
         7 => EntityKind.VeilProjector,
         8 => EntityKind.ServiceDepot,
         9 => EntityKind.Wall,
+        15 => EntityKind.Emplacement,   // P7-2
         11 => EntityKind.Barracks,
         12 => EntityKind.RadarUplink,
         13 => EntityKind.Outpost,   // ADR-021

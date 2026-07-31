@@ -631,6 +631,9 @@ public sealed partial class World
         // named in a hardcoded predicate. The compiled default must agree
         // with sod_veil_projector.yaml or the /data round-trip fails loudly,
         // which is exactly the check that now protects the rule.
+        // P7-2: the Emplacement. Cheap, short-lived under armour, and the only
+        // thing in the game that answers massed infantry from a fixed position.
+        15 => new StructureTypeDef(350, EntityKind.Emplacement, 90, Hp: 300, PowerDraw: 10, SightCells: 5, WeaponId: 8, Prereqs: new[] { 1 }),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
@@ -679,7 +682,11 @@ public sealed partial class World
     /// loops must also skip GateStructType: the gate
     /// is inside the bound but has no def and no file (ADR-005 clause 6).
     /// </summary>
-    public const int MaxStructType = 14;
+    // P7-2 raised this from 14 to 15 for the Emplacement. Note that 10 is NOT
+    // free despite the gap in the id map: it is GateStructType, reserved by
+    // ADR-005 for the deferred wall gates, and SeedStructureTypes skips it.
+    // Taking it would have silently collided with C6b the day it lands.
+    public const int MaxStructType = 15;
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -977,6 +984,24 @@ public sealed partial class World
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Turret,
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 5,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>P7-2: the Emplacement, the anti-infantry hardpoint. Identical
+    /// in shape to SpawnTurret because it IS a turret in every structural
+    /// sense - the difference that matters is its weapon, which is authored in
+    /// /data and read from the def rather than written here.</summary>
+    public int SpawnEmplacement(int player, int ax, int ay)
+    {
+        var def = GetStructureType(15);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Emplacement,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = 15,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
         });
@@ -1508,6 +1533,7 @@ public sealed partial class World
                     case EntityKind.Refinery: SpawnRefinery(c.PlayerId, ax, ay); break;
                     case EntityKind.ConstructionYard: SpawnConstructionYard(c.PlayerId, ax, ay); break;
                     case EntityKind.Turret: SpawnTurret(c.PlayerId, ax, ay); break;
+                    case EntityKind.Emplacement: SpawnEmplacement(c.PlayerId, ax, ay); break;   // P7-2
                     case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay); break;
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
@@ -1712,6 +1738,16 @@ public sealed partial class World
              or EntityKind.ConstructionYard or EntityKind.Turret or EntityKind.Superweapon
              or EntityKind.VeilProjector or EntityKind.ServiceDepot or EntityKind.Wall
              or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield
+             // P7-2: the Emplacement, and Bastion alongside it. Bastion spawns
+             // from nothing today and is therefore inert here, but it is added
+             // in the same breath deliberately: this predicate is an
+             // ENUMERATION, and the Emplacement has just proved what that
+             // costs. Left out of this list a building is not a structure to
+             // the sim at all - not power-gated, not repairable, not sellable,
+             // not counted for victory - and every one of those failures is
+             // silent. Adding the reserved kind now closes the identical trap
+             // before it is stepped in.
+             or EntityKind.Emplacement or EntityKind.Bastion
              // ADR-021: the Outpost is a structure, which is what makes it
              // engineer-capturable through the untouched CaptureSystem (whose
              // only ownership test, t.PlayerId == e.PlayerId, a neutral -1
@@ -2246,12 +2282,24 @@ public sealed partial class World
             var e = _entities[i];
             if (!e.Alive || e.WeaponId == 0) continue;
             // GDD s5 line 48: a browned-out base cannot power its guns
-            // (ADR-008 clause 1). Turret kind only - the GDD says defensive
-            // turrets, and doc 22's emplacement and bastion join by kind when
-            // they land. The continue sits ABOVE the cooldown decrement
-            // deliberately: a dead turret does not reload. Inclusive boundary
-            // via divisionless AtLeast75: supply 15 against draw 20 FIRES.
-            if (e.Kind == EntityKind.Turret && !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId]))
+            // (ADR-008 clause 1).
+            //
+            // P7-2 generalised this from `Kind == Turret` to ANY ARMED
+            // STRUCTURE. The old form named one kind, and the comment here
+            // promised that "doc 22's emplacement and bastion join by kind when
+            // they land" - an enumeration somebody has to remember. The
+            // Emplacement proved nobody would: it shipped firing straight
+            // through a brown-out until a gate caught it. What the rule MEANS
+            // is that a building's gun needs power, so it now keys on the
+            // building having a gun. Behaviour-identical on the day it changed,
+            // because the turret was the only armed structure in the
+            // catalogue - which is why the goldens do not move.
+            //
+            // The continue sits ABOVE the cooldown decrement deliberately: a
+            // dead turret does not reload. Inclusive boundary via divisionless
+            // AtLeast75: supply 15 against draw 20 FIRES.
+            if (IsStructure(e.Kind) && e.WeaponId != 0
+                && !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId]))
             { _entities[i] = e; continue; }
             if (e.Cooldown > 0) { e.Cooldown--; _entities[i] = e; continue; }
 

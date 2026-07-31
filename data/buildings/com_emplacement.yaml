@@ -1,0 +1,22 @@
+# P7-2. The anti-infantry leg of base defence, and the answer to the balance
+# tool's sharpest measured conviction: at equal credits massed rifle squads beat
+# almost everything, and the turret is anti-armour so it answers them badly.
+# The Emplacement is deliberately NOT a small turret. It is cheap, it dies to
+# armour, and it shreds infantry at a range no rifle squad can match - range 4
+# against the service rifle's 3, because a defence that must be walked into by
+# the thing it counters is not a counter.
+# Held to the same power rule as the turret (ADR-008): it goes quiet below the
+# brown-out line, so defence still costs an economy rather than being free once
+# it is built.
+id: com_emplacement
+name: Emplacement
+faction: common
+cost: 350
+build_time_ticks: 90
+hp: 300
+power_supply: 0
+power_draw: 10
+sight_range: 5
+footprint: 2
+weapon_ids: [wpn_emplacement_gun]
+prerequisites: [com_power_plant]

@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   emplacementgate    - P7-2: the Emplacement beats infantry and LOSES to armour, so defence is a choice; and it obeys the power gate
 //   factiongate        - P7-1: a building's side comes from /data; common admits both, a declared side is obeyed
 //   basingate          - skirmish-07 played 20,000 ticks (~22 simulated minutes): the commanders expand and fight rather than stall
 //   sizeprobe          - doc 26 s5: ms/tick and flow-field build cost against map area (not a gate; nothing asserts)
@@ -4524,6 +4525,91 @@ int SizeProbe()
     return 0;
 }
 
+int EmplacementGate()
+{
+    // P7-2. Additive, the factiongate/decorgate pattern: a standalone mode and
+    // a Match battery stage, never a golden scenario, so the golden list stays
+    // 24.
+    //
+    // The claim is not "a new building exists". It is that base defence now has
+    // a ROCK-PAPER-SCISSORS, which needs both halves proven: the Emplacement
+    // must beat the thing the turret answers badly, and must LOSE to the thing
+    // the turret answers well. A defence that is simply better than the turret
+    // would be a straight upgrade and would make the choice fake.
+    const int Emplacement = 15, Turret = 5;
+
+    // 1. Against infantry the Emplacement wins and wins faster than the turret.
+    //    Both are given the same rifle squad at the same range, and the turret
+    //    is the control - its anti-armour warhead is measurably the wrong tool.
+    int TicksToKillInfantry(int structType)
+    {
+        var w = new World(2900, 64, 64, players: 2);
+        int def = structType == Emplacement ? w.SpawnEmplacement(0, 20, 20) : w.SpawnTurret(0, 20, 20);
+        // Power it, or ADR-008's brown-out gate silences both and the check
+        // measures nothing at all.
+        w.SpawnPowerPlant(0, 30, 30, supply: 500);
+        int foe = w.SpawnUnit(1, Fix64.FromInt(23), Fix64.FromInt(21),
+                              Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        for (int t = 0; t < 900; t++)
+        {
+            w.Step(default);
+            if (!w.Entities[foe].Alive) return t;
+        }
+        return -1;
+    }
+    int empVsInfantry = TicksToKillInfantry(Emplacement);
+    int turVsInfantry = TicksToKillInfantry(Turret);
+    if (empVsInfantry < 0)
+        return Fail("emplacement: it must kill a rifle squad standing in its range");
+    if (turVsInfantry >= 0 && empVsInfantry >= turVsInfantry)
+        return Fail($"emplacement: it must answer infantry BETTER than the turret does "
+                    + $"({empVsInfantry} ticks vs the turret's {turVsInfantry}) - otherwise it is not a counter, "
+                    + "it is a second turret");
+
+    // 2. Against armour it is the wrong tool, which is what makes the pair a
+    //    choice. Same shape, armoured target, and the turret is the control
+    //    that SHOULD win here.
+    int TicksToKillArmour(int structType)
+    {
+        var w = new World(2901, 64, 64, players: 2);
+        if (structType == Emplacement) w.SpawnEmplacement(0, 20, 20); else w.SpawnTurret(0, 20, 20);
+        w.SpawnPowerPlant(0, 30, 30, supply: 500);
+        int foe = w.SpawnUnit(1, Fix64.FromInt(23), Fix64.FromInt(21),
+                              Fix64.Zero, 400, ArmourClass.Heavy, weaponId: 0);
+        for (int t = 0; t < 1800; t++)
+        {
+            w.Step(default);
+            if (!w.Entities[foe].Alive) return t;
+        }
+        return -1;
+    }
+    int empVsArmour = TicksToKillArmour(Emplacement);
+    int turVsArmour = TicksToKillArmour(Turret);
+    if (turVsArmour < 0)
+        return Fail("emplacement control: the TURRET must still kill armour - if it cannot, this check proves nothing");
+    if (empVsArmour >= 0 && empVsArmour <= turVsArmour)
+        return Fail($"emplacement: it must answer armour WORSE than the turret ({empVsArmour} vs {turVsArmour}) - "
+                    + "a defence that beats everything removes the decision this wave exists to create");
+
+    // 3. It obeys ADR-008's power rule, like every other weapon emplacement.
+    //    Free defence once built would make the economy stop mattering.
+    {
+        var w = new World(2902, 64, 64, players: 2);
+        w.SpawnEmplacement(0, 20, 20);
+        int foe = w.SpawnUnit(1, Fix64.FromInt(23), Fix64.FromInt(21),
+                              Fix64.Zero, 100, ArmourClass.None, weaponId: 0);
+        for (int t = 0; t < 600; t++) w.Step(default);   // no power plant anywhere
+        if (!w.Entities[foe].Alive)
+            return Fail("emplacement: an UNPOWERED emplacement must hold its fire (ADR-008)");
+    }
+
+    Console.WriteLine($"emplacementgate: the Emplacement kills a rifle squad in {empVsInfantry} ticks against the "
+                      + $"turret's {turVsInfantry}, and is the WORSE answer to armour ({(empVsArmour < 0 ? "never killed it" : empVsArmour + " ticks")} "
+                      + $"against the turret's {turVsArmour}), so base defence is a choice rather than a ladder; "
+                      + "and it holds fire unpowered, so defence still costs an economy");
+    return 0;
+}
+
 int FactionGate()
 {
     // P7-1. Additive, the decorgate/repairgate pattern: a standalone mode and a
@@ -5228,6 +5314,9 @@ int Match(ulong seed)
     // P7-1: a building's faction comes from /data, not from a hardcoded name.
     int factions = FactionGate();
     if (factions != 0) return factions;
+    // P7-2: base defence is a choice, not a ladder.
+    int emplace = EmplacementGate();
+    if (emplace != 0) return emplace;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6076,6 +6165,7 @@ return args.Length == 0
         "decorgate" => DecorGate(),
         "basingate" => BasinGate(),
         "factiongate" => FactionGate(),
+        "emplacementgate" => EmplacementGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
