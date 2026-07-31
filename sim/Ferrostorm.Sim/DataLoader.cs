@@ -274,6 +274,7 @@ public static class UnitCatalogue
         "com_carrier" => 14,          // P7-3: the transport
         "com_strike_flyer" => 15,     // ADR-028 (P7-4)
         "com_flak_track" => 16,       // ADR-028 clause 4: the answer
+        "sod_infiltrator" => 17,      // P7-7: GDD s7's "Infiltrator (steals intel/credits)"
         _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 

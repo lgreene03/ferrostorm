@@ -478,6 +478,9 @@ public sealed partial class World
         // ADR's own binding. Mobile, because what air threatens most is the
         // army in the field rather than the base.
         { 16, new UnitTypeDef(550, 130, 260, ArmourClass.Light, 9, Fix64.FromFraction(26, 100), SightCells: 7, Prereqs: new[] { 12 }) }, // com_flak_track
+        // P7-7: the Infiltrator. Cloaked, unarmed, barracks-built, and consumed
+        // by the theft exactly as the engineer is consumed by capture.
+        { 17, new UnitTypeDef(700, 150, 90, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 5, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11) }, // sod_infiltrator
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -905,6 +908,8 @@ public sealed partial class World
     /// number rather than a 7 that has to be recognised on sight.</summary>
     public const int McvUnitType = 7;
     public const int EngineerUnitType = 11;
+    /// <summary>P7-7: GDD s7's Infiltrator, the Sodality's economy-denial tool.</summary>
+    public const int InfiltratorUnitType = 17;
 
     /// <summary>ADR-021 (P6 Wave C4): what a captured Outpost pays its owner,
     /// once per second (the pre-increment tick's positive multiples of
@@ -2410,7 +2415,15 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
-            if (!e.Alive || e.UnitType != 11 || e.ExplicitTarget < 0) continue;
+            // P7-7 generalised this from `UnitType != 11`. Two unit types now
+            // ACT ON CONTACT with an enemy structure - the engineer captures it
+            // and the infiltrator robs it - and the walk, the reach test and
+            // the consumed-by-the-act rule are identical for both. Adding a
+            // second literal type here would have been the eighth enumeration
+            // this phase; the shared shape is named once and the EFFECT
+            // branches at the point where they actually differ.
+            bool isEngineer = e.UnitType == EngineerUnitType, isInfiltrator = e.UnitType == InfiltratorUnitType;
+            if (!e.Alive || (!isEngineer && !isInfiltrator) || e.ExplicitTarget < 0) continue;
             if (!ValidId(e.ExplicitTarget)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             var t = _entities[e.ExplicitTarget];
             // ADR-005 clause 2: engineers do not capture fences.
@@ -2425,15 +2438,38 @@ public sealed partial class World
             Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
             if (d <= Fix64.FromFraction(49, 16)) // within 1.75 cells of the footprint centre: through the door
             {
-                int captured = e.ExplicitTarget;
+                int touched = e.ExplicitTarget;
+                if (isInfiltrator)
+                {
+                    // P7-7: the theft. A SHARE of the victim's treasury rather
+                    // than a flat sum, because the Sodality's written identity
+                    // is economy denial and a percentage is what punishes the
+                    // hoard - robbing a rich enemy is worth the walk, robbing a
+                    // broke one is not. A fifth is my call and is recorded as
+                    // one; the GDD names the unit and not the number.
+                    long taken = _credits[t.PlayerId] / 5;
+                    if (taken > 0)
+                    {
+                        _credits[t.PlayerId] -= taken;
+                        _credits[e.PlayerId] += taken;
+                    }
+                    // The structure is UNHARMED and unchanged hands: this is a
+                    // robbery, not a capture, and conflating them would give the
+                    // Sodality a second engineer instead of a different tool.
+                    e.Alive = false; e.Moving = false; e.ExplicitTarget = -1;
+                    _events.Add(new GameEvent(GameEventType.Captured, touched, e.PlayerId, C: (int)taken));
+                }
+                else
+                {
                 t.PlayerId = e.PlayerId;
                 t.Repairing = false;
                 t.ReadyStructure = 0;
-                _queues.Remove(captured);
-                _orderQueues.Remove(captured);
-                _entities[captured] = t;
+                _queues.Remove(touched);
+                _orderQueues.Remove(touched);
+                _entities[touched] = t;
                 e.Alive = false; e.Moving = false; e.ExplicitTarget = -1; // the act consumes the engineer
-                _events.Add(new GameEvent(GameEventType.Captured, captured, e.PlayerId));
+                _events.Add(new GameEvent(GameEventType.Captured, touched, e.PlayerId));
+                }
             }
             else
             {
