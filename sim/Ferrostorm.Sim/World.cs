@@ -20,6 +20,8 @@ public enum CommandType : byte
     LaunchSuper = 15,    // EntityId (charged superweapon) fires at map position X/Y (TICKET-P2-SIM-15)
     SetRally = 16,       // EntityId (own producing structure) rally point at X/Y; AuxId == -1 clears (ADR-007)
     SetStance = 17,      // EntityId (own unit) stance = (Stance)AuxId; Patrol reads X/Y as the far waypoint (ADR-015)
+    LoadTransport = 18,  // P7-3: EntityId (own infantry) boards transport AuxId; walks to it if out of reach
+    UnloadTransport = 19,// P7-3: EntityId (own transport) sets its whole cargo down around itself
 }
 
 public readonly struct Command
@@ -462,6 +464,12 @@ public sealed partial class World
         // (the ProducedAt default 2). Veterancy off, like the MCV and harvester.
         // The heal behaviour is hardcoded in ProductionSystem, not a stat.
         { 13, new UnitTypeDef(700, 120, 300, ArmourClass.Light, 0, Fix64.FromFraction(1, 5), Veterancy: false, Prereqs: new[] { 8 }) }, // com_repair_vehicle
+        // Carrier (P7-3): the transport, and the first unit that exists to move
+        // OTHER units. Unarmed on purpose - a transport that fights is a light
+        // tank that happens to carry, and deciding whether to escort it is the
+        // whole point. Prereq the barracks (struct type 11), because what it
+        // carries is what the barracks makes.
+        { 14, new UnitTypeDef(600, 140, 350, ArmourClass.Light, 0, Fix64.FromFraction(22, 100), Veterancy: false, SightCells: 6, Prereqs: new[] { 11 }) }, // com_carrier
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -496,6 +504,39 @@ public sealed partial class World
         public bool Inert => Queue.Count == 0 && Progress == 0 && Paid == 0 && Ready == 0;
     }
     private readonly Dictionary<int, BuildLane> _lanes = new(); // yard id -> its second lane, ONLY while active
+
+    /// <summary>P7-3: what a transport is carrying, keyed by transport id and
+    /// held ONLY while it carries something. A carried unit is despawned - it
+    /// is not a live entity that every system has to remember to skip, which
+    /// is the enumeration trap this phase has already been bitten by three
+    /// times - and what is kept is exactly enough to put it back: its type, its
+    /// health and its rank.
+    ///
+    /// A pruned side collection, the ADR-023 lane pattern, and pruned for the
+    /// same reason: the entry is removed the instant the hold empties, so "no
+    /// entry" provably means "no state that could gate behaviour", which is
+    /// what makes the guarded hash fold sound rather than merely convenient.
+    /// A world with no transport carries no entry and hashes identically.</summary>
+    public readonly record struct CargoUnit(int UnitType, int Hp, int Rank);
+    private readonly Dictionary<int, List<CargoUnit>> _cargo = new();
+
+    /// <summary>P7-3: how many a transport holds. Five is the benchmark figure
+    /// and it is the number that makes an engineer plus an escort fit.</summary>
+    public const int CarrierCapacity = 5;
+    public const int CarrierUnitType = 14;
+
+    /// <summary>P7-3: what a transport is carrying, for the client and the
+    /// gates. Empty for anything that is not carrying, including anything that
+    /// is not a transport.</summary>
+    public IReadOnlyList<CargoUnit> CargoOf(int transportId)
+        => _cargo.TryGetValue(transportId, out var c) ? c : System.Array.Empty<CargoUnit>();
+
+    /// <summary>P7-3: infantry is what a transport carries, and it is a DATA
+    /// question, not a hardcoded list - anything the barracks produces fits.
+    /// That admits the engineer, which is the point: delivering one under fire
+    /// is the play this unit exists to make possible.</summary>
+    public bool IsCarryable(int unitType)
+        => unitType != CarrierUnitType && GetUnitType(unitType).ProducedAt == BarracksStructType;
 
     /// <summary>ADR-023 clause 6: the bit that marks a CancelProduce AuxId as
     /// addressing the SECOND lane. High enough that no real queue index or
@@ -1183,6 +1224,17 @@ public sealed partial class World
         MovementSystem();
         SeparationSystem();
         DetectionSystem();
+        // P7-3: a destroyed carrier takes its hold with it. Walked by ENTITY
+        // INDEX rather than over the dictionary's keys, because dictionary
+        // iteration order is a determinism hazard and this runs every tick on
+        // every client. Done as one sweep rather than at each death site: there
+        // are several of those, and enumerating them is the trap this phase has
+        // already been bitten by three times.
+        if (_cargo.Count > 0)
+        {
+            for (int i = 0; i < _entities.Count; i++)
+                if (!_entities[i].Alive && _cargo.ContainsKey(i)) _cargo.Remove(i);
+        }
         CaptureSystem();
         CombatSystem();
         HarvestSystem();
@@ -1590,6 +1642,82 @@ public sealed partial class World
                 e.Alive = false; // the vehicle IS the building
                 int newCy = SpawnConstructionYard(e.PlayerId, dax, day);
                 _events.Add(new GameEvent(GameEventType.Deployed, c.EntityId, newCy));
+                break;
+            }
+            case CommandType.LoadTransport:
+            {
+                // P7-3. EntityId is the unit doing the boarding, AuxId the
+                // transport, matching Attack and Harvest where the actor is the
+                // entity and the target is the aux.
+                if (e.Kind != EntityKind.Unit || !IsCarryable(e.UnitType)) break;
+                if (c.AuxId < 0 || c.AuxId >= _entities.Count) break;
+                var carrier = _entities[c.AuxId];
+                if (!carrier.Alive || carrier.PlayerId != e.PlayerId
+                    || carrier.Kind != EntityKind.Unit || carrier.UnitType != CarrierUnitType) break;
+                if (!_cargo.TryGetValue(c.AuxId, out var hold)) hold = null;
+                if ((hold?.Count ?? 0) >= CarrierCapacity) break;
+
+                // Out of reach: WALK there rather than refusing. The order is
+                // re-issued each beat by whoever gave it, so this is
+                // self-healing if the transport moves - the same shape the AI's
+                // engineer-to-outpost order uses.
+                if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) > Fix64.FromInt(4))
+                {
+                    e.TargetX = carrier.X; e.TargetY = carrier.Y;
+                    e.Moving = true; e.UseFlow = true; e.AMove = false;
+                    e.StallTicks = 0; e.NearestApproachSq = Fix64.Zero; e.NoProgressTicks = 0;
+                    break;
+                }
+
+                if (hold is null) _cargo[c.AuxId] = hold = new List<CargoUnit>();
+                hold.Add(new CargoUnit(e.UnitType, e.Hp, e.Rank));
+                // Despawned, not flagged. A carried unit that stayed alive would
+                // have to be skipped by movement, combat, separation, selection
+                // and drawing, and every one of those skips is an enumeration
+                // somebody forgets - this phase has already paid for that lesson
+                // three times.
+                e.Alive = false;
+                e.Moving = false;
+                _events.Add(new GameEvent(GameEventType.Died, c.EntityId, -1));
+                break;
+            }
+            case CommandType.UnloadTransport:
+            {
+                // P7-3. Sets the whole hold down around the transport, in the
+                // order it was loaded, using the same deterministic spawn ring
+                // the producers use so two clients place them identically.
+                if (e.Kind != EntityKind.Unit || e.UnitType != CarrierUnitType) break;
+                if (!_cargo.TryGetValue(c.EntityId, out var hold) || hold.Count == 0) break;
+                int ax = Map.CellOf(e.X), ay = Map.CellOf(e.Y);
+                int placed = 0;
+                foreach (var cu in hold)
+                {
+                    // The producers' own spawn ring, walked in its committed
+                    // order, so two clients set the hold down identically.
+                    int sx = -1, sy = -1;
+                    foreach (var (dx, dy) in SpawnOffsets)
+                    {
+                        int nx = ax + dx, ny = ay + dy;
+                        if (nx < 0 || ny < 0 || nx >= Map.Width || ny >= Map.Height) continue;
+                        if (Map.IsBlocked(nx, ny) || CellOccupied(nx, ny)) continue;
+                        sx = nx; sy = ny; break;
+                    }
+                    if (sx < 0) break;   // ringed in: what is left stays aboard
+                    var def = GetUnitType(cu.UnitType);
+                    int id = SpawnUnit(e.PlayerId, Map.CellCentre(sx), Map.CellCentre(sy),
+                                       def.Speed, cu.Hp, def.Armour, def.WeaponId,
+                                       veterancy: def.Veterancy, unitType: cu.UnitType);
+                    var landed = _entities[id];
+                    landed.Rank = cu.Rank;          // a veteran does not lose its rank in transit
+                    landed.Hp = cu.Hp;
+                    _entities[id] = landed;
+                    _events.Add(new GameEvent(GameEventType.ProductionComplete, c.EntityId, id));
+                    placed++;
+                }
+                hold.RemoveRange(0, placed);
+                // PRUNE on empty, which is what makes the hash fold sound: no
+                // entry provably means nothing carried.
+                if (hold.Count == 0) _cargo.Remove(c.EntityId);
                 break;
             }
             case CommandType.Repair:
@@ -3333,6 +3461,16 @@ public sealed partial class World
                 h.Add(lane.Progress); h.Add(lane.Paid); h.Add(lane.Ready);
                 h.Add(lane.Queue.Count);
                 foreach (int t in lane.Queue) h.Add(t);
+            }
+            // P7-3: a transport's hold, folded on exactly the lane's terms and
+            // for exactly its reason. The entry is pruned the instant the hold
+            // empties, so no entry provably means no carried state, and a world
+            // with no transport in it hashes byte-identically to one compiled
+            // before transports existed.
+            if (_cargo.TryGetValue(e.Id, out var hold))
+            {
+                h.Add(hold.Count);
+                foreach (var cu in hold) { h.Add(cu.UnitType); h.Add(cu.Hp); h.Add(cu.Rank); }
             }
         }
         if (_orderQueues.Count > 0)

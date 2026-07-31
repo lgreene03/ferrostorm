@@ -26,6 +26,7 @@ using Ferrostorm.Sim;
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
 //   emplacementgate    - P7-2: the Emplacement beats infantry and LOSES to armour, so defence is a choice; and it obeys the power gate
 //   factiongate        - P7-1: a building's side comes from /data; common admits both, a declared side is obeyed
 //   basingate          - skirmish-07 played 20,000 ticks (~22 simulated minutes): the commanders expand and fight rather than stall
@@ -2296,17 +2297,21 @@ int CatalogueRefuse()
 // bytes. (The pre-B2 version of this lived inline in catrefuse and assumed
 // the only difference was the checksum; the wider entity record made it a
 // shared, layout-aware helper.)
-byte[] DowngradeSave(byte[] v8, uint targetMagic)
+byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u;
-    using var input = new BinaryReader(new MemoryStream(v8));
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u;
+    using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    if (input.ReadUInt32() != magicV8)
-        throw new InvalidOperationException("save surgery expects a v8 stream");
+    // P7-3: the SOURCE is whatever Save() currently writes, which is v9 now.
+    // Pinned to a literal version this helper broke the moment the format
+    // moved, and it broke in the battery rather than here - the same
+    // name-one-version trap the loader's hasBuildLanes had.
+    if (input.ReadUInt32() != magicV9)
+        throw new InvalidOperationException("save surgery expects a v9 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic == magicV3 || targetMagic == magicV4 || targetMagic == magicV5 || targetMagic == magicV6 || targetMagic == magicV7) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2364,18 +2369,31 @@ byte[] DowngradeSave(byte[] v8, uint targetMagic)
         int n = input.ReadInt32(); w.Write(n);
         for (int k = 0; k < n; k++) w.Write(input.ReadBytes(34)); // one serialized Command
     }
-    // ADR-023 (v8 only): consumed and DROPPED. This helper only ever produces
-    // formats BELOW v8, and v8 is refused as a target rather than half-copied:
-    // writing the count without the lane bodies would emit a corrupt save that
-    // loaded as a truncation error somewhere far from here.
-    if (targetMagic == magicV8) throw new InvalidOperationException("save surgery downgrades; v8 is the source format, not a target");
+    // ADR-023's lane block: kept for a v8 target, dropped below it. v9 is the
+    // SOURCE format and is refused as a target rather than half-copied, the
+    // same reason v8 used to be.
+    if (targetMagic == magicV9) throw new InvalidOperationException("save surgery downgrades; v9 is the source format, not a target");
     int laneCount = input.ReadInt32();
+    bool keepLanes = targetMagic == magicV8;
+    if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
-        input.ReadInt32();                                // yard id
-        input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); // progress, paid, ready
+        int yard = input.ReadInt32();
+        int prog = input.ReadInt32(), paid = input.ReadInt32(), ready = input.ReadInt32();
         int n = input.ReadInt32();
-        for (int k = 0; k < n; k++) input.ReadInt32();
+        if (keepLanes) { w.Write(yard); w.Write(prog); w.Write(paid); w.Write(ready); w.Write(n); }
+        for (int k = 0; k < n; k++) { int t = input.ReadInt32(); if (keepLanes) w.Write(t); }
+    }
+    // P7-3 (v9 only): the transport holds, consumed and DROPPED. Every target
+    // this helper produces predates transports, so a hold cannot be expressed
+    // in any of them - and a unit that was aboard is simply not in that older
+    // world, which is what those formats meant.
+    int cargoCount = input.ReadInt32();
+    for (int i = 0; i < cargoCount; i++)
+    {
+        input.ReadInt32();                                // carrier id
+        int n = input.ReadInt32();
+        for (int k = 0; k < n; k++) { input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); }
     }
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
@@ -4525,6 +4543,149 @@ int SizeProbe()
     return 0;
 }
 
+int TransportGate()
+{
+    // P7-3. Additive, the emplacementgate pattern: a standalone mode and a
+    // Match battery stage, never a golden scenario, so the golden list stays 24.
+    const int Carrier = World.CarrierUnitType, Rifle = 2, Engineer = World.EngineerUnitType, Tank = 1;
+
+    World Fresh(out int carrier)
+    {
+        var w = new World(3000, 64, 64, players: 2);
+        var cd = w.GetUnitType(Carrier);
+        carrier = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), cd.Speed, cd.Hp,
+                              cd.Armour, 0, veterancy: false, unitType: Carrier);
+        return w;
+    }
+    int Board(World w, int carrier, int unitType, int cx, int cy)
+    {
+        var d = w.GetUnitType(unitType);
+        int u = w.SpawnUnit(0, Fix64.FromInt(cx), Fix64.FromInt(cy), d.Speed, d.Hp,
+                            d.Armour, d.WeaponId, veterancy: false, unitType: unitType);
+        var cmd = new List<Command> { new(w.Tick, 0, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmd));
+        return u;
+    }
+
+    // --- 1. Infantry boards, and boarding DESPAWNS rather than flags. A
+    //        carried unit that stayed alive would have to be skipped by
+    //        movement, combat, separation, selection and drawing, and every one
+    //        of those skips is an enumeration somebody forgets.
+    {
+        var w = Fresh(out int carrier);
+        int rifle = Board(w, carrier, Rifle, 21, 20);
+        if (w.Entities[rifle].Alive)
+            return Fail("transport: a boarded unit must leave the world, not linger as a live entity");
+        if (w.CargoOf(carrier).Count != 1)
+            return Fail($"transport: the hold must hold one ({w.CargoOf(carrier).Count})");
+    }
+
+    // --- 2. Armour cannot board. What a transport carries is a DATA question
+    //        (barracks-produced), so the tank is refused without a hardcoded
+    //        list naming it.
+    {
+        var w = Fresh(out int carrier);
+        int tank = Board(w, carrier, Tank, 21, 20);
+        if (!w.Entities[tank].Alive || w.CargoOf(carrier).Count != 0)
+            return Fail("transport: a tank is not infantry and must NOT board");
+        if (!w.IsCarryable(Engineer))
+            return Fail("transport: the ENGINEER must be carryable - delivering one is the play this unit exists for");
+    }
+
+    // --- 3. Capacity is real, and the refusal does not eat the unit.
+    {
+        var w = Fresh(out int carrier);
+        for (int i = 0; i < World.CarrierCapacity; i++) Board(w, carrier, Rifle, 21, 20 + (i % 2));
+        if (w.CargoOf(carrier).Count != World.CarrierCapacity)
+            return Fail($"transport: the hold must fill to {World.CarrierCapacity} ({w.CargoOf(carrier).Count})");
+        int overflow = Board(w, carrier, Rifle, 21, 21);
+        if (!w.Entities[overflow].Alive)
+            return Fail("transport: a refused boarder must survive the refusal - a full hold is not a shredder");
+        if (w.CargoOf(carrier).Count != World.CarrierCapacity)
+            return Fail("transport: a full hold must not exceed capacity");
+    }
+
+    // --- 4. Unload puts them back, keeps their health and rank, and PRUNES the
+    //        hold - the prune is what makes the hash fold sound.
+    {
+        var w = Fresh(out int carrier);
+        int rifle = Board(w, carrier, Rifle, 21, 20);
+        var hurt = w.Entities[rifle];
+        int before = w.EntityCount;
+        var cmd = new List<Command> { new(w.Tick, 0, CommandType.UnloadTransport, carrier, Fix64.Zero, Fix64.Zero) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmd));
+        if (w.CargoOf(carrier).Count != 0)
+            return Fail("transport: unloading must empty the hold");
+        int landed = -1;
+        for (int i = before; i < w.EntityCount; i++)
+            if (w.Entities[i].Alive && w.Entities[i].UnitType == Rifle) landed = i;
+        if (landed < 0)
+            return Fail("transport: unloading must put a live rifle squad back on the map");
+        if (w.Entities[landed].Hp != hurt.Hp)
+            return Fail($"transport: a unit must keep its health across the journey ({w.Entities[landed].Hp} vs {hurt.Hp})");
+    }
+
+    // --- 5. THE EDGE CASE THAT MATTERS: a destroyed transport takes its cargo
+    //        with it. Anything else would make the hold a place to hide an army
+    //        where nothing can shoot it.
+    {
+        var w = Fresh(out int carrier);
+        Board(w, carrier, Rifle, 21, 20);
+        Board(w, carrier, Rifle, 21, 21);
+        if (w.CargoOf(carrier).Count != 2) return Fail("transport: the precondition needs two aboard");
+        // Killed through the REAL damage path, not by setting Alive false: a
+        // death staged by fiat skips whatever the death path does, which is
+        // exactly the code under test here.
+        var frail = w.Entities[carrier]; frail.Hp = 1; w.SetEntityForTest(carrier, frail);
+        var rd = w.GetUnitType(Rifle);
+        w.SpawnUnit(1, Fix64.FromInt(21), Fix64.FromInt(20), rd.Speed, rd.Hp, rd.Armour, rd.WeaponId,
+                    veterancy: false, unitType: Rifle);
+        int wasAlive = w.EntityCount;
+        for (int t = 0; t < 120 && w.Entities[carrier].Alive; t++) w.Step(default);
+        // Step ON past the death. The loop above stops the tick the carrier
+        // dies, and the sweep that empties a dead hold runs on the NEXT tick -
+        // asserting immediately would have measured the frame before the
+        // cleanup rather than the cleanup.
+        for (int t = 0; t < 3; t++) w.Step(default);
+        if (w.Entities[carrier].Alive)
+            return Fail("transport: the precondition needs the carrier destroyed");
+        for (int i = wasAlive; i < w.EntityCount; i++)
+            if (w.Entities[i].Alive && w.Entities[i].UnitType == Rifle)
+                return Fail("transport: a destroyed carrier must NOT spill its cargo back onto the map");
+        if (w.CargoOf(carrier).Count != 0)
+            return Fail("transport: a destroyed carrier must not still be holding an army");
+    }
+
+    // --- 6. A save carries the hold. Without this a player who saved with
+    //        troops aboard would load to find them gone, which is data loss
+    //        rather than a missing feature - and nothing else in the battery
+    //        would have noticed.
+    {
+        var w = Fresh(out int carrier);
+        Board(w, carrier, Rifle, 21, 20);
+        Board(w, carrier, Engineer, 21, 21);
+        var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var back = World.Load(ms);
+        var hold = back.CargoOf(carrier);
+        if (hold.Count != 2)
+            return Fail($"transport: a save must carry the hold ({hold.Count} of 2 survived)");
+        if (hold[0].UnitType != Rifle || hold[1].UnitType != Engineer)
+            return Fail("transport: the hold must round-trip in ORDER - unloading order is gameplay");
+        if (back.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("transport: a loaded world carrying cargo must hash identically to the one saved");
+    }
+
+    Console.WriteLine("transportgate: infantry boards and leaves the world rather than lingering as a skipped entity; a "
+                      + "tank is refused because carryable is DATA (barracks-produced) and the engineer therefore rides; "
+                      + $"the hold fills to {World.CarrierCapacity} and a refused boarder survives; unloading returns the "
+                      + "unit with its health and rank and PRUNES the hold; and a destroyed carrier takes its cargo with "
+                      + "it, so the hold is not somewhere to hide an army; and a v9 save round-trips the hold in order, "
+                      + "hash-identical");
+    return 0;
+}
+
 int EmplacementGate()
 {
     // P7-2. Additive, the factiongate/decorgate pattern: a standalone mode and
@@ -5317,6 +5478,9 @@ int Match(ulong seed)
     // P7-2: base defence is a choice, not a ladder.
     int emplace = EmplacementGate();
     if (emplace != 0) return emplace;
+    // P7-3: the transport carries, refuses armour, and dies with its cargo.
+    int transport = TransportGate();
+    if (transport != 0) return transport;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6166,6 +6330,7 @@ return args.Length == 0
         "basingate" => BasinGate(),
         "factiongate" => FactionGate(),
         "emplacementgate" => EmplacementGate(),
+        "transportgate" => TransportGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
