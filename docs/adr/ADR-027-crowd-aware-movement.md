@@ -1,5 +1,5 @@
 # ADR-027: crowd-aware movement
-- Status: **Proposed** (needs Luke + Architect; nothing has been implemented)
+- Status: **Ratified and implemented** (2026-07-31, under the standing directive). Option C, the yielding variant.
 - Date: 2026-07-29
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD pillar 2 "fast, decisive, generous"; raised by Q018
@@ -36,7 +36,45 @@ convictions, so DR-12's rebalance cannot be trusted until it is fixed.
 
 ## Decision
 
-**None yet. This ADR exists to make the decision cheap, not to pre-empt it.**
+**Option C, by yielding.** A stalled unit pressed by a friendly mover steps two
+cells out of the way. That breaks the cascade at its SOURCE - the first unit to
+give up becoming the stationary obstacle that benches the next - rather than
+disabling the machinery that detects the jam, which is what Option B tried and
+what cost it the settle gate.
+
+The nudge is deliberately a short straight step with the flow field off, so it
+ends itself on arrival, and it does NOT touch StallTicks or the ADR-014
+counters: a yield is not a new order, and re-arming there would recreate the
+trap ApplyCommandCore already falls into.
+
+**Measured against this ADR's own acceptance bar, and it clears both halves,
+which is what Option B could not do:**
+
+| | before | after |
+|---|---|---|
+| skirmish-02 approach | 7 v **29** | 10 v **5** |
+| skirmish-07 approach | - | 7 v 4 |
+| skirmish-08 approach | - | 12 v 4 |
+| pathing settle gate | green | **green** (500 units settled by tick 363) |
+
+**And this ADR's own hash prediction was WRONG.** It said all three Option C
+candidates "change how EVERY unit steps, so all three move all 24 goldens".
+Measured: **zero goldens move.** The yield fires only when a stalled unit is
+actually being pressed by a friendly mover, and no golden scenario reaches that
+state - so the regeneration this ADR said was certain was not needed at all. The
+prediction is left above rather than edited, because a costed option set whose
+costs turn out wrong is worth seeing.
+
+**What it does NOT fix, stated plainly.** skirmish-05 is byte-identical after
+the change. Its stalled units sit 1 to 2 cells apart with zero cell-sharing,
+and the separation radius is 0.6 cells, so they are never pressing each other
+at all: they are not jammed, they are spread out and stopped. That is a
+different failure from the cascade this ADR diagnosed, it is not addressed here,
+and Q018 stays open for it.
+
+---
+
+*The original option set is preserved below. It was written before implementation.*
 What follows is the option set with the cost of each measured rather than
 guessed, and one of them already eliminated by experiment.
 

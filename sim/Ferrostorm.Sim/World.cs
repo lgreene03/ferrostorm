@@ -2878,6 +2878,12 @@ public sealed partial class World
             int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
             Fix64 pushX = Fix64.Zero, pushY = Fix64.Zero;
             bool pressedOnStationary = false;
+            // ADR-027 / Q018: the inverse of pressedOnStationary. That flag
+            // notices a MOVER jammed against a stalled unit; this one notices a
+            // STALLED unit being pressed by a mover, which is the other half of
+            // the same event and the half nothing acted on.
+            bool pressedByMover = false;
+            Fix64 yieldX = Fix64.Zero, yieldY = Fix64.Zero;
 
             for (int by = cy - 1; by <= cy + 1; by++)
             {
@@ -2967,6 +2973,15 @@ public sealed partial class World
                         Fix64 overlap = minDist - d;
                         Fix64 scale = o.Moving ? Fix64.Half : Fix64.One; // full push off stationary blockers
                         if (!o.Moving) pressedOnStationary = true;
+                        // ADR-027: somebody is trying to get past this unit.
+                        // dx/dy already point AWAY from the neighbour, so the
+                        // accumulated vector is the direction out of the way.
+                        if (!e.Moving && o.Moving && o.PlayerId == e.PlayerId)
+                        {
+                            pressedByMover = true;
+                            yieldX += dx * overlap / d;
+                            yieldY += dy * overlap / d;
+                        }
                         pushX += dx * overlap * scale / d;
                         pushY += dy * overlap * scale / d;
                     }
@@ -2979,6 +2994,37 @@ public sealed partial class World
                 Fix64 ny = Fix64.Clamp(e.Y + pushY, Fix64.Half, Fix64.FromInt(Map.Height) - Fix64.Half);
                 if (!Map.IsBlocked(Map.CellOf(nx), Map.CellOf(e.Y))) e.X = nx;
                 if (!Map.IsBlocked(Map.CellOf(e.X), Map.CellOf(ny))) e.Y = ny;
+            }
+
+            // ADR-027, THE YIELD. Q018 traced the jam to a cascade: the first
+            // unit to give up becomes a STATIONARY obstacle, and pressing
+            // against a stationary unit is exactly what feeds the next unit's
+            // stall counter, so a production cluster freezes solid from the
+            // inside out. The backstops are not the fault - they cannot make a
+            // route through a crowd exist, which is what Option B proved when
+            // removing them traded a freeze for a never-settles.
+            //
+            // What was missing is that a unit standing in the way had no reason
+            // to move. Now it does: pressed by a friendly mover, a stalled unit
+            // steps aside two cells along the direction out of the way. That
+            // breaks the cascade at its source rather than disabling the
+            // machinery that detects it.
+            //
+            // UseFlow FALSE on purpose. The nudge is a short straight step that
+            // ends itself on arrival, and it deliberately does not touch
+            // StallTicks or the ADR-014 counters: a yield is not a new order,
+            // and re-arming the backstops here would recreate the trap
+            // ApplyCommandCore already falls into.
+            if (pressedByMover && !e.Moving && e.Kind == EntityKind.Unit
+                && e.Speed != Fix64.Zero && e.Stance != Stance.HoldFire)
+            {
+                Fix64 len = Fix64.Sqrt(Fix64.DistSq(yieldX, yieldY));
+                if (len > Fix64.Zero)
+                {
+                    e.TargetX = e.X + yieldX * Fix64.FromInt(2) / len;
+                    e.TargetY = e.Y + yieldY * Fix64.FromInt(2) / len;
+                    e.Moving = true; e.UseFlow = false; e.AMove = false;
+                }
             }
 
             // Stall arrival: a pathing combat unit that is no longer making
