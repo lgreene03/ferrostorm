@@ -39,7 +39,7 @@ that round-trips a live match.
 | Structures | ~20 | ~25 | **13** |
 | Defensive structures | 4 | 6 to 7 | **1** |
 | Superweapons | 2 | 3 | **1** |
-| Campaign missions | ~15 per side | ~14 per side | **3** |
+| Campaign missions | ~15 per side | ~14 per side | **6** |
 | Simultaneous players | 4 | 8 | **2** |
 
 The thirteen units are six shared (engineer, harvester, MCV, repair vehicle,
@@ -150,8 +150,29 @@ superweapons) are the designed response, and all three are blocked on Q017.
 
 ## Tier D: content volume
 
-**D1. Three campaign missions** against roughly fifteen per side in the
+**D1. Six campaign missions** against roughly fifteen per side in the
 benchmarks, with the voice set still placeholder TTS pending the legal check.
+**Half closed 2026-08-01** (P7-9, ADR-029): missions 04 to 06 shipped, and the
+gap is now six against fifteen rather than three.
+
+What matters more than the count is that the three new ones are shapes the
+campaign did not have. Missions 01 to 03 are a strike, a theft and a siege, all
+three decided by what is left standing. **Ironhaul** (04) is decided by what
+ARRIVES, which is the first non-destruction win condition in the game and the
+mission the Carrier exists for. **Skyfall** (05) is the first mission where a
+whole CATEGORY of unit is not optional: nothing in the player's starting force
+can touch an aircraft, by ADR-028 clause 3, and the answer has to be built.
+**Ashen Crown** (06) is the only mission that is a whole game, and it is where
+the rest of P7 is put in front of the player at once - defence with a shape, a
+contested sky, a treasury worth stealing.
+
+They are also the first missions that are GENERATED rather than hand-typed, at
+96x72, 112x80 and 128x96 against the old 64x48, and the first with the
+decorative layer the skirmish pool got in P6 and the campaign never did.
+
+Still open on this row: nine or so more missions to reach the benchmarks, the
+voice set, and bringing missions 01 to 03 under the generator (P7-9a, deferred
+because it moves two goldens).
 
 **D2. Two player seats.** Every committed map declares exactly two starts and
 `MapLoader.PlaceSkirmishStart` is hardcoded to two players, while GDD section 9
@@ -171,9 +192,16 @@ except A3, which is recorded only because skirmish-08 made its cost visible.
 
 Tier A and Tier B items are sim changes and every one of them moves goldens;
 each needs its own ADR and a regeneration under the doc 23 section 6 discipline.
-Tier C is largely `/data` and moves goldens through the catalogue. D1 is data and
-triggers; D2 is a sim change. Nothing here is hash-neutral, which is itself the
-argument for sequencing this work rather than picking it up piecemeal.
+Tier C is largely `/data` and moves goldens through the catalogue. D2 is a sim
+change. Nothing here is hash-neutral, which is itself the argument for
+sequencing this work rather than picking it up piecemeal.
+
+D1 was the exception and it was not predicted: missions 04 to 06 landed with all
+24 goldens byte-identical and the catalogue checksum unmoved, because
+`MissionRunner` state has always lived outside the world hash and the row added
+no unit or building. The claim above that "nothing here is hash-neutral" was
+right about every row it was written for and wrong about this one, which is
+worth leaving visible rather than quietly editing away.
 
 ## Changed / Assumed / Needed next
 

@@ -60,8 +60,12 @@ unit 0 2 10 24
 structure 1 1 44 18 camp
 structure 1 2 48 20 camp
 structure 1 5 42 22 camp
-unit 1 2 44 24 camp
-unit 1 2 46 24 camp
+# Q012 fork 3: these two squads are UNTAGGED deliberately. Elimination and a
+# scripted objective are BOTH legitimate wins, and elimination fires when the
+# last camp STRUCTURE dies - so a tag that also demanded the squads described a
+# condition that could never decide the mission.
+unit 1 2 44 24
+unit 1 2 46 24
 # Objectives and scripting
 trigger elapsed 150 -> message reinforcements_inbound
 trigger elapsed 150 -> grant 0 2000

@@ -3563,6 +3563,31 @@ public sealed partial class World
     /// a baseless strike force is not a defeated player. Hashed.</summary>
     public bool ShortGameEnabled { get; set; } = true;
 
+    /// <summary>ADR-029: the ONE definition of "this player is still in the
+    /// game". ADR-005 clause 2: a barrier is not hope, or a player whose last
+    /// possession is one 100-credit wall is never eliminated and the match
+    /// never ends. ADR-021 adds the Outpost to the same exclusion: a captured
+    /// income node is not a base.</summary>
+    private static bool IsHope(in Entity e)
+        => (IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost)
+           || e.UnitType == McvUnitType;
+
+    /// <summary>Does this player still hold anything that counts as being in
+    /// the game? The short-game rule below and the mission trigger condition
+    /// 'eliminated P' both ask THIS, so a campaign defeat cannot drift from
+    /// the skirmish one. Independent of ShortGameEnabled, which decides
+    /// whether the sim ACTS on the answer, not what the answer is.</summary>
+    public bool HasHope(int player)
+    {
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var e = _entities[i];
+            if (!e.Alive || e.PlayerId != player) continue;
+            if (IsHope(e)) return true;
+        }
+        return false;
+    }
+
     private void VictorySystem()
     {
         if (!ShortGameEnabled || Winner >= 0 || _players < 2) return;
@@ -3571,13 +3596,7 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.PlayerId < 0) continue;
-            // ADR-005 clause 2: a barrier is not hope. Without this exclusion a
-            // player whose last possession is one 100-credit wall is never
-            // eliminated and the match never ends. ADR-021 adds the Outpost to
-            // the same exclusion: a captured income node is not a base, so a
-            // player whose last possession is one is still eliminated.
-            if ((IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost)
-                || e.UnitType == McvUnitType) hasHope[e.PlayerId] = true;
+            if (IsHope(e)) hasHope[e.PlayerId] = true;
         }
         int living = 0, last = -1;
         for (int p = 0; p < _players; p++)

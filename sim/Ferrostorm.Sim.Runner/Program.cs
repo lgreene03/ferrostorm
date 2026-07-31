@@ -27,6 +27,7 @@ using Ferrostorm.Sim;
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
+//   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
 //   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
@@ -1204,8 +1205,8 @@ ulong ScenarioMission(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/missions/mission-01.fmap"));
     var map = MapData.Load(path);
     var world = map.BuildWorld(seed, players: 2, out var tags);
-    if (!tags.TryGetValue("camp", out var camp) || camp.Count != 5)
-        throw new Exception($"mission: expected 5 tagged camp entities, got {(tags.TryGetValue("camp", out var c) ? c.Count : 0)}");
+    if (!tags.TryGetValue("camp", out var camp) || camp.Count != 3)
+        throw new Exception($"mission: expected 3 tagged camp entities, got {(tags.TryGetValue("camp", out var c) ? c.Count : 0)}");
     // Mission economics: bootstrap (plant 300 + refinery 2000 + factory 2000
     // + harvester 1400 = 5700) must be affordable from start + the timed
     // grant, or the strike force is the only wave that will ever exist.
@@ -1240,19 +1241,17 @@ ulong ScenarioMission(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     if (!ambushSeen) throw new Exception("mission: the ambush zone was never sprung");
     if (wonAt < 0) throw new Exception("mission: the camp was never destroyed within the time limit");
     if (world.Winner != 0) throw new Exception($"mission: scripted objective declared the wrong winner ({world.Winner})");
-    // The winner-implies-camp-dead invariant this scenario used to assert was
-    // a coincidence of ordering, not a rule: victory can arrive from
-    // VictorySystem eliminating player 1 the moment its last STRUCTURE dies,
-    // while a tagged camp UNIT lives. ADR-010's attack-move fix made the
-    // attackers focus structures, which exposed it. The provable invariant is
-    // asserted instead - winner 0 and every camp structure razed - and the
-    // design question (should elimination end a scripted mission before its
-    // objective, or should the objective trigger count only structures?) is
-    // Q012, owner Producer + QA.
+    // This invariant was NARROWED once, because the tag then covered two rifle
+    // squads that elimination did not wait for: victory arrived from
+    // VictorySystem the moment player 1's last STRUCTURE died while a tagged
+    // UNIT lived, so "winner implies every tagged entity dead" held only by
+    // accident of kill order. Q012 is now answered (fork 3: elimination and
+    // the scripted objective are BOTH wins) and the tag covers structures
+    // only, so the full invariant is provable again and is asserted as such.
     foreach (int id in camp)
-        if (world.Entities[id].Alive && world.Entities[id].Kind != EntityKind.Unit)
-            throw new Exception("mission: winner declared while camp structures lived");
-    report?.Invoke($"mission: mission-01 ran as pure data - timed grant and message fired, the ambush sprang on zone entry, and victory landed at tick {wonAt} with every camp structure confirmed razed (Q012 tracks the objective-vs-elimination question)");
+        if (world.Entities[id].Alive)
+            throw new Exception("mission: winner declared while a tagged camp entity lived");
+    report?.Invoke($"mission: mission-01 ran as pure data - timed grant and message fired, the ambush sprang on zone entry, and victory landed at tick {wonAt} with every TAGGED camp entity confirmed dead (Q012 answered: the tag describes what the objective actually waits for)");
     return world.ComputeStateHash();
 }
 
@@ -4642,6 +4641,264 @@ int InfiltratorGate()
     return 0;
 }
 
+int CampaignGate()
+{
+    // P7-9. The campaign is now six missions and a manifest of magic numbers,
+    // and the manifest had ALREADY gone stale by six structure types before
+    // anyone noticed - because nothing read it except the client sidebar, at
+    // runtime, in a build nobody runs headless. This gate reads it the way the
+    // sidebar does and refuses ids that do not resolve.
+    //
+    // Then it proves the two things missions 04 to 06 added that the earlier
+    // three could not have: that a mission can be won by ARRIVING, and that a
+    // mission which suppresses the short-game rule can still be LOST (Q016 -
+    // mission 03 could not, and ran forever).
+    string Root(string rel) => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", rel));
+
+    // -- Stage 1: every id in the manifest resolves ------------------------
+    // The stale-header class of defect, made impossible to leave lying about.
+    {
+        var probe = new World(1, 16, 16, players: 2);
+        string[] rows = File.ReadAllLines(Root("data/campaign/campaign.txt"));
+        int missions = 0, ids = 0;
+        foreach (string raw in rows)
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            var col = line.Split('|', StringSplitOptions.TrimEntries);
+            if (col.Length < 3) return Fail($"campaign: manifest row has {col.Length} columns: {line}");
+            string file = col[0];
+            if (!File.Exists(Root(file))) return Fail($"campaign: manifest names a missing mission '{file}'");
+            // It must LOAD, not merely exist. A mission that throws on parse is
+            // a mission the campaign menu offers and the game cannot open.
+            var m = MapData.Load(Root(file));
+            if (m.Width <= 0 || m.Height <= 0) return Fail($"campaign: {file} has no grid");
+            missions++;
+            for (int c = 3; c < col.Length && c <= 4; c++)
+            {
+                if (col[c] == "-" || col[c].Length == 0) continue;
+                foreach (string tok in col[c].Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int id = int.Parse(tok.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                    // A def that was never registered comes back as
+                    // default(T), and every real one carries hit points.
+                    bool ok = c == 3
+                        ? probe.GetStructureType(id).Hp > 0
+                        : probe.GetUnitType(id).Hp > 0;
+                    if (!ok)
+                        return Fail($"campaign: {file} allows {(c == 3 ? "structure" : "unit")} id {id}, "
+                                    + "which is not in the catalogue - the manifest and the game disagree");
+                    ids++;
+                }
+            }
+        }
+        if (missions != 6) return Fail($"campaign: expected 6 missions in the manifest, found {missions}");
+        Console.WriteLine($"campaigngate: manifest lists {missions} missions and {ids} buildable ids, "
+                          + "every one of which loads and resolves in the catalogue");
+    }
+
+    // -- Stage 2: mission 04 is won by ARRIVING, not by killing ------------
+    // The property under test is the SHAPE of the win, so it is asserted as a
+    // shape: the extraction trigger fired, and the enemy is still standing.
+    // Asserting a tick or a body count would be asserting the route.
+    {
+        string path = Root("data/missions/mission-04.fmap");
+        var map = MapData.Load(path);
+        var world = map.BuildWorld(7401, players: 2, out var tags);
+        var mission = new MissionRunner(map, tags);
+        // Driven the way the mission expects to be played: a commander that
+        // BUILDS (the column is the cargo, not the army - the mission hands
+        // over a yard, ferrite and seven thousand credits for exactly this
+        // reason), with everything it owns pushed east on a standing order.
+        // The first pass walked only the six starting units into the gauntlet
+        // and lost all six, which measured the mission's difficulty rather
+        // than the thing under test.
+        var ai = SkirmishAI.Rusher(0);
+        var cmds = new List<Command>();
+        var missionCmds = new List<Command>();
+        Fix64 ex = Map.CellCentre(86), ey = Map.CellCentre(36);
+        for (int t = 0; t < 12000 && world.Winner < 0; t++)
+        {
+            cmds.Clear();
+            ai.Act(world, cmds);
+            if (t % 240 == 0)
+                for (int i = 0; i < world.Entities.Count; i++)
+                {
+                    var e = world.Entities[i];
+                    if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Unit)
+                        cmds.Add(new Command(world.Tick, 0, CommandType.AttackMove, i, ex, ey));
+                }
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            mission.Tick(world, missionCmds);
+            if (missionCmds.Count > 0) { cmds.Clear(); cmds.AddRange(missionCmds); missionCmds.Clear(); world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); }
+        }
+        if (world.Winner != 0)
+        {
+            int alive = 0; Fix64 best = Fix64.FromInt(9999);
+            for (int i = 0; i < world.Entities.Count; i++)
+            {
+                var e = world.Entities[i];
+                if (!e.Alive || e.PlayerId != 0 || e.Kind != EntityKind.Unit) continue;
+                alive++;
+                Fix64 d = Fix64.Sqrt(Fix64.DistSq(e.X - ex, e.Y - ey));
+                if (d < best) best = d;
+            }
+            return Fail($"mission04: winner={world.Winner}, {alive} player units alive, nearest {best} from the field");
+        }
+        if (!mission.Messages.Contains("extraction_made"))
+            return Fail("mission04: won without the extraction trigger - something else ended it");
+        bool enemyStands = false;
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (e.Alive && e.PlayerId == 1 && World.IsStructure(e.Kind)) { enemyStands = true; break; }
+        }
+        if (!enemyStands)
+            return Fail("mission04: the enemy was wiped out, so this proves nothing about arriving");
+        Console.WriteLine($"campaigngate: mission 04 was won at tick {world.Tick} by ARRIVING - the extraction "
+                          + "trigger fired with the enemy still standing, the first win in the campaign that is "
+                          + "not a body count");
+    }
+
+    // -- Stage 3: a noshortgame mission can still be LOST (Q016) -----------
+    // This is the defect Q016 described, asserted directly: mission 03 set
+    // 'rules noshortgame' and carried no defeat, so a player who lost
+    // everything was neither beaten nor able to win, and the mission ran
+    // until the clock. Killed outright rather than played to a loss - what is
+    // under test is that the condition fires and declares.
+    foreach (var (file, tag, loser) in new[]
+             {
+                 ("data/missions/mission-03.fmap", "the_line_broke", 0),
+                 ("data/missions/mission-04.fmap", "column_lost", 0),
+                 ("data/missions/mission-06.fmap", "the_crown_falls", 1),
+             })
+    {
+        string path = Root(file);
+        var map = MapData.Load(path);
+        var world = map.BuildWorld(7402, players: 2, out var tags);
+        var mission = new MissionRunner(map, tags);
+        if (world.ShortGameEnabled)
+            return Fail($"campaign: {file} is the noshortgame case and short game is ON - the test is vacuous");
+        // Erase everything the losing side holds that counts as hope.
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (!e.Alive || e.PlayerId != loser) continue;
+            e.Alive = false;
+            world.SetEntityForTest(i, e);
+        }
+        if (world.HasHope(loser))
+            return Fail($"campaign: {file} - failed to erase player {loser}, the test would prove nothing");
+        var cmds = new List<Command>();
+        var missionCmds = new List<Command>();
+        for (int t = 0; t < 120 && world.Winner < 0; t++)
+        {
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            mission.Tick(world, missionCmds);
+            if (missionCmds.Count > 0) { cmds.AddRange(missionCmds); missionCmds.Clear(); }
+        }
+        int expect = loser == 0 ? 1 : 0;
+        if (world.Winner != expect)
+            return Fail($"campaign: {file} - player {loser} holds nothing and the mission did not declare "
+                        + $"(winner={world.Winner}, wanted {expect}). This is exactly Q016's defect.");
+        if (!mission.Messages.Contains(tag))
+            return Fail($"campaign: {file} - the ending declared but said nothing ('{tag}' never fired)");
+    }
+    Console.WriteLine("campaigngate: a mission that suppresses the short-game rule can now still END - three of "
+                      + "them declare on 'eliminated', each with a line explaining itself, which is the defect "
+                      + "Q016 described (mission 03 ran forever)");
+
+    // -- Stage 4: mission 06 owns BOTH endings -----------------------------
+    // The finale sets noshortgame, so if its win trigger were wrong the
+    // mission would be unwinnable rather than merely unfair. Stage 3 proved
+    // the win side (crown falls); this proves the defeat side of the SAME
+    // mission, which is what "the mission owns its ending" has to mean.
+    {
+        string path = Root("data/missions/mission-06.fmap");
+        var map = MapData.Load(path);
+        var world = map.BuildWorld(7403, players: 2, out var tags);
+        var mission = new MissionRunner(map, tags);
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (!e.Alive || e.PlayerId != 0) continue;
+            e.Alive = false;
+            world.SetEntityForTest(i, e);
+        }
+        var cmds = new List<Command>();
+        var missionCmds = new List<Command>();
+        for (int t = 0; t < 120 && world.Winner < 0; t++)
+        {
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            mission.Tick(world, missionCmds);
+            if (missionCmds.Count > 0) { cmds.AddRange(missionCmds); missionCmds.Clear(); }
+        }
+        if (world.Winner != 1 || !mission.Messages.Contains("the_landing_is_lost"))
+            return Fail($"mission06: the landing was wiped out and the mission did not say so "
+                        + $"(winner={world.Winner})");
+        Console.WriteLine("campaigngate: mission 06 owns both endings - the crown falling and the landing being "
+                          + "lost are each the mission's own trigger, so the finale cannot end without saying why");
+    }
+
+    // -- Stage 5: mission 05's premise actually holds ----------------------
+    // The mission is built on ADR-028 clause 3: the player's starting force
+    // cannot touch an aircraft. If that were false the mission would still
+    // "work" and would teach nothing, so it is proved against the REAL map
+    // and the REAL starting force rather than against a constructed pair.
+    {
+        string path = Root("data/missions/mission-05.fmap");
+        var map = MapData.Load(path);
+        var world = map.BuildWorld(7404, players: 2, out var tags);
+        var mission = new MissionRunner(map, tags);
+        var cmds = new List<Command>();
+        var missionCmds = new List<Command>();
+        int flyer = -1;
+        for (int t = 0; t < 600 && flyer < 0; t++)
+        {
+            world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            mission.Tick(world, missionCmds);
+            if (missionCmds.Count > 0) { cmds.AddRange(missionCmds); missionCmds.Clear(); }
+            for (int i = 0; i < world.Entities.Count; i++)
+                if (world.Entities[i].Alive && world.IsAirborne(world.Entities[i])) { flyer = i; break; }
+        }
+        if (flyer < 0) return Fail("mission05: the first sortie never launched");
+        // Order every ground unit the player owns to attack it, explicitly.
+        var attack = new List<Command>();
+        int shooters = 0;
+        for (int i = 0; i < world.Entities.Count; i++)
+        {
+            var e = world.Entities[i];
+            if (e.Alive && e.PlayerId == 0 && e.Kind == EntityKind.Unit && e.WeaponId != 0)
+            {
+                // Put them under it, so range is not what saves the aircraft.
+                e.X = world.Entities[flyer].X; e.Y = world.Entities[flyer].Y;
+                world.SetEntityForTest(i, e);
+                attack.Add(new Command(world.Tick, 0, CommandType.Attack, i, Fix64.Zero, Fix64.Zero, flyer));
+                shooters++;
+            }
+        }
+        if (shooters == 0) return Fail("mission05: the player's start has no armed ground units, so the premise is untested");
+        int hp0 = world.Entities[flyer].Hp;
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(attack));
+        for (int t = 0; t < 150 && world.Entities[flyer].Alive; t++) world.Step(default);
+        if (!world.Entities[flyer].Alive || world.Entities[flyer].Hp != hp0)
+            return Fail($"mission05: {shooters} ground units standing underneath the aircraft damaged it "
+                        + $"({hp0} -> {world.Entities[flyer].Hp}); the mission's whole premise is false");
+        Console.WriteLine($"campaigngate: mission 05's premise holds against the real map - {shooters} armed ground "
+                          + "units of the player's actual starting force, standing directly underneath the first "
+                          + "sortie and explicitly ordered to attack it, took exactly nothing off it");
+    }
+
+    Console.WriteLine("campaigngate: the campaign is six missions the game can actually open - the manifest's ids all "
+                      + "resolve, a mission can be won by ARRIVING rather than by killing, a mission that suppresses "
+                      + "the short-game rule can still be lost and says why (Q016), and mission 05's no-answer-to-air "
+                      + "premise is true of its real starting force");
+    return 0;
+}
+
 int FactionDefenceGate()
 {
     // P7-2b. Additive, the airgate pattern: a standalone mode and a Match
@@ -5775,6 +6032,10 @@ int Match(ulong seed)
     // P7-7: the Infiltrator robs rather than captures.
     int infil = InfiltratorGate();
     if (infil != 0) return infil;
+    // P7-9: six missions the game can open, and the two things missions 04 to
+    // 06 added that the earlier three could not have.
+    int campaign = CampaignGate();
+    if (campaign != 0) return campaign;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -6628,6 +6889,7 @@ return args.Length == 0
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
         "infiltratorgate" => InfiltratorGate(),
+        "campaigngate" => CampaignGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),

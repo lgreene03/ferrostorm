@@ -33,7 +33,8 @@ system removes a category of decision while a missing unit removes an option.
 | P7-6 | Storage and a credit ceiling (silo) | B2 | **PRODUCER: GDD-SILENT.** GDD s4 specifies the economy in full and never mentions storage, a cap or overflow, and a ceiling would change the "float at 2 refineries / 3 harvesters" intent it DOES specify. Same category as crates and the map editor | MOVES | **NOT TAKEN** - I put this row on the list treating it as mine; it is not |
 | P7-7 | Infiltration: the Sodality's Infiltrator, from GDD s7's named roster | B5 | - (the unit is written; only the 20 per cent share is my call) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - infiltratorgate (4 stages incl. conservation and an engineer regression check) |
 | P7-8 | More than two player seats | D2 | **Producer sign-off**: sim change to PlaceSkirmishStart plus multi-start maps | MOVES | pending |
-| P7-9 | Campaign missions 4 to 6 | D1 | Q012/Q016 (win/loss semantics) first | data only, MOVES | pending |
+| P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
+| P7-9a | Bring missions 01 to 03 under the generator, and onto self-declared setup, retiring `switch (setup.MissionIndex)` in SkirmishLive.cs | D1 | - | MOVES (two goldens: entity spawn order changes) | pending - **created by P7-9, not inherited.** Missions 04 to 06 declare their own yard and credits in the fmap; 01 and 03 still get theirs from a per-mission case in C#. Two mechanisms is the duplication this phase keeps finding, and the only reason it was left is that fixing it moves goldens for no behavioural gain |
 | P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
 | P7-11 | Hero unit, mines, support infantry | B3/B4/B6 | Producer: roster additions | MOVES | pending |
 
@@ -66,6 +67,39 @@ convention. Renaming them cascades into art (art/png/dir_turret.png,
 art/sprites/dir_turret.svg and the model library key), so it is a wave of its
 own rather than a rider on this one.
 
+## What P7-9 turned out to be
+
+Filed as **data only**. It was not, and the reason generalises.
+
+Three things stood between the ticket and three new files. Two were the open
+questions the row already named. The third was in nobody's ticket: missions 01
+to 03 are hand-typed 64x48 grids, written before doc 26 existed, at a moment
+when the skirmish pool had just been regenerated at 96x64 to 256x192 with a
+decorative layer on the finding that the old maps were "not big and detailed
+enough". Three more hand-typed missions would have shipped that same complaint
+into the campaign, and no row said so.
+
+Writing them properly then surfaced three defects that had been sitting in the
+tree, all of the same shape - **a rule keyed on an instance where it should key
+on a property**, now the ninth, tenth and eleventh instances this phase:
+
+- `MapLoader`'s structure switch had no arm for Emplacement, Airfield, Bastion
+  or Shroud Nest. Those kinds have been spawnable, buildable and GATED for
+  weeks; a map simply could not place one. The switch's own comment records
+  this happening before (PROD-D7, the service depot).
+- `campaign.txt`'s id legend had gone stale by six structure types and six
+  units, because nothing read it except a running client's sidebar.
+- `SkirmishLive.cs` sets missions up with `switch (setup.MissionIndex)`, so a
+  new mission needs a C# edit or it silently has no base.
+
+The first two are fixed and now guarded in CI by campaigngate stage 1, which
+loads every mission the manifest names and refuses ids that do not resolve. The
+third is P7-9a above, deliberately deferred because fixing it moves goldens.
+
+**The lesson worth keeping:** a row estimated as "data only" was carrying three
+code defects, and none of them were found by reading the tickets. They were
+found by trying to use the feature end to end for the first time.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against
@@ -83,7 +117,13 @@ These block rows above and are not P7's to solve:
 - **ADR-027**, the crowd-aware movement decision, blocks nothing here directly
   but distorts every AI-vs-AI measurement any of these rows would be judged by,
   so it should be answered before P7-2's balance work.
-- **Q012/Q016**, win and loss semantics, block P7-9.
+- ~~**Q012/Q016**, win and loss semantics, block P7-9.~~ Both answered and closed
+  2026-08-01 under the standing directive, having passed their decide-by dates.
+  Q012 took fork 3 (elimination and a scripted objective are both wins); Q016
+  took option 1 (you have lost when you hold nothing that counts), which needed
+  a new `eliminated P` trigger condition because the obvious fix - stop
+  suppressing short game - hands the player an instant win against an attacker
+  that owns no buildings.
 
 ## Changed / Assumed / Needed next
 
