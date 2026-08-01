@@ -145,6 +145,16 @@ public sealed class SkirmishAI
     /// check should read.</summary>
     public int DecisionBeat => _actEvery;
 
+    /// <summary>P7-8f: which seat this commander plays. Read-only and purely
+    /// informational, exactly as DecisionBeat is, so exposing it changes no
+    /// behaviour and moves no hash. It exists because the lockstep client orders
+    /// its attached commanders by seat, and an ORDER is only load-bearing if the
+    /// thing it sorts on can be read: sorting by list position instead would make
+    /// the determinism of a LAN match depend on the order a caller happened to
+    /// build its list in, which is precisely the kind of unstated convention that
+    /// desyncs one peer against the other.</summary>
+    public int Seat => _player;
+
     /// <summary>DR-14: Brutal's declared handicap, in starting credits, applied
     /// by whatever builds the match and NEVER by the AI itself. This is not
     /// squeamishness: SkirmishAI holds no privileged access and mutates nothing,

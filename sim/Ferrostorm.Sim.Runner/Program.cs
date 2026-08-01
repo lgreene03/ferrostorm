@@ -28,6 +28,7 @@ using Ferrostorm.Sim;
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
+//   lanaiseatsgate     - P7-8f: a LAN match on a four-seat map - the seats no peer holds are played by commanders both peers generate locally, to identical hashes, and a divergent commander is CAUGHT
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
@@ -7382,6 +7383,10 @@ int Match(ulong seed)
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
+    // P7-8f: ...and a LAN match whose spare seats are played by commanders both
+    // peers generate locally, with the divergence detector proven to bite.
+    int lanAiSeats = LanAiSeatsGate();
+    if (lanAiSeats != 0) return lanAiSeats;
     return 0;
 }
 
@@ -7602,6 +7607,247 @@ int LanChaos(int games, int delayMs, int jitterMs, int stallPerMille, int stallM
                           $"hash 0x{results[0]:X16} identical, no desync ({sw.Elapsed.TotalSeconds:F1}s wall)");
     }
     Console.WriteLine($"lanchaos: {games} games under adverse conditions, zero desyncs");
+    return 0;
+}
+
+int LanAiSeatsGate()
+{
+    // P7-8f: A LAN MATCH ON A MULTI-START MAP, WITH COMMANDERS IN THE SEATS NO
+    // HUMAN HOLDS. The relay seats exactly two peers, so on a four-start map two
+    // seats have no controller at all; P7-8d refused such a map outright rather
+    // than ship a match VictorySystem could never end. The refusal is gone and
+    // the spare seats are played by SkirmishAI instead.
+    //
+    // AI seats have NO PEER, so their commands cannot travel the relay: it counts
+    // one batch per player per tick and its players are peers. Each client
+    // therefore generates them LOCALLY and folds them into the same tick. That is
+    // sound because the world at tick T is identical on both peers by the
+    // lockstep guarantee, SkirmishAI is deterministic and reads only world state,
+    // and its tuning is /data that rides World.CatalogueChecksum, which the hello
+    // already compares and refuses on. Stage 1 is that claim measured rather than
+    // argued; stage 4 is the proof that the safety net under it is real.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapPath = Path.Combine(root, "data", "maps", "test-4seat.fmap");
+    const int Seats = 4;          // the map's starts, and therefore the world's seats
+    const int HumanSeats = 2;     // the relay's players: a LAN match seats two peers
+    // The commanded stages run long enough for a commander to finish something it
+    // started; the control stage's length is FIXED at the figure its pinned hash
+    // was measured at and must not be tuned for convenience.
+    const int AiTicks = 900;
+    const int ControlTicks = 400;
+
+    // Both clients must build the identical world, exactly as LanWorldFactory
+    // does for the two-seat soaks - but a FOUR-seat one off a committed map, with
+    // the /data catalogue registered, because a commander with no catalogue can
+    // buy nothing and stage 2 would be asserting on an inert opponent.
+    World FourSeat(ulong seed)
+    {
+        var m = MapData.Load(mapPath);
+        var w = m.BuildWorld(seed, players: Seats, out _, ww =>
+        {
+            CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data"));
+        });
+        m.PlaceSkirmishStart(w, 8000);
+        return w;
+    }
+
+    // One headless LAN match. commandersFor is asked PER PEER, so a stage can
+    // hand the two peers deliberately different commanders and watch what
+    // happens; every other stage hands them the same ones.
+    (ulong[] Hashes, bool RelayDesync, bool[] SawDesync, int[][] AiCommands, int[][] SeatGrowth, Exception?[] Errors)
+        PlayLan(ulong seed, int ticks, Func<int, World, SkirmishAI[]> commandersFor, int timeoutMs = 10_000)
+    {
+        var relay = new Relay(playerCount: HumanSeats);
+        relay.Start();
+        new Thread(relay.Run) { IsBackground = true }.Start();
+
+        var hashes = new ulong[HumanSeats];
+        var sawDesync = new bool[HumanSeats];
+        var aiCommands = new int[HumanSeats][];
+        var growth = new int[HumanSeats][];
+        var errors = new Exception?[HumanSeats];
+        var threads = new Thread[HumanSeats];
+        for (int p = 0; p < HumanSeats; p++)
+        {
+            int pid = p;
+            aiCommands[pid] = new int[Seats];
+            growth[pid] = new int[Seats];
+            threads[p] = new Thread(() =>
+            {
+                LockstepClient? client = null;
+                try
+                {
+                    client = new LockstepClient(relay.Port, FourSeat, seed);
+                    var ais = commandersFor(client.PlayerId, client.World);
+                    if (ais.Length > 0) client.SetAiCommanders(ais);
+                    var before = new int[Seats];
+                    foreach (var e in client.World.Entities)
+                        if (e.Alive && e.PlayerId >= 0 && e.PlayerId < Seats) before[e.PlayerId]++;
+
+                    // Each peer orders only its OWN units, from its own stream, so
+                    // the merge is genuinely ordering two different batches rather
+                    // than two copies of one. Selected by ownership and speed, the
+                    // shape LanSmoke uses, because entity ids on a real map are not
+                    // the even/odd interleave the synthetic soak world has.
+                    var mine = new List<int>();
+                    for (int i = 0; i < client.World.EntityCount; i++)
+                    {
+                        var e = client.World.Entities[i];
+                        if (e.Alive && e.PlayerId == client.PlayerId && e.Speed != Fix64.Zero) mine.Add(i);
+                    }
+                    var cmdRng = new DeterministicRandom(seed * 7919UL + (ulong)client.PlayerId);
+                    client.Prime();
+                    while (client.World.Tick < ticks)
+                    {
+                        var cmds = new List<Command>();
+                        if (client.World.Tick % 15 == 0 && mine.Count > 0)
+                            for (int k = 0; k < 3; k++)
+                                cmds.Add(new Command(0, client.PlayerId, CommandType.PathMove,
+                                    mine[cmdRng.NextInt(mine.Count)],
+                                    Fix64.FromInt(4 + cmdRng.NextInt(24)), Fix64.FromInt(4 + cmdRng.NextInt(24))));
+                        client.SubmitCommands(cmds);
+                        if (!client.AdvanceTick(timeoutMs)) break;   // the relay called a desync
+                    }
+                    for (int i = 0; i < client.AiCommanders.Count; i++)
+                        aiCommands[pid][client.AiCommanders[i].Seat] = client.AiCommandsIssued[i];
+                    foreach (var e in client.World.Entities)
+                        if (e.Alive && e.PlayerId >= 0 && e.PlayerId < Seats) growth[pid][e.PlayerId]++;
+                    for (int s = 0; s < Seats; s++) growth[pid][s] -= before[s];
+                }
+                catch (Exception ex) { errors[pid] = ex; }
+                finally
+                {
+                    // The hash and the verdict are taken even off a run that
+                    // ended early, because the stage that ends early on purpose
+                    // is the one with the most to prove.
+                    if (client != null)
+                    {
+                        hashes[pid] = client.World.ComputeStateHash();
+                        sawDesync[pid] = client.DesyncNotified;
+                        client.Dispose();
+                    }
+                }
+            });
+            threads[p].Start();
+        }
+        foreach (var t in threads) t.Join();
+        return (hashes, relay.DesyncDetected, sawDesync, aiCommands, growth, errors);
+    }
+
+    SkirmishAI[] None(int peer, World w) => System.Array.Empty<SkirmishAI>();
+
+    // The commanders a LAN client builds for real: one per seat from HumanSeats
+    // up, which on this map is seats 2 and 3. Built from the world so they read
+    // the tuning in data/ai rather than the compiled reference, which is the
+    // configuration a real match runs and therefore the one worth soaking.
+    SkirmishAI[] SpareSeats(int peer, World w)
+    {
+        var ais = new SkirmishAI[Seats - HumanSeats];
+        for (int seat = HumanSeats; seat < Seats; seat++)
+            ais[seat - HumanSeats] = SkirmishAI.Standard(seat, AiDifficulty.Normal, w);
+        return ais;
+    }
+
+    // --- 1 and 2. THE WHOLE POINT: two peers, four seats, commanders in the two
+    //        seats no peer holds, and one world at the end. And the commanders
+    //        must have DONE something, or two identically inert opponents would
+    //        satisfy stage 1 perfectly.
+    ulong agreedHash;
+    int[] aiOrders;
+    int[] aiGrowth;
+    {
+        var run = PlayLan(8100, AiTicks, SpareSeats);
+        foreach (var e in run.Errors) if (e != null) return Fail($"lanaiseats: {e.Message}");
+        if (run.RelayDesync)
+            return Fail($"lanaiseats: the relay flagged a desync over {AiTicks} ticks with commanders at seats "
+                        + $"{HumanSeats}..{Seats - 1} - the two peers are not generating identical AI commands");
+        if (run.Hashes[0] != run.Hashes[1])
+            return Fail($"lanaiseats: after {AiTicks} ticks peer 0 holds 0x{run.Hashes[0]:X16} and peer 1 holds "
+                        + $"0x{run.Hashes[1]:X16}");
+        agreedHash = run.Hashes[0];
+        aiOrders = run.AiCommands[0];
+        aiGrowth = run.SeatGrowth[0];
+        for (int seat = HumanSeats; seat < Seats; seat++)
+        {
+            if (aiOrders[seat] <= 0)
+                return Fail($"lanaiseats: the commander at seat {seat} issued {aiOrders[seat]} commands in {AiTicks} "
+                            + "ticks - the match agrees because both peers ran an opponent that does nothing");
+            if (aiGrowth[seat] == 0)
+                return Fail($"lanaiseats: seat {seat} issued {aiOrders[seat]} commands and its entity count did not "
+                            + "move - the commands are reaching the tick but not the world");
+            // The same numbers on the OTHER peer, which is the claim itself
+            // expressed per seat rather than only in the closing hash.
+            if (run.AiCommands[1][seat] != aiOrders[seat] || run.SeatGrowth[1][seat] != aiGrowth[seat])
+                return Fail($"lanaiseats: at seat {seat} peer 0 saw {aiOrders[seat]} commands and "
+                            + $"{aiGrowth[seat]} new entities while peer 1 saw {run.AiCommands[1][seat]} and "
+                            + $"{run.SeatGrowth[1][seat]} - the two peers ran different commanders");
+        }
+    }
+
+    // --- 3. THE CONTROL, AND THE NO-REGRESSION BAR. With no commanders attached
+    //        the two clients must still agree, and on the hash the identical
+    //        scenario produced BEFORE any of this existed. NoAiBeforeTheChange was
+    //        measured by running this very stage against the unmodified lockstep
+    //        client, so it is a before-and-after measurement rather than an
+    //        inference from a green run: every shipped LAN match today attaches no
+    //        commanders, and `lan`, `lanpoll` and `lanchaos` are all that path.
+    const ulong NoAiBeforeTheChange = 0x96898875D89FCD82UL;
+    ulong controlHash;
+    {
+        var run = PlayLan(8101, ControlTicks, None);
+        foreach (var e in run.Errors) if (e != null) return Fail($"lanaiseats control: {e.Message}");
+        if (run.RelayDesync) return Fail("lanaiseats control: the relay flagged a desync with no commanders attached");
+        if (run.Hashes[0] != run.Hashes[1])
+            return Fail($"lanaiseats control: two clients with no commanders ended on 0x{run.Hashes[0]:X16} "
+                        + $"and 0x{run.Hashes[1]:X16}");
+        if (run.Hashes[0] != NoAiBeforeTheChange)
+            return Fail($"lanaiseats control: {ControlTicks} ticks with no commanders hashes 0x{run.Hashes[0]:X16}, "
+                        + $"but before the AI seats existed the identical scenario hashed "
+                        + $"0x{NoAiBeforeTheChange:X16} - the empty case is no longer a pass-through");
+        controlHash = run.Hashes[0];
+        for (int seat = HumanSeats; seat < Seats; seat++)
+            if (run.SeatGrowth[0][seat] != 0)
+                return Fail($"lanaiseats control: seat {seat} gained {run.SeatGrowth[0][seat]} entities with no "
+                            + "commander attached - something other than the commanders is playing that seat");
+    }
+    if (agreedHash == controlHash)
+        return Fail($"lanaiseats: a commanded match and an uncommanded one both end on 0x{agreedHash:X16} - "
+                    + "the commanders are not reaching the world, so stage 1 proves nothing");
+
+    // --- 4. AND THE SAFETY NET IS REAL. Peer 0's commander at seat 2 is given a
+    //        DIFFERENT RUNG, so it thinks on a different beat and issues its
+    //        orders on different ticks. Nothing in the shipped path can produce
+    //        this - the rung travels in the host's setup blob and the numbers
+    //        behind it ride the catalogue checksum the hello refuses on - which is
+    //        exactly why it has to be produced by hand here. Without this stage,
+    //        "both peers provably run the same commander" is an argument; with it,
+    //        it is a measurement, because the case where they do not is caught.
+    {
+        var run = PlayLan(8102, AiTicks, (peer, w) =>
+        {
+            var ais = SpareSeats(peer, w);
+            if (peer == 0) ais[0] = SkirmishAI.Standard(HumanSeats, AiDifficulty.Easy, w);
+            return ais;
+        }, timeoutMs: 20_000);
+        if (!run.RelayDesync)
+            return Fail($"lanaiseats divergence: peer 0 ran a different commander at seat {HumanSeats} for up to {AiTicks} "
+                        + "ticks and the relay never flagged a desync - the detector that makes AI seats safe is "
+                        + "not watching");
+        if (!run.SawDesync[0] && !run.SawDesync[1])
+            return Fail("lanaiseats divergence: the relay flagged a desync and neither client was told - "
+                        + "the match would have continued quietly on two different worlds");
+        if (run.Hashes[0] == run.Hashes[1])
+            return Fail($"lanaiseats divergence: both peers ended on 0x{run.Hashes[0]:X16}, so the desync notice "
+                        + "fired on worlds that agree - the detector is crying wolf rather than catching this");
+    }
+
+    Console.WriteLine($"lanaiseatsgate: two peers on a {Seats}-seat map, commanders at seats {HumanSeats}..{Seats - 1} "
+                      + $"generated locally by each peer, ran {AiTicks} ticks to the same hash 0x{agreedHash:X16} with "
+                      + $"no desync; those commanders issued {aiOrders[2]} and {aiOrders[3]} orders and grew their "
+                      + $"seats by {aiGrowth[2]} and {aiGrowth[3]} entities. With none attached the same scenario "
+                      + $"still hashes 0x{controlHash:X16}, the figure it produced before commanders existed. A peer "
+                      + "given a commander on a different rung was CAUGHT by the relay's hash comparison rather than "
+                      + "played on");
     return 0;
 }
 
@@ -8233,6 +8479,7 @@ return args.Length == 0
         "factiondefencegate" => FactionDefenceGate(),
         "infiltratorgate" => InfiltratorGate(),
         "multiseatgate" => MultiSeatGate(),
+        "lanaiseatsgate" => LanAiSeatsGate(),
         "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),

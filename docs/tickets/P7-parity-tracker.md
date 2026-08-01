@@ -322,8 +322,13 @@ humans and builds its relay with `playerCount: 2`, but the world's seat count
 now comes from the map. A LAN match on skirmish-09 would have seated two humans
 and left two bases with NO controller: they would never act, and VictorySystem
 would refuse to end the match until somebody walked over and razed them. A match
-that cannot finish. It is refused loudly in `Lan.BuildFrom` now, and lifting the
-refusal needs LAN seat negotiation, which is its own piece of work.
+that cannot finish. It was refused loudly in `Lan.BuildFrom`, and I said lifting
+the refusal needs LAN seat negotiation. **Lifted by P7-8f, and it needed no
+negotiation at all**: the spare seats are played by commanders that each peer
+generates locally and folds into the same tick, which is safe because the
+commander is deterministic and its tuning rides the catalogue checksum the hello
+already refuses on. `lanaiseatsgate` measures it, including that a peer running a
+different commander is caught rather than played on.
 
 **And one the harness caught.** The opponent-faction rule was written as
 "alternate between the player's pick and the opponent's pick", which reads

@@ -91,10 +91,19 @@ public static class MatchSetupBlob
     /// per the rule above rather than appended silently, because a version-1
     /// joiner reading a version-2 blob would slide one field and misread the
     /// seed, which is a desync at the first order instead of a sentence in the
-    /// lobby. There is no AI in a LAN match, so the rung changes no LAN
-    /// gameplay; it rides along because the blob carries the setup whole and a
+    /// lobby. It rode along because the blob carries the setup whole and a
     /// joiner's saved sidecar should describe the match it actually played.</summary>
-    public const int Version = 2;
+    /// <summary>Version 3 (P7-8f): the SEAT COUNT joined the setup, and it is
+    /// load-bearing rather than a rider. The host's LAN screen has an
+    /// opponent-count picker, so MatchSetup.Seats is a genuine host choice, and a
+    /// joiner that could not read it defaulted to zero - which SeatsFor reads as
+    /// "fill the map". On a two-start map both answers are 2 and the omission was
+    /// invisible; on the four-start map this wave exists to allow, a host asking
+    /// for two seats would build a two-seat world while the joiner built a
+    /// four-seat one. That is not a desync at the first order, it is two different
+    /// worlds at tick 0, and the rung above is exactly why: the difficulty the
+    /// commanders play at is now LAN gameplay too.</summary>
+    public const int Version = 3;
 
     public static byte[] Encode(MatchSetup s)
     {
@@ -109,6 +118,7 @@ public static class MatchSetupBlob
         w.Write(s.Seed);
         w.Write(s.Faction);
         w.Write(s.OppFaction);
+        w.Write(s.Seats);
         w.Flush();
         return ms.ToArray();
     }
@@ -136,6 +146,7 @@ public static class MatchSetupBlob
             Seed = r.ReadUInt64(),
             Faction = r.ReadInt32(),
             OppFaction = r.ReadInt32(),
+            Seats = r.ReadInt32(),
         };
     }
 }
@@ -165,6 +176,14 @@ public sealed class LanLobby
     /// address and reach it. The relay's ephemeral port 0 (which every soak uses)
     /// is unreachable by definition: nobody can guess it.</summary>
     public const int DefaultPort = 47801;
+
+    /// <summary>P7-8f: how many seats a LAN match seats PEERS in. Named because
+    /// it is now two facts rather than one - it is the relay's player count AND
+    /// it is the boundary above which a seat is played by a commander instead -
+    /// and those two must agree or a seat is either played twice or not at all.
+    /// The relay assigns seats by arrival order, so the peers are always the
+    /// LOWEST seats and the commanders always take the seats above them.</summary>
+    public const int HumanSeats = 2;
 
     public enum Phase { Connecting, Ready, Failed }
 
@@ -213,20 +232,29 @@ public sealed class LanLobby
     private static World BuildFrom(MatchSetup s)
     {
         var map = MapData.Load(GameFiles.Abs(s.MapPath));
-        // P7-8d: LAN seats exactly two humans, and the relay is built with
-        // playerCount 2, but the world's seat count now comes from the MAP. On
-        // a four-start map that would seat two humans and leave two bases with
-        // no controller at all - they would never act, and VictorySystem would
-        // refuse to end the match until somebody walked over and razed them.
-        // Refused here, loudly, rather than shipped as a match that cannot
-        // finish. Lifting this needs LAN seat negotiation, which is its own
-        // piece of work and not a rider on the lobby.
-        int seats = SkirmishLive.SeatsFor(map);
-        if (seats > 2)
-            throw new System.InvalidOperationException(
-                $"'{s.MapPath}' seats {seats} players and a LAN match seats two. "
-                + "Multi-seat LAN needs seat negotiation, which does not exist yet. "
-                + "Choose a two-start map.");
+        // P7-8f: THE SEATS NO PEER HOLDS ARE PLAYED BY COMMANDERS, and this is
+        // where P7-8d's refusal used to stand. That refusal existed because the
+        // relay seats exactly HumanSeats peers while the world's seat count comes
+        // from the map and the setup, so on a four-start map two bases had no
+        // controller at all: they would never act, and VictorySystem would refuse
+        // to end the match until somebody walked over and razed them.
+        //
+        // They have a controller now. SkirmishLive builds one SkirmishAI per seat
+        // at HumanSeats and above and hands them to the lockstep client, which
+        // generates their commands LOCALLY on each peer and folds them into the
+        // same tick - the relay cannot carry them, because it counts one batch per
+        // peer and those seats have no peer. Both peers stay on one world because
+        // the commander is deterministic, reads only world state, and its tuning
+        // is /data that rides the catalogue checksum this very hello compares and
+        // refuses on (ADR-032). `lanaiseatsgate` measures both halves, including
+        // that a peer running a different commander is CAUGHT.
+        //
+        // NO REFUSAL REPLACES IT, because there is no case left to refuse.
+        // SeatsFor clamps the seat count to the map's starts and to [2,8], the
+        // first HumanSeats of those are the peers and every seat above them takes
+        // a commander, so every seat count the world can hold is filled. A map
+        // with fewer starts than the relay's peers cannot arise either: the floor
+        // is 2 and PlaceSkirmishStart refuses louder than this could.
         return SkirmishLive.BuildStartingWorld(s, map, out _);
     }
 
@@ -259,7 +287,7 @@ public sealed class LanLobby
         {
             try
             {
-                var relay = new Ferrostorm.Net.Relay(playerCount: 2, port: port,
+                var relay = new Ferrostorm.Net.Relay(playerCount: HumanSeats, port: port,
                     bind: IPAddress.Any, setup: blob);
                 relay.Start();
                 lobby._relay = relay;
