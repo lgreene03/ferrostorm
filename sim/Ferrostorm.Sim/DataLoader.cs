@@ -471,11 +471,107 @@ public static class StructureCatalogue
 /// </summary>
 public static class CatalogueFiles
 {
-    public static void RegisterAll(World w, string unitsDir, string buildingsDir)
+    /// <summary>
+    /// The ONE description of what a /data subdirectory is: either a catalogue
+    /// kind, carrying the step that loads it, or a directory known to hold
+    /// something that is not defs at all. Both the registration walk in
+    /// <see cref="RegisterAll(World, string)"/> and the unrecognised-directory
+    /// guard beside it read this table, and that is the point of it. Fields and
+    /// then weapons each shipped as an EXTRA call every caller had to remember
+    /// beside RegisterAll, so a caller that forgot one got a partial catalogue
+    /// and no error at all, silently playing compiled numbers. Two lists would
+    /// be that same defect wearing a second coat, so there is exactly one.
+    ///
+    /// Array order is REGISTRATION order: units, structures, fields, weapons,
+    /// which is the order the per-kind call sites used before they collapsed
+    /// into one call. The checksum walks ids in sorted order and so cannot see
+    /// this, but the order still decides which failure a broken /data reports
+    /// first, so it is stated here rather than left to chance.
+    /// </summary>
+    private static readonly (string Dir, Action<World, string>? Register)[] DataDirs =
+    {
+        ("units",     RegisterUnits),
+        ("buildings", RegisterStructures),
+        ("fields",    RegisterFields),
+        ("weapons",   RegisterWeapons),
+        // Known, and deliberately NOT a catalogue kind. Listed rather than
+        // silently skipped, so the guard can tell a directory that holds no
+        // defs from one nobody has ever heard of.
+        ("maps",      null),   // .fmap terrain, loaded per match by MapData
+        ("missions",  null),   // campaign mission files, loaded by the mission runner
+        ("campaign",  null),   // the campaign manifest and its briefings
+        ("ai",        null),   // reserved for authored AI tuning
+    };
+
+    /// <summary>
+    /// The single honest entry point: register EVERY catalogue kind in /data
+    /// into a world before tick 0, from the /data root itself. One call, all of
+    /// it, so a new kind joins every caller at once instead of being an extra
+    /// line each of them has to remember.
+    ///
+    /// It also refuses a /data holding a directory this table does not know,
+    /// naming it. The day somebody adds data/newkind/ full of yaml, the build
+    /// fails and asks to be wired in, rather than parsing, validating and then
+    /// silently ignoring the lot, which is the P7-1 defect shape.
+    ///
+    /// A missing directory behaves exactly as it did when each kind was called
+    /// by hand: the per-kind step throws its own readable IOException naming
+    /// what it wanted. A world nobody calls this on keeps the compiled numbers
+    /// it was seeded with, which is what keeps the bare-World harness scenarios
+    /// green.
+    /// </summary>
+    public static void RegisterAll(World w, string dataRoot)
+    {
+        // Guarded, because a dataRoot that is not there at all is the missing
+        // /data case: it must reach the per-kind step below and produce that
+        // step's message, not a directory-enumeration failure from the guard.
+        if (Directory.Exists(dataRoot))
+        {
+            var subs = Directory.GetDirectories(dataRoot);
+            Array.Sort(subs, StringComparer.Ordinal);
+            foreach (var sub in subs)
+            {
+                string name = Path.GetFileName(sub);
+                bool known = false;
+                foreach (var (dir, _) in DataDirs)
+                    if (string.Equals(dir, name, StringComparison.Ordinal)) known = true;
+                if (!known)
+                    throw new FormatException(
+                        $"{sub}: unrecognised /data directory '{name}'. " +
+                        "Every directory under /data is either a catalogue kind this loader registers or one recorded " +
+                        "as holding no defs; an unknown one would be authored, validated and then silently ignored. " +
+                        "Add it to CatalogueFiles.DataDirs, with a registration step if it holds defs and null if it does not.");
+            }
+        }
+
+        foreach (var (dir, register) in DataDirs)
+            register?.Invoke(w, Path.Combine(dataRoot, dir));
+    }
+
+    /// <summary>
+    /// Units and structures only, from two explicit directories. Named for what
+    /// it does after RegisterAll took its old name: it registered two of the
+    /// four kinds while calling itself "all", which is exactly how callers came
+    /// to be missing fields and weapons. Kept for the error-path assertions
+    /// that feed it scratch directories to prove bad input is refused.
+    /// </summary>
+    public static void RegisterUnitsAndStructures(World w, string unitsDir, string buildingsDir)
     {
         if (!Directory.Exists(unitsDir) || !Directory.Exists(buildingsDir))
             throw new IOException(
                 $"/data is missing: expected {unitsDir} and {buildingsDir}. " +
+                "Gameplay numbers live in /data (ADR-006) and a battle cannot start without them. " +
+                "Restore the data directory beside the game and try again.");
+
+        RegisterUnits(w, unitsDir);
+        RegisterStructures(w, buildingsDir);
+    }
+
+    private static void RegisterUnits(World w, string unitsDir)
+    {
+        if (!Directory.Exists(unitsDir))
+            throw new IOException(
+                $"/data is missing: expected {unitsDir}. " +
                 "Gameplay numbers live in /data (ADR-006) and a battle cannot start without them. " +
                 "Restore the data directory beside the game and try again.");
 
@@ -503,6 +599,15 @@ public static class CatalogueFiles
                 throw new FormatException(
                     $"{unitsDir}: no unit file provides compiled unit type {t}. " +
                     "The compiled catalogue is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
+    }
+
+    private static void RegisterStructures(World w, string buildingsDir)
+    {
+        if (!Directory.Exists(buildingsDir))
+            throw new IOException(
+                $"/data is missing: expected {buildingsDir}. " +
+                "Gameplay numbers live in /data (ADR-006) and a battle cannot start without them. " +
+                "Restore the data directory beside the game and try again.");
 
         var seenStructs = new HashSet<int>();
         var structFiles = Directory.GetFiles(buildingsDir, "*.yaml");
@@ -535,15 +640,18 @@ public static class CatalogueFiles
 
     /// <summary>
     /// ADR-012: register the ferrite field regrowth tuning from /data/fields
-    /// into a world before tick 0, the same opt-in load step RegisterAll is for
-    /// the unit and structure catalogues. Kept separate rather than folded into
-    /// RegisterAll's signature so the four existing RegisterAll call sites and
-    /// their gates are untouched; a caller that never registers fields runs the
-    /// compiled placeholder (World.DefaultRegrowAmount / DefaultRegrowIntervalTicks),
-    /// which the selftest proves this file reproduces exactly. A sorted ordinal
-    /// walk (a directory listing is not a source of truth) that demands the
-    /// compiled ferrite field id, because a missing file must fail loudly rather
-    /// than silently leave the placeholder standing for edited data.
+    /// into a world before tick 0. It is a row in DataDirs like every other
+    /// kind, so RegisterAll loads it; it stays public only for the selftest,
+    /// which registers this one kind on its own to prove the file reproduces
+    /// the compiled twin. Keeping it separate from RegisterAll's signature so
+    /// that existing call sites were untouched is what left every caller
+    /// carrying an extra line, and is exactly what the table ended. A world
+    /// nobody registers fields into runs the compiled placeholder
+    /// (World.DefaultRegrowAmount / DefaultRegrowIntervalTicks), which the
+    /// selftest proves this file reproduces exactly. A sorted ordinal walk (a
+    /// directory listing is not a source of truth) that demands the compiled
+    /// ferrite field id, because a missing file must fail loudly rather than
+    /// silently leave the placeholder standing for edited data.
     /// </summary>
     public static void RegisterFields(World w, string fieldsDir)
     {

@@ -31,6 +31,7 @@ using Ferrostorm.Sim;
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
+//   catalogueloadgate  - ONE RegisterAll(world, /data) call loads every kind, an unrecognised /data directory is refused by name, and a bare World still plays the compiled numbers
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
@@ -2126,16 +2127,16 @@ int CatalogueRefuse()
     // 2. The ADR's hash-impact argument, asserted rather than assumed: the
     // /data files register to a catalogue identical to the compiled one, so
     // adoption moves nothing. This is the equality the goldens rest on.
-    string unitsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units"));
-    string buildingsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/buildings"));
-    string weaponsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/weapons"));
-    if (Directory.Exists(unitsDir) && Directory.Exists(buildingsDir))
+    string dataRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data"));
+    if (Directory.Exists(dataRoot))
     {
+        // One call registers every kind: units, structures, fields and weapons.
+        // Weapons are part of the catalogue since their numbers moved into
+        // /data, so the equality the goldens rest on has to cover them, and
+        // remembering to say so at each call site is precisely what the single
+        // entry point removed.
         var wd = new World(4);
-        CatalogueFiles.RegisterAll(wd, unitsDir, buildingsDir);
-        // Weapons are the third leg of the catalogue since their numbers moved
-        // into /data, so the equality the goldens rest on has to cover them too.
-        if (Directory.Exists(weaponsDir)) CatalogueFiles.RegisterWeapons(wd, weaponsDir);
+        CatalogueFiles.RegisterAll(wd, dataRoot);
         if (wd.CatalogueChecksum != good)
             return Fail($"catrefuse: /data registers to 0x{wd.CatalogueChecksum:X16} but the compiled catalogue is 0x{good:X16} - the two sources have drifted");
         Console.WriteLine($"catrefuse: /data and the compiled catalogue agree on 0x{good:X16} (ADR-006 hash-impact argument holds)");
@@ -2259,7 +2260,7 @@ int CatalogueRefuse()
         Directory.CreateDirectory(Path.Combine(scratch, "buildings"));
         try
         {
-            CatalogueFiles.RegisterAll(new World(5), Path.Combine(scratch, "missing"), Path.Combine(scratch, "buildings"));
+            CatalogueFiles.RegisterUnitsAndStructures(new World(5), Path.Combine(scratch, "missing"), Path.Combine(scratch, "buildings"));
             return Fail("catrefuse: a missing /data directory must refuse");
         }
         catch (IOException e)
@@ -2270,7 +2271,7 @@ int CatalogueRefuse()
         File.WriteAllText(badFile, "id: dir_cannon_tank\n  oops: indented\n");
         try
         {
-            CatalogueFiles.RegisterAll(new World(6), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
+            CatalogueFiles.RegisterUnitsAndStructures(new World(6), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
             return Fail("catrefuse: a malformed data file must refuse");
         }
         catch (FormatException e)
@@ -2281,7 +2282,7 @@ int CatalogueRefuse()
         File.Delete(badFile);
         try
         {
-            CatalogueFiles.RegisterAll(new World(7), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
+            CatalogueFiles.RegisterUnitsAndStructures(new World(7), Path.Combine(scratch, "units"), Path.Combine(scratch, "buildings"));
             return Fail("catrefuse: an incomplete /data must refuse rather than mix catalogues");
         }
         catch (FormatException e)
@@ -3928,10 +3929,7 @@ int MapGate()
             map = MapData.Load(mapPath);
             world = map.BuildWorld(4242, players: 2, out _, w =>
             {
-                CatalogueFiles.RegisterAll(w,
-                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-                CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
-                CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
+                CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
             });
             map.PlaceSkirmishStart(world, 8000);
         }
@@ -4225,10 +4223,7 @@ int PinTrace()
     var map = MapData.Load(mapPath);
     var world = map.BuildWorld(4242, players: 2, out _, w =>
     {
-        CatalogueFiles.RegisterAll(w,
-            Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-        CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
-        CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
+        CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
     });
     map.PlaceSkirmishStart(world, 8000);
 
@@ -4434,10 +4429,7 @@ int PinProbe()
         var map = MapData.Load(mapPath);
         var world = map.BuildWorld(4242, players: 2, out _, w =>
         {
-            CatalogueFiles.RegisterAll(w,
-                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
-            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
+            CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
         });
         map.PlaceSkirmishStart(world, 8000);
         var s0 = map.Starts[0];
@@ -4594,10 +4586,7 @@ int MultiSeatGate()
         var m = MapData.Load(mapPath);
         var w = m.BuildWorld(seed, players: Seats, out _, ww =>
         {
-            CatalogueFiles.RegisterAll(ww,
-                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-            CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
-            CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
+            CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data"));
         });
         m.PlaceSkirmishStart(w, 8000);
         return (m, w);
@@ -4851,10 +4840,7 @@ int MultiSeatGate()
             var m = MapData.Load(ninePath);
             var w = m.BuildWorld(seed, players: players, out _, ww =>
             {
-                CatalogueFiles.RegisterAll(ww,
-                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-                CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
-                CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
+                CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data"));
             });
             m.PlaceSkirmishStart(w, 8000);
             return (m, w);
@@ -5199,6 +5185,190 @@ int WeaponDataGate()
                       + "sim fires the table it was given rather than the one it was compiled with; registration after "
                       + $"tick 0 is refused; and the catalogue checksum sits at 0x{stock1:X16} from both sources and "
                       + "moves on a single point of damage");
+    return 0;
+}
+
+int CatalogueLoadGate()
+{
+    // The single /data entry point. Additive, the weapondatagate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so the
+    // golden list stays 24.
+    //
+    // CatalogueFiles.RegisterAll used to register TWO of the four /data kinds
+    // while calling itself "all", so fields and then weapons each arrived as an
+    // extra line every caller had to remember beside it. A caller that forgot
+    // one got a world with a partial catalogue and NO error whatsoever: it fell
+    // through to the compiled numbers and played on, which is the same
+    // authored-data-that-does-not-drive-the-runtime shape as the P7-1 defect.
+    // There were roughly ten such clusters in this file alone. This gate holds
+    // the fix from both ends: one call registers every kind, and a /data
+    // directory the loader has never heard of is refused BY NAME rather than
+    // ignored, so the next kind cannot be added silently.
+    string dataRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data"));
+    if (!Directory.Exists(dataRoot))
+        return Fail($"catalogueload: {dataRoot} is missing, so there is no catalogue to load");
+
+    // --- 1. ONE call registers all four kinds. Each kind is POISONED first with
+    //        a value that is neither the compiled one nor the authored one, so a
+    //        kind the single call fails to touch keeps its poison and is caught
+    //        here. The poison is what makes the assertion mean anything: the
+    //        authored numbers reproduce the compiled ones exactly by design (the
+    //        selftest and weapondatagate pin that equality, and it is what keeps
+    //        the 24 goldens still), so no def value differs between the two
+    //        sources and reading one against the other could never tell a
+    //        registered def from an unregistered one. Expectations are parsed
+    //        back out of the /data files themselves rather than read off the
+    //        compiled constants, for the same reason.
+    int unitType = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+    int structType = StructureCatalogue.TypeIdOf("com_power_plant");
+    int weaponId = UnitCatalogue.WeaponIdOf("wpn_tank_cannon");
+    var wantUnit = UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(dataRoot, "units", "dir_cannon_tank.yaml")));
+    var wantStruct = StructureCatalogue.ToTypeDef(DataLoader.LoadStructureFile(Path.Combine(dataRoot, "buildings", "com_power_plant.yaml")));
+    var wantWeapon = UnitCatalogue.ToWeaponDef(DataLoader.LoadWeaponFile(Path.Combine(dataRoot, "weapons", "wpn_tank_cannon.yaml")));
+    {
+        var w = new World(9001);
+        w.RegisterUnitType(unitType, w.GetUnitType(unitType) with { Cost = wantUnit.Cost + 4242 });
+        w.RegisterStructureType(structType, w.GetStructureType(structType) with { Cost = wantStruct.Cost + 4242 });
+        var poison = w.GetWeaponType(weaponId);
+        w.RegisterWeaponType(weaponId, new WeaponDef(poison.Range, poison.Damage + 4242, poison.Warhead,
+                                                     poison.CooldownTicks, poison.MinRange, poison.SplashRadius, poison.AntiAir));
+
+        CatalogueFiles.RegisterAll(w, dataRoot);
+
+        if (w.GetUnitType(unitType).Cost != wantUnit.Cost)
+            return Fail($"catalogueload: the UNITS kind did not register - dir_cannon_tank still costs "
+                        + $"{w.GetUnitType(unitType).Cost} where data/units says {wantUnit.Cost}");
+        if (w.GetUnitType(unitType) != wantUnit)
+            return Fail("catalogueload: the registered dir_cannon_tank def does not match data/units field for field");
+        if (w.GetStructureType(structType).Cost != wantStruct.Cost)
+            return Fail($"catalogueload: the STRUCTURES kind did not register - com_power_plant still costs "
+                        + $"{w.GetStructureType(structType).Cost} where data/buildings says {wantStruct.Cost}");
+        if (w.GetStructureType(structType) != wantStruct)
+            return Fail("catalogueload: the registered com_power_plant def does not match data/buildings field for field");
+        if (w.GetWeaponType(weaponId).Damage != wantWeapon.Damage)
+            return Fail($"catalogueload: the WEAPONS kind did not register - wpn_tank_cannon still deals "
+                        + $"{w.GetWeaponType(weaponId).Damage} where data/weapons says {wantWeapon.Damage}");
+        if (w.GetWeaponType(weaponId).Range != wantWeapon.Range)
+            return Fail("catalogueload: the registered wpn_tank_cannon range does not match data/weapons");
+    }
+
+    // --- 1b. The fourth kind, fields, has no def to read back: regrowth is
+    //         private config, so it is proved the only honest way, by MEASURING
+    //         a field recover. The regrowthgate differential, borrowed: an
+    //         identical harvest run twice, once with regrowth poisoned to zero
+    //         and once with the single call switching it back on from
+    //         data/fields. The field is huge and never nears depletion, so the
+    //         two sequences are identical except for regrowth's own additions
+    //         and the difference IS the authored rate.
+    const int cap = 1_000_000, window = 1000;
+    long Remaining(ulong seed, bool poison, bool registerFromData)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        if (poison) w.ConfigureRegrowth(0, World.DefaultRegrowIntervalTicks);
+        if (registerFromData) CatalogueFiles.RegisterAll(w, dataRoot);
+        w.SpawnRefinery(0, 10, 10);
+        int fld = w.SpawnFerriteField(Fix64.FromInt(12), Fix64.FromInt(12), cap);
+        int hv = w.SpawnHarvester(0, Fix64.FromInt(12), Fix64.FromInt(12));
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, hv, Fix64.Zero, Fix64.Zero, fld) };
+        for (int t = 0; t < window; t++) { w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds)); cmds.Clear(); }
+        return w.Entities[fld].FerriteAmount;
+    }
+    int wantRegrown = (window - 1) / World.DefaultRegrowIntervalTicks * World.DefaultRegrowAmount;
+    long dead = Remaining(9002, poison: true, registerFromData: false);
+    long revived = Remaining(9002, poison: true, registerFromData: true);
+    if (revived - dead != wantRegrown)
+        return Fail($"catalogueload: the FIELDS kind did not register - a poisoned world recovered {revived - dead} "
+                    + $"ferrite over {window} ticks where data/fields asks for {wantRegrown}");
+
+    // --- 2. The guard that makes the whole defect class impossible: a /data
+    //        holding a directory the loader has never heard of is REFUSED, by
+    //        name. This is the stage that protects the NEXT kind - the day
+    //        somebody authors data/newkind and wires nothing up, this fails and
+    //        asks for it rather than parsing nothing and playing on.
+    string scratch = Path.Combine(Path.GetTempPath(), "ferrostorm-catload-data");
+    if (Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true);
+    foreach (var known in new[] { "units", "buildings", "fields", "weapons", "maps" })
+        Directory.CreateDirectory(Path.Combine(scratch, known));
+    Directory.CreateDirectory(Path.Combine(scratch, "newkind"));
+    File.WriteAllText(Path.Combine(scratch, "newkind", "com_thing.yaml"), "id: com_thing\nname: Thing\n");
+    try
+    {
+        CatalogueFiles.RegisterAll(new World(9003), scratch);
+        return Fail("catalogueload: a /data holding an unrecognised directory must refuse - ignoring it is how a whole "
+                    + "authored kind gets parsed by nobody");
+    }
+    catch (FormatException e)
+    {
+        if (!e.Message.Contains("newkind"))
+            return Fail($"catalogueload: the refusal must NAME the unrecognised directory, got: {e.Message}");
+    }
+
+    // --- 2b. The CONTROL, without which the stage above reads exactly the same
+    //         for a guard that simply refuses everything: the identical scratch
+    //         tree with the unknown directory removed gets PAST the guard, and
+    //         fails further on for its empty catalogue instead, naming the
+    //         compiled type no file provides.
+    Directory.Delete(Path.Combine(scratch, "newkind"), recursive: true);
+    try
+    {
+        CatalogueFiles.RegisterAll(new World(9004), scratch);
+        return Fail("catalogueload: an empty scratch catalogue must still refuse on its own terms");
+    }
+    catch (FormatException e)
+    {
+        if (e.Message.Contains("unrecognised"))
+            return Fail($"catalogueload: a tree of KNOWN directories must pass the guard, got: {e.Message}");
+        if (!e.Message.Contains("compiled unit type 1"))
+            return Fail($"catalogueload: the control must fail on the empty catalogue, got: {e.Message}");
+    }
+    Directory.Delete(scratch, recursive: true);
+
+    // --- 3. A world built with NO /data at all still plays the compiled
+    //        numbers. Roughly 138 scenarios in this runner construct a bare
+    //        World and never register anything, so this is not a nicety: it is
+    //        the property the whole battery and all 24 goldens rest on. Measured
+    //        the same way as stage 1b, plus the defs themselves.
+    {
+        var bare = new World(9005);
+        if (bare.GetUnitType(unitType) != wantUnit)
+            return Fail("catalogueload: a bare World must seed the compiled unit catalogue, which /data reproduces");
+        if (bare.GetStructureType(structType) != wantStruct)
+            return Fail("catalogueload: a bare World must seed the compiled structure catalogue");
+        if (bare.GetWeaponType(weaponId).Damage != wantWeapon.Damage)
+            return Fail("catalogueload: a bare World must seed the compiled weapon table");
+        long unregistered = Remaining(9006, poison: false, registerFromData: false);
+        long registered = Remaining(9006, poison: false, registerFromData: true);
+        if (unregistered != registered)
+            return Fail($"catalogueload: a bare World must regrow exactly as a /data world does "
+                        + $"({unregistered} against {registered}) - the compiled placeholders are the same numbers");
+    }
+
+    // --- 4. The collapse moved nothing. The checksum after the single call must
+    //        equal the checksum the old per-kind sequence produced, and the old
+    //        sequence is RUN here rather than pinned to a constant, so this is a
+    //        real equality that would still catch a re-ordering or a dropped
+    //        kind after the numbers in /data change.
+    var viaAll = new World(9007);
+    CatalogueFiles.RegisterAll(viaAll, dataRoot);
+    var viaKinds = new World(9008);
+    CatalogueFiles.RegisterUnitsAndStructures(viaKinds, Path.Combine(dataRoot, "units"), Path.Combine(dataRoot, "buildings"));
+    CatalogueFiles.RegisterFields(viaKinds, Path.Combine(dataRoot, "fields"));
+    CatalogueFiles.RegisterWeapons(viaKinds, Path.Combine(dataRoot, "weapons"));
+    if (viaAll.CatalogueChecksum != viaKinds.CatalogueChecksum)
+        return Fail($"catalogueload: one call registers to 0x{viaAll.CatalogueChecksum:X16} but the per-kind sequence "
+                    + $"gives 0x{viaKinds.CatalogueChecksum:X16} - the collapse changed what gets registered");
+    if (viaAll.CatalogueChecksum != new World(9009).CatalogueChecksum)
+        return Fail($"catalogueload: /data registers to 0x{viaAll.CatalogueChecksum:X16} against the compiled "
+                    + $"0x{new World(9009).CatalogueChecksum:X16} - the two sources have drifted");
+
+    Console.WriteLine($"catalogueloadgate: one CatalogueFiles.RegisterAll(world, /data) call registered all four kinds over a "
+                      + $"poisoned world - dir_cannon_tank back to {wantUnit.Cost} credits, com_power_plant to {wantStruct.Cost}, "
+                      + $"wpn_tank_cannon to {wantWeapon.Damage} damage, and a field with regrowth poisoned to zero recovered "
+                      + $"{wantRegrown} ferrite over {window} ticks at the authored rate; a /data carrying an unrecognised "
+                      + "directory was refused naming it, while the same tree without it got past the guard and failed on its "
+                      + "empty catalogue instead; a world built with no /data at all still plays the compiled numbers, which is "
+                      + $"what the bare-World scenarios rest on; and the catalogue checksum sits at 0x{viaAll.CatalogueChecksum:X16} "
+                      + "from the single call, from the old per-kind sequence and from the compiled table alike");
     return 0;
 }
 
@@ -6318,10 +6488,7 @@ int BasinGate()
         map = MapData.Load(mapPath);
         world = map.BuildWorld(4242, players: 2, out _, w =>
         {
-            CatalogueFiles.RegisterAll(w,
-                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
-            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
+            CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
         });
         map.PlaceSkirmishStart(world, 8000);
     }
@@ -6469,10 +6636,7 @@ int DecorGate()
     string droot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
     var w = map.BuildWorld(4242, players: 2, out _, ww =>
     {
-        CatalogueFiles.RegisterAll(ww,
-            Path.Combine(droot, "data", "units"), Path.Combine(droot, "data", "buildings"));
-        CatalogueFiles.RegisterFields(ww, Path.Combine(droot, "data", "fields"));
-        CatalogueFiles.RegisterWeapons(ww, Path.Combine(droot, "data", "weapons"));
+        CatalogueFiles.RegisterAll(ww, Path.Combine(droot, "data"));
     });
     int id = w.SpawnUnit(0, Map.CellCentre(21), Map.CellCentre(18),
                          Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
@@ -6533,10 +6697,7 @@ int FordGate()
         map = MapData.Load(mapPath);
         world = map.BuildWorld(4242, players: 2, out _, w =>
         {
-            CatalogueFiles.RegisterAll(w,
-                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-            CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
-            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
+            CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
         });
         // NO opening hand here, deliberately. The first draft called
         // PlaceSkirmishStart and then walked a unit to the far START cell -
@@ -6662,10 +6823,7 @@ int FordGate()
         {
             w = cross.BuildWorld(4242, players: 2, out _, ww =>
             {
-                CatalogueFiles.RegisterAll(ww,
-                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
-                CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
-                CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
+                CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data"));
             });
         }
         catch (Exception ex) { where = $"world build threw: {ex.Message}"; return false; }
@@ -6965,6 +7123,10 @@ int Match(ulong seed)
     // And the weapon numbers in /data are the ones the sim actually fires.
     int weaponData = WeaponDataGate();
     if (weaponData != 0) return weaponData;
+    // And ONE call loads the whole catalogue, with an unknown /data kind refused
+    // rather than silently ignored.
+    int catLoad = CatalogueLoadGate();
+    if (catLoad != 0) return catLoad;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -7823,6 +7985,7 @@ return args.Length == 0
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "weapondatagate" => WeaponDataGate(),
+        "catalogueloadgate" => CatalogueLoadGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
