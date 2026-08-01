@@ -776,19 +776,14 @@ public partial class SkirmishLive : Node3D
     /// </summary>
     public static void RegisterCatalogue(World w)
     {
-        CatalogueFiles.RegisterAll(w,
-            Path.Combine(GameFiles.RepoRoot, "data", "units"),
-            Path.Combine(GameFiles.RepoRoot, "data", "buildings"));
-        // ADR-012: the ferrite regrowth tuning is /data too, so the client loads
-        // it on the same pre-tick-0 path rather than running the compiled twin
-        // silently. A caller (the runner's scenarios, Main.cs's demo) that skips
-        // this keeps the placeholder the selftest proves this file reproduces.
-        CatalogueFiles.RegisterFields(w, Path.Combine(GameFiles.RepoRoot, "data", "fields"));
-        // The weapon table is /data now too, and it loads on the same pre-tick-0
-        // path for the same reason: every number the sim fires with must come
-        // from the files a designer edits, not from the compiled reference the
-        // files exist to reproduce.
-        CatalogueFiles.RegisterWeapons(w, Path.Combine(GameFiles.RepoRoot, "data", "weapons"));
+        // ONE call, every kind: units, structures, the ADR-012 ferrite regrowth
+        // tuning and the weapon table, all on the same pre-tick-0 path. It used
+        // to be a call per kind here, which meant the client had to be edited
+        // again for each new kind and would otherwise have run that kind's
+        // compiled numbers silently. A caller that skips this entirely (Main.cs's
+        // demo, the runner's scenarios) keeps the compiled placeholders the
+        // selftest proves the files reproduce.
+        CatalogueFiles.RegisterAll(w, Path.Combine(GameFiles.RepoRoot, "data"));
     }
 
     /// <summary>Replace the freshly built world with a saved one. The fresh

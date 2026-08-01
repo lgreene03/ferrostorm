@@ -189,11 +189,38 @@ it field by field. The catalogue checksum moved from `0x374FDD8212234CB2` to
 `0x73326A3FF8AEA4D1`, which is expected: a new catalogue section changes it by
 construction, on the same pre-first-public-build argument as P7-2/3/4 and P7-11a.
 
-**Left as the obvious next candidate:** `CatalogueFiles.Register*` is a per-kind
-opt-in, so `RegisterWeapons` had to be added beside all nine `RegisterFields`
-sites plus the client's. That is a fourth parallel registration line and the next
-`/data` kind faces the same fan-out. Not refactored here, because widening a
-wave to fix the thing the wave just revealed is how a wave stops landing.
+**That fan-out was the next wave, and it is CLOSED.** `CatalogueFiles.Register*`
+was a per-kind opt-in, so `RegisterWeapons` had to be added beside all nine
+`RegisterFields` sites plus the client's.
+
+The name was the tell: **`RegisterAll` did not register all**, and had not since
+fields were added. A caller who forgot a kind got a world with a partial
+catalogue and NO error, silently falling back to the compiled defaults. The
+recurring shape again, a rule keyed on an instance.
+
+`RegisterAll(world, dataRoot)` is now the single honest entry point, and the
+three-argument one is renamed `RegisterUnitsAndStructures` because that is what
+it does. Thirty-two calls across eleven clusters became eleven.
+
+**The guard is the point, not the tidying.** One table lists every `/data`
+subdirectory as either a catalogue kind with its registrar or a known
+non-catalogue, and both the registration loop and the guard read that ONE table
+so they cannot drift. An unrecognised directory is refused by name:
+
+> unrecognised /data directory 'zzz_probe'. Every directory under /data is either
+> a catalogue kind this loader registers or one recorded as holding no defs; an
+> unknown one would be authored, validated and then silently ignored.
+
+So the next `/data` kind cannot be silently forgotten in one of ten places.
+
+Checksum measured unchanged at `0x73326A3FF8AEA4D1` before and after, and the
+gate asserts it three ways at once: the single call, the old per-kind sequence
+run explicitly beside it, and a bare compiled world all agree.
+
+One deliberate narrowing, recorded because it is a real semantic change: a
+`/data` present but missing `weapons` now throws where it once silently compared
+a partial checksum. That case cannot arise in this repo, and refusing it is
+exactly the point of the wave.
 
 ## What P7-8 turned out to be
 
