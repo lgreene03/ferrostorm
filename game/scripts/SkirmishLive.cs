@@ -27,7 +27,11 @@ public partial class SkirmishLive : Node3D
     private const double TickSeconds = 1.0 / World.TicksPerSecond;
 
     private World _world = null!;
-    private SkirmishAI? _enemy;
+    /// <summary>One commander per NON-LOCAL seat, in ascending seat order.
+    /// A list rather than a single `_enemy` since P7-8d: with four seats there
+    /// are three opponents, and the order is load-bearing because their orders
+    /// enter the same command stream and a replay re-runs that stream.</summary>
+    private readonly System.Collections.Generic.List<SkirmishAI> _commanders = new();
     private MissionRunner? _mission;
     private readonly List<Command> _missionCmds = new();
     private int _seenMessages;
@@ -550,8 +554,14 @@ public partial class SkirmishLive : Node3D
                 // undefined enum - the established "a corrupt sidecar must not
                 // take the menu down with it" posture.
                 var rung = (AiDifficulty)System.Math.Clamp(_setup.AiDifficulty, 0, 3);
-                _enemy = _setup.AiPreset switch
+                // P7-8d: one commander per non-local seat, ascending. Two seats
+                // gives exactly one, at the other seat, which is what shipped
+                // before this and is the regression bar.
+                for (int seat = 0; seat < _world.PlayerCount; seat++)
                 {
+                    if (seat == LocalPlayerId) continue;
+                    _commanders.Add(_setup.AiPreset switch
+                    {
                 // The opponent plays the OTHER seat, not a hardcoded player 1.
                 // With the seat hardcoded, a client sitting in seat 1 got an AI
                 // playing ITS OWN side: the AI's orders and the player's landed
@@ -561,10 +571,11 @@ public partial class SkirmishLive : Node3D
                 // where the seat is 0 and the AI's 1 happen to be opposite.
                 // Found by the headless harness the first time anything drove
                 // the scene from seat 1.
-                    1 => SkirmishAI.Rusher(EnemyPlayerId, rung),
-                    2 => SkirmishAI.Turtle(EnemyPlayerId, rung),
-                    _ => SkirmishAI.Standard(EnemyPlayerId, rung),
-                };
+                        1 => SkirmishAI.Rusher(seat, rung),
+                        2 => SkirmishAI.Turtle(seat, rung),
+                        _ => SkirmishAI.Standard(seat, rung),
+                    });
+                }
                 // Brutal's handicap, applied HERE by setup rather than by the
                 // commander itself (doc 28 s6): SkirmishAI mutates nothing, so
                 // an AI that granted itself credits would desync every replay
@@ -576,7 +587,9 @@ public partial class SkirmishLive : Node3D
                 // ResumeFromSave replaces this world entirely, so the saved
                 // treasury stands rather than being topped up on every load.
                 long handicap = SkirmishAI.StartingCreditHandicap(rung);
-                if (handicap > 0) _world.GrantCredits(EnemyPlayerId, handicap);
+                if (handicap > 0)
+                    for (int seat = 0; seat < _world.PlayerCount; seat++)
+                        if (seat != LocalPlayerId) _world.GrantCredits(seat, handicap);
             }
 
             // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
@@ -663,6 +676,23 @@ public partial class SkirmishLive : Node3D
     /// carried in the sidecar beside the file, so a save or a replay written
     /// today still rebuilds its own world after the setup options grow.
     /// </summary>
+    /// <summary>
+    /// P7-8d: how many seats a skirmish on this map is played with. THE MAP
+    /// DECIDES, and that is what keeps this out of the sidecar: the seat count
+    /// is derived from an input the sidecar already names rather than stored
+    /// beside it, so a save or a replay written before multi-seat existed
+    /// rebuilds the identical world with no format version and no migration.
+    ///
+    /// Every map but skirmish-09 declares two starts, so every existing match
+    /// is unchanged by construction. The floor of 2 is for a malformed map;
+    /// the ceiling of 8 is NOT arbitrary and is not a taste call - Entity's
+    /// DetectedMask is a byte, so a ninth seat shifts out of it and that
+    /// player's detectors would silently stop revealing stealth (ADR-031).
+    /// Capping here turns a silent wrong answer into a map that seats eight.
+    /// </summary>
+    public static int SeatsFor(MapData map)
+        => System.Math.Clamp(map.Starts.Count, 2, 8);
+
     public static World BuildStartingWorld(MatchSetup setup, MapData map,
         out Dictionary<string, List<int>> tags)
     {
@@ -686,14 +716,32 @@ public partial class SkirmishLive : Node3D
             }
             return m;
         }
-        var w = map.BuildWorld(setup.Seed, players: 2, out tags, RegisterCatalogue);
+        int seats = SeatsFor(map);
+        var w = map.BuildWorld(setup.Seed, players: seats, out tags, RegisterCatalogue);
         // TICKET-P6-FACTION-01: the sides, before any spawn and before tick 0.
         // After BuildWorld on purpose: no shipped skirmish map declares
         // factions (Q001), and if one ever does, the player's menu choice is
         // the one that must win in a skirmish. The mission branch above stays
         // untouched: a mission's map speaks for itself.
+        //
+        // P7-8d: every seat, not just two. Seat 1 gets the opponent faction the
+        // menu asked for, and the seats after it ALTERNATE between the two
+        // sides so a four-player game is never three of a kind.
+        //
+        // Written first as "alternate between the player's pick and the
+        // opponent's pick", which reads sensibly and is wrong: both default to
+        // the same faction, so all three opponents came out identical. The
+        // harness caught it. Alternating between the two FACTIONS holds
+        // whatever the two menu picks happen to be.
+        //
+        // A default rather than a choice: a per-opponent faction picker is menu
+        // work, and inventing one here would put a player-facing option
+        // somewhere no player can see it.
         w.SetFaction(0, setup.Faction);
-        w.SetFaction(1, setup.OppFaction);
+        int opp = setup.OppFaction;
+        int alt = opp == World.FactionDirectorate ? World.FactionSodality : World.FactionDirectorate;
+        for (int p = 1; p < seats; p++)
+            w.SetFaction(p, p % 2 == 1 ? opp : alt);
         // ADR-011 (Wave B5): the opening hand - start credits, two construction
         // yards, and a harvester with three rifle squads per side, mirrored and
         // now placed at cell centres - is authored in the sim's MapLoader layer,
@@ -776,7 +824,7 @@ public partial class SkirmishLive : Node3D
         // recordings carry no checksum and play exactly as before.
         _replay.AssertCatalogueMatches(_world.CatalogueChecksum);
         _replayTicks = MatchConfig.ReplayTicks;
-        _enemy = null;   // the recorded stream already carries the AI's decisions
+        _commanders.Clear();   // the recorded stream already carries the AI's decisions
     }
 
     private void BeginRecording()
@@ -1494,7 +1542,10 @@ public partial class SkirmishLive : Node3D
         }
         else
         {
-            _enemy?.Act(_world, _tickCmds);
+            // Ascending seat order, which is the order they were built in.
+            // Their orders share one command stream and a replay re-runs
+            // that stream, so the order is part of the recording.
+            foreach (var commander in _commanders) commander.Act(_world, _tickCmds);
             _tickCmds.AddRange(_pending);
             _pending.Clear();
             // Record what the AI and the player decided, restamped with the tick

@@ -210,8 +210,25 @@ public sealed class LanLobby
     /// <summary>Build the world a MatchSetup describes, exactly as the battle
     /// scene will. One function, used by both seats, so there is no second
     /// definition of "the starting world" to drift.</summary>
-    private static World BuildFrom(MatchSetup s) =>
-        SkirmishLive.BuildStartingWorld(s, MapData.Load(GameFiles.Abs(s.MapPath)), out _);
+    private static World BuildFrom(MatchSetup s)
+    {
+        var map = MapData.Load(GameFiles.Abs(s.MapPath));
+        // P7-8d: LAN seats exactly two humans, and the relay is built with
+        // playerCount 2, but the world's seat count now comes from the MAP. On
+        // a four-start map that would seat two humans and leave two bases with
+        // no controller at all - they would never act, and VictorySystem would
+        // refuse to end the match until somebody walked over and razed them.
+        // Refused here, loudly, rather than shipped as a match that cannot
+        // finish. Lifting this needs LAN seat negotiation, which is its own
+        // piece of work and not a rider on the lobby.
+        int seats = SkirmishLive.SeatsFor(map);
+        if (seats > 2)
+            throw new System.InvalidOperationException(
+                $"'{s.MapPath}' seats {seats} players and a LAN match seats two. "
+                + "Multi-seat LAN needs seat negotiation, which does not exist yet. "
+                + "Choose a two-start map.");
+        return SkirmishLive.BuildStartingWorld(s, map, out _);
+    }
 
     /// <summary>
     /// Open a lobby on a fixed port and wait for one player. Returns immediately;
