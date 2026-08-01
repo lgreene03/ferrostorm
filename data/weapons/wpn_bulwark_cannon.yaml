@@ -1,0 +1,10 @@
+# The Directorate's argument-ender, carried by the Bulwark Tank. Heavy
+# single-target: no splash, because a wall that walks should have to pick what
+# it kills. It matches the turret's reach and beats it for damage, which is what
+# the Bulwark's cost and its crawling speed are paying for.
+id: wpn_bulwark_cannon
+name: "Bulwark Cannon"
+range: 500
+damage: 50
+warhead: anti_armour
+cooldown_ticks: 18

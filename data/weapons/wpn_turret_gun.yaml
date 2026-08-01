@@ -1,0 +1,13 @@
+# The base defence turret's gun, and since P7-2b the Directorate Bastion's too.
+# No unit carries it: it is a building's weapon, which is why it can afford the
+# longest reach of the anti-armour guns without being a mobile threat. A tank
+# that walks into a turret's 5 cells is inside its range before it is inside its
+# own 4.
+# ADR-008 clause 1 applies to whatever carries this: a browned-out base cannot
+# power its guns, so range means nothing without an economy.
+id: wpn_turret_gun
+name: "Turret Gun"
+range: 500
+damage: 35
+warhead: anti_armour
+cooldown_ticks: 12

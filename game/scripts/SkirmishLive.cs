@@ -231,9 +231,16 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>DEF-01: a weapon's range in world units. Fix64.Raw is public and
     /// FracBits is 32, so this is the same conversion SnapshotInterpolator.ToDouble
-    /// uses. Weapon 0 (none) has no ring.</summary>
-    private static float RangeOf(int weaponId) =>
-        weaponId == 0 ? 0f : (float)(Weapons.Get(weaponId).Range.Raw / 4294967296.0);
+    /// uses. Weapon 0 (none) has no ring.
+    ///
+    /// Read from the LIVE weapon table for WeaponOfStruct's reason: the numbers
+    /// live in data/weapons now, a match registers them over the compiled
+    /// reference before tick 0, and a ring drawn from Weapons.Get would show the
+    /// player a range the gun does not have the moment a file is edited. An
+    /// instance method rather than a static one purely so that _world is in
+    /// scope; both call sites already had it.</summary>
+    private float RangeOf(int weaponId) =>
+        weaponId == 0 ? 0f : (float)(_world.GetWeaponType(weaponId).Range.Raw / 4294967296.0);
 
     // Fog, minimap, groups, alerts
     private FogOfWar _fog = null!;
@@ -777,6 +784,11 @@ public partial class SkirmishLive : Node3D
         // silently. A caller (the runner's scenarios, Main.cs's demo) that skips
         // this keeps the placeholder the selftest proves this file reproduces.
         CatalogueFiles.RegisterFields(w, Path.Combine(GameFiles.RepoRoot, "data", "fields"));
+        // The weapon table is /data now too, and it loads on the same pre-tick-0
+        // path for the same reason: every number the sim fires with must come
+        // from the files a designer edits, not from the compiled reference the
+        // files exist to reproduce.
+        CatalogueFiles.RegisterWeapons(w, Path.Combine(GameFiles.RepoRoot, "data", "weapons"));
     }
 
     /// <summary>Replace the freshly built world with a saved one. The fresh

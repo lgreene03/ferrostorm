@@ -1,0 +1,20 @@
+# TICKET-P2-SIM-14. Enormous reach, a 3-cell dead zone, slow, and splash that
+# does not care whose uniform you wear.
+# The dead zone is the whole design: min_range 300 means anything that closes
+# inside three cells cannot be engaged at all, so the artillery piece stands
+# helpless rather than firing point blank. It neither shoots nor backs further
+# in. That is the classic weakness the reach is paid for with, and removing it
+# would turn a siege weapon into a long-range tank.
+# splash_radius 150 is 1.5 cells, and the half damage it deals inside that
+# radius lands on friend and foe alike. Authoring it in hundredths of a cell is
+# what lets 1.5 be written exactly.
+# Anti-building warhead: this is for taking a base apart, not for winning a
+# field engagement.
+id: wpn_howitzer
+name: "Howitzer"
+range: 900
+damage: 60
+warhead: anti_building
+cooldown_ticks: 45
+min_range: 300
+splash_radius: 150

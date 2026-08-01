@@ -30,6 +30,7 @@ using Ferrostorm.Sim;
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
+//   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
@@ -2127,10 +2128,14 @@ int CatalogueRefuse()
     // adoption moves nothing. This is the equality the goldens rest on.
     string unitsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units"));
     string buildingsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/buildings"));
+    string weaponsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/weapons"));
     if (Directory.Exists(unitsDir) && Directory.Exists(buildingsDir))
     {
         var wd = new World(4);
         CatalogueFiles.RegisterAll(wd, unitsDir, buildingsDir);
+        // Weapons are the third leg of the catalogue since their numbers moved
+        // into /data, so the equality the goldens rest on has to cover them too.
+        if (Directory.Exists(weaponsDir)) CatalogueFiles.RegisterWeapons(wd, weaponsDir);
         if (wd.CatalogueChecksum != good)
             return Fail($"catrefuse: /data registers to 0x{wd.CatalogueChecksum:X16} but the compiled catalogue is 0x{good:X16} - the two sources have drifted");
         Console.WriteLine($"catrefuse: /data and the compiled catalogue agree on 0x{good:X16} (ADR-006 hash-impact argument holds)");
@@ -3926,6 +3931,7 @@ int MapGate()
                 CatalogueFiles.RegisterAll(w,
                     Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
                 CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+                CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
             });
             map.PlaceSkirmishStart(world, 8000);
         }
@@ -4222,6 +4228,7 @@ int PinTrace()
         CatalogueFiles.RegisterAll(w,
             Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
         CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+        CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
     });
     map.PlaceSkirmishStart(world, 8000);
 
@@ -4430,6 +4437,7 @@ int PinProbe()
             CatalogueFiles.RegisterAll(w,
                 Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
             CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
         });
         map.PlaceSkirmishStart(world, 8000);
         var s0 = map.Starts[0];
@@ -4589,6 +4597,7 @@ int MultiSeatGate()
             CatalogueFiles.RegisterAll(ww,
                 Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
             CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+            CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
         });
         m.PlaceSkirmishStart(w, 8000);
         return (m, w);
@@ -4845,6 +4854,7 @@ int MultiSeatGate()
                 CatalogueFiles.RegisterAll(ww,
                     Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
                 CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+                CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
             });
             m.PlaceSkirmishStart(w, 8000);
             return (m, w);
@@ -5018,6 +5028,7 @@ int SchemaGate()
                  ("data/units", "data/schema.unit.json"),
                  ("data/buildings", "data/schema.structure.json"),
                  ("data/fields", "data/schema.field.json"),
+                 ("data/weapons", "data/schema.weapon.json"),
              })
     {
         string schemaPath = Root(schema);
@@ -5046,28 +5057,148 @@ int SchemaGate()
         }
     }
 
-    // data/weapons exists and is EMPTY: every weapon number lives compiled in
-    // Combat.cs. That contradicts CLAUDE.md's "all gameplay numbers live in
-    // /data" as plainly as the unenforced schema did, and it is a bigger job
-    // than this gate (authoring them moves the catalogue checksum). Asserted as
-    // the CURRENT truth rather than left silent, so that the day someone adds a
-    // weapon yaml this fails and asks for a schema to validate it against.
-    {
-        string weapons = Root("data/weapons");
-        if (Directory.Exists(weapons))
-        {
-            var files2 = Directory.GetFiles(weapons, "*.yaml");
-            if (files2.Length > 0 && !File.Exists(Root("data/schema.weapon.json")))
-                return Fail($"schema: data/weapons holds {files2.Length} definition(s) and there is no "
-                            + "data/schema.weapon.json to validate them against. Add the schema with the files.");
-        }
-    }
+    // The "data/weapons is empty" special case that used to close this gate is
+    // gone, and deliberately so rather than by oversight. It asserted that the
+    // day a weapon yaml appeared there would be a schema for it, and that day
+    // has arrived: data/weapons now holds all nine definitions and
+    // data/schema.weapon.json validates them in the loop above, on the same
+    // terms as the other three directories. The guard has nothing left to guard.
 
-    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the three "
+    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the four "
                       + "schemas, and every key is one the schema allows. This is the enforcement CLAUDE.md's "
                       + "\"validated against /data/schema.unit.json\" always claimed and nothing performed: the "
                       + "schemas say additionalProperties:false and nothing read them, so schema.unit.json had "
-                      + "already fallen four waves behind the loader on the 'air' key");
+                      + "already fallen four waves behind the loader on the 'air' key. data/weapons is the "
+                      + "newest of the four and was empty until its numbers moved out of Combat.cs");
+    return 0;
+}
+
+int WeaponDataGate()
+{
+    // The weapons wave. Additive, the infiltratorgate pattern: a standalone
+    // mode and a Match battery stage, never a golden scenario, so the golden
+    // list stays 24.
+    //
+    // Two different things are under test here and only one of them is the
+    // obvious one.
+    //
+    // The obvious one is TRANSCRIPTION: nine files now carry numbers that used
+    // to be compiled literals in Combat.cs, and a single mistyped digit would
+    // move a golden hash, which is a replay-compatibility break. Stage 1 is
+    // what makes the goldens safe.
+    //
+    // The one that matters more is stage 2. Authoring the files while leaving
+    // Weapons.Get authoritative would have produced a directory full of
+    // convincing YAML that the game never read - which is precisely the P7-1
+    // defect, where every building's `faction:` line was parsed, validated and
+    // then dropped while the sim ran a hardcoded rule. Stage 1 would pass
+    // happily in that world, because the files WOULD equal the compiled table;
+    // they would just be scenery. So stage 2 registers a weapon the compiled
+    // table does not contain and asserts the sim fires it, with a control that
+    // proves the same fixture is silent without the registration. If anybody
+    // ever puts Weapons.Get back into CombatSystem, this is the stage that
+    // fails.
+    string weaponsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/weapons"));
+    if (!Directory.Exists(weaponsDir))
+        return Fail($"weapondata: {weaponsDir} is missing, so the weapon numbers have nowhere to live");
+
+    // --- 1. Every authored weapon reproduces the compiled reference exactly,
+    //        field by field. This is the check that protects the 24 goldens:
+    //        the behaviour is unchanged only because the numbers are.
+    var loaded = new World(4200);
+    try { CatalogueFiles.RegisterWeapons(loaded, weaponsDir); }
+    catch (Exception e) { return Fail($"weapondata: /data/weapons would not load: {e.Message}"); }
+
+    for (int id = 1; id <= Weapons.MaxWeaponId; id++)
+    {
+        var got = loaded.GetWeaponType(id);
+        var want = Weapons.Get(id);
+        string Drift(string field, object a, object b)
+            => $"weapondata: weapon {id} authored {field} {a} but the compiled reference says {b}. "
+               + "Transcription is what keeps the goldens still, so fix the file rather than the hashes.";
+        if (got.Range != want.Range) return Fail(Drift("range", got.Range, want.Range));
+        if (got.Damage != want.Damage) return Fail(Drift("damage", got.Damage, want.Damage));
+        if (got.Warhead != want.Warhead) return Fail(Drift("warhead", got.Warhead, want.Warhead));
+        if (got.CooldownTicks != want.CooldownTicks) return Fail(Drift("cooldown_ticks", got.CooldownTicks, want.CooldownTicks));
+        if (got.MinRange != want.MinRange) return Fail(Drift("min_range", got.MinRange, want.MinRange));
+        if (got.SplashRadius != want.SplashRadius) return Fail(Drift("splash_radius", got.SplashRadius, want.SplashRadius));
+        if (got.AntiAir != want.AntiAir) return Fail(Drift("anti_air", got.AntiAir, want.AntiAir));
+    }
+
+    // --- 2. The runtime reads the REGISTERED table, not the compiled one.
+    //        A turret is the fixture on purpose: a building cannot walk, so a
+    //        target it damages at seven cells is a target its GUN reached, with
+    //        no chance that pursuit closed the gap and flattered the result.
+    //        The compiled turret gun reaches five.
+    const int TurretGun = 4;
+    int DamageDealtAtSevenCells(bool registerLongerGun)
+    {
+        var w = new World(4201, 64, 64, players: 2);
+        if (registerLongerGun)
+        {
+            // Ten cells, every other field left as authored. Deliberately a
+            // value no /data file carries, so a pass cannot be explained by the
+            // compiled table happening to agree.
+            var stock = w.GetWeaponType(TurretGun);
+            w.RegisterWeaponType(TurretGun, new WeaponDef(Fix64.FromInt(10), stock.Damage, stock.Warhead,
+                                                         stock.CooldownTicks, stock.MinRange, stock.SplashRadius, stock.AntiAir));
+        }
+        w.SpawnTurret(0, 20, 20);                    // centre (21,21)
+        w.SpawnPowerPlant(0, 30, 30, supply: 500);   // or ADR-008 silences it and this measures nothing
+        int foe = w.SpawnUnit(1, Fix64.FromInt(28), Fix64.FromInt(21),
+                              Fix64.Zero, 4000, ArmourClass.Heavy, weaponId: 0);
+        int hp0 = w.Entities[foe].Hp;
+        for (int t = 0; t < 300; t++) w.Step(default);
+        return hp0 - w.Entities[foe].Hp;
+    }
+    int control = DamageDealtAtSevenCells(false);
+    int driven = DamageDealtAtSevenCells(true);
+    if (control != 0)
+        return Fail($"weapondata control: a stock turret must NOT reach seven cells (it dealt {control}). "
+                    + "Without this the next check proves nothing, because the target would be inside the "
+                    + "compiled range all along");
+    if (driven <= 0)
+        return Fail("weapondata: a turret whose weapon was REGISTERED with a ten-cell range must engage a target "
+                    + "seven cells away, and it dealt no damage at all. The sim is still reading the compiled "
+                    + "Weapons.Get table, so data/weapons is decoration rather than data - the P7-1 defect exactly");
+
+    // --- 3. Registration after tick 0 is refused, matching the unit and
+    //        structure rule. A weapon swapped mid-match is a silent replay
+    //        divergence rather than a balance change.
+    {
+        var w = new World(4202, 64, 64, players: 2);
+        w.Step(default);
+        bool refused = false;
+        try { w.RegisterWeaponType(TurretGun, Weapons.Get(TurretGun)); }
+        catch (InvalidOperationException) { refused = true; }
+        if (!refused)
+            return Fail("weapondata: registering a weapon after tick 0 must be refused, as it is for units and structures");
+    }
+
+    // --- 4. The catalogue checksum answers to the weapon table. A checksum
+    //        that ignored a range would let two players fight with different
+    //        guns and call it agreement.
+    ulong stock1 = new World(4203).CatalogueChecksum;
+    ulong stock2 = new World(4204).CatalogueChecksum;
+    if (stock1 != stock2)
+        return Fail("weapondata: two compiled catalogues must still produce one checksum");
+    ulong fromData = loaded.CatalogueChecksum;
+    if (fromData != stock1)
+        return Fail($"weapondata: /data registers to 0x{fromData:X16} against the compiled 0x{stock1:X16} - "
+                    + "the files and the reference table have drifted");
+    var bumped = new World(4205);
+    var one = bumped.GetWeaponType(1);
+    bumped.RegisterWeaponType(1, new WeaponDef(one.Range, one.Damage + 1, one.Warhead, one.CooldownTicks,
+                                               one.MinRange, one.SplashRadius, one.AntiAir));
+    if (bumped.CatalogueChecksum == stock1)
+        return Fail("weapondata: a one-point damage change must change the catalogue checksum");
+
+    Console.WriteLine($"weapondatagate: all {Weapons.MaxWeaponId} data/weapons files reproduce the compiled reference "
+                      + "field for field, which is why the goldens do not move; a turret whose weapon was REGISTERED at "
+                      + $"ten cells dealt {driven} damage at seven cells where the stock turret dealt {control}, so the "
+                      + "sim fires the table it was given rather than the one it was compiled with; registration after "
+                      + $"tick 0 is refused; and the catalogue checksum sits at 0x{stock1:X16} from both sources and "
+                      + "moves on a single point of damage");
     return 0;
 }
 
@@ -6190,6 +6321,7 @@ int BasinGate()
             CatalogueFiles.RegisterAll(w,
                 Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
             CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
         });
         map.PlaceSkirmishStart(world, 8000);
     }
@@ -6340,6 +6472,7 @@ int DecorGate()
         CatalogueFiles.RegisterAll(ww,
             Path.Combine(droot, "data", "units"), Path.Combine(droot, "data", "buildings"));
         CatalogueFiles.RegisterFields(ww, Path.Combine(droot, "data", "fields"));
+        CatalogueFiles.RegisterWeapons(ww, Path.Combine(droot, "data", "weapons"));
     });
     int id = w.SpawnUnit(0, Map.CellCentre(21), Map.CellCentre(18),
                          Fix64.FromFraction(1, 4), 100, ArmourClass.None, weaponId: 2);
@@ -6403,6 +6536,7 @@ int FordGate()
             CatalogueFiles.RegisterAll(w,
                 Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
             CatalogueFiles.RegisterFields(w, Path.Combine(root, "data", "fields"));
+            CatalogueFiles.RegisterWeapons(w, Path.Combine(root, "data", "weapons"));
         });
         // NO opening hand here, deliberately. The first draft called
         // PlaceSkirmishStart and then walked a unit to the far START cell -
@@ -6531,6 +6665,7 @@ int FordGate()
                 CatalogueFiles.RegisterAll(ww,
                     Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
                 CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+                CatalogueFiles.RegisterWeapons(ww, Path.Combine(root, "data", "weapons"));
             });
         }
         catch (Exception ex) { where = $"world build threw: {ex.Message}"; return false; }
@@ -6827,6 +6962,9 @@ int Match(ulong seed)
     // The authored data actually matches the schemas that claim to govern it.
     int schema = SchemaGate();
     if (schema != 0) return schema;
+    // And the weapon numbers in /data are the ones the sim actually fires.
+    int weaponData = WeaponDataGate();
+    if (weaponData != 0) return weaponData;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -7684,6 +7822,7 @@ return args.Length == 0
         "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
+        "weapondatagate" => WeaponDataGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),

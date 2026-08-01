@@ -404,8 +404,12 @@ public sealed partial class World
     // Producible unit types (TICKET-P2-SIM-03). Compiled defaults serve also as the
     // reference values for the /data loader round-trip test (TICKET-P2-DATA-02);
     // matches can overwrite or extend the catalogue before tick 0 via
-    // RegisterUnitType. The catalogue is static config, like weapons, and is
-    // therefore not part of the state hash.
+    // RegisterUnitType. The catalogue is static config and is therefore not
+    // part of the state hash; it carries its own CatalogueChecksum instead.
+    // This comment used to say "like weapons", meaning the compiled table in
+    // Combat.cs that no registration path could reach. Weapons are a REGISTERED
+    // catalogue themselves now (see _weaponTypes), so the contrast it drew is
+    // gone and the rule simply covers all three.
     public const int FactionCommon = 2;
     /// <summary>
     /// Prereqs (structure type ids that must stand alive) and ProducedAt (the
@@ -851,12 +855,44 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// The live WEAPON catalogue, the third leg of ADR-006 and the one that was
+    /// missing: every weapon number used to be compiled in Combat.cs and the sim
+    /// read the static table directly, so data/weapons could have held anything
+    /// at all and the game would not have noticed. That is the P7-1 defect shape
+    /// exactly, authored data that does not drive the runtime, and it is why the
+    /// two target-selection call sites now read THIS rather than Weapons.Get.
+    ///
+    /// Seeded from the compiled reference table so a World built with no /data
+    /// behind it plays today's numbers unchanged, which is what keeps every
+    /// harness that constructs a bare World green. Unknown ids return
+    /// Weapons.None, matching Weapons.Get's own default: weapon 0 means unarmed
+    /// and every caller already tests for it.
+    /// </summary>
+    private readonly Dictionary<int, WeaponDef> _weaponTypes = SeedWeaponTypes();
+    private static Dictionary<int, WeaponDef> SeedWeaponTypes()
+    {
+        var d = new Dictionary<int, WeaponDef>();
+        for (int id = 1; id <= Weapons.MaxWeaponId; id++) d[id] = Weapons.Get(id);
+        return d;
+    }
+
+    /// <summary>The weapon a live match fires. Read this, never Weapons.Get, anywhere a world is in scope.</summary>
+    public WeaponDef GetWeaponType(int weaponId) => _weaponTypes.TryGetValue(weaponId, out var d) ? d : Weapons.None;
+
+    /// <summary>Match setup may overwrite or extend the weapon table before tick 0, mirroring RegisterUnitType and RegisterStructureType. After tick 0 it is frozen: a mid-match change would be a silent replay divergence.</summary>
+    public void RegisterWeaponType(int weaponId, WeaponDef def)
+    {
+        if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
+        _weaponTypes[weaponId] = def;
+    }
+
+    /// <summary>
     /// ADR-006 commitment 1: the catalogue checksum. FNV-1a in the sim's own
     /// StateHash idiom over the CANONICALISED registered defs, never over file
-    /// bytes: unit types first, then structure types, each walked in ascending
-    /// type id (dictionary iteration order must never leak into an artefact),
-    /// each def contributing every field in declaration order with the
-    /// prerequisite list length-prefixed. Two worlds agreeing here are playing
+    /// bytes: unit types first, then structure types, then weapon types, each
+    /// walked in ascending id (dictionary iteration order must never leak into
+    /// an artefact), each def contributing every field in declaration order with
+    /// the prerequisite list length-prefixed. Two worlds agreeing here are playing
     /// the same numbers; the LAN hello, saves and replays carry this value and
     /// refuse a mismatch before tick 0. Deliberately NOT part of
     /// ComputeStateHash: hashing the catalogue into state would move all 24
@@ -890,6 +926,24 @@ public sealed partial class World
                 h.Add(d.WeaponId);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
+            }
+            // Weapons joined the catalogue when their numbers moved into
+            // data/weapons. They are folded LAST and appended rather than
+            // interleaved, so the unit and structure sections contribute
+            // exactly what they always did and the change to this value is one
+            // thing rather than three. It does change, by construction: a
+            // checksum that ignored a weapon range would let two players fight
+            // with different guns and call it agreement. Pre-existing saves and
+            // replays therefore refuse, the same pre-first-public-build trade
+            // P7-2, P7-3, P7-4 and P7-11a each took.
+            var weaponIds = new List<int>(_weaponTypes.Keys);
+            weaponIds.Sort();
+            h.Add(weaponIds.Count);
+            foreach (int id in weaponIds)
+            {
+                var d = _weaponTypes[id];
+                h.Add(id); h.Add(d.Range); h.Add(d.Damage); h.Add((int)d.Warhead);
+                h.Add(d.CooldownTicks); h.Add(d.MinRange); h.Add(d.SplashRadius); h.Add(d.AntiAir);
             }
             return h.Value;
         }
@@ -1482,7 +1536,7 @@ public sealed partial class World
                             // rule as much as the other two. Finding it only
                             // because the shared predicate failed to compile
                             // here is the argument for the shared predicate.
-                            if (!WeaponCanEngage(Weapons.Get(e.WeaponId), in t)) continue;
+                            if (!WeaponCanEngage(GetWeaponType(e.WeaponId), in t)) continue;
                             Fix64 d = Fix64.DistSq(t.X - e.PostX, t.Y - e.PostY);
                             if (d <= leashSq && d < bestD) { bestD = d; target = j; }
                         }
@@ -2716,7 +2770,9 @@ public sealed partial class World
             { _entities[i] = e; continue; }
             if (e.Cooldown > 0) { e.Cooldown--; _entities[i] = e; continue; }
 
-            var w = Weapons.Get(e.WeaponId);
+            // The world's table, never Weapons.Get: this is the line that makes
+            // data/weapons drive the game rather than describe it.
+            var w = GetWeaponType(e.WeaponId);
             int target = -1, sightTarget = -1;
 
             // A dead, invalid, or no-longer-targetable (stealthed) explicit

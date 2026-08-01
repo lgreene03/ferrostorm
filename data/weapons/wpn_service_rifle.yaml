@@ -1,0 +1,15 @@
+# The infantry small arm, carried by the Rifle Squad and by the Sodality's
+# Shade Raider. Cheap, fast-cycling and useless against armour, which is what
+# makes massed infantry a real answer to other infantry and a waste of credits
+# against a tank.
+# Its range of 3 cells is load-bearing beyond this file: the Emplacement's gun
+# is deliberately set to 4 so that a defence out-ranges the thing it counters.
+# Shortening this or lengthening that closes the gap the counter depends on.
+# DR-17: shipped as wpn_test_rifle. Numbers untouched by the rename; a change
+# needs a Balance co-sign under charter A11.
+id: wpn_service_rifle
+name: "Service Rifle"
+range: 300
+damage: 12
+warhead: anti_infantry
+cooldown_ticks: 8

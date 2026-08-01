@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Weapon definition",
+  "description": "Mirrors schema.unit.json's shape for the weapon table. CLAUDE.md forbids hand-editing stats in code, so these files are the weapon catalogue and Combat.cs's compiled defs exist only to be proved equal to them by weapondatagate. Unlike the era before this schema existed, the numbers here DRIVE the runtime: CatalogueFiles.RegisterWeapons registers them into the world before tick 0 and CombatSystem reads World.GetWeaponType, so editing a value in one of these files changes the game. The weapon id is the sim's wire and save identity and stays a compiled map (UnitCatalogue.WeaponIdOf); the file names the thing, the map names the number.",
+  "type": "object",
+  "required": ["id", "name", "range", "damage", "warhead", "cooldown_ticks"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^wpn_[a-z0-9_]+$",
+      "description": "Weapons take the wpn_ prefix rather than a faction prefix: a weapon is not owned by a side, it is carried by whatever unit or building the catalogue arms with it, and several are shared." },
+    "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
+    "range": { "type": "integer", "minimum": 0,
+      "description": "Maximum engagement distance in HUNDREDTHS OF A CELL, integer-encoded, the same convention a unit's speed uses (400 => 4 cells, 150 => 1.5). Hundredths rather than cells because 1.5 must be expressible exactly; the loader converts to Fix64 and no floating-point type is involved at any point." },
+    "damage": { "type": "integer", "minimum": 0, "description": "Base damage per shot, BEFORE the warhead-versus-armour matrix in Combat.cs multiplies it. Set by Balance under A11." },
+    "warhead": { "enum": ["anti_infantry", "anti_armour", "anti_building", "omni"],
+      "description": "Which column of the damage matrix (GDD s6) applies. This, not the damage number, is what makes the counter triangle real: an anti-infantry gun does a quarter of its damage to heavy armour." },
+    "cooldown_ticks": { "type": "integer", "minimum": 1, "description": "Sim ticks at 15Hz between shots. Must be at least 1; a rate of fire has to be a rate." },
+    "min_range": { "type": "integer", "minimum": 0,
+      "description": "Hundredths of a cell. A target closer than this cannot be engaged at all: the artillery dead zone. Absent means 0, which is what every weapon but the howitzer wants." },
+    "splash_radius": { "type": "integer", "minimum": 0,
+      "description": "Hundredths of a cell. 0 means single target; otherwise everything else inside the radius takes half damage, FRIEND OR FOE. Absent means 0." },
+    "anti_air": { "type": "boolean", "default": false,
+      "description": "ADR-028 clause 3: whether this weapon can engage an aircraft, and it is an equality in both directions - an anti-air weapon cannot shoot the ground either. Defaults false, so any weapon authored without thinking about the air layer is ground-only from the moment it lands. That is the point rather than an omission: an aircraft everything can shoot is just a fast tank." },
+    "notes": { "type": "string", "description": "Design intent and GDD/ADR traceback." }
+  }
+}

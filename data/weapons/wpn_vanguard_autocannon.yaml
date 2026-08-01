@@ -1,0 +1,12 @@
+# TICKET-P4-SLICE-01, the full-pipeline vertical slice. A fast-cycling
+# anti-infantry gun on the Directorate's Vanguard Car: the per-cost edge over
+# massed rifles that justifies the car existing at all.
+# It shares the rifle's 3-cell reach and fires more than twice as often for half
+# again the damage, so the harasser beats infantry in the open and still loses
+# to anything armoured, which keeps it a raider rather than a line unit.
+id: wpn_vanguard_autocannon
+name: "Vanguard Autocannon"
+range: 300
+damage: 18
+warhead: anti_infantry
+cooldown_ticks: 6

@@ -212,12 +212,73 @@ public static class DataLoader
     }
 
     public static FieldData LoadFieldFile(string path) => ParseField(File.ReadAllText(path));
+
+    /// <summary>A weapon as authored in /data/weapons, validated against
+    /// schema.weapon.json. Ranges arrive as integer hundredths of a cell (the
+    /// speed convention) and leave as Fix64, so 150 is exactly 1.5 cells and no
+    /// fractional value has to be spelled as a division the author cannot
+    /// see.</summary>
+    public sealed record WeaponData(
+        string Id, string Name, Fix64 Range, int Damage, Warhead Warhead, int CooldownTicks,
+        Fix64 MinRange, Fix64 SplashRadius, bool AntiAir, string Notes);
+
+    /// <summary>
+    /// The same flat-YAML and integer-only primitives as ParseUnit and
+    /// ParseStructure, run at match setup and never per tick. Weapon ids carry
+    /// the `wpn_` prefix rather than the faction prefixes: a weapon is not
+    /// owned by a side, it is carried by whatever unit or building the
+    /// catalogue arms with it, and two of the nine are already shared across
+    /// factions. min_range and splash_radius default to 0, which is what every
+    /// weapon but the howitzer wants, and cooldown_ticks must be at least 1 so
+    /// that a rate of fire is a rate rather than every tick forever.
+    /// </summary>
+    public static WeaponData ParseWeapon(string yamlText)
+    {
+        var m = ParseFlatYaml(yamlText);
+        string id = ReqStr(m, "id");
+        if (!id.StartsWith("wpn_"))
+            throw new FormatException($"id '{id}' violates the wpn_ prefix convention for weapons");
+
+        var warhead = ReqStr(m, "warhead") switch
+        {
+            "anti_infantry" => Warhead.AntiInfantry,
+            "anti_armour" => Warhead.AntiArmour,
+            "anti_building" => Warhead.AntiBuilding,
+            "omni" => Warhead.Omni,
+            var wh => throw new FormatException($"unknown warhead '{wh}'"),
+        };
+
+        int cooldown = ReqInt(m, "cooldown_ticks");
+        if (cooldown < 1) throw new FormatException("cooldown_ticks must be at least 1");
+
+        // Hundredths of a cell, integer-encoded, exactly as `speed` is for a
+        // unit: 400 is 4 cells and 150 is 1.5, both exact in Fix64.
+        Fix64 OptCells(string key)
+            => m.ContainsKey(key) ? Fix64.FromFraction(ReqInt(m, key), 100) : Fix64.Zero;
+
+        return new WeaponData(
+            Id: id,
+            Name: ReqStr(m, "name"),
+            Range: Fix64.FromFraction(ReqInt(m, "range"), 100),
+            Damage: ReqInt(m, "damage"),
+            Warhead: warhead,
+            CooldownTicks: cooldown,
+            MinRange: OptCells("min_range"),
+            SplashRadius: OptCells("splash_radius"),
+            AntiAir: OptBool(m, "anti_air", false),
+            Notes: m.TryGetValue("notes", out var n) ? n : "");
+    }
+
+    public static WeaponData LoadWeaponFile(string path) => ParseWeapon(File.ReadAllText(path));
 }
 
 /// <summary>Bridges loaded /data unit definitions into the sim's producible catalogue (TICKET-P2-DATA-02).</summary>
 public static class UnitCatalogue
 {
-    /// <summary>Weapon id registry; /data weapon files land in Phase 2, so the name map is compiled for now.</summary>
+    /// <summary>Weapon id registry. The /data weapon files have landed, so this
+    /// is now exactly what TypeIdOf is for units and structures: the file names
+    /// the thing and this map names the number, which is the sim's wire and save
+    /// identity and therefore stays code rather than data.</summary>
     public static int WeaponIdOf(string name) => name switch
     {
         // DR-17: these three shipped as wpn_test_cannon/rifle/rocket, prototype
@@ -248,6 +309,13 @@ public static class UnitCatalogue
         "wpn_flak_gun" => 9,          // ADR-028: the only AntiAir weapon in the game
         _ => throw new FormatException($"unknown weapon id '{name}'"),
     };
+
+    /// <summary>Bridges a /data/weapons file into the sim's WeaponDef, mirroring
+    /// ToTypeDef for units and structures. Every field crosses: a weapon whose
+    /// authored number was parsed and then dropped would be the P7-1 defect in a
+    /// third place.</summary>
+    public static WeaponDef ToWeaponDef(DataLoader.WeaponData w)
+        => new(w.Range, w.Damage, w.Warhead, w.CooldownTicks, w.MinRange, w.SplashRadius, w.AntiAir);
 
     /// <summary>Producible unit type ids: the file names the thing, this map
     /// names the number, and neither is free to drift alone - the selftest
@@ -506,5 +574,53 @@ public static class CatalogueFiles
             throw new FormatException(
                 $"{fieldsDir}: no field file provides com_ferrite_field. " +
                 "The compiled defaults are not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
+    }
+
+    /// <summary>
+    /// Register the authored weapon table from /data/weapons into a world
+    /// before tick 0, the same opt-in load step RegisterFields is for ferrite
+    /// regrowth and on the same terms: a sorted ordinal walk (a directory
+    /// listing is not a source of truth), registration through the WeaponIdOf
+    /// map the gate proves, a duplicate id refused, and EVERY compiled weapon
+    /// id demanded, because a partial /data silently mixing authored and
+    /// compiled guns is the two-catalogue ambiguity ADR-006 exists to end.
+    ///
+    /// This is the step that makes the numbers real. World seeds its weapon
+    /// table from the compiled reference so a bare harness world still plays,
+    /// but a MATCH registers these files over the top and CombatSystem reads
+    /// the world's table, so editing a range here changes the game.
+    /// </summary>
+    public static void RegisterWeapons(World w, string weaponsDir)
+    {
+        if (!Directory.Exists(weaponsDir))
+            throw new IOException(
+                $"/data is missing: expected {weaponsDir}. " +
+                "Weapon numbers live in /data (ADR-006) and a battle cannot start without them. " +
+                "Restore the data directory beside the game and try again.");
+
+        var seen = new HashSet<int>();
+        var files = Directory.GetFiles(weaponsDir, "*.yaml");
+        Array.Sort(files, StringComparer.Ordinal);
+        foreach (var f in files)
+        {
+            try
+            {
+                var wd = DataLoader.LoadWeaponFile(f);
+                int id = UnitCatalogue.WeaponIdOf(wd.Id);
+                if (!seen.Add(id)) throw new FormatException($"weapon id {id} is claimed twice");
+                w.RegisterWeaponType(id, UnitCatalogue.ToWeaponDef(wd));
+            }
+            catch (FormatException e)
+            {
+                throw new FormatException($"{f}: {e.Message}", e);
+            }
+        }
+        // Weapon ids are dense from 1 to the compiled bound; 0 is None and is
+        // not a weapon, so it is not demanded.
+        for (int id = 1; id <= Weapons.MaxWeaponId; id++)
+            if (!seen.Contains(id))
+                throw new FormatException(
+                    $"{weaponsDir}: no weapon file provides compiled weapon id {id}. " +
+                    "The compiled table is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
     }
 }
