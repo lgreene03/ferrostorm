@@ -2803,7 +2803,15 @@ public partial class SkirmishLive : Node3D
     {
         _winner = winner;
         if (_matchOver) return;
-        ShowVerdict(winner == LocalPlayerId);
+        // P7-8c: "did MY SIDE win", not "am I the named seat". World.Winner is
+        // a player id and the sim names the last standing seat of the winning
+        // TEAM, so `winner == LocalPlayerId` would show the winner's own
+        // teammate a DEFEAT banner. Nothing can reach that today, because no
+        // lobby path calls SetTeam - which is exactly why it is fixed now
+        // rather than when a 4v4 lobby lands and it becomes a bug report. It is
+        // the same shape as the seat inversion the harness caught twice: a
+        // comparison that is right at one seat by luck.
+        ShowVerdict(_world.TeamOf(winner) == _world.TeamOf(LocalPlayerId));
     }
 
     /// <summary>One seat has lost everything it holds. With more than two seats

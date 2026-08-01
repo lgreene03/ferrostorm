@@ -281,6 +281,64 @@ public sealed partial class World
     public void SetFaction(int player, int faction) => _playerFaction[player] = (byte)faction;
     public int FactionOf(int player) => _playerFaction[player];
 
+    // Teams and alliances (P7-8c). GDD s9 promises "custom lobbies up to 4v4"
+    // and there was no notion of a side larger than a seat. This is it: ONE
+    // TEAM ID PER PLAYER, DEFAULTING TO THE PLAYER'S OWN ID.
+    //
+    // The default is the whole design rather than a convenience. Every player
+    // starts on a team of one, so a free-for-all is unchanged BY CONSTRUCTION:
+    // every expression teams touch reduces to the comparison that stood there
+    // before, and all 24 goldens stay byte-identical without any scenario
+    // knowing teams exist. Nothing here is a special case for "no teams set",
+    // because there is no such state - the identity map IS the free-for-all.
+    //
+    // A team id is a player id, so the range is the seat range. That keeps
+    // TeamOf's answer indexable (VictorySystem counts living teams in a span of
+    // _players) and means a lobby names a team by naming a seat.
+    private readonly int[] _playerTeam;
+
+    /// <summary>
+    /// P7-8c: put a player on a team. Settable before tick 0 and frozen after,
+    /// mirroring RegisterUnitType and ConfigureRegrowth and refusing the same
+    /// way: a mid-match alliance change would be a silent replay divergence,
+    /// because the team map is hashed state that no command stream carries.
+    ///
+    /// Both ids are range-checked. A team id outside the seat range would index
+    /// VictorySystem's living-team span out of bounds, and a team of -1 would
+    /// collide with TeamOf's neutral answer.
+    /// </summary>
+    public void SetTeam(int player, int team)
+    {
+        if (Tick != 0) throw new InvalidOperationException("teams are fixed once the match starts");
+        if ((uint)player >= (uint)_players)
+            throw new ArgumentOutOfRangeException(nameof(player), $"no seat {player} in a {_players}-player world");
+        if ((uint)team >= (uint)_players)
+            throw new ArgumentOutOfRangeException(nameof(team), $"a team id is a seat id, so it must be 0..{_players - 1}, not {team}");
+        _playerTeam[player] = team;
+    }
+
+    /// <summary>
+    /// P7-8c: which team a player fights for. Its own id unless a lobby said
+    /// otherwise.
+    ///
+    /// A player id outside the seat range answers with itself, which is what
+    /// keeps a NEUTRAL (-1) hostile to everybody exactly as it was before teams
+    /// existed: -1 is not a legal team id, so it equals nobody's team.
+    /// </summary>
+    public int TeamOf(int player) => (uint)player < (uint)_players ? _playerTeam[player] : player;
+
+    /// <summary>
+    /// P7-8c: "is this entity on player P's side?" - which INCLUDES P's own,
+    /// because an ally and yourself are the same answer to every question that
+    /// asks this. The complement of <see cref="IsEnemyOf"/> over owned things.
+    ///
+    /// A neutral is nobody's ally, from the PlayerId >= 0 clause, which is what
+    /// leaves ADR-021's neutral outpost capturable: the contact rule asks "not
+    /// allied", and a rock is not allied to anyone.
+    /// </summary>
+    public bool IsAlliedTo(in Entity e, int player)
+        => e.PlayerId >= 0 && TeamOf(e.PlayerId) == TeamOf(player);
+
     private readonly List<GameEvent> _events = new();
     /// <summary>Events emitted by the tick that just ran; cleared at the start of every Step.</summary>
     public IReadOnlyList<GameEvent> Events => _events;
@@ -342,6 +400,11 @@ public sealed partial class World
         int words = (mapWidth * mapHeight + 63) / 64;
         _eliminatedAnnounced = new bool[players];
         _playerFaction = new byte[players]; // everyone Directorate until told otherwise
+        // P7-8c: everyone on their own team until a lobby says otherwise, which
+        // is what makes a free-for-all the default by construction rather than
+        // by a special case anywhere downstream.
+        _playerTeam = new int[players];
+        for (int p = 0; p < players; p++) _playerTeam[p] = p;
         _visible = new ulong[players][];
         _explored = new ulong[players][];
         for (int p = 0; p < players; p++) { _visible[p] = new ulong[words]; _explored[p] = new ulong[words]; }
@@ -733,16 +796,20 @@ public sealed partial class World
     /// outposts and bridges - which is why a wave does not march on a rock and a
     /// minefield does not go off under a bridge.
     ///
-    /// THIS IS THE ONE EXPRESSION P7-8c CHANGES. When teams exist the body
-    /// becomes "owned by somebody else AND not allied to P" and nothing else in
-    /// the sim needs editing. That is the whole reason for naming it. The air
-    /// layer was added by editing each site that needed it by hand, and ADR-028
-    /// records that the first pass guarded two of three paths and shot an
-    /// aircraft down with a rifle, while the mine - a fourth path - was missed
-    /// again in its own first draft. A question spelled out by hand at every site
-    /// is a question somebody forgets.
+    /// P7-8c CHANGED EXACTLY THIS EXPRESSION and nothing else in the sim needed
+    /// editing, which is the whole reason for naming it. The body is now "owned
+    /// by somebody AND not allied to P". The air layer was added by editing each
+    /// site that needed it by hand, and ADR-028 records that the first pass
+    /// guarded two of three paths and shot an aircraft down with a rifle, while
+    /// the mine - a fourth path - was missed again in its own first draft. A
+    /// question spelled out by hand at every site is a question somebody forgets.
+    ///
+    /// It is an INSTANCE method now, because the answer depends on the world's
+    /// team map. With the default map (everyone on their own team) it reduces to
+    /// the `e.PlayerId != player` it replaced, term for term, which is why the
+    /// goldens do not move.
     /// </summary>
-    public static bool IsEnemyOf(in Entity e, int player) => e.PlayerId >= 0 && e.PlayerId != player;
+    public bool IsEnemyOf(in Entity e, int player) => e.PlayerId >= 0 && !IsAlliedTo(in e, player);
 
     /// <summary>
     /// P7-8g: the ONE entry point for a path that PICKS SOMETHING TO SHOOT. It
@@ -2779,9 +2846,16 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
             {
                 var o = _entities[i];
-                // P7-8g: ownership. A prerequisite is a building YOU hold, and an
-                // ally's radar unlocking your tech is a design question for
-                // P7-8c rather than something this line already answers.
+                // P7-8g: ownership. A prerequisite is a building YOU hold.
+                //
+                // P7-8c ANSWERED THE QUESTION AND LEFT THIS LINE ALONE, and the
+                // answer is deliberate rather than an oversight: an ally's radar
+                // does NOT unlock your tech, and each player builds their own
+                // tree. Sharing a tech tree is a separate design lever from
+                // sharing a war, and it is the one that would matter most - a 4v4
+                // where one seat builds the radar and three seats spend nothing
+                // makes the tree free, which is not what "up to 4v4" was asking
+                // for. IsOwnedBy, never IsAlliedTo.
                 if (o.Alive && IsOwnedBy(in o, player) && o.StructType == ids[r]) { found = true; break; }
             }
             if (!found) return false;
@@ -3096,8 +3170,15 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
             {
                 var e = _entities[i];
-                // P7-8g: ownership. The veil covers YOUR units today; whether it
-                // should cover an ally's is a P7-8c decision, not this line's.
+                // P7-8g: ownership. The veil covers YOUR units.
+                //
+                // P7-8c ANSWERED THE QUESTION AND LEFT THIS LINE ALONE: a
+                // projector hides its OWNER's units, not an ally's. Deliberate,
+                // not an oversight - the projector is a building one player paid
+                // for and powers, and a cloak that spilled onto every allied unit
+                // parked beside it would make one seat's investment the whole
+                // team's, which is a different (and much stronger) building than
+                // the one that was priced. IsOwnedBy, never IsAlliedTo.
                 if (!e.Alive || !IsOwnedBy(in e, vp.PlayerId)) continue;
                 if (e.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                 if (Fix64.DistSq(e.X - vp.X, e.Y - vp.Y) > vp.Sight * vp.Sight) continue;
@@ -3117,10 +3198,17 @@ public sealed partial class World
                 // two are not the same predicate - "not mine" also uncloaks a
                 // NEUTRAL. Nothing neutral carries Stealth or FieldCloaked today,
                 // so the choice is unobservable, and the exact expression that
-                // stood here is kept rather than tightened on a guess. P7-8c has
-                // to decide whether a detector reveals an ally's phantom to its
-                // owner's own mask, and this is where that decision lands.
-                if (!e.Alive || !(e.Stealth || e.FieldCloaked) || IsOwnedBy(in e, det.PlayerId)) continue;
+                // stood here was kept rather than tightened on a guess.
+                //
+                // P7-8c widened NOT-MINE to NOT-ALLIED, which is the same
+                // reasoning applied one seat wider: a sweep exists to find things
+                // you cannot see, and a teammate's phantom is not one of them.
+                // Revealing it would also cost the ally its stealth against
+                // everyone, because DetectedMask is read per observer but written
+                // here for every detector in the game. The neutral case is
+                // untouched: a neutral is allied to nobody, so it stays uncloaked
+                // exactly as before.
+                if (!e.Alive || !(e.Stealth || e.FieldCloaked) || IsAlliedTo(in e, det.PlayerId)) continue;
                 if (Fix64.DistSq(e.X - det.X, e.Y - det.Y) > det.Sight * det.Sight) continue;
                 e.DetectedMask |= bit;
                 _entities[i] = e;
@@ -3270,13 +3358,19 @@ public sealed partial class World
     /// Attack instead - and by the same token a hero ordered at a bridge shoots
     /// it, because this predicate says no and CombatSystem's skip does not fire.
     /// </summary>
-    /// <remarks>P7-8g: the player test here is NOT-MINE, not hostility, and the
-    /// difference is the feature - a neutral outpost is nobody's enemy and
-    /// capturing one is the outpost's whole point (ADR-021). Named as the
-    /// negation of the ownership predicate so it stays that way.</remarks>
-    private static bool CanBeActedOn(in Entity actor, in Entity t)
+    /// <remarks>P7-8g: the player test here was NOT-MINE rather than hostility,
+    /// and the difference is the feature - a neutral outpost is nobody's enemy
+    /// and capturing one is the outpost's whole point (ADR-021).
+    ///
+    /// P7-8c widened NOT-MINE to NOT-ALLIED, which is the smallest change that
+    /// keeps both halves true: an engineer cannot capture a teammate's refinery
+    /// and a Saboteur cannot switch one off, because an alliance you can rob is
+    /// not an alliance; and a NEUTRAL outpost is still admitted, untouched,
+    /// because a rock is allied to nobody. Note this is deliberately NOT
+    /// IsEnemyOf: hostility would exclude the neutral and delete ADR-021.</remarks>
+    private bool CanBeActedOn(in Entity actor, in Entity t)
         => t.Alive && IsStructure(t.Kind) && !IsBarrier(t.Kind)
-           && t.Kind != EntityKind.Bridge && !IsOwnedBy(in t, actor.PlayerId);
+           && t.Kind != EntityKind.Bridge && !IsAlliedTo(in t, actor.PlayerId);
 
     private void CaptureSystem()
     {
@@ -4508,6 +4602,14 @@ public sealed partial class World
     /// Detonation damage: full Omni damage within 1.5 cells of ground zero,
     /// half within 3. Deaths use the standard rules (rubble unblocks); nobody
     /// earns veterancy from a superweapon.
+    ///
+    /// P7-8c: NOTHING CHANGED HERE, and the absence is deliberate. This scan
+    /// asks no ownership question at all - it already hits friend and foe alike,
+    /// including the detonator's OWN units - so an ally is treated exactly as
+    /// your own squad already is. An ally standing in your howitzer's splash
+    /// takes it. Sparing allies would mean sparing yourself too, or else
+    /// inventing a rule that treats a teammate better than your own men, and
+    /// neither is what "alliance" was asked to mean.
     /// </summary>
     private void ApplyAreaDamage(Fix64 x, Fix64 y, int baseDamage)
     {
@@ -4532,6 +4634,17 @@ public sealed partial class World
         }
     }
 
+    /// <summary>
+    /// P7-8c: ALLIES DO NOT SHARE VISION, and the omission is a decision rather
+    /// than an oversight. Every sighting below is written into the OWNER's
+    /// bitset alone, which is what it always did, and no allied fan-out was
+    /// added. Shared sight is a separate design lever from a shared war: it is
+    /// the single largest thing an alliance could grant, it would let a 4v4 see
+    /// four times the map for one seat's scouting, and it would make the veil
+    /// projector and every stealth unit answer to a team's worth of detectors.
+    /// If a lobby wants it later it is a per-team OR of these bitsets and a
+    /// deliberate ADR, not a quiet widening here.
+    /// </summary>
     private void FogSystem()
     {
         for (int p = 0; p < _players; p++) Array.Clear(_visible[p]);
@@ -4614,17 +4727,38 @@ public sealed partial class World
             if (!e.Alive || e.PlayerId < 0) continue;
             if (IsHope(e)) hasHope[e.PlayerId] = true;
         }
-        int living = 0, last = -1;
+        // P7-8c: the match ends when one TEAM is left, not one player.
+        //
+        // ELIMINATION IS STILL PER PLAYER and the announcement below is
+        // untouched: a commander with no structures and no MCV is out and is
+        // told so, whether or not a teammate is still fighting. Being carried is
+        // not the same as being in the game, and the client's defeat banner and
+        // the campaign's 'eliminated P' trigger both rest on that reading.
+        // What teams change is only the END condition.
+        //
+        // With the default team map each player is their own team, so
+        // livingTeams equals the living-player count this counted before and the
+        // whole block is behaviour-identical.
+        Span<bool> teamStands = stackalloc bool[_players];   // team ids are seat ids, so this span fits by construction
+        int livingTeams = 0, last = -1;
         for (int p = 0; p < _players; p++)
         {
-            if (hasHope[p]) { living++; last = p; }
+            if (hasHope[p])
+            {
+                last = p;
+                int team = _playerTeam[p];
+                if (!teamStands[team]) { teamStands[team] = true; livingTeams++; }
+            }
             else if (!_eliminatedAnnounced[p])
             {
                 _eliminatedAnnounced[p] = true;
                 _events.Add(new GameEvent(GameEventType.PlayerEliminated, -1, p));
             }
         }
-        if (living == 1) Winner = last;
+        // Winner stays a PLAYER id, and it is the last standing seat of the
+        // winning team - which at default teams is the sole survivor this always
+        // named, so nothing moves. Ask TeamOf(Winner) for the winning side.
+        if (livingTeams == 1) Winner = last;
     }
 
     /// <summary>Hash of everything gameplay-relevant; exchanged between clients for desync detection (US1.2).</summary>
@@ -4746,6 +4880,27 @@ public sealed partial class World
         for (int p = 0; p < _players; p++)
         {
             h.Add(_playerFaction[p]);
+            // P7-8c: this player's team, folded ONLY when they have been put on
+            // somebody else's. Teams gate target acquisition, the guard leash,
+            // the mine trigger, the contact effects, the detector sweep and the
+            // end of the match, so they are state a desync could hide in and
+            // MUST be hashed; a bare h.Add here would move all 24 goldens for a
+            // feature no golden scenario uses. The guarded fold is the ADR-023
+            // lane pattern and the P7-3 cargo pattern, and it is sound for the
+            // same reason those are: an absent entry provably means no state
+            // that could gate behaviour, because a player on their own team is
+            // exactly the free-for-all every expression above reduces to.
+            //
+            // The whole MAP is recovered from the entries that are present, not
+            // just this player's: if q is on p's team then q's own entry folds,
+            // so the alliance is hashed once from q's side. Contributing nothing
+            // therefore means the map is the identity, which is the only case
+            // that has to stay byte-identical.
+            //
+            // Tagged with p, like the lane fold is scoped to its entity, so a
+            // variable-length fold inside a fixed-length per-player record
+            // cannot present the same int sequence as a different team map.
+            if (_playerTeam[p] != p) { h.Add(p); h.Add(_playerTeam[p]); }
             h.Add(_credits[p]);
             var exp = _explored[p];
             for (int w = 0; w < exp.Length; w++) h.Add(exp[w]);
