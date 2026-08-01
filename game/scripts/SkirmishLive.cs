@@ -848,6 +848,21 @@ public partial class SkirmishLive : Node3D
         int alt = opp == World.FactionDirectorate ? World.FactionSodality : World.FactionDirectorate;
         for (int p = 1; p < seats; p++)
             w.SetFaction(p, p % 2 == 1 ? opp : alt);
+        // P7-8h: the sides in the other sense - who fights WITH whom. Here
+        // rather than anywhere later because World.SetTeam is refused once the
+        // match starts (ADR-038): a team is setup, not a move.
+        //
+        // FREE FOR ALL calls nothing at all, which is the whole reason this
+        // wave is hash-neutral: every seat already starts on a team of its own,
+        // so the default mode is not a code path that reproduces today's
+        // behaviour, it is the absence of one.
+        //
+        // EVEN SIDES is the even seats against the odd ones. On the only
+        // four-start map that is 2v2; on a two-start map SetTeam(0, 0) and
+        // SetTeam(1, 1) write the identity map the world was built with, so a
+        // duel is byte-identical to the free-for-all it always was.
+        if (setup.TeamMode == MatchSetup.TeamsEvenSides)
+            for (int p = 0; p < seats; p++) w.SetTeam(p, p % 2);
         // ADR-011 (Wave B5): the opening hand - start credits, two construction
         // yards, and a harvester with three rifle squads per side, mirrored and
         // now placed at cell centres - is authored in the sim's MapLoader layer,

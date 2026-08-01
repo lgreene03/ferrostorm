@@ -103,7 +103,21 @@ public static class MatchSetupBlob
     /// four-seat one. That is not a desync at the first order, it is two different
     /// worlds at tick 0, and the rung above is exactly why: the difficulty the
     /// commanders play at is now LAN gameplay too.</summary>
-    public const int Version = 3;
+    /// <summary>Version 4 (P7-8h): the TEAM MODE joined the setup, and it is
+    /// load-bearing for the same reason the seat count is. BuildStartingWorld
+    /// reads it before tick 0, so a joiner that decoded zero would build a
+    /// free-for-all against the host's 2v2 - two different worlds at tick 0
+    /// rather than a desync anyone could trace back. Bumped rather than
+    /// appended silently: a version-3 joiner reading a version-4 blob is refused
+    /// in the lobby, where the sentence is readable.
+    ///
+    /// The pleasant consequence, worth stating because it is what makes the mode
+    /// worth having in LAN at all: the relay seats peers by arrival order, so on
+    /// a four-seat map the two humans hold seats 0 and 1 and EVEN SIDES puts them
+    /// on OPPOSITE sides, each allied with the commander at seat 2 or 3. Two
+    /// people plus two commanders is a 2v2 with no per-seat UI at either
+    /// end.</summary>
+    public const int Version = 4;
 
     public static byte[] Encode(MatchSetup s)
     {
@@ -119,6 +133,7 @@ public static class MatchSetupBlob
         w.Write(s.Faction);
         w.Write(s.OppFaction);
         w.Write(s.Seats);
+        w.Write(s.TeamMode);
         w.Flush();
         return ms.ToArray();
     }
@@ -147,6 +162,7 @@ public static class MatchSetupBlob
             Faction = r.ReadInt32(),
             OppFaction = r.ReadInt32(),
             Seats = r.ReadInt32(),
+            TeamMode = r.ReadInt32(),
         };
     }
 }

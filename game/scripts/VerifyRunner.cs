@@ -1101,6 +1101,164 @@ public partial class VerifyRunner : Node
 
         RunLobbyChecks();
         RunDifficultyChecks();
+        RunTeamChecks();
+    }
+
+    /// <summary>
+    /// P7-8h acceptance: the lobby can express a team, and the client reads one.
+    ///
+    /// ADR-038 recorded a coverage gap rather than claiming it away: the client's
+    /// team-aware victory banner was NOT harness-covered, because SetTeam is
+    /// refused after tick 0 and the harness world has already ticked by the time
+    /// the banner checks run, so a check that called SetTeam mid-run hung the
+    /// scene. The ADR named the two ways out and rejected the first: a
+    /// guard-bypassing hook would weaken the tick-0 rule the sim relies on, and a
+    /// second scene built TEAMED FROM THE START was "real work".
+    ///
+    /// A team MODE in MatchSetup is what makes the second one cheap, so it is
+    /// done here. The scene below is a real Skirmish.tscn on the four-start map
+    /// with EVEN SIDES in its setup, driven from seat 1 like everything else in
+    /// this file - and seat 1 is exactly where getting the comparison wrong
+    /// shows, because seat 1's teammate is a seat it is not.
+    /// </summary>
+    private void RunTeamChecks()
+    {
+        GD.Print("  --    P7-8h: teams reach the lobby");
+
+        // 1. THE SIDECAR, backwards first. A file written before the mode
+        //    existed describes a free-for-all, and that is what zero means -
+        //    the same trap the difficulty rung documents, where decoding an
+        //    absent field to the wrong default silently resumes a different
+        //    match and reports DIVERGED with nothing in the diff to explain it.
+        string legacy = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "ferrostorm-verify-noteams.json");
+        System.IO.File.WriteAllText(legacy,
+            "{\"map\":\"skirmish-01\",\"map_path\":\"data/maps/skirmish-01.fmap\",\"mission\":0,"
+            + "\"tick\":120,\"saved_at\":\"\",\"credits\":8000,\"ai_preset\":0,"
+            + "\"ai_difficulty\":1,\"start_credits\":8000,\"seed\":2026,\"faction\":0,"
+            + "\"opp_faction\":0,\"seats\":0}");
+        var old = MatchMeta.Read(legacy);
+        Check(old != null && old.Setup.TeamMode == MatchSetup.TeamsFreeForAll,
+              "a sidecar written before the team mode decodes to FREE FOR ALL, which is what it was");
+        System.IO.File.Delete(legacy);
+
+        string sidecar = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "ferrostorm-verify-teams.json");
+        MatchMeta.For(new MatchSetup { TeamMode = MatchSetup.TeamsEvenSides }, tick: 7, credits: 99)
+                 .Write(sidecar);
+        var back = MatchMeta.Read(sidecar);
+        Check(back != null && back.Setup.TeamMode == MatchSetup.TeamsEvenSides,
+              "a chosen team mode survives the sidecar round trip");
+        System.IO.File.Delete(sidecar);
+
+        // 2. THE WIRE, asserted ALONE for the reason RunLobbyChecks states about
+        //    its own two: a new field bolted into an existing conjunction is how
+        //    a field the encoder writes and the decoder never reads slips
+        //    through, because one true clause among nine reads as green. Both
+        //    peers must agree on this before tick 0 or they build different
+        //    worlds, which is why the blob version moved to 4 rather than the
+        //    field being appended quietly.
+        var wired = MatchSetupBlob.Decode(MatchSetupBlob.Encode(
+            new MatchSetup { TeamMode = MatchSetup.TeamsEvenSides }));
+        Check(wired.TeamMode == MatchSetup.TeamsEvenSides,
+              $"the team mode survives the wire round trip (came back {wired.TeamMode})");
+
+        // 3. EVEN SIDES BUILDS THE WORLD IT PROMISES, read through the sim's own
+        //    accessor rather than through the field that produced it: a mode
+        //    that set its own flag and never called SetTeam would pass any check
+        //    written against the setup.
+        var map4 = MapData.Load(GameFiles.Abs("data/maps/skirmish-09.fmap"));
+        var even = SkirmishLive.BuildStartingWorld(new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-09.fmap",
+            TeamMode = MatchSetup.TeamsEvenSides,
+        }, map4, out _);
+        Check(even.PlayerCount == 4, $"the four-start map seats four ({even.PlayerCount}) - the precondition");
+        Check(even.TeamOf(0) == even.TeamOf(2),
+              $"under EVEN SIDES seats 0 and 2 fight for ONE team ({even.TeamOf(0)} and {even.TeamOf(2)})");
+        Check(even.TeamOf(0) != even.TeamOf(1),
+              $"...and seats 0 and 1 do NOT ({even.TeamOf(0)} against {even.TeamOf(1)})");
+        Check(even.TeamOf(1) == even.TeamOf(3),
+              $"...which leaves seats 1 and 3 as the other side ({even.TeamOf(1)} and {even.TeamOf(3)})");
+
+        // The control, without which the three above would read the same over a
+        // world where every seat happened to share one team: the default mode
+        // must still be four seats fighting four different wars.
+        var ffa = SkirmishLive.BuildStartingWorld(new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-09.fmap",
+            TeamMode = MatchSetup.TeamsFreeForAll,
+        }, map4, out _);
+        bool allAlone = true;
+        for (int p = 0; p < ffa.PlayerCount; p++) if (ffa.TeamOf(p) != p) allAlone = false;
+        Check(allAlone, "FREE FOR ALL leaves every seat on a team of its own, which is the sim's own default");
+
+        // 4. AND ON A TWO-START MAP THE TWO MODES ARE THE SAME MATCH, measured
+        //    rather than argued. SetTeam(0, 0) and SetTeam(1, 1) write the
+        //    identity map the world was built with, so the claim is testable as
+        //    a hash rather than as a paragraph.
+        var map2 = MapData.Load(GameFiles.Abs("data/maps/skirmish-02.fmap"));
+        var duelFfa = SkirmishLive.BuildStartingWorld(new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-02.fmap",
+            TeamMode = MatchSetup.TeamsFreeForAll,
+        }, map2, out _);
+        var duelEven = SkirmishLive.BuildStartingWorld(new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-02.fmap",
+            TeamMode = MatchSetup.TeamsEvenSides,
+        }, map2, out _);
+        Check(duelFfa.ComputeStateHash() == duelEven.ComputeStateHash(),
+              $"on a two-start map EVEN SIDES is byte-identical to FREE FOR ALL "
+              + $"(0x{duelFfa.ComputeStateHash():X16} both)");
+
+        // 5. THE BANNER, WHICH IS THE CHECK ADR-038 WANTED AND COULD NOT WRITE.
+        //    A real scene, teamed before its first tick, driven from seat 1.
+        //    World.Winner is a player id and the sim names the LAST STANDING SEAT
+        //    of the winning team, so `winner == LocalPlayerId` shows the winner's
+        //    own teammate a DEFEAT banner - right at every seat that happens to
+        //    be the named one, and wrong for every ally.
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode;
+        SkirmishLive teamed;
+        try
+        {
+            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-09.fmap");
+            MatchConfig.TeamMode = MatchSetup.TeamsEvenSides;
+            MatchConfig.Seats = 0;                 // fill the map: four seats
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.LocalSeat = 1;
+            SkirmishLive.PendingNet = null;        // offline: this is not a LAN scene
+            teamed = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(teamed);
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.TeamMode = wasTeamMode;
+        }
+
+        Check(teamed.LiveWorld.PlayerCount == 4,
+              $"the teamed scene came up on four seats ({teamed.LiveWorld.PlayerCount})");
+        Check(teamed.LocalPlayerId == 1, $"...and took seat 1 ({teamed.LocalPlayerId})");
+        // The preconditions, stated as measurements: seat 3 is my ally and seat 2
+        // is not. Without these the two banner checks below would prove only that
+        // a banner can say two things.
+        Check(teamed.LiveWorld.TeamOf(3) == teamed.LiveWorld.TeamOf(teamed.LocalPlayerId),
+              "seat 3 is my TEAMMATE in this world (the precondition)");
+        Check(teamed.LiveWorld.TeamOf(2) != teamed.LiveWorld.TeamOf(teamed.LocalPlayerId),
+              "...and seat 2 is an ENEMY (the control's precondition)");
+
+        teamed.DeclareWinnerForTest(3);
+        Check(teamed.BannerTextForTest.Contains("VICTORY"),
+              $"my TEAMMATE being named the winner reads as VICTORY at seat 1 "
+              + $"(\"{teamed.BannerTextForTest.Split('\n')[0]}\")");
+        teamed.ResetVictoryForTest();
+        teamed.DeclareWinnerForTest(2);
+        Check(teamed.BannerTextForTest.Contains("DEFEAT"),
+              $"...and an ENEMY winning is still DEFEAT (\"{teamed.BannerTextForTest.Split('\n')[0]}\")");
+        teamed.ResetVictoryForTest();
+        teamed.QueueFree();
     }
 
     /// <summary>
