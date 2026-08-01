@@ -195,6 +195,10 @@ public sealed class SkirmishAI
 
         int cy = -1, factory = -1, refinery = -1, barracks = -1;
         bool hasPlant = false, hasTurret = false, hasRadar = false;
+        // P7-5d: does anything of mine reveal cloak? Asked of the ENTITY FLAG
+        // rather than of a building kind, so it counts the Directorate's Sentinel
+        // Scout and the Sodality's Watch Post alike without naming either.
+        bool hasDetector = false;
         int harvesters = 0, army = 0, supply = 0, draw = 0;
         int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0, ownEngineer = -1;
         bool hasSuper = false;
@@ -215,6 +219,7 @@ public sealed class SkirmishAI
             // restates the question rather than relying on falling through.
             if (World.IsOwnedBy(in e, _player))
             {
+                if (e.Detector) hasDetector = true;
                 switch (e.Kind)
                 {
                     case EntityKind.ConstructionYard:
@@ -373,6 +378,13 @@ public sealed class SkirmishAI
         // commander picks type 1 and its behaviour is unchanged to the byte,
         // which is why the goldens do not move.
         int plant = World.PlantTypeForFaction(w.FactionOf(_player));
+        // P7-5d: the other two buildings whose type the ladder used to name as a
+        // literal, asked of the catalogue instead. Both return 0 for a side with
+        // no answer, and every rung that uses one checks for 0 first, so a
+        // commander can never queue a building it will be refused - which stalls
+        // the yard forever rather than failing loudly.
+        int superStruct = w.BuildableStructOfKind(_player, EntityKind.Superweapon);
+        int detectorStruct = w.BuildableDetectorStruct(_player);
         int wanted = !hasPlant ? plant
                    : refinery < 0 ? 3
                    : barracks < 0 ? 11
@@ -396,13 +408,33 @@ public sealed class SkirmishAI
                    : supply < draw + 40 ? plant
                    : refineryCount < cyCount ? 3 // one refinery per base (TICKET-AI-03)
                    : !hasTurret ? 5
+                   // P7-5d: EYES. The Directorate's unit cycle below has built a
+                   // Sentinel Scout every sixth unit since TICKET-P3-FAC-04,
+                   // described there as "eyes for the wall" - so that commander
+                   // has always had an answer to cloak and the Sodality has
+                   // never had one, which mirrored the sim's own hole exactly
+                   // until ADR-043 closed it.
+                   //
+                   // For the Sodality the answer is a BUILDING, so it belongs
+                   // here rather than in the unit cycle, and the rung is written
+                   // as a capability: a side with no detector building gets 0
+                   // from the query and skips the rung entirely. That is what
+                   // keeps this hash-neutral for the Directorate, which is every
+                   // commander in every golden.
+                   : !hasDetector && detectorStruct != 0 ? detectorStruct
                    // ADR-008 clause 4: the radar before the superweapon, at
                    // BD-09's affordability threshold. Without this rung the AI
                    // never lights its own minimap surrogate today, and the day
                    // ADR-009's prerequisites land it queues a superweapon it
                    // can never build and stalls forever.
                    : !hasRadar && w.Credits(_player) >= 1500 ? 12
-                   : !hasSuper && w.Credits(_player) >= 4500 ? 6 // war chest banked: reach for the sky (TICKET-AI-04)
+                   // P7-5d: ITS OWN SIDE'S superweapon. This named type 6 as a
+                   // literal, and P7-5c made type 6 Directorate-only - so a
+                   // Sodality commander asked for a building it is refused and
+                   // simply never got a superweapon at all. The comment above
+                   // predicted this exact failure for prerequisites and it
+                   // arrived through faction instead.
+                   : !hasSuper && superStruct != 0 && w.Credits(_player) >= 4500 ? superStruct
                    : 0;
         int ready = w.Entities[cy].ReadyStructure;
         if (ready != 0)

@@ -8472,6 +8472,146 @@ int FactionPowerGate()
     return 0;
 }
 
+int AiFactionGate()
+{
+    // P7-5d (ADR-045). Additive, the airgate pattern: a standalone mode and a
+    // Match battery stage, never a golden scenario.
+    //
+    // Three faction rows in a row split buildings the two sides used to share,
+    // and each time the AI's ladder went on naming the Directorate's type id as
+    // a literal. This gate holds the commander to building ITS OWN SIDE'S
+    // hardware, and stage 1 is a defect the last wave created rather than a
+    // feature: a Sodality commander could not queue a superweapon AT ALL.
+    const int Cannon = World.OrbitalCannonStructType;    // 6
+    const int Seismic = World.SeismicChargeStructType;   // 22
+    const int WatchPost = World.WatchPostStructType;     // 21
+
+    // A rich commander with a complete base, run long enough to walk its whole
+    // ladder. Modelled on ScenarioAiSuper, which is the fixture that already
+    // proves the ladder reaches the top rung.
+    (World W, int Super, bool Detects) RunCommander(ulong seed, int faction)
+    {
+        var w = new World(seed, 96, 64, players: 2);
+        w.SetFaction(0, faction);
+        w.GrantCredits(0, 30000);
+        w.SpawnConstructionYard(0, 8, 30);
+        int plantType = World.PlantTypeForFaction(faction);
+        w.SpawnPowerPlant(0, 12, 30, supply: 2000, structType: plantType);
+        w.SpawnRefinery(0, 12, 26);
+        w.SpawnFactory(0, 8, 34);
+        int harv = w.SpawnHarvester(0, Fix64.FromInt(14), Fix64.FromInt(34));
+        int field = w.SpawnFerriteField(Fix64.FromInt(22), Fix64.FromInt(30), 40000);
+        w.SpawnConstructionYard(1, 86, 30);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+        for (int t = 0; t < 6000; t++)
+        {
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        int super = 0;
+        bool detects = false;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (e.Kind == EntityKind.Superweapon) super = e.StructType;
+            if (e.Detector) detects = true;
+        }
+        return (w, super, detects);
+    }
+
+    // --- 1. Each commander builds ITS OWN side's superweapon. The Directorate
+    //        arm is the regression check (it must still reach the cannon, which
+    //        is what every golden depends on); the Sodality arm is the defect.
+    var dir = RunCommander(3700, World.FactionDirectorate);
+    var sod = RunCommander(3701, World.FactionSodality);
+    {
+        if (dir.Super != Cannon)
+            return Fail($"ai faction: a Directorate commander must still reach its orbital cannon, and this one "
+                        + $"finished with superweapon type {dir.Super} - the ladder regressed for the side every "
+                        + "golden runs");
+        if (sod.Super == Cannon)
+            return Fail("ai faction: a Sodality commander built the DIRECTORATE's orbital cannon, which the sim "
+                        + "would refuse from a human - the ladder is naming a type id rather than asking for one");
+        if (sod.Super != Seismic)
+            return Fail($"ai faction: a Sodality commander must reach its seismic charge and this one finished with "
+                        + $"superweapon type {sod.Super} (0 means none at all). Naming struct type 6 as a literal is "
+                        + "why: P7-5c made that Directorate-only, so the rung asked for a building the sim refuses "
+                        + "and the commander simply never got a superweapon");
+        Console.WriteLine($"  aifaction: superweapon reached - Directorate type {dir.Super}, Sodality type {sod.Super}");
+    }
+
+    // --- 2. EYES, for both. The Directorate has had an answer to cloak since
+    //        TICKET-P3-FAC-04, because its unit cycle builds a Sentinel Scout
+    //        every sixth unit; the Sodality had none, which mirrored the sim's
+    //        own hole until ADR-043 closed it and left the commander blind
+    //        anyway. Asserted on the ENTITY FLAG, so it does not care whether a
+    //        side's answer is a unit or a building.
+    {
+        if (!dir.Detects)
+            return Fail("ai faction: a Directorate commander must end with something that reveals cloak - its unit "
+                        + "cycle has built Sentinel Scouts since TICKET-P3-FAC-04, so this is a regression");
+        if (!sod.Detects)
+            return Fail("ai faction: a Sodality commander must end with something that reveals cloak. ADR-043 gave "
+                        + "that side a Watch Post and this is the row that makes the commander build one - without "
+                        + "it the counter exists and no AI can ever use it");
+        // And the Sodality's answer is specifically the BUILDING, which is the
+        // half that needed the new rung. A pass on stage 2 alone could be a
+        // Sodality commander that happened to build a Sentinel Scout, which it
+        // cannot, but the assertion should say what it means.
+        bool sodPost = false;
+        for (int i = 0; i < sod.W.Entities.Count; i++)
+        {
+            var e = sod.W.Entities[i];
+            if (e.Alive && e.PlayerId == 0 && e.StructType == WatchPost && World.IsStructure(e.Kind)) sodPost = true;
+        }
+        if (!sodPost)
+            return Fail("ai faction: the Sodality commander's detector must be its Watch Post");
+    }
+
+    // --- 3. THE NEUTRALITY MECHANISM, asserted rather than left to the golden
+    //        file. The new detector rung is skipped entirely by a Directorate
+    //        commander because that side has no detector BUILDING - its answer
+    //        is a unit - so the query returns 0 and the rung cannot fire. That
+    //        is why all 24 goldens are byte-identical, and if it ever stops
+    //        being true this fails here rather than in a hash comparison that
+    //        says only "something moved".
+    {
+        var w = new World(3702, 32, 32, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        if (w.BuildableDetectorStruct(0) != 0)
+            return Fail($"ai faction: the Directorate must have NO detector building (its answer is the Sentinel "
+                        + $"Scout, a unit), and the query returned {w.BuildableDetectorStruct(0)} - the new ladder "
+                        + "rung would fire for that side and every golden would move");
+        if (w.BuildableDetectorStruct(1) != WatchPost)
+            return Fail("ai faction: the Sodality's detector building must be its Watch Post");
+        if (w.BuildableStructOfKind(0, EntityKind.Superweapon) != Cannon)
+            return Fail("ai faction: the Directorate's superweapon must be the orbital cannon");
+        if (w.BuildableStructOfKind(1, EntityKind.Superweapon) != Seismic)
+            return Fail("ai faction: the Sodality's superweapon must be the seismic charge");
+        // And a kind nobody can build answers 0 rather than guessing, which is
+        // what keeps a rung from queueing a building the sim refuses.
+        if (w.BuildableStructOfKind(0, EntityKind.VeilProjector) != 0)
+            return Fail("ai faction: the Directorate cannot build a Veil Projector, so the query must answer 0 "
+                        + "rather than naming one - a rung that queued it would stall the yard forever");
+    }
+
+    Console.WriteLine("aifactiongate: the commander builds ITS OWN side's hardware rather than the type ids the "
+                      + "ladder used to name as literals. A Sodality commander reaches its seismic charge, where "
+                      + "before P7-5c it reached NOTHING - the rung asked for struct type 6 and that had just become "
+                      + "a building the sim refuses it, so the yard was asked for something it could never finish; "
+                      + "the Directorate still reaches its orbital cannon, which is the regression check that "
+                      + "matters because it is the side every golden runs. Both sides now end a match able to see "
+                      + "cloak, asserted on the entity flag so it does not care that the Directorate's answer is a "
+                      + "UNIT and the Sodality's a BUILDING; and the neutrality mechanism is asserted directly "
+                      + "rather than left to the hash file - the Directorate has no detector building, so the new "
+                      + "rung cannot fire for the side all 24 goldens are played by");
+    return 0;
+}
+
 int FactionSuperweaponGate()
 {
     // P7-5c (DR-04, ADR-044), the last part of Q017. Additive, the airgate
@@ -10115,6 +10255,10 @@ int Match(ulong seed)
     // the Sodality's destroys the ground it lands on.
     int facSuper = FactionSuperweaponGate();
     if (facSuper != 0) return facSuper;
+    // P7-5d: and the commander can actually reach the identity those three rows
+    // shipped, instead of asking for type ids that stopped being its own.
+    int aiFaction = AiFactionGate();
+    if (aiFaction != 0) return aiFaction;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -11694,6 +11838,7 @@ return args.Length == 0
         "ferritefieldgate" => FerriteFieldGate(),
         "sodalitydetectorgate" => SodalityDetectorGate(),
         "factionsuperweapongate" => FactionSuperweaponGate(),
+        "aifactiongate" => AiFactionGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

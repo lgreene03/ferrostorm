@@ -229,12 +229,24 @@ A11 as a balance change needing co-sign, with its reversal conditions recorded.
 And **a Sodality commander can no longer queue a superweapon at all**, because the
 AI ladder names struct type 6 by number and that is now a Directorate building.
 
-That last one generalises, and it is the largest thing standing between this
-phase and a game worth playing: **the AI builds none of the faction identity any
-of these rows shipped.** Its ladder yields seven common types and has never
-reached a faction building, so the Bastion, the Shroud Nest, the Veil Projector,
-the generator, the Watch Post and both superweapons are unreachable for it. It
-matters most for the Watch Post, because that one is a counter.
+That last one generalised into a row of its own, and it is **mostly closed
+2026-08-01** (P7-5d, ADR-045). The ladder now asks the catalogue for "the
+superweapon I can build" and "the building of mine that reveals cloak" rather
+than naming type ids, and a query with no answer returns 0 so the rung is skipped
+instead of queueing a building the sim refuses - which is the failure mode that
+had been silently costing a Sodality commander its superweapon entirely.
+
+Measured: a Sodality commander reaches struct type 22, its seismic charge, where
+reverting the fix leaves it with **type 0, none at all.**
+
+What the commander still does NOT build, stated plainly because the row is
+deliberately narrow: **the faction defences** (Bastion, Shroud Nest) and the
+**Veil Projector**, both of which are balance additions rather than defects since
+the common turret works for either side. And **a Sodality commander fires its
+seismic charge at refineries rather than at ferrite fields**, which is that
+weapon's entire reason to exist. Field-denial targeting is a different scan from
+structure-targeting and it is the largest single thing between the AI and playing
+its own faction.
 
 ## Tier D: content volume
 

@@ -3138,6 +3138,57 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// P7-5d: the buildable structure of a given KIND that this player's side may
+    /// build, or 0 for none. The capability query the AI ladder needed.
+    ///
+    /// Three faction rows in a row (ADR-042, 043, 044) each split a building the
+    /// two sides used to share, and each time the AI's ladder went on naming the
+    /// Directorate's type id as a literal. That is how a Sodality commander ended
+    /// up unable to queue a superweapon AT ALL: the ladder asks for "structure
+    /// type 6" and type 6 stopped being something it could build.
+    ///
+    /// So the ladder asks what it actually means - "the superweapon I can build"
+    /// - and gets it from the catalogue. A side with no answer gets 0 and the
+    /// rung is skipped rather than jamming, which is the behaviour that matters
+    /// most: a commander must never queue a building it will be refused, because
+    /// the yard stalls on it forever.
+    ///
+    /// Ascending type id, so the answer cannot depend on dictionary order.
+    /// BuildTicks &gt; 0 excludes the map-placed kinds, matching the yard's own
+    /// queueability rule rather than restating it.
+    /// </summary>
+    public int BuildableStructOfKind(int player, EntityKind kind)
+    {
+        int faction = _playerFaction[player];
+        for (int t = 1; t <= MaxStructType; t++)
+        {
+            var d = GetStructureType(t);
+            if (d.Kind == kind && d.BuildTicks > 0 && StructureAllowedForFaction(t, faction)) return t;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// P7-5d: the buildable DETECTOR building this player's side may build, or 0
+    /// for none - which is the honest answer for the Directorate, whose detector
+    /// is a unit (the Sentinel Scout) rather than a building.
+    ///
+    /// Asked as a property rather than by naming the Watch Post, so a Directorate
+    /// detector building would be picked up the day one is authored, and so this
+    /// says what it means: "something of mine that reveals cloak".
+    /// </summary>
+    public int BuildableDetectorStruct(int player)
+    {
+        int faction = _playerFaction[player];
+        for (int t = 1; t <= MaxStructType; t++)
+        {
+            var d = GetStructureType(t);
+            if (d.Detector && d.BuildTicks > 0 && StructureAllowedForFaction(t, faction)) return t;
+        }
+        return 0;
+    }
+
+    /// <summary>
     /// ADR-009 clause 2: does this player own a living instance of every
     /// prerequisite?
     ///
