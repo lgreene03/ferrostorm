@@ -593,7 +593,18 @@ public sealed class SkirmishAI
             for (int j = 0; j < w.Entities.Count; j++)
             {
                 var own = w.Entities[j];
-                if (!own.Alive || !World.IsOwnedBy(in own, _player)) continue;       // P7-8g: ownership
+                // P7-8i: MY TEAM'S, not merely mine. This is the whole of what
+                // "the AI knows it has allies" means here, and it is one
+                // predicate because the P7-8g refactor had already separated
+                // ownership from hostility - the question this site asks is
+                // "whose ground is being walked on", and the answer widened
+                // from a seat to a side.
+                //
+                // With the default team map every seat is its own team, so
+                // IsAlliedTo reduces to PlayerId == _player and this is
+                // byte-identical to what shipped. That is the mechanism for
+                // hash neutrality rather than a resemblance to it.
+                if (!own.Alive || !w.IsAlliedTo(in own, _player)) continue;
                 bool isEconomy = own.Kind == EntityKind.Harvester;
                 if (!isEconomy && own.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant
                     or EntityKind.Refinery or EntityKind.Factory or EntityKind.Turret)) continue;

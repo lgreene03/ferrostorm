@@ -7299,6 +7299,64 @@ int TeamGate()
             return Fail("team: the reloaded 2v2 diverged from the uninterrupted run within 50 ticks");
     }
 
+    // P7-8i: the AI DEFENDS ITS TEAM, which is the whole of what "the commander
+    // knows it has allies" means. Measured as a behaviour, not as a predicate:
+    // the same fixture is run twice, once with the defender allied to the
+    // victim and once not, and the difference IS the assertion. A stage that
+    // only ran the allied case would pass on an AI that charges at everything.
+    {
+        int OrdersWhenAllied(bool allied)
+        {
+            var w = new World(9303, 96, 96, players: 3);
+            if (allied) w.SetTeam(1, 0);          // seat 1 joins seat 0's side
+            // Seat 1's base, well away from seat 0's garrison.
+            w.SpawnConstructionYard(1, 60, 60);
+            w.SpawnRefinery(1, 64, 60);
+            // Seat 0's garrison, idle at home with nothing of its own at risk.
+            var d = w.GetUnitType(1);
+            var mine = new List<int>();
+            for (int k = 0; k < 6; k++)
+                mine.Add(w.SpawnUnit(0, Fix64.FromInt(52 + k), Fix64.FromInt(52), d.Speed, d.Hp,
+                                     d.Armour, d.WeaponId, veterancy: false, unitType: 1));
+            w.SpawnConstructionYard(0, 50, 50);
+            // Seat 2 walks into seat 1's base. Seat 2 is nobody's ally in
+            // either run, so the ONLY thing that differs is whether the ground
+            // being walked on is seat 0's side.
+            var ed = w.GetUnitType(2);
+            w.SpawnUnit(2, Fix64.FromInt(62), Fix64.FromInt(61), ed.Speed, ed.Hp,
+                        ed.Armour, ed.WeaponId, veterancy: false, unitType: 2);
+            var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+            var cmds = new List<Command>();
+            int towardsAlly = 0;
+            for (int t = 0; t < 200; t++)
+            {
+                cmds.Clear();
+                ai.Act(w, cmds);
+                foreach (var c in cmds)
+                {
+                    if (c.Type != CommandType.AttackMove) continue;
+                    // Counted only if the order sends a unit at the ALLY'S base,
+                    // not merely anywhere: an AttackMove elsewhere is the AI
+                    // doing its ordinary business.
+                    if (Fix64.DistSq(c.X - Map.CellCentre(61), c.Y - Map.CellCentre(61)) <= Fix64.FromInt(64))
+                        towardsAlly++;
+                }
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            }
+            return towardsAlly;
+        }
+        int allied = OrdersWhenAllied(true), alone = OrdersWhenAllied(false);
+        if (allied == 0)
+            return Fail("team: an ally's base was overrun and the commander sent nobody. Defending the team is "
+                        + "the whole of what knowing you have allies means here.");
+        if (alone != 0)
+            return Fail($"team: the commander sent {alone} orders to defend a NON-ally's base, so the allied "
+                        + "case proves nothing - it would charge at anything.");
+        Console.WriteLine($"teamgate: the commander sent {allied} orders to defend an ALLY'S base under attack "
+                          + $"and {alone} to defend the same base when not allied to it, so co-operation is a "
+                          + "behaviour rather than a predicate, and the pair discriminates");
+    }
+
     Console.WriteLine($"teamgate: every seat starts on its OWN team, so with no SetTeam call three seats are "
                       + $"mutually hostile by the predicate and in all {ffaPairs} firefights, which is why the 24 "
                       + $"goldens may stay byte-identical; put two seats on one team and a rifle squad takes "

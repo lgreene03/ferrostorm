@@ -754,6 +754,42 @@ which buttons EXIST, so a new building gets no icon rather than no button.
 there were two, so a new `MatchSetup` field cannot be forgotten there. Proved by
 deleting a field and watching the harness go red.
 
+## The commander knows it has allies
+
+ADR-038 and ADR-039 both ended by naming this gap. "Co-operate" is not a
+specification, so the first job was deciding what it means, and **the constraint
+shaped the answer**: `SkirmishAI` instances are independent, hold only their own
+seat, mutate nothing and have no channel to each other. That is deliberate and
+load-bearing - it is what makes an AI match replayable, since a replay re-runs the
+bare command stream with no AI attached. So co-operation cannot be negotiated. It
+has to be DERIVED FROM WORLD STATE, which every commander already reads and which
+is identical on every machine.
+
+That rules out the obvious ideas - agree a target, divide the map, request help -
+and points at the ones where shared ground truth suffices.
+
+**Co-operation means defending the team.** One predicate: the threat scan asked
+"is one of MY things being walked on" and now asks "is one of MY SIDE'S". One line,
+because the P7-8g refactor had already separated ownership from hostility - the
+question was always *whose ground is this*, and the answer widened from a seat to
+a side. Hash-neutral by construction, since the default team map makes
+`IsAlliedTo` reduce to `PlayerId == _player`.
+
+**Measured as a behaviour rather than asserted as a predicate**: the same fixture
+runs twice, an enemy overrunning seat 1's base while seat 0's garrison idles with
+nothing of its own at risk. Allied, 6 orders sent. Not allied, 0. The difference
+IS the assertion, and the control is there because a stage running only the allied
+case would pass on a commander that charges at everything.
+
+**What it deliberately does NOT mean yet**, recorded so the row is not read as
+more than it is: no shared targeting (allies pick waves independently and will
+often hit different bases), no economy courtesy (allied harvesters compete for the
+same nearest field), no tech or resource sharing (ADR-038 already decided that),
+no formation or timing. And an ally that is losing will still be allowed to lose,
+because the responder only reacts inside its own guard radius of a team structure
+- a commander will not cross the map to help. That is a number in the same scan
+rather than a policy.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against
