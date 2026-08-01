@@ -247,20 +247,34 @@ public partial class VerifyRunner : Node
         }
 
         // --- The end-of-match banner tells ME what happened ------------------
-        // _winner is an ABSOLUTE player id and the banner asked whether it was
-        // zero, so at seat 1 it was exactly inverted: the LAN joiner who had
+        // The verdict is an ABSOLUTE player id and the banner asked whether it
+        // was zero, so at seat 1 it was exactly inverted: the LAN joiner who had
         // just won was shown DEFEAT and played the failure line, while the host
         // who lost was congratulated. The last thing a match says, saying the
         // opposite of what happened. Two directions, because a banner that
         // inverts passes either check alone.
-        _game.EliminateForTest(_game.EnemyPlayerId);           // the OTHER player is out: I won
-        Check(_game.BannerVisibleForTest, "the match banner is raised on elimination");
+        //
+        // P7-8a drives the two through the paths that now genuinely differ. A
+        // declared winner ends the match; an elimination only ends it when the
+        // eliminated seat is MINE, because in a free-for-all somebody else going
+        // out leaves the survivors still fighting.
+        _game.DeclareWinnerForTest(_game.LocalPlayerId);       // the sim says I won
+        Check(_game.BannerVisibleForTest, "the match banner is raised when a winner is declared");
         Check(_game.BannerTextForTest.Contains("VICTORY"),
-              $"eliminating the OPPOSITION reads as VICTORY at seat 1 (\"{_game.BannerTextForTest.Split('\n')[0]}\")");
+              $"being DECLARED the winner reads as VICTORY at seat 1 (\"{_game.BannerTextForTest.Split('\n')[0]}\")");
         _game.ResetVictoryForTest();
         _game.EliminateForTest(_game.LocalPlayerId);           // I am out: I lost
         Check(_game.BannerTextForTest.Contains("DEFEAT"),
               $"being eliminated MYSELF reads as DEFEAT (\"{_game.BannerTextForTest.Split('\n')[0]}\")");
+        _game.ResetVictoryForTest();
+        // ...and somebody ELSE being eliminated is news, not a verdict: with
+        // three or more seats the match carries on, and this is the exact site
+        // that used to end it and invent a winner by flipping a seat number.
+        _game.EliminateForTest(_game.EnemyPlayerId);
+        Check(!_game.BannerVisibleForTest,
+              "another commander's elimination raises no banner - the match is not over");
+        Check(_game.DeclaredWinnerForTest < 0,
+              $"...and invents no winner (winner is {_game.DeclaredWinnerForTest})");
         _game.ResetVictoryForTest();
 
         // --- A captured structure changes colour -----------------------------

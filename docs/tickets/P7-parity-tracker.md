@@ -32,7 +32,10 @@ system removes a category of decision while a missing unit removes an option.
 | P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | **Q017 (Luke's roster call)** | MOVES | pending - **first open row, and it needs a human** |
 | P7-6 | Storage and a credit ceiling (silo) | B2 | **PRODUCER: GDD-SILENT.** GDD s4 specifies the economy in full and never mentions storage, a cap or overflow, and a ceiling would change the "float at 2 refineries / 3 harvesters" intent it DOES specify. Same category as crates and the map editor | MOVES | **NOT TAKEN** - I put this row on the list treating it as mine; it is not |
 | P7-7 | Infiltration: the Sodality's Infiltrator, from GDD s7's named roster | B5 | - (the unit is written; only the 20 per cent share is my call) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - infiltratorgate (4 stages incl. conservation and an engineer regression check) |
-| P7-8 | More than two player seats | D2 | **Producer sign-off**: sim change to PlaceSkirmishStart plus multi-start maps | MOVES | pending |
+| P7-8 | ~~More than two player seats~~ - **SPLIT, 2026-08-01.** GDD s9 makes TWO promises of very different sizes and one row cannot hold both | D2 | - | - | **SPLIT**, see "What P7-8 turned out to be" |
+| P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
+| P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash (tooling and content) | pending - **no shipped map declares more than two starts**, so every 3+ player map is new content. Needs `rot()` generalised from a 180-degree pair to a symmetry ORBIT; note 90-degree rotation additionally requires a SQUARE map and none of the eight are square, so double-mirror is the likelier group |
+| P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | **PRODUCER.** Not a sub-task of P7-8 but a second project of comparable size | MOVES | **NOT TAKEN** - there is no team field, no alliance table and no `AreAllied` predicate anywhere in the sim; hostility is decided everywhere by "not me and not neutral". It touches targeting, splash friendly-fire, detection and fog sharing, victory and the AI, and it has NO code to build on |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | Bring missions 01 to 03 under the generator, and onto self-declared setup, retiring `switch (setup.MissionIndex)` in SkirmishLive.cs | D1 | - | MOVES (two goldens: entity spawn order changes) | pending - **created by P7-9, not inherited.** Missions 04 to 06 declare their own yard and credits in the fmap; 01 and 03 still get theirs from a per-mission case in C#. Two mechanisms is the duplication this phase keeps finding, and the only reason it was left is that fixing it moves goldens for no behavioural gain |
 | P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
@@ -145,6 +148,43 @@ list the `air` key that `com_strike_flyer.yaml` authors and `DataLoader` reads.
 There is no runtime JSON-schema validator in `sim/`, so the schema is
 documentation that has silently drifted from the loader. Filed rather than
 fixed in passing.
+
+## What P7-8 turned out to be
+
+The row assumed the sim was the hard part. **It was not.** `VictorySystem` is
+already a last-one-standing rule over N seats with a per-seat announcement
+latch; the save format already writes the seat count and loops it; the LAN relay
+already takes `playerCount` as a real parameter and sizes everything from it;
+and `SkirmishAI` already holds only its own seat and picks hostiles with "anyone
+who is not me and not neutral". Three of the four two-player assumptions were in
+the CLIENT.
+
+The worst was silent and inverted the result. The client reconstructed the
+winner by flipping a seat number, in three places, including deriving it from
+the LOSER (`_winner = player == 0 ? 1 : 0`). With three seats a `Winner` of 2
+called `OnEliminated(0)`, which set `_winner = 1`: **player 1 shown VICTORY and
+the actual winner shown DEFEAT**, no crash, no log, as the last thing the match
+says. A second defect ended everybody's match on the FIRST elimination event,
+when the sim emits one per seat and plays on.
+
+Two things about that are worth keeping:
+
+1. **The CI guard meant to prevent exactly this could not see it.** Its regexes
+   keyed on the literals `[01]`, so `PlayerId == 2` passed untouched, the
+   `== 0 ? 1 : 0` ternary form evaded it entirely, and its remedy message
+   actively recommended `EnemyPlayerId`, which IS `1 - LocalPlayerId`. A guard
+   that teaches the assumption it is guarding against has to be changed in the
+   same wave as the code, or it pulls new work straight back into the old shape.
+2. **The headless client harness caught it, again.** The file's own comment
+   records this class shipping once before and being found only by driving the
+   client from seat 1. It was found the same way this time. That harness has now
+   caught eleven defects the sim battery is structurally blind to.
+
+**And one hard ceiling found while looking for something else:** `DetectedMask`
+is a `byte`, so eight seats is the limit - exactly GDD s9's maximum of you plus
+seven, with zero margin. A ninth seat shifts out of the byte and that player's
+detectors silently stop revealing stealth. It is hashed state, so widening it
+later is expensive. Recorded in ADR-031 rather than left to be discovered.
 
 ## What this phase does NOT do
 

@@ -18,6 +18,33 @@ public static class BattlefieldView
     public static readonly Color NeutralMark = new(0.79f, 0.63f, 0.36f);
 
     /// <summary>
+    /// The seat colours, in seat order. P7-8a: GDD s9 promises a skirmish
+    /// against "1-7 opponents", so eight seats can be on a battlefield at once
+    /// and each of them has to be told apart at a glance. Seats 0 and 1 are the
+    /// Directorate orange and Sodality teal above, unchanged and in that order,
+    /// so nothing about a two-player match moves; the six that follow are chosen
+    /// to sit clear of both of those, of each other and of the ferrite gold that
+    /// means "nobody owns this". Every one is bright enough to read as a team
+    /// strip against the storm-lit ground rather than as shadow.
+    ///
+    /// A table rather than a chain of ternaries deliberately: the shipped form
+    /// gave every seat above 0 the SAME colour, which is not an error anything
+    /// could catch - three enemies simply rendered identically and the player
+    /// was left to guess which teal army was which.
+    /// </summary>
+    private static readonly Color[] SeatMarks =
+    {
+        DirectorateMark,                 // 0  Directorate orange
+        SodalityMark,                    // 1  Sodality teal
+        new(0.36f, 0.55f, 0.92f),        // 2  cobalt
+        new(0.80f, 0.36f, 0.78f),        // 3  magenta
+        new(0.47f, 0.78f, 0.31f),        // 4  leaf green
+        new(0.88f, 0.24f, 0.28f),        // 5  crimson
+        new(0.62f, 0.47f, 0.85f),        // 6  violet
+        new(0.93f, 0.86f, 0.32f),        // 7  citrine
+    };
+
+    /// <summary>
     /// The one-place team-colour law, actually in one place.
     ///
     /// A player's colour is a property of WHICH PLAYER THEY ARE, not of who is
@@ -26,9 +53,15 @@ public static class BattlefieldView
     /// The minimap held a rival copy keyed on "me versus them", which agrees at
     /// seat 0 and inverts at seat 1 - a joiner saw their own army orange on the
     /// minimap and teal on the battlefield, and the enemy the reverse.
+    ///
+    /// Indexed defensively at both ends. A negative seat is the neutral mark by
+    /// rule (an unclaimed outpost, a bridge); a seat past the end of the table
+    /// wraps rather than throwing, because a colour clash in a hypothetical
+    /// ninth-seat match is a legibility complaint and an exception thrown from
+    /// the draw path is a crash.
     /// </summary>
     public static Color MarkFor(int player) =>
-        player < 0 ? NeutralMark : player == 0 ? DirectorateMark : SodalityMark;
+        player < 0 ? NeutralMark : SeatMarks[player % SeatMarks.Length];
 
     public static void BuildEnvironment(Node3D parent)
     {

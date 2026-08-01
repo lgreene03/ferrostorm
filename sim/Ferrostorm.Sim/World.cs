@@ -316,6 +316,13 @@ public sealed partial class World
     public int Tick { get; private set; } // set by Step and by Load
 
     private readonly int _players;
+    /// <summary>How many seats this world was built with (P7-8a). Read-only and
+    /// stateless, so it hashes nothing and moves no golden. It exists because
+    /// every generalisation away from "exactly two players" needs to ask the
+    /// WORLD how many there are rather than assume: MapLoader's opening hand is
+    /// the first caller, and VictorySystem below has always used _players
+    /// directly for the same reason.</summary>
+    public int PlayerCount => _players;
     private readonly long[] _credits;
     private readonly ulong[][] _visible; // per player, bitset over cells (this tick)
     private readonly ulong[][] _explored; // per player, shroud-lifted cells (ever seen)

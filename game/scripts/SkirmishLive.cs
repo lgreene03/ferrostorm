@@ -75,7 +75,16 @@ public partial class SkirmishLive : Node3D
     /// <summary>The other seat in a two-player match, for the handful of reads
     /// that are genuinely about the opponent rather than about me. Public so a
     /// check can ask about the opposition without recomputing the arithmetic,
-    /// which is how a test comes to agree with a bug.</summary>
+    /// which is how a test comes to agree with a bug.
+    ///
+    /// P7-8a: this is a TWO-PLAYER CONVENIENCE and nothing more. `1 - seat` IS
+    /// the two-seat assumption written down, so it is correct for the 1v1 match
+    /// every mode ships today and it is meaningless the moment a free-for-all
+    /// seats a third commander. Where a read has to work at any seat count, ask
+    /// the question the code actually means instead: "not mine" is
+    /// `PlayerId != LocalPlayerId` (with `PlayerId >= 0` where neutrals matter),
+    /// and "who won" is `_world.Winner`, which the sim already knows and which
+    /// no amount of seat arithmetic can reconstruct.</summary>
     public int EnemyPlayerId => 1 - LocalPlayerId;
 
     private readonly HashSet<int> _selection = new();
@@ -111,7 +120,15 @@ public partial class SkirmishLive : Node3D
     private RtsCamera _cam = null!;
     private double _accumulator;
     private double _renderTime;
+    /// <summary>The ABSOLUTE seat id of the match winner as the sim declared it,
+    /// or -1 while it is undecided. Never inferred, never inverted.</summary>
     private int _winner = -1;
+    /// <summary>Has this scene shown its final verdict and stopped playing?
+    /// P7-8a split this from _winner, because with more than two seats the two
+    /// are genuinely different questions: a commander who has lost everything is
+    /// finished while the match carries on without them, so their client is over
+    /// at a moment when there is still no winner to name.</summary>
+    private bool _matchOver;
 
     // TICKET-P5-SAVE-01: persistence and replays. Exactly one of these three
     // states holds for a scene: recording a fresh live match (_rec set), playing
@@ -848,7 +865,7 @@ public partial class SkirmishLive : Node3D
     public void TogglePause()
     {
         if (_pauseMenu != null) { ClosePause(); return; }
-        if (_winner >= 0 || _replayDone) return;
+        if (_matchOver || _replayDone) return;
         // C7b-iv: a LAN match does NOT stop. _paused halts the accumulator
         // drain, and the drain is the only thing that submits this client's
         // command batch - so pausing would stop the OTHER player's world dead
@@ -1388,7 +1405,7 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Is the sim allowed to advance? A finished match, a pause, and a
     /// replay that has reached the end of its stream all stop it.</summary>
-    private bool Running => _winner < 0 && !_paused && !_replayDone;
+    private bool Running => !_matchOver && !_paused && !_replayDone;
 
     /// <summary>
     /// TICKET-P5-SET-01: raise the match notice if the session has one. Polled
@@ -1481,7 +1498,7 @@ public partial class SkirmishLive : Node3D
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
         _fog.UpdateFrom(_world, LocalPlayerId);
-        if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
+        if (_winner < 0 && _world.Winner >= 0) EndMatch(_world.Winner);
         if (_mission != null && _mission.Messages.Count > _seenMessages)
         {
             for (int i = _seenMessages; i < _mission.Messages.Count; i++)
@@ -1588,6 +1605,15 @@ public partial class SkirmishLive : Node3D
                         .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
                 }
             }
+            // P7-8a: an elimination is NEWS, not a verdict. The sim keeps
+            // playing until one seat is left standing, so in a free-for-all the
+            // second commander falling means two are still fighting and nothing
+            // has been decided. This used to end the match on any elimination
+            // and reconstruct the "winner" by flipping the seat number, which is
+            // only ever right when there are exactly two of them. The one
+            // elimination that IS a verdict for this client is its own, and
+            // OnEliminated handles that promptly rather than waiting for the
+            // survivors to finish.
             if (ev.Type == GameEventType.PlayerEliminated)
                 OnEliminated(ev.B);
             // Base under attack: own structure took fire, cooled alert.
@@ -2537,25 +2563,57 @@ public partial class SkirmishLive : Node3D
         node.QueueFree();
     }
 
+    /// <summary>The sim has declared a winner, and `winner` is its ABSOLUTE seat
+    /// id read straight off World.Winner. The only thing that ends a match.
+    ///
+    /// P7-8a fixed the direction of the data flow here. The sim already knows
+    /// who won; the client used to throw that away, convert it into an
+    /// "eliminated player" by flipping the seat number, and then flip it back to
+    /// get the winner again. Two inversions that cancel at two seats and are
+    /// simply wrong at three, silently, because a made-up seat id looks exactly
+    /// like a real one. Recorded even when the verdict has already been shown,
+    /// so a commander eliminated early still ends the scene knowing who took
+    /// it.</summary>
+    private void EndMatch(int winner)
+    {
+        _winner = winner;
+        if (_matchOver) return;
+        ShowVerdict(winner == LocalPlayerId);
+    }
+
+    /// <summary>One seat has lost everything it holds. With more than two seats
+    /// that is not the end of anything: the survivors fight on and EndMatch
+    /// above is what closes the match. The exception is MY OWN elimination -
+    /// there is nothing left to watch and nothing left to command, so defeat is
+    /// shown at once rather than whenever the remaining commanders settle
+    /// it.</summary>
     private void OnEliminated(int player)
     {
-        _winner = player == 0 ? 1 : 0;
+        if (_matchOver || player != LocalPlayerId) return;
+        ShowVerdict(false);
+    }
+
+    /// <summary>Raise the closing banner and stand the match down. Split out of
+    /// OnEliminated so that both ways a match can finish - a declared winner and
+    /// my own elimination - say it in exactly one place.</summary>
+    private void ShowVerdict(bool iWon)
+    {
+        _matchOver = true;
         // TICKET-P5-SAVE-01: the match is over, so the recording is complete.
         // Closing it here rather than at scene exit means the file is on disk
         // and in the browser before the player has finished reading the banner.
         FinishRecording();
         ClosePause();
-        // "DID I WIN", not "did player 0 win". _winner is an absolute player id,
-        // and this asked whether it was zero - correct at seat 0 by luck, and at
-        // seat 1 exactly inverted: the LAN joiner who had just won was shown
-        // DEFEAT in the loser's red and played the failure line, while the host
-        // who lost was congratulated. The last thing a match says, and it said
-        // the opposite of what happened.
-        bool iWon = _winner == LocalPlayerId;
+        // "DID I WIN", not "did player 0 win". The verdict is an absolute player
+        // id compared against MY seat, and this once asked whether it was zero -
+        // correct at seat 0 by luck, and at seat 1 exactly inverted: the LAN
+        // joiner who had just won was shown DEFEAT in the loser's red and played
+        // the failure line, while the host who lost was congratulated. The last
+        // thing a match says, and it said the opposite of what happened.
         _banner.Text = (iWon ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
         // The winner's banner wears the winner's own team colour through the
         // one-place law, which is identical to the old DirectorateMark at seat 0
-        // and correct at seat 1.
+        // and correct at every seat above it.
         _banner.AddThemeColorOverride("font_color",
             iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f));
         _banner.Visible = true;
@@ -3434,7 +3492,7 @@ public partial class SkirmishLive : Node3D
             if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
             if (_patrolArmed) { DisarmPatrol("patrol cancelled"); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
-            if (_winner >= 0 || _replayDone) { QuitToMenu(); return true; }
+            if (_matchOver || _replayDone) { QuitToMenu(); return true; }
             return false;
         }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
@@ -4623,9 +4681,22 @@ public partial class SkirmishLive : Node3D
     public string BannerTextForTest => _banner.Text;
     public bool BannerVisibleForTest => _banner.Visible;
 
-    /// <summary>Verification hook: end the match with this player eliminated,
-    /// through the REAL path the sim's victory latch calls.</summary>
+    /// <summary>Verification hook: report this player eliminated, through the
+    /// REAL path the sim's PlayerEliminated event drives. P7-8a: this no longer
+    /// implies a winner, because an elimination no longer is one - eliminating
+    /// somebody else must leave the match running, and only eliminating the
+    /// LOCAL seat shows defeat.</summary>
     public void EliminateForTest(int eliminatedPlayer) => OnEliminated(eliminatedPlayer);
+
+    /// <summary>Verification hook: the sim has declared a winner, through the
+    /// REAL path the victory latch calls. The winner is an absolute seat id and
+    /// is passed through unaltered, which is the whole point: nothing between
+    /// World.Winner and the banner may invert or invent a seat.</summary>
+    public void DeclareWinnerForTest(int winner) => EndMatch(winner);
+
+    /// <summary>Verification read: the winner this scene believes in, -1 while
+    /// undecided. Exists so a check can assert that nothing INVENTED one.</summary>
+    public int DeclaredWinnerForTest => _winner;
 
     /// <summary>Verification read: an entity's kind, for checks that care what
     /// KIND was hit rather than which instance. Ferrite fields sit adjacent, so
@@ -4640,7 +4711,7 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification hook: clear the victory latch so a second verdict
     /// can be driven in one run. Test-only by name and by nature - nothing in a
     /// played match un-wins a match.</summary>
-    public void ResetVictoryForTest() { _winner = -1; _banner.Visible = false; }
+    public void ResetVictoryForTest() { _winner = -1; _matchOver = false; _banner.Visible = false; }
 
     /// <summary>Verification hook: hand an entity to another player, as a
     /// capture does. Through the sim's own scenario-scripting SetEntity, so the
@@ -4706,7 +4777,7 @@ public partial class SkirmishLive : Node3D
     {
         SnapshotNow();
         _fog.UpdateFrom(_world, LocalPlayerId);
-        if (_winner < 0 && _world.Winner >= 0) OnEliminated(_world.Winner == 0 ? 1 : 0);
+        if (_winner < 0 && _world.Winner >= 0) EndMatch(_world.Winner);
     }
 
     private bool AdvanceOneTick()
