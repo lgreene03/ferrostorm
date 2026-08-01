@@ -30,7 +30,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-3 | Transports: the Carrier, the first unit that exists to move OTHER units | A2 | - | goldens NEUTRAL; catalogue checksum MOVES; save format v9 | **DONE** - transportgate (6 stages incl. save round-trip and cargo dying with its carrier) |
 | P7-4 | The air layer: Airfield, Strike Flyer, Flak Track | A1 | ADR-028 (ratified under the standing directive) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - airgate (5 stages, both halves of clause 4); no reload cycle and the AI does not fly, both stated in the ADR |
 | P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | **Q017 (Luke's roster call)** | MOVES | pending - **first open row, and it needs a human** |
-| P7-6 | Storage and a credit ceiling (silo) | B2 | **PRODUCER: GDD-SILENT.** GDD s4 specifies the economy in full and never mentions storage, a cap or overflow, and a ceiling would change the "float at 2 refineries / 3 harvesters" intent it DOES specify. Same category as crates and the map editor | MOVES | **NOT TAKEN** - I put this row on the list treating it as mine; it is not |
+| P7-6 | Storage and a credit ceiling (silo) | B2 | - (authorised 2026-08-01) | no code, no hash | **REFUSED, and MEASURED rather than argued** - ADR-041; `economyprobe` shows the treasury oscillating near zero, so a ceiling would constrain something that never approaches a limit. Reversal conditions recorded |
 | P7-7 | Infiltration: the Sodality's Infiltrator, from GDD s7's named roster | B5 | - (the unit is written; only the 20 per cent share is my call) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - infiltratorgate (4 stages incl. conservation and an engineer regression check) |
 | P7-8 | ~~More than two player seats~~ - **SPLIT, 2026-08-01.** GDD s9 makes TWO promises of very different sizes and one row cannot hold both | D2 | - | - | **SPLIT**, see "What P7-8 turned out to be" |
 | P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
@@ -831,6 +831,50 @@ shut gate is not pathable, so an order straight ACROSS one detours round the wal
 instead of waiting for it to open. Making that order path through would be exactly
 the per-player passability clause 6 refused, so a later wave answering clause 6 on
 its own terms is not blocked by this one.
+
+## P7-6 refused, and the measurement found the opposite problem
+
+GDD s4 specifies the economy in full and never mentions storage, a cap or
+overflow. What it does specify is an intent, and **one word decides the row**:
+
+> A player **floats** at 2 refineries / 3 harvesters on one base.
+
+The economy s4 describes is a FLOW, not a stockpile. A ceiling is a rule about a
+stockpile, so it is not a missing piece of that design - it is a different one.
+
+Refusing on a reading alone would be an opinion, so `economyprobe` measures what
+s4 actually claims, which nothing had ever checked. Over 9000 ticks of real
+AI-versus-AI on skirmish-01:
+
+```
+   tick   credits0   credits1   refineries0   harvesters0
+   1500       3329       4029             1             1
+   4500          0          2             1             1
+   9000          1       2172             1             1
+```
+
+**The treasury does not run away. It oscillates near zero**, because credits are
+spent as fast as they are earned. A silo would have been machinery, a build
+option, a schema key, a hash fold and a gate, all to make a decision about a
+stockpile that does not exist.
+
+**And the measurement found something that matters more than the answer.** Those
+last two columns are 1 refinery and 1 harvester, sustained for the whole run,
+where GDD s4 specifies **two and three**. The design intent is not being met, and
+it is not being met in the direction OPPOSITE to the one P7-6 assumed: the economy
+is not overflowing, it is undersized. The commander builds one refinery and one
+harvester and stops.
+
+That is a row of its own, it is measurable by the probe that found it, and it is
+filed rather than fixed here because this wave's question was whether a ceiling is
+wanted.
+
+The refusal is reversible and its conditions are written down: the treasury
+running away on a re-run, a Producer amendment changing s4's intent from a float
+to a stockpile, or **a human playtest finding late-game banking the AI does not
+exhibit** - which is the likeliest of the three, since the probe measures two
+commanders that spend continuously and a human who turtles may bank in a way it
+cannot see.
 
 ## What this phase does NOT do
 
