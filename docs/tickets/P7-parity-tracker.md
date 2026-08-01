@@ -331,11 +331,28 @@ sensibly and is wrong: both default to the same faction, so all three opponents
 came out identical. Alternating between the two FACTIONS holds whatever the two
 menu picks happen to be.
 
-Still not done, and deliberately: there is **no opponent-count control in the
-menu**. The map decides, and every seat it declares is filled. A picker that let
-a player seat fewer than the map declares is menu work with no new capability
-behind it, and GDD s9's "1-7 opponents" is bounded by content rather than by
-this: no map declares more than four starts.
+~~Still not done, and deliberately: there is no opponent-count control in the
+menu.~~ **Done as P7-8e, 2026-08-01.** I called the picker "menu work with no
+new capability behind it" and that was wrong in one specific way worth
+recording: filling every seat the map declares means a player who wants a DUEL
+on skirmish-09 cannot have one. P7-8d did not add a capability, it removed a
+choice, and GDD s9's wording is "1-7 opponents", which is a choice.
+
+`MatchSetup.Seats` carries it, optional in the sidecar exactly as
+`ai_difficulty` is, so zero means "fill the map" and every sidecar written
+before the field resumes against the opposition it actually played. No format
+version and no migration, the same trick P7-8d used to avoid one.
+
+**The map remains the ceiling and always wins.** A hand-edited or corrupt
+sidecar asking for nine seats on a four-start map gets four rather than a
+`PlaceSkirmishStart` refusal, which is the "a corrupt sidecar must not take the
+menu down with it" posture the difficulty rung already takes. Asserted both
+ways in the harness, which went 138 to 145 checks.
+
+The control's RANGE comes from the selected map, because a count the map cannot
+seat is not an option, it is a crash waiting for a player to find it. On a
+two-start map that leaves exactly one option, which is correct rather than a
+special case, and the control says so instead of hiding.
 
 ## What this phase does NOT do
 

@@ -700,6 +700,23 @@ public partial class SkirmishLive : Node3D
     public static int SeatsFor(MapData map)
         => System.Math.Clamp(map.Starts.Count, 2, 8);
 
+    /// <summary>The seats a SETUP asks for on a map, which is the map's ceiling
+    /// and the player's choice together. GDD s9 promises "1-7 opponents", so
+    /// the count is a choice; P7-8d filled every seat the map declared, which
+    /// meant a player who wanted a duel on a four-start map could not have one.
+    ///
+    /// The MAP still decides the ceiling and always wins, so a hand-edited or
+    /// corrupt sidecar asking for six seats on a two-start map gets two rather
+    /// than a `PlaceSkirmishStart` refusal - the same "a corrupt sidecar must
+    /// not take the menu down with it" posture the difficulty rung takes.
+    /// Zero, the value every sidecar written before this field carries, means
+    /// fill the map.</summary>
+    public static int SeatsFor(MapData map, MatchSetup setup)
+    {
+        int ceiling = SeatsFor(map);
+        return setup.Seats <= 0 ? ceiling : System.Math.Clamp(setup.Seats, 2, ceiling);
+    }
+
     public static World BuildStartingWorld(MatchSetup setup, MapData map,
         out Dictionary<string, List<int>> tags)
     {
@@ -723,7 +740,7 @@ public partial class SkirmishLive : Node3D
             }
             return m;
         }
-        int seats = SeatsFor(map);
+        int seats = SeatsFor(map, setup);
         var w = map.BuildWorld(setup.Seed, players: seats, out tags, RegisterCatalogue);
         // TICKET-P6-FACTION-01: the sides, before any spawn and before tick 0.
         // After BuildWorld on purpose: no shipped skirmish map declares
