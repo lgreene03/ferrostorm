@@ -65,6 +65,17 @@ unit 0 1 24 20
 unit 0 1 24 28
 unit 0 2 22 22
 unit 0 2 22 26
+# P7-9a: the yard and the opening treasury are declared HERE, not in a
+# per-mission case in the client. Missions 04 to 06 have always done this;
+# 01 and 03 got theirs from `switch (setup.MissionIndex)` in SkirmishLive,
+# which is a rule keyed on WHICH mission this is rather than on what the
+# mission says, so every new mission needed a C# edit and a matching one in
+# the gate, and a mission whose author forgot was silently a mission with no
+# base. Two mechanisms for one thing is the duplication this phase keeps
+# finding; this is the second one retired.
+# No yard line here: mission 03 declares its own base above, so the only
+# thing the switch was still supplying was the treasury.
+trigger elapsed 0 -> grant 0 4000
 trigger elapsed 300 -> message first_wave
 trigger elapsed 300 -> spawn 1 2 58 22 4
 trigger elapsed 300 -> assault 1 26 24

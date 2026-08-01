@@ -51,6 +51,16 @@ grid:
 ................................................................
 ................................................................
 # --- Mission 01: Ferrostorm Rising - wipe out the raider camp ---
+# P7-9a: the yard and the opening treasury are declared HERE, not in a
+# per-mission case in the client. Missions 04 to 06 have always done this;
+# 01 and 03 got theirs from `switch (setup.MissionIndex)` in SkirmishLive,
+# which is a rule keyed on WHICH mission this is rather than on what the
+# mission says, so every new mission needed a C# edit and a matching one in
+# the gate, and a mission whose author forgot was silently a mission with no
+# base. Two mechanisms for one thing is the duplication this phase keeps
+# finding; this is the second one retired.
+structure 0 4 6 22
+trigger elapsed 0 -> grant 0 5000
 # Player forces
 unit 0 1 12 20
 unit 0 1 12 24
