@@ -416,6 +416,35 @@ which is the exact species of defect that preceded it.
 Client harness 146 to 153 checks. Also corrected a message from the previous wave
 that contradicted itself, reporting "came back 3, not the host's 3" on success.
 
+## The AI aimed at whoever spawned first
+
+Fixed 2026-08-01, and it is the clearest example this phase produced of a defect
+that no amount of testing was going to find.
+
+`SkirmishAI` picked the enemy REFINERY as "the first one in entity order", and
+that pick beats the nearest-production-structure one at both use sites, so it
+decided where every wave and every superweapon went. With ONE opponent, first
+and nearest are the same refinery. With three, it means the commander attacks
+whichever player happens to sit earliest in the entity array, for the whole
+match, **deterministically and reproducibly** - which is precisely why it would
+never have been reported as a bug. An AI attacking someone always looks like
+intended behaviour.
+
+It is now nearest by the same measure the structure pick uses.
+
+**Measured NEUTRAL: no golden moved.** That is the point rather than a relief -
+no golden scenario distinguishes the two rules, so nothing existing proved the
+old behaviour and nothing existing would have proved the new. `aitargetgate`
+spawns a FAR enemy refinery BEFORE a near one and asserts the first wave goes
+near, with both still standing so it is a choice between live targets. Proved to
+bite by restoring the old line.
+
+**One thing the gate got wrong first, worth keeping**: it asserted that EVERY
+wave order went to the near refinery, and read 17 of 34 as a failure. It was the
+commander correctly moving on: the near refinery had fallen, so the far one WAS
+then the nearest. A gate demanding every order go to one place asserts that the
+AI never finishes anything. The claim is about the FIRST wave.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against

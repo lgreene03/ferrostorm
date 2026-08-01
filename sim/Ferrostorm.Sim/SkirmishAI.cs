@@ -201,6 +201,7 @@ public sealed class SkirmishAI
         int readySuper = -1, enemyRefinery = -1;
         int enemyStructure = -1;
         Fix64 bestEnemyD = Fix64.MaxValue;
+        Fix64 bestRefineryD = Fix64.MaxValue;
         Fix64 homeX = Fix64.Zero, homeY = Fix64.Zero;
 
         for (int i = 0; i < w.Entities.Count; i++)
@@ -255,7 +256,27 @@ public sealed class SkirmishAI
                      && e.Kind is EntityKind.ConstructionYard or EntityKind.Factory or EntityKind.Refinery
                         or EntityKind.PowerPlant or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield)
             {
-                if (e.Kind == EntityKind.Refinery && enemyRefinery < 0) enemyRefinery = i;
+                // The enemy REFINERY, nearest by the same measure the structure
+                // pick uses. This was "the first refinery in entity order",
+                // which with ONE opponent is the same thing and with three is
+                // an artefact of spawn order: the wave and the superweapon
+                // would both go for whichever player happens to sit earliest in
+                // the array, every time, for the whole match. It reads as the
+                // commander inexplicably focusing one player, and it is
+                // perfectly deterministic and reproducible, which is exactly
+                // why it would never be reported as a bug.
+                //
+                // The refinery is preferred over other production at both use
+                // sites, so this line is what decides where a wave GOES.
+                if (e.Kind == EntityKind.Refinery)
+                {
+                    if (cy >= 0)
+                    {
+                        Fix64 rd = Fix64.DistSq(e.X - homeX, e.Y - homeY);
+                        if (rd < bestRefineryD) { bestRefineryD = rd; enemyRefinery = i; }
+                    }
+                    else if (enemyRefinery < 0) enemyRefinery = i;
+                }
                 // Nearest enemy production structure is the wave target.
                 if (cy >= 0)
                 {

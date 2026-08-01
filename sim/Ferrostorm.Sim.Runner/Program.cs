@@ -30,6 +30,7 @@ using Ferrostorm.Sim;
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   lanaiseatsgate     - P7-8f: a LAN match on a four-seat map - the seats no peer holds are played by commanders both peers generate locally, to identical hashes, and a divergent commander is CAUGHT
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
+//   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
 //   aituninggate       - the seven data/ai files reproduce the compiled commander exactly, the sim plays what they say, and a changed AI number moves the catalogue checksum (the LAN desync guard)
@@ -4959,6 +4960,88 @@ int MultiSeatGate()
     return 0;
 }
 
+int AiTargetGate()
+{
+    // The commander picked "the first enemy refinery in ENTITY ORDER" and that
+    // pick beats the nearest-structure one at both use sites, so it decided
+    // where every wave and every superweapon went. With one opponent, first and
+    // nearest are the same refinery and the defect is invisible; with three it
+    // means the AI attacks whichever player happens to sit earliest in the
+    // array, for the whole match, deterministically and reproducibly - which is
+    // precisely why it would never be reported as a bug.
+    //
+    // No golden scenario distinguishes the two rules, which is why fixing this
+    // moved nothing and why nothing existing proves it works. Hence this.
+    (World W, int Near, int Far) Setup(ulong seed)
+    {
+        var w = new World(seed, 96, 96, players: 3);
+        // The commander's own base, so it has a home to measure distance FROM.
+        // Without a construction yard the rule has no origin and deliberately
+        // falls back to first-found, which is a different branch.
+        w.SpawnConstructionYard(0, 10, 10);
+        // Seat 1's refinery is spawned FIRST and is FAR. Seat 2's is spawned
+        // second and is NEAR. Under the old rule the wave goes to seat 1
+        // forever, purely because it was created first.
+        int far = w.SpawnRefinery(1, 80, 80);
+        int near = w.SpawnRefinery(2, 24, 20);
+        return (w, near, far);
+    }
+
+    {
+        var (w, near, far) = Setup(4411);
+        if (w.Entities[far].Id >= w.Entities[near].Id)
+            return Fail("aitarget: the fixture must spawn the FAR refinery first, or it proves nothing");
+        // Give the commander an army and let it decide where to send it.
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        var d = w.GetUnitType(1);
+        // Comfortably above waveSize plus whatever the commander garrisons.
+        for (int k = 0; k < 20; k++)
+            w.SpawnUnit(0, Fix64.FromInt(12 + k % 10), Fix64.FromInt(14 + k / 10), d.Speed, d.Hp,
+                        d.Armour, d.WeaponId, veterancy: false, unitType: 1);
+        var cmds = new List<Command>();
+        Fix64 nearX = w.Entities[near].X, nearY = w.Entities[near].Y;
+        Fix64 farX = w.Entities[far].X, farY = w.Entities[far].Y;
+        // The FIRST wave is the whole claim. Later waves legitimately move on:
+        // once the near refinery falls, the far one IS the nearest, and a gate
+        // that demanded every order go to the same place would be asserting
+        // that the commander never finishes anything. The first draft did
+        // exactly that and read 17 of 34 as a failure when it was the AI
+        // correctly moving to its second target.
+        int firstWaveTick = -1;
+        bool firstWentNear = false;
+        for (int t = 0; t < 400 && firstWaveTick < 0; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            foreach (var c in cmds)
+            {
+                if (c.Type != CommandType.AttackMove || firstWaveTick >= 0) continue;
+                Fix64 dn = Fix64.DistSq(c.X - nearX, c.Y - nearY);
+                Fix64 df = Fix64.DistSq(c.X - farX, c.Y - farY);
+                firstWaveTick = w.Tick;
+                firstWentNear = dn < df;
+            }
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        if (firstWaveTick < 0)
+            return Fail("aitarget: the commander never launched a wave, so the pick is untested");
+        if (!firstWentNear)
+            return Fail($"aitarget: the first wave (tick {firstWaveTick}) went to the FAR refinery. The "
+                        + "commander is picking the first enemy refinery in ENTITY ORDER, so on a "
+                        + "four-player map it would focus whichever seat spawned earliest, all match.");
+        // And the control: both refineries still stand, so "near" was a choice
+        // between two live targets rather than the only one left.
+        if (!w.Entities[far].Alive)
+            return Fail("aitarget: the far refinery died before the first wave, so there was no choice to make");
+        Console.WriteLine($"aitargetgate: given a FAR enemy refinery spawned BEFORE a near one and both still "
+                          + $"standing, the commander's first wave (tick {firstWaveTick}) went to the NEAR one. "
+                          + "Under the entity-order rule it would have crossed the map to the seat that merely "
+                          + "happened to spawn first, and kept doing it. No golden distinguishes the two rules, "
+                          + "which is why this moved no hash and why nothing else was going to catch it");
+    }
+    return 0;
+}
+
 int SchemaGate()
 {
     // CLAUDE.md: "All gameplay numbers live in /data as YAML validated against
@@ -7369,6 +7452,9 @@ int Match(ulong seed)
     // The authored data actually matches the schemas that claim to govern it.
     int schema = SchemaGate();
     if (schema != 0) return schema;
+    // The commander aims at the nearest enemy economy, not the earliest-spawned.
+    int aitarget = AiTargetGate();
+    if (aitarget != 0) return aitarget;
     // And the weapon numbers in /data are the ones the sim actually fires.
     int weaponData = WeaponDataGate();
     if (weaponData != 0) return weaponData;
@@ -8483,6 +8569,7 @@ return args.Length == 0
         "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
+        "aitargetgate" => AiTargetGate(),
         "weapondatagate" => WeaponDataGate(),
         "aituninggate" => AiTuningGate(),
         "catalogueloadgate" => CatalogueLoadGate(),
