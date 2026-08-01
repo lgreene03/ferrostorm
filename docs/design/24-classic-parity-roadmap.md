@@ -335,6 +335,26 @@ This one is worth remembering for what it says about coverage: **the defect was
 invisible for the whole project until an economy row made one side build twelve
 power buildings instead of one.** Nothing had ever asked what shape a base was.
 
+**So the next wave went looking on purpose** (P7-9, ADR-051), and found another
+sitting under three rows that had already shipped. GDD s4 says a refinery
+"processes a load in 8 seconds" and that a player floats at 2 refineries; the
+second is only a design if the first is a BUILDING rate. It is not.
+`UnloadTicks`' own comment says "refinery processes a load in 8s" while the code
+applies it **per harvester with no occupancy check**, so any number unload at
+once. Measured: six harvesters unload five-at-a-time at one refinery, and **a
+second refinery earns 0 per cent more at three harvesters and 1 per cent at
+six.**
+
+In this sim a refinery is a **licence to own more harvesters**, not a station -
+and that, rather than throughput, is why ADR-047's second refinery improved the
+treasury. Serialising the dock is refused for now with three reversal conditions,
+because three economy rows have landed unplayed and this would be a five-fold cut
+on top of them.
+
+The method is the transferable part: **a defect that nothing tests does not
+announce itself, it has to be gone looking for.** Two waves running have found
+one by asking what no gate asserts.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
