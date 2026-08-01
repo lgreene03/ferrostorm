@@ -239,6 +239,14 @@ public enum GameEventType : byte
     SuperweaponLaunched = 9,// A superweapon, impact at (X, Y) after the warning
     SuperweaponImpact = 10, // detonation at (X, Y)
     Captured = 11,          // A structure, B new owner
+    // P7-11a: A structure, B the saboteur's player, C the tick it comes back.
+    // NOT Captured, though the infiltrator's theft borrows that type: the
+    // client's DR-20 alert reads Captured as an ownership change and caches the
+    // new owner from it, so raising it for a building that never changed hands
+    // would announce "you lost it" about a building the player still owns. The
+    // whole distinction this unit exists to make is sabotage against capture,
+    // and it has to survive as far as the alert.
+    Sabotaged = 12,
 }
 public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default, int C = -1);
 
@@ -481,6 +489,12 @@ public sealed partial class World
         // P7-7: the Infiltrator. Cloaked, unarmed, barracks-built, and consumed
         // by the theft exactly as the engineer is consumed by capture.
         { 17, new UnitTypeDef(700, 150, 90, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 5, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11) }, // sod_infiltrator
+        // P7-11a: the Saboteur, the Infiltrator's twin down to the fixture.
+        // Cloaked, unarmed, barracks-built and consumed by the act; it differs
+        // only in what the act DOES, which is to switch a building off rather
+        // than to rob it. Cheaper and frailer than the thief because a brown-out
+        // is a window rather than a payday.
+        { 18, new UnitTypeDef(600, 140, 80, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 5, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11) }, // sod_saboteur
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -530,6 +544,36 @@ public sealed partial class World
     /// A world with no transport carries no entry and hashes identically.</summary>
     public readonly record struct CargoUnit(int UnitType, int Hp, int Rank);
     private readonly Dictionary<int, List<CargoUnit>> _cargo = new();
+
+    /// <summary>P7-11a: which structures are switched off, keyed by entity id
+    /// and holding the tick each one comes back. A pruned side collection on
+    /// exactly the _cargo terms and for exactly its reason: the entry is removed
+    /// the tick the sabotage lapses, so "no entry" provably means "no state that
+    /// could gate behaviour", which is what makes the guarded hash fold sound
+    /// rather than merely convenient. A world with no saboteur in it carries no
+    /// entry and hashes byte-identically to one compiled before saboteurs
+    /// existed, which is why all 24 goldens stand.
+    ///
+    /// A tick STAMP rather than a countdown, the ADR-012 regrowth idiom: a
+    /// stamp resumes correctly across save and load with no schedule to rewind,
+    /// and it makes extending an existing sabotage a max rather than a sum.</summary>
+    private readonly Dictionary<int, int> _disabledUntil = new();   // entityId -> tick it comes back
+
+    /// <summary>P7-11a: how long one saboteur switches a building off for. Thirty
+    /// seconds at 15 Hz. The duration is the only part of GDD s7 line 64 that is
+    /// not written down, so it is recorded as my call: long enough that a
+    /// brown-out is a window to attack through, short enough that losing a plant
+    /// to one infantryman is a setback rather than a loss. Balance owns the
+    /// number under charter A11.</summary>
+    public const int SabotageDurationTicks = 450;
+
+    /// <summary>P7-11a: is this building switched off? The ONE place the rule is
+    /// stated, read by the power tally, the structure-weapon gate and the
+    /// production loop, so those three cannot drift from each other or from the
+    /// prune in Step. An absent entry and a lapsed entry answer the same, which
+    /// is what lets the prune run on a schedule rather than at an exact tick.</summary>
+    public bool IsDisabled(int entityId)
+        => _disabledUntil.TryGetValue(entityId, out int until) && until > Tick;
 
     /// <summary>P7-3: how many a transport holds. Five is the benchmark figure
     /// and it is the number that makes an engineer plus an escort fit.</summary>
@@ -910,6 +954,11 @@ public sealed partial class World
     public const int EngineerUnitType = 11;
     /// <summary>P7-7: GDD s7's Infiltrator, the Sodality's economy-denial tool.</summary>
     public const int InfiltratorUnitType = 17;
+    /// <summary>P7-11a: GDD s7's Saboteur, the Sodality's tempo tool. It shares
+    /// the Infiltrator's walk and its consumed-by-the-act rule and differs only
+    /// in the effect, which is why both are named here rather than recognised on
+    /// sight in CaptureSystem.</summary>
+    public const int SaboteurUnitType = 18;
 
     /// <summary>ADR-021 (P6 Wave C4): what a captured Outpost pays its owner,
     /// once per second (the pre-increment tick's positive multiples of
@@ -1316,6 +1365,23 @@ public sealed partial class World
         {
             for (int i = 0; i < _entities.Count; i++)
                 if (!_entities[i].Alive && _cargo.ContainsKey(i)) _cargo.Remove(i);
+        }
+        // P7-11a: a lapsed sabotage, and a sabotaged building that has since
+        // been destroyed, both leave the collection here. Walked by ENTITY
+        // INDEX for the reason the hold above is: dictionary iteration order is
+        // a determinism hazard.
+        //
+        // The predicate is the EXACT complement of IsDisabled - an entry goes
+        // when `until <= Tick` or the entity is not alive - and it has to be,
+        // because "present" is what the hash fold and the save block record. A
+        // prune that disagreed with its guard would leave entries that gate
+        // nothing yet still fold into the hash, which is the shape of bug this
+        // project has been bitten by before.
+        if (_disabledUntil.Count > 0)
+        {
+            for (int i = 0; i < _entities.Count; i++)
+                if (_disabledUntil.TryGetValue(i, out int until) && (until <= Tick || !_entities[i].Alive))
+                    _disabledUntil.Remove(i);
         }
         CaptureSystem();
         CombatSystem();
@@ -2216,9 +2282,33 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.PlayerId < 0 || e.PlayerId >= _players) continue;
+            // P7-11a: a sabotaged building is off the grid entirely, supplying
+            // nothing and drawing nothing. This is the load-bearing site of the
+            // three: switching a plant off browns the base out through ADR-008's
+            // EXISTING rules - the turret gate, the production rate scaling, the
+            // superweapon charge - rather than through any consequence invented
+            // for the saboteur. Dropping the draw as well as the supply is
+            // deliberate: a building that consumes nothing while it does nothing
+            // is the honest reading, and it stops sabotaging a barracks from
+            // browning out the base that owns it.
+            if (IsDisabled(e.Id)) continue;
             supply[e.PlayerId] += e.PowerSupply;
             draw[e.PlayerId] += e.PowerDraw;
         }
+    }
+
+    /// <summary>P7-11a: one player's power tally, computed by the SIM's own
+    /// ComputePower rather than by a copy of its loop. Public for the reason
+    /// AtLeast75 is public: a gate that re-summed PowerSupply itself would pass
+    /// whether or not the sabotage rule had been applied at all, so it would
+    /// prove nothing. Pure and stateless, so exporting it moves no hash and
+    /// gives no caller a lever: it is a question, not a command.</summary>
+    public (int Supply, int Draw) PowerOf(int player)
+    {
+        Span<int> supply = stackalloc int[_players];
+        Span<int> draw = stackalloc int[_players];
+        ComputePower(supply, draw);
+        return (supply[player], draw[player]);
     }
 
     /// <summary>
@@ -2415,15 +2505,18 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
-            // P7-7 generalised this from `UnitType != 11`. Two unit types now
-            // ACT ON CONTACT with an enemy structure - the engineer captures it
-            // and the infiltrator robs it - and the walk, the reach test and
-            // the consumed-by-the-act rule are identical for both. Adding a
-            // second literal type here would have been the eighth enumeration
-            // this phase; the shared shape is named once and the EFFECT
-            // branches at the point where they actually differ.
+            // P7-7 generalised this from `UnitType != 11`. THREE unit types now
+            // ACT ON CONTACT with an enemy structure - the engineer captures it,
+            // the infiltrator robs it and (P7-11a) the saboteur switches it off
+            // - and the walk, the reach test and the consumed-by-the-act rule
+            // are identical for all three. Adding literal types here would have
+            // been the eighth enumeration this phase; the shared shape is named
+            // once and the EFFECT branches at the point where they actually
+            // differ, which is why P7-11a added one branch below and not one
+            // line of pursuit, reach or consumption logic of its own.
             bool isEngineer = e.UnitType == EngineerUnitType, isInfiltrator = e.UnitType == InfiltratorUnitType;
-            if (!e.Alive || (!isEngineer && !isInfiltrator) || e.ExplicitTarget < 0) continue;
+            bool isSaboteur = e.UnitType == SaboteurUnitType;
+            if (!e.Alive || (!isEngineer && !isInfiltrator && !isSaboteur) || e.ExplicitTarget < 0) continue;
             if (!ValidId(e.ExplicitTarget)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             var t = _entities[e.ExplicitTarget];
             // ADR-005 clause 2: engineers do not capture fences.
@@ -2458,6 +2551,24 @@ public sealed partial class World
                     // Sodality a second engineer instead of a different tool.
                     e.Alive = false; e.Moving = false; e.ExplicitTarget = -1;
                     _events.Add(new GameEvent(GameEventType.Captured, touched, e.PlayerId, C: (int)taken));
+                }
+                else if (isSaboteur)
+                {
+                    // P7-11a: the sabotage. A tick STAMP for the building's
+                    // return, and a second saboteur EXTENDS rather than
+                    // shortens - the max, not an assignment, because a fresh
+                    // charge planted on a building that is already off must
+                    // never hand the defender time back.
+                    int until = Tick + SabotageDurationTicks;
+                    if (!_disabledUntil.TryGetValue(touched, out int standing) || until > standing)
+                        _disabledUntil[touched] = until;
+                    // The structure is UNHARMED and does not change hands, for
+                    // the reason the theft leaves it standing: this is sabotage,
+                    // and a saboteur that damaged or took the building would be
+                    // a demolition charge or a second engineer rather than the
+                    // tempo tool GDD s7 names.
+                    e.Alive = false; e.Moving = false; e.ExplicitTarget = -1;
+                    _events.Add(new GameEvent(GameEventType.Sabotaged, touched, e.PlayerId, C: until));
                 }
                 else
                 {
@@ -2574,8 +2685,14 @@ public sealed partial class World
             // The continue sits ABOVE the cooldown decrement deliberately: a
             // dead turret does not reload. Inclusive boundary via divisionless
             // AtLeast75: supply 15 against draw 20 FIRES.
+            //
+            // P7-11a joins the same gate rather than adding a second one: a
+            // sabotaged gun is silent for the same reason an unpowered one is,
+            // and the continue sits above the cooldown decrement for the same
+            // reason too, so a switched-off turret does not reload either.
             if (IsStructure(e.Kind) && e.WeaponId != 0
-                && !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId]))
+                && (IsDisabled(e.Id)
+                    || !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId])))
             { _entities[i] = e; continue; }
             if (e.Cooldown > 0) { e.Cooldown--; _entities[i] = e; continue; }
 
@@ -3326,6 +3443,14 @@ public sealed partial class World
             // ADR-009 clause 1, ProductionSystem site: miss this and the
             // barracks queue never advances, with no error to say so.
             if (!IsProducer(e.Kind)) continue;
+            // P7-11a: a sabotaged producer stops the line. Placed ABOVE the
+            // queue read and below the producer test, so the lane HOLDS exactly
+            // as it holds when the treasury is empty: the queue is untouched,
+            // the head is not popped, and BuildProgress and BuildPaid keep their
+            // values, so nothing is lost and nothing is charged twice when the
+            // building comes back. Zeroing progress here would be a second, invented
+            // punishment on top of the stopped clock.
+            if (IsDisabled(e.Id)) continue;
             if (e.Kind == EntityKind.ConstructionYard && e.ReadyStructure != 0) continue; // placement pending pauses the line
             if (!_queues.TryGetValue(e.Id, out var q) || q.Count == 0) continue;
 
@@ -3434,6 +3559,13 @@ public sealed partial class World
         {
             var e = _entities[i];
             if (!e.Alive || e.Kind != EntityKind.ConstructionYard) continue;
+            // P7-11a: a sabotaged yard stops BOTH its lines. Guarded here as
+            // well as in the main loop because this pass is deliberately
+            // separate from it; a rule applied to one lane and not the other
+            // would let a switched-off yard keep building out of its second
+            // head, which is the enumeration trap in a different coat. The lane
+            // holds untouched, exactly as it holds when the player is broke.
+            if (IsDisabled(i)) continue;
             if (LaneOf(i) is not { } lane) continue;
             if (lane.Ready != 0) continue;               // placement pending pauses THIS lane only
             if (lane.Queue.Count == 0) { PruneLane(i); continue; }
@@ -3701,6 +3833,16 @@ public sealed partial class World
                 h.Add(hold.Count);
                 foreach (var cu in hold) { h.Add(cu.UnitType); h.Add(cu.Hp); h.Add(cu.Rank); }
             }
+            // P7-11a: a sabotaged building's return tick, folded on exactly the
+            // hold's terms and for exactly its reason. It gates the power tally,
+            // the structure guns and the production lines, so it is state a
+            // desync could hide in and must be hashed; the entry is pruned the
+            // tick it lapses, so no entry provably means no disable, and a world
+            // with no saboteur in it hashes byte-identically to one compiled
+            // before saboteurs existed. Guarded, never unconditional: a bare
+            // h.Add here would move all 24 goldens for a feature no golden
+            // scenario uses.
+            if (_disabledUntil.TryGetValue(e.Id, out int until)) h.Add(until);
         }
         if (_orderQueues.Count > 0)
         {

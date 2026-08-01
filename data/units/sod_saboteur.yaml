@@ -1,0 +1,28 @@
+# P7-11a. Written doctrine, not invention: GDD s7 line 64 names a "Saboteur
+# (disables buildings)" in the Sodality's roster, which gives the unit, the
+# faction and the effect; only the duration is a judgement call, exactly as
+# only the Infiltrator's share of the treasury was.
+# Doc 24 B3 recorded the gap it fills - every answer to a building in this game
+# was destruction, so the only question an attacker could ask of a base was
+# "can I kill it", never "can I switch it off for half a minute".
+# Cloaked and unarmed, the Infiltrator's twin. It walks into a power plant and
+# the base browns out through ADR-008's existing rules rather than through any
+# new consequence, and the act consumes it exactly as capture consumes an
+# engineer. The building is neither harmed nor taken: that is the whole unit.
+id: sod_saboteur
+name: Saboteur
+faction: sodality
+tier: 2
+cost: 600
+build_time_ticks: 140
+hp: 80
+armour_class: none
+speed: 20
+role: support
+weapon_ids: []
+sight_range: 5
+stealth: true
+detector: false
+produced_at: com_barracks
+prerequisites: [com_radar_uplink]
+veterancy_enabled: false

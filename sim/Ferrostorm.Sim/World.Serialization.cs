@@ -62,12 +62,18 @@ public sealed partial class World
     private const uint SaveMagicV7 = 0x534C4137; // v7 adds the per-entity command stance tail (ADR-015)
     private const uint SaveMagicV8 = 0x534C4138; // v8 adds the second build lane block (ADR-023)
     private const uint SaveMagicV9 = 0x534C4139; // v9 adds the transport cargo block (P7-3)
+    // v10 adds the sabotage disable block (P7-11a). The tag byte runs on from
+    // '9' (0x39) to ':' (0x3A) because the family is one ASCII byte wide and
+    // there is no two-digit slot in it; the numbering keeps incrementing, which
+    // is what every comparison here relies on, and the constant is what the
+    // code reads rather than the character.
+    private const uint SaveMagicV10 = 0x534C413A;
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV9);
+        w.Write(SaveMagicV10);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -149,6 +155,23 @@ public sealed partial class World
             w.Write(hold.Count);
             foreach (var cu in hold) { w.Write(cu.UnitType); w.Write(cu.Hp); w.Write(cu.Rank); }
         }
+        // P7-11a (v10): which buildings are switched off and when they come
+        // back, sorted by entity id for the reason every block above is sorted -
+        // dictionary iteration order must never leak into a serialized artefact.
+        // Written unconditionally as a count, so the format stays strictly
+        // positional and a world with no sabotage costs four bytes. A tick stamp
+        // survives the round trip with nothing to rewind, because Tick is saved
+        // beside it. Without this block a player who saved during a brown-out
+        // would load with the lights back on, which is a divergence rather than
+        // a missing feature.
+        var disabled = new List<int>(_disabledUntil.Keys);
+        disabled.Sort();
+        w.Write(disabled.Count);
+        foreach (int id in disabled)
+        {
+            w.Write(id);
+            w.Write(_disabledUntil[id]);
+        }
         w.Write(SaveTrailer);
     }
 
@@ -173,7 +196,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -182,20 +205,26 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9;
-        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9; // ADR-015: v7+ entities carry the command stance tail
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10; // ADR-015: v7+ entities carry the command stance tail
         // P7-3: every version from v8 ONWARD carries the lane block, not v8
         // alone. Written as an equality it silently skipped the block on a v9
         // save and the reader then fell out of step with the writer, which
         // surfaced as "save truncated or corrupt" - a version test that names
         // one version is the same enumeration trap as a rule that names one
         // kind, and it will bite again at v10 unless it is written as a floor.
-        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9; // ADR-023
+        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10; // ADR-023
+        // P7-11a: the warning above came true at v10 exactly as written. The
+        // cargo block's own test was `magic == SaveMagicV9`, an equality, so
+        // adding v10 skipped it on a save that HAD written it and every later
+        // read fell out of step with the writer. Both tests are floors now.
+        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10;   // P7-3
+        bool hasSabotage = magic is SaveMagicV10;               // P7-11a
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -278,7 +307,7 @@ public sealed partial class World
         // P7-3 (v9): the transport holds. A pre-v9 save carries no block and
         // loads with nothing aboard, which is exactly what those saves meant,
         // so they resume identically.
-        if (magic == SaveMagicV9)
+        if (hasCargo)
         {
             int carrierCount = r.ReadInt32();
             for (int i = 0; i < carrierCount; i++)
@@ -293,6 +322,24 @@ public sealed partial class World
                 // "present means carrying" invariant the hash guard rests on,
                 // the same reason an inert lane is refused above.
                 if (hold.Count > 0) world._cargo[id] = hold;
+            }
+        }
+        // P7-11a (v10): the switched-off buildings. A pre-v10 save carries no
+        // block and loads with everything running, which is exactly what those
+        // saves meant, so they resume identically.
+        if (hasSabotage)
+        {
+            int disabledCount = r.ReadInt32();
+            for (int i = 0; i < disabledCount; i++)
+            {
+                int id = r.ReadInt32();
+                int until = r.ReadInt32();
+                // A lapsed stamp was never written, but refuse to resurrect one
+                // from a hand-edited file: an entry that gates nothing would
+                // still fold into the state hash, breaking the "present means
+                // switched off" invariant the guarded fold rests on - the same
+                // reason an inert lane and an empty hold are refused above.
+                if (until > world.Tick) world._disabledUntil[id] = until;
             }
         }
         if (r.ReadUInt32() != SaveTrailer) throw new InvalidDataException("save truncated or corrupt");
