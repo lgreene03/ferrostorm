@@ -10987,6 +10987,10 @@ int Match(ulong seed)
     // nothing about - it asserts where a wave is pointed.
     int arrival = ArrivalGate();
     if (arrival != 0) return arrival;
+    // P7-12: and the save format holds at the scale a real match reaches, not
+    // just on saveload's small hand-built world.
+    int saveScale = SaveScaleGate();
+    if (saveScale != 0) return saveScale;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -12356,6 +12360,108 @@ int SaveLoad()
     return 0;
 }
 
+int SaveScaleGate()
+{
+    // P7-12. saveload proves a round trip on BuildSkirmishWorld - a small,
+    // hand-built world. Nothing has ever saved a world at the scale a real
+    // match reaches, and churnprobe showed 558 entities is reachable on
+    // skirmish-07.
+    //
+    // The question one step to the side of saveload: does the format hold at
+    // SCALE? A save that works at 30 entities and fails at 300 loses a player's
+    // campaign, and it would fail on exactly the saves worth keeping - the long
+    // ones - while every existing gate passed.
+    //
+    // A GATE rather than a probe, by the ADR-053 rule: a save that does not
+    // round-trip is not a balance question.
+    //
+    // Same shape as saveload deliberately, including RECORDING the command
+    // stream rather than re-running the commanders. The AI's own state
+    // (_produced, _lastWaveTick) is not serialised and is not meant to be, so a
+    // resumed world driven by a fresh commander would diverge for a reason that
+    // has nothing to do with the save format.
+    const ulong seed = 2026;
+    // 4500 ticks to REACH the scale, then only 500 more to prove the resume.
+    // A longer tail costs three runs of it (record, reference, resume) and buys
+    // nothing: divergence from a serialisation slip shows on the first tick that
+    // reads the dropped field, not eventually.
+    const int half = 4500, full = 5000;
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var map = MapData.Load(Path.Combine(root, "data/maps/skirmish-07.fmap"));
+
+    World Build()
+    {
+        var w = map.BuildWorld(seed, players: 2, out _);
+        CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+        map.PlaceSkirmishStart(w, 8000);
+        // Non-default factions on BOTH seats, the Q001 hardening saveload
+        // records: a dropped field that happens to be zero round-trips by luck.
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        return w;
+    }
+
+    var recorded = new List<Command>[full];
+    {
+        var w = Build();
+        var a0 = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        var a1 = SkirmishAI.Standard(1, AiDifficulty.Normal, w);
+        for (int t = 0; t < full; t++)
+        {
+            var c = new List<Command>();
+            a0.Act(w, c); a1.Act(w, c);
+            recorded[t] = c;
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(c));
+        }
+    }
+
+    ulong hashFull;
+    {
+        var w = Build();
+        for (int t = 0; t < full; t++) w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
+        hashFull = w.ComputeStateHash();
+    }
+
+    var live = Build();
+    for (int t = 0; t < half; t++) live.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
+    ulong hashMid = live.ComputeStateHash();
+    int entities = live.EntityCount;
+
+    // The scale this gate exists for. Asserted rather than assumed, because a
+    // fixture that quietly stopped producing entities would make everything
+    // below pass while testing nothing - which is exactly how saveload came to
+    // be a small-world test without anybody deciding it should be.
+    const int scale = 150;
+    if (entities < scale)
+        return Fail($"save scale: the fixture only reached {entities} entities, under the {scale} this gate exists "
+                    + "to exercise - it is no longer testing scale and the round trip below proves nothing saveload "
+                    + "does not already prove");
+
+    using var ms = new MemoryStream();
+    live.Save(ms);
+    ms.Position = 0;
+    var loaded = World.Load(ms);
+
+    if (loaded.EntityCount != entities)
+        return Fail($"save scale: {entities} entities saved, {loaded.EntityCount} loaded");
+    if (loaded.FactionOf(0) != World.FactionDirectorate || loaded.FactionOf(1) != World.FactionSodality)
+        return Fail("save scale: a faction was dropped by the round trip");
+    if (loaded.ComputeStateHash() != hashMid)
+        return Fail($"save scale: loaded hash 0x{loaded.ComputeStateHash():X16} != saved 0x{hashMid:X16} at "
+                    + $"{entities} entities");
+
+    for (int t = half; t < full; t++) loaded.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(recorded[t]));
+    if (loaded.ComputeStateHash() != hashFull)
+        return Fail($"save scale: resumed run diverged (0x{loaded.ComputeStateHash():X16} vs 0x{hashFull:X16})");
+
+    Console.WriteLine($"savescalegate: a world of {entities} entities saved to {ms.Length} bytes, loaded hash-exact, "
+                      + $"and resumed to the uninterrupted final hash 0x{hashFull:X16} bit-for-bit. saveload proves "
+                      + "the same round trip on a small hand-built world; this proves the format holds at the scale a "
+                      + "real match on the largest map actually reaches, which is where a save is worth keeping and "
+                      + "where a format slip would cost a player their campaign");
+    return 0;
+}
+
 int CampaignSave()
 {
     // TICKET-P2-SIM-21. Same philosophy as the saveload gate, with the
@@ -12589,6 +12695,7 @@ return args.Length == 0
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),
         "arrivalgate" => ArrivalGate(),
+        "savescalegate" => SaveScaleGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

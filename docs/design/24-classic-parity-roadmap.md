@@ -391,6 +391,26 @@ questions. **A hunt that finds nothing has still bought something, provided it
 leaves an assertion behind**; the alternative, concluding "probably fine" and
 moving on, buys nothing and has to be re-asked after every change.
 
+**The fifth outing added a third kind of outcome** (P7-12, ADR-054). `saveload`
+proves a round trip on a small hand-built world, and nothing had saved a world at
+the scale a real match reaches. Measured: **226 entities, 81,215 bytes, hash-exact
+and resumed bit-for-bit.** No defect.
+
+But the bite test found something about the gate rather than the game. Dropping a
+serialised field makes it fail as intended - **and makes `saveload` fail too**,
+so for that defect it adds nothing. Following that properly rather than shrugging:
+what would fail only at scale is a narrow-typed count or index, and every narrow
+write in the format is an enum bounded by its own definition. **No current defect
+class needs this gate.**
+
+It ships anyway, cut from 27000 ticks of work to 10000 so it costs 4.5 seconds,
+and justified on what it actually does: it establishes a save-size figure nobody
+had, and it guards the next narrow type somebody adds to a format already on its
+twelfth version. The discipline worth keeping is that the question was asked at
+all: **do not let a gate ship on the assumption that it is valuable - measure what
+it catches that an existing gate does not, and if the answer is "nothing today",
+say so and justify it on the future rather than pretending.**
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
