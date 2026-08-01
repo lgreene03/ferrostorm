@@ -979,7 +979,14 @@ public partial class VerifyRunner : Node
             // buttoned or map-placed); this one is the history.
             var addedSince = new[]
             {
-                "com_gate",   // P7-10: struct type 10, ADR-005's reservation filled
+                "com_gate",        // P7-10: struct type 10, ADR-005's reservation filled
+                // P7-5 (DR-02): struct type 20, the Sodality's own power grid.
+                // It carries no icon of its own and wears the plant's, exactly
+                // as the Bastion wears the turret's - art is owed, and the
+                // button is real either way. Note this button is faction-gated,
+                // so a Directorate player never sees it; the count here is of
+                // buttons BUILT, before FixedGatesAllow hides any.
+                "sod_generator",
             };
             Check(sButtoned == wasListed.Length + addedSince.Length,
                   $"...and the derivation dropped none of the {wasListed.Length} it transcribed, adding only the "

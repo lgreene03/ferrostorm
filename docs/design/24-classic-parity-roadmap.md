@@ -173,7 +173,30 @@ a side is choosing a handful of items rather than a doctrine.
 Doc 27 reached the same conclusion from the other direction and called asymmetry
 the least-delivered of the GDD's five pillars. Its DR-02, DR-03 and DR-04
 (faction power economics, a Sodality detection answer, faction-distinct
-superweapons) are the designed response, and all three are blocked on Q017.
+superweapons) are the designed response.
+
+**A third closed 2026-08-01** (P7-5a, ADR-042): DR-02 shipped, so the two sides
+no longer share a power grid. The Directorate keeps one big fragile plant and the
+Sodality builds three small generators for the same supply, which is GDD s3's own
+"centralised" against "decentralised" written out in numbers. The doctrine is
+pinned as behaviour rather than as a stat line: **one building lost darks a
+Directorate base completely (100 to 0 supply) and costs the Sodality under half
+its grid (120 to 80).** That is the first time in this game that the two
+economies differ at all.
+
+Two things about that row are worth carrying forward rather than leaving in the
+ADR. It could not be built until a **prerequisite stopped naming a building and
+started naming a capability** - five prerequisites name the power plant by type
+id, so a Sodality player holding only generators would have satisfied none of
+them and been stuck one rung deep forever. And reading GDD s8 for DR-04 turned up
+a live defect worth more than the row: **any unit could delete an entire ferrite
+field with one shot**, because a field has 1 hit point and the explicit-attack
+branch was the only one in the sim that did not exclude fields. GDD s8 reserves
+destroying a field to the Sodality seismic charge, so that identity could not
+have shipped on top of it.
+
+DR-03 and DR-04 remain open, and Q017's sequencing question is now answered by
+having taken its own first candidate.
 
 ## Tier D: content volume
 

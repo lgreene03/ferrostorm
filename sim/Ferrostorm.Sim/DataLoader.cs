@@ -600,6 +600,13 @@ public static class StructureCatalogue
         "dir_bastion",            // 17: P7-2b, the Directorate's defence
         "sod_shroud_nest",        // 18: P7-2b, the Sodality's
         "com_mine",               // 19: P7-11c, built and placed like any other building
+        // 20: P7-5 (DR-02). The id keeps its com_ prefix at index 1 while that
+        // building is now Directorate-only, which is a cosmetic mismatch and is
+        // recorded rather than hidden: the prefixes are legacy labels and the
+        // faction: key is the truth. dir_turret and dir_superweapon are
+        // FactionCommon and mismatch in the opposite direction, so a rename is
+        // a tidy-up of its own rather than part of a design wave.
+        "sod_generator",          // 20: the Sodality's decentralised power
     };
 
     /// <summary>The number for a name. Throws on an unknown id rather than
@@ -646,6 +653,10 @@ public static class StructureCatalogue
         13 => EntityKind.Outpost,   // ADR-021
         14 => EntityKind.Bridge,    // ADR-025
         19 => EntityKind.Mine,      // P7-11c
+        // P7-5: a generator is a POWER PLANT, and that is the whole mechanism.
+        // Sharing the kind is what makes it satisfy the five prerequisites that
+        // name type 1, now that HasPrereqs asks for a capability.
+        20 => EntityKind.PowerPlant,
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 

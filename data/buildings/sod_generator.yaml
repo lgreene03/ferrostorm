@@ -1,0 +1,35 @@
+# P7-5 (DR-02, ADR-042): the Sodality half of GDD s3's power doctrine, which
+# gives that side "decentralised power (many small generators)" against the
+# Directorate's "fewer, bigger power plants". Written doctrine, not invention.
+#
+# Every number here is set against com_power_plant rather than chosen alone,
+# because the identity IS the comparison. Three of these are the unit of
+# comparison, being what it takes to beat one plant's 100 supply: 120 supply for
+# 390 credits against 100 for 300, so the Directorate buys power more cheaply
+# and the Sodality buys it more safely. See ADR-042 for the full ledger.
+id: sod_generator
+name: Generator
+faction: sodality
+cost: 130
+build_time_ticks: 45
+hp: 70
+power_supply: 40
+power_draw: 0
+sight_range: 3
+footprint: 1
+weapon_ids: []
+prerequisites: []
+build_tab: buildings
+notes: >
+  Prerequisites are empty for the same reason the Directorate plant's are: this
+  is the root of the tech tree for its side, and it needs nothing.
+
+  It satisfies every prerequisite in the game that names com_power_plant,
+  because P7-5 made a prerequisite ask for a KIND rather than a type id. Without
+  that, a Sodality player holding three of these would satisfy no prerequisite
+  in the game and could build nothing else, ever.
+
+  Sight 3 against the plant's 4 is deliberate: a cheap generator that saw
+  further than the building it replaces would be a cheap watchtower, which is
+  the one axis on which this could have been strictly better rather than a
+  trade.

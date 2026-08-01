@@ -3,7 +3,7 @@
 # the compiled def, and the golden hashes prove the port changed no behaviour.
 id: com_power_plant
 name: Power Plant
-faction: common
+faction: directorate
 cost: 300
 build_time_ticks: 100
 hp: 150

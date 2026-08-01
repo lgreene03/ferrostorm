@@ -1,5 +1,29 @@
 # Q017: the asymmetry pillar is the least delivered - which identity step first?
 
+> **ANSWERED 2026-08-01, by taking candidate 1.** DR-02 (power economics) shipped
+> as P7-5a under ADR-042, on this question's own argument that it is "the most
+> thematic option and the one the GDD already designed in prose". The two sides
+> no longer share a power grid, and the difference is pinned as behaviour rather
+> than as a stat line: one building lost darks a Directorate base completely
+> (100 to 0 supply) and costs the Sodality under half its grid (120 to 80).
+>
+> **The sequencing question is closed. Candidates 2 and 3 are not.** They are now
+> ordinary open rows (P7-5b, P7-5c) rather than blocked ones, and the reason is
+> worth stating because it is what this question got wrong: it treated all four
+> candidates as needing a design call, and three of the four are **written in the
+> GDD already**. Line 56 requires that every stealth tool have a public counter,
+> which is DR-03's whole justification. Section 8 specifies both superweapons
+> precisely, including the Sodality charge destroying resource fields, which is
+> DR-04. Only candidate 4 (per-faction refinery economics) is genuinely
+> unspecified, and nothing has asked for it.
+>
+> The lesson, banked because it has now paid three times in this phase - the
+> hero, the mines, and this: **check what is WRITTEN before deciding that
+> something needs a decision.**
+>
+> One thing this question measured that is now false: "The Directorate has no
+> faction mechanic at all." It has one, and it is the one the GDD wrote for it.
+
 Labels: persona:p1, gdd:s3, phase:6, owner:game-designer + producer
 Raised by: the design review of 2026-07-25 (docs/design/27), as its principal
 recommendation.
