@@ -352,8 +352,28 @@ because three economy rows have landed unplayed and this would be a five-fold cu
 on top of them.
 
 The method is the transferable part: **a defect that nothing tests does not
-announce itself, it has to be gone looking for.** Two waves running have found
-one by asking what no gate asserts.
+announce itself, it has to be gone looking for.** Three waves running have now
+found one by asking what no gate asserts.
+
+**The third** (P7-10b, ADR-052) asked whether a long match degrades, because
+entity ids are stable by construction so the list can never be compacted and
+every system walks all of it. On skirmish-07 over thirty minutes the list grows
+**211 to 558 while the living count stays flat at about 200** - two thirds of
+every per-tick walk is a corpse - and **the match is still running at the top of
+GDD pillar 2's 15-to-30-minute window** with both armies healthy. skirmish-01
+hides both by ending at tick 13500.
+
+Both are refused with conditions rather than fixed: the sim still runs at about
+1 ms per tick against TDD s6's 8 ms budget, and whether the basin is simply a
+long-game map is a balance question for the playtest rather than something to
+tune blind.
+
+**And the pattern across all three is now unmistakable: each defect sat beside a
+gate that asked a neighbouring question.** `basingate` plays skirmish-07 and asks
+whether it is a stalemate, never whether it ends. The load scenario asks what 600
+units cost, never what a match accumulates. `aitargetgate` asks where a wave is
+aimed, never whether it arrives. Asking one step to the side of an existing gate
+has found something every single time.
 
 ## Tier D: content volume
 

@@ -8537,6 +8537,59 @@ int FactionPowerGate()
     return 0;
 }
 
+int ChurnProbe()
+{
+    // P7-10. Entity ids are stable by construction - Add appends and death sets
+    // Alive = false - because a replay, a save and a LAN peer all name entities
+    // by index. Nothing may ever be compacted out of the list.
+    //
+    // So the list only grows, and EVERY system walks all of it. Nothing has ever
+    // asked whether a long match degrades: the load scenario measures 600 units
+    // standing still, which is a snapshot, not accumulation.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    // BOTH a close map and a far one. skirmish-01 resolves quickly, which is
+    // healthy and also means it never exercises a long game; skirmish-07 is the
+    // basin, whose starts are 231 cells apart precisely so a crossing is a
+    // commitment, and it is where a 30-minute match actually happens.
+    string mapName = args.Length > 1 ? args[1] : "skirmish-01";
+    var map = MapData.Load(Path.Combine(root, $"data/maps/{mapName}.fmap"));
+    var w = map.BuildWorld(2026, players: 2, out _);
+    CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+    map.PlaceSkirmishStart(w, 8000);
+    var a0 = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+    var a1 = SkirmishAI.Standard(1, AiDifficulty.Normal, w);
+    var cmds = new List<Command>();
+    Console.WriteLine($"churnprobe [{mapName}]: entity ids are stable by construction, so the list can never be "
+                      + "compacted and every system walks all of it. Measuring whether a long match degrades.");
+    Console.WriteLine("   tick   entities   alive   dead   dead%   ms/1000   army0   army1   match");
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    long last = 0;
+    for (int t = 1; t <= 27000; t++)   // 30 minutes at 15Hz, the top of GDD pillar 2's window
+    {
+        cmds.Clear();
+        a0.Act(w, cmds); a1.Act(w, cmds);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (t % 4500 != 0) continue;
+        int alive = 0;
+        for (int i = 0; i < w.EntityCount; i++) if (w.Entities[i].Alive) alive++;
+        int dead = w.EntityCount - alive;
+        long now = sw.ElapsedMilliseconds;
+        int army0 = 0, army1 = 0;
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Unit) continue;
+            if (e.PlayerId == 0) army0++; else if (e.PlayerId == 1) army1++;
+        }
+        string state = w.Winner >= 0 ? $"seat {w.Winner} won" : "running";
+        Console.WriteLine($"  {t,5}   {w.EntityCount,8}   {alive,5}   {dead,4}   {(w.EntityCount == 0 ? 0 : dead * 100 / w.EntityCount),4}%   {now - last,7}   {army0,5}   {army1,5}   {state}");
+        last = now;
+    }
+    Console.WriteLine("churnprobe: a list that grows without bound while the ALIVE count stays flat is dead weight "
+                      + "every system pays for on every tick, and the last column is what it costs.");
+    return 0;
+}
+
 int DockProbe()
 {
     // P7-9. GDD s4 says two things about a refinery that only make sense
@@ -12443,6 +12496,7 @@ return args.Length == 0
         "freeharvestergate" => FreeHarvesterGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
+        "churnprobe" => ChurnProbe(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
