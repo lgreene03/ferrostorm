@@ -4819,6 +4819,130 @@ int MultiSeatGate()
                 return Fail($"multiseat: seat {p}'s treasury came back as {loaded.Credits(p)}, not {w.Credits(p)}");
     }
 
+    // --- 7. A SHIPPED FOUR-START MAP, played (P7-8b). Every stage above runs on
+    //        data/maps/test-4seat.fmap, which is an asymmetric fixture carrying
+    //        no fairness proof at all, so all of it proves the ENGINE seats four
+    //        commanders and none of it proves a map anyone would play exists.
+    //        skirmish-09 is the other half: mapgen's mirror2 group, four starts
+    //        that are exactly one orbit, and a generator that refuses to emit it
+    //        unless the ferrite and outpost distance profiles of all four seats
+    //        are identical. What is asserted here is what the generator cannot
+    //        see - that the sim seats four commanders on the committed file and
+    //        that all four can play it - and, separately, that the two-seat case
+    //        the menu will actually hit today works, because MainMenu.cs globs
+    //        skirmish-*.fmap while the lobby still expresses two seats.
+    int quarterEntities, quarterOutposts = 0;
+    ulong quarterHash;
+    {
+        string ninePath = Path.Combine(root, "data", "maps", "skirmish-09.fmap");
+
+        (MapData Map, World World) Kilnmoor(ulong seed, int players)
+        {
+            var m = MapData.Load(ninePath);
+            var w = m.BuildWorld(seed, players: players, out _, ww =>
+            {
+                CatalogueFiles.RegisterAll(ww,
+                    Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+                CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+            });
+            m.PlaceSkirmishStart(w, 8000);
+            return (m, w);
+        }
+
+        // 7a. Four seats, four opening hands, on the shipped map rather than on
+        //     the fixture. Counted off the spawned entities, not off the start
+        //     list that asked for them.
+        var (nine, w4) = Kilnmoor(4106, Seats);
+        if (nine.Starts.Count != Seats)
+            return Fail($"multiseat: skirmish-09 declares {nine.Starts.Count} starts, not {Seats} - "
+                        + "it is meant to be the pool's first four-player map");
+        foreach (var (p, s) in nine.Starts)
+        {
+            int yards = 0, force = 0;
+            foreach (var e in w4.Entities)
+            {
+                if (!e.Alive || e.PlayerId != p) continue;
+                if (e.Kind == EntityKind.ConstructionYard) yards++;
+                if (e.Kind is EntityKind.Harvester or EntityKind.Unit) force++;
+            }
+            if (yards != 1 || force != 4)
+                return Fail($"multiseat: on skirmish-09 seat {p} at ({s.Cx},{s.Cy}) got {yards} yards and "
+                            + $"{force} mobile units, not the 1 yard and 4-strong hand every seat is owed");
+        }
+        foreach (var e in w4.Entities)
+            if (e.Alive && e.Kind == EntityKind.Outpost) quarterOutposts++;
+        if (quarterOutposts % Seats != 0)
+            return Fail($"multiseat: skirmish-09 stood {quarterOutposts} outposts, which is not a whole number "
+                        + $"of {Seats}-seat orbits - one commander has a free income node the others do not");
+
+        // 7b. Four commanders play it. "Consistent" is the sim's own definition:
+        //     the same match run twice reaches the same hash. No winner may be
+        //     named while four bases stand, and the winner is checked EVERY tick
+        //     rather than at the end, because a rule that declared a winner at
+        //     tick 3 and cleared it later would read the same from outside.
+        (ulong Hash, int Produced, int WinnerTick) PlayNine(ulong seed)
+        {
+            var (_, w) = Kilnmoor(seed, Seats);
+            int before = w.EntityCount;
+            var ais = new SkirmishAI[Seats];
+            for (int p = 0; p < Seats; p++) ais[p] = new SkirmishAI(p);
+            var cmds = new List<Command>();
+            int winnerTick = -1;
+            for (int t = 0; t < 600; t++)
+            {
+                cmds.Clear();
+                for (int p = 0; p < Seats; p++) ais[p].Act(w, cmds);
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                if (winnerTick < 0 && w.Winner >= 0) winnerTick = t;
+            }
+            return (w.ComputeStateHash(), w.EntityCount - before, winnerTick);
+        }
+
+        var run = PlayNine(4107);
+        if (run.WinnerTick >= 0)
+            return Fail($"multiseat: skirmish-09 named a winner at tick {run.WinnerTick} of 600 with all four "
+                        + "commanders still building - victory is firing on something other than elimination");
+        if (run.Produced <= 0)
+            return Fail("multiseat: 600 ticks of four commanders on skirmish-09 produced nothing - "
+                        + "the AI cannot play the map, which is a failed map rather than a hard one");
+        if (PlayNine(4107).Hash != run.Hash)
+            return Fail("multiseat: a four-seat match on skirmish-09 does not replay to the same hash - "
+                        + "the world is not consistent");
+        quarterHash = run.Hash;
+        quarterEntities = run.Produced;
+
+        // 7c. And the case the MENU hits today. Seats 0 and 1 are the 180-degree
+        //     rotation pair of the mirror2 orbit, which is what makes a
+        //     two-player game on a four-start map as fair as one on any two-start
+        //     map in the pool; the spare starts must simply go unused rather than
+        //     spawning ownerless bases or throwing the way four seats on a
+        //     two-start map correctly do in stage 1b.
+        var (nine2, w2) = Kilnmoor(4108, 2);
+        if (w2.PlayerCount != 2)
+            return Fail($"multiseat: skirmish-09 opened with players: 2 reports {w2.PlayerCount} seats");
+        int yardsSeen = 0;
+        foreach (var e in w2.Entities)
+        {
+            if (!e.Alive || e.Kind != EntityKind.ConstructionYard) continue;
+            yardsSeen++;
+            if (e.PlayerId is < 0 or > 1)
+                return Fail($"multiseat: a two-seat skirmish-09 spawned a yard for seat {e.PlayerId} - "
+                            + "the spare starts are meant to go unused, not to be seated");
+            var s = nine2.Starts[e.PlayerId];
+            int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
+            // Within a cell of the declared start, because a 2x2 footprint's
+            // centre lands on the far corner of its anchor cell. The starts on
+            // this map are 91 cells apart at their closest, so a yard seated at
+            // the wrong start could not hide inside this tolerance.
+            if (Math.Abs(cx - s.Cx) > 1 || Math.Abs(cy - s.Cy) > 1)
+                return Fail($"multiseat: seat {e.PlayerId}'s yard stands at cell ({cx},{cy}), not at its "
+                            + $"declared start ({s.Cx},{s.Cy})");
+        }
+        if (yardsSeen != 2)
+            return Fail($"multiseat: a two-seat skirmish-09 placed {yardsSeen} construction yards, not 2 - "
+                        + $"the map declares {nine2.Starts.Count} starts and only the first two may be filled");
+    }
+
     Console.WriteLine($"multiseatgate: four seats each get a yard, 8000 credits and a hand of one harvester and three "
                       + $"squads, laid out towards the map centre from both sides ({rightLeaning} leaning right, "
                       + $"{leftLeaning} left); the sim names no winner while two of the four still stand and names "
@@ -4826,7 +4950,13 @@ int MultiSeatGate()
                       + $"once over 480 ticks; four commanders all issue orders and the match replays to the same "
                       + $"hash 0x{aiHash:X16}; the four-seat world round-trips through {saveBytes} bytes of save "
                       + $"unchanged; and a two-player skirmish-01 still hashes 0x{PlacedOnMain:X16} at placement and "
-                      + $"0x{Tick600OnMain:X16} 600 ticks on, the values measured on main before the change");
+                      + $"0x{Tick600OnMain:X16} 600 ticks on, the values measured on main before the change. "
+                      + $"On the shipped four-start map skirmish-09 (Kilnmoor Quarters, mirror2) all four seats are "
+                      + $"seated with a yard and a four-strong hand, {quarterOutposts} outposts stand as whole "
+                      + $"four-seat orbits, 600 ticks of four commanders produce {quarterEntities} entities and "
+                      + $"replay to the same hash 0x{quarterHash:X16} with no winner named while four bases stand, "
+                      + $"and the same map opened with two seats places exactly two yards on starts 0 and 1, the "
+                      + $"180-degree rotation pair, leaving the spare starts unused");
     return 0;
 }
 

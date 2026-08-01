@@ -220,11 +220,17 @@ was exactly inverted, showing VICTORY to a player who had not won.
 
 What remains, and it is most of the player-facing half:
 
-- **No shipped map can host a third player** (P7-8b). All eight declare exactly
-  two starts, so every multi-seat map is new content, and `tools/mapgen.py`
-  assumes 180-degree rotation throughout. A fair four-start map needs the
-  cell-and-its-one-image pairing generalised to a symmetry ORBIT; 90-degree
-  rotation additionally requires a square map and none of the eight are square.
+- ~~**No shipped map can host a third player**~~ **(P7-8b, closed 2026-08-01).**
+  `tools/mapgen.py` writes every feature as its full ORBIT under the map's
+  symmetry group rather than as a 180-degree pair, and every fairness check runs
+  over all starts. The pool's first four-player map is **skirmish-09, "Kilnmoor
+  Quarters"**, 160x120, 9.15 per cent density, eight neutral outposts. The group
+  is a double mirror rather than a quarter turn, because 90-degree rotation
+  requires a square map and no map in the pool is square. Seats 0 and 1 are
+  asserted to be the 180-degree pair, so a two-player game on it is exactly as
+  fair as on any two-start map, which is what lets the menu offer it while the
+  lobby still expresses only two seats. All ten previously committed maps
+  re-generate byte-identically, which is the proof the refactor changed nothing.
 - **The lobby cannot express a third seat.** `MatchSetup` carries one
   `OppFaction`, and both codecs that persist it are shaped for two.
 - **4v4 is a separate project** (P7-8c, Producer-blocked). There is no team

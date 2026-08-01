@@ -34,7 +34,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-7 | Infiltration: the Sodality's Infiltrator, from GDD s7's named roster | B5 | - (the unit is written; only the 20 per cent share is my call) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - infiltratorgate (4 stages incl. conservation and an engineer regression check) |
 | P7-8 | ~~More than two player seats~~ - **SPLIT, 2026-08-01.** GDD s9 makes TWO promises of very different sizes and one row cannot hold both | D2 | - | - | **SPLIT**, see "What P7-8 turned out to be" |
 | P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
-| P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash (tooling and content) | pending - **no shipped map declares more than two starts**, so every 3+ player map is new content. Needs `rot()` generalised from a 180-degree pair to a symmetry ORBIT; note 90-degree rotation additionally requires a SQUARE map and none of the eight are square, so double-mirror is the likelier group |
+| P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash; all 10 committed maps re-generate BYTE-IDENTICAL, which is the inertness proof | **DONE** - `mirror2` orbit group; skirmish-09 "Kilnmoor Quarters" 160x120, four starts, 9.15% density; multiseatgate stage 7 |
 | P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | **PRODUCER.** Not a sub-task of P7-8 but a second project of comparable size | MOVES | **NOT TAKEN** - there is no team field, no alliance table and no `AreAllied` predicate anywhere in the sim; hostility is decided everywhere by "not me and not neutral". It touches targeting, splash friendly-fire, detection and fog sharing, victory and the AI, and it has NO code to build on |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | Bring missions 01 to 03 under the generator, and onto self-declared setup, retiring `switch (setup.MissionIndex)` in SkirmishLive.cs | D1 | - | MOVES (two goldens: entity spawn order changes) | pending - **created by P7-9, not inherited.** Missions 04 to 06 declare their own yard and credits in the fmap; 01 and 03 still get theirs from a per-mission case in C#. Two mechanisms is the duplication this phase keeps finding, and the only reason it was left is that fixing it moves goldens for no behavioural gain |
@@ -185,6 +185,47 @@ is a `byte`, so eight seats is the limit - exactly GDD s9's maximum of you plus
 seven, with zero margin. A ninth seat shifts out of the byte and that player's
 detectors silently stop revealing stealth. It is hashed state, so widening it
 later is expensive. Recorded in ADR-031 rather than left to be discovered.
+
+## What P7-8b turned out to be
+
+A refactor from a PAIR to an ORBIT, and the orbit found coverage the pair never
+had. `mapgen.py` wrote every feature as "a cell and its one 180-degree image",
+and `validate()` compared `starts[0]` against `starts[1]` seven times over. Both
+are now the general form: a feature is written as its whole orbit under the
+map's symmetry group, and every fairness check runs over all starts.
+
+Two decisions inside it:
+
+- **`mirror2` (double mirror), not a quarter turn.** 90-degree rotation requires
+  a SQUARE map and not one of the nine maps in the pool is square, so adopting
+  it would have meant the first four-player map also being the first square one.
+  The double mirror works on any rectangle.
+- **Seats 0 and 1 must be the 180-degree pair**, asserted by the generator.
+  `rot180` is a member of the `mirror2` group, so ordering the starts this way
+  makes a TWO-player game on a four-start map exactly as fair as on any existing
+  two-start map. That is what lets skirmish-09 be offered in the menu today,
+  while the lobby still only expresses two seats.
+
+**The generalisation was tested by breaking it**, five ways, each refused with a
+specific message. The one worth keeping: closing every crossing but leaving one
+pass unrecorded was caught with "starts 0 and 2 stay connected" - **a pair the
+old `starts[0]` versus `starts[1]` check never looked at**. The refactor did not
+merely tolerate more starts, it closed a hole that existed at two.
+
+Two honest costs of the group, both documented in doc 26 rather than left to be
+found: a feature sitting on a mirror axis cannot wander across it without being
+reflected into two features, so the dykes vary in width rather than position;
+and decoration is placed as an orbit too, so the four quarters cannot be dressed
+differently the way skirmish-02 distinguishes its two lands. The Kiln is the
+map's only landmark.
+
+One thing deliberately NOT done: the default start-separation floor,
+`int(0.7 * max(w, h))`, cannot be met by any four-quadrant layout, because it
+exceeds `min(w, h)` on anything wider than 1.43:1 while a four-quadrant map's
+closest pair faces across the SHORT axis. skirmish-09 passes an explicit
+`min_separation` with its reasoning. Making the default aware of the seat count
+is the right fix and would change what the floor means for two-start maps, so it
+is a wave of its own.
 
 ## What this phase does NOT do
 
