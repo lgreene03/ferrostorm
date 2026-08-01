@@ -101,3 +101,56 @@ base falls to a siege army, so the mitigation is measured on every push.
 Deferring gates costs the player a convenience and costs the project
 nothing structural: if per-player flow fields are ever built for another
 reason, clause 6 is revisited with the blocker already gone.
+
+## Amendment, P7-10 (2026-08-01): gates ship, and clause 6 is not overturned
+
+Clause 6 stands exactly as written and nothing above is edited. This amendment
+records a distinction it did not draw, because drawing it turns out to be the
+whole of what a gate needed.
+
+**Clause 6's blocker is scoped to SIMULTANEOUS per-player passability.** Read its
+own words: "a gate that is passable to its owner **and** solid to the enemy". A
+cell that is two different things at one instant is what needs either per-player
+flow fields or an incremental flow repair, and clause 6 is entirely right that
+neither exists and that inventing one to ship a gate would be the tail wagging
+the dog. P7-10 builds neither, and the precondition clause 6 named for its own
+revisit is still unmet.
+
+What P7-10 ships is a gate with **one global open/closed state**. An open gate is
+passable to everybody and a closed one is solid to everybody, and the single
+global grid of Map.cs:7 already says exactly that. It opens when a unit allied to
+its owner comes within three cells and closes again forty-five ticks after the
+last of them leaves; a toggle calls the existing `BlockFootprint` and
+`UnblockFootprint`, so the existing `FlowFieldCache.Clear()` is the whole of the
+invalidation and no new mechanism was added.
+
+**What was traded away, stated plainly rather than discovered later: an enemy can
+follow you through an open gate.** That is the honest consequence of a global
+state. It is a real mechanic rather than a defect, and `wallgategate` asserts it
+as a REQUIREMENT so that a later wave cannot quietly turn it into the per-player
+rule this clause refused to build.
+
+Two further consequences, both measured:
+
+- **The forty-five tick delay is load-bearing, not feel.** Every toggle throws
+  away every cached flow field on the map, so a gate that answered the proximity
+  question per tick would rebuild every route in the game several times a
+  second. The delay bounds the toggle rate at one close per gate per forty-five
+  ticks whatever the units do. Measured: one toggle over nine hundred ticks for
+  an ally parked beside a gate, and twelve for one crossing the radius over and
+  over, against the nine hundred a per-tick answer would have cost.
+- **A shut gate is not pathable, so a unit ordered ACROSS one detours rather
+  than waiting for it.** The flow field reads a shut gate as the blocked cell it
+  is. A player drives up to their own gate and it opens; an order straight past
+  it routes round the wall instead. Making that order path through the gate would
+  mean the flow field treating one cell as passable for one player and not for
+  another, which is clause 6's blocker arriving through the back door, so it is
+  deliberately not done here. If clause 6 is ever revisited on its own terms,
+  this is the first thing it fixes.
+
+Struct type 10 is now a real type with a def and a /data file, so the "skip the
+gate" exception that every catalogue-enumerating loop carried is gone. All 24
+golden hashes stand byte-identical, measured; the catalogue checksum moves from
+`0xCB3170B590433275` to `0x2495D0E393438B38`, which a new building does by
+construction; and the save format is v12, carrying the remaining hysteresis of
+any gate that was open when the save was taken.

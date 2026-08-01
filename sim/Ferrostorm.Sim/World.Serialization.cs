@@ -66,6 +66,16 @@ namespace Ferrostorm.Sim;
 /// v1..v10 saves predate the field and load with every player on their own team,
 /// which is exactly what those saves meant (no teams existed), so they resume as
 /// the free-for-alls they were recorded as.
+/// Format v12 (P7-10): the OPEN GATES block - for each gate standing open, the
+/// earliest tick it may close. It is hashed state, so it is saved state, on the
+/// rule the first paragraph states. The map's own passability bitmap is already
+/// saved, so an open gate's cell resumes passable either way; what the block
+/// carries is the REMAINING hysteresis, without which a gate saved forty ticks
+/// into its three-second delay would resume with the full delay ahead of it and
+/// the continued run would diverge from the uninterrupted one - which is exactly
+/// the contract the first paragraph makes.
+/// v1..v11 saves predate the block and load with every gate shut, which is what
+/// those saves meant (no gate existed to be open).
 /// </summary>
 public sealed partial class World
 {
@@ -87,12 +97,15 @@ public sealed partial class World
     // v11 adds the per-player team id (P7-8c); the tag byte runs on from ':'
     // (0x3A) to ';' (0x3B) on the note above.
     private const uint SaveMagicV11 = 0x534C413B;
+    // v12 adds the open-gates block (P7-10); the tag byte runs on from ';'
+    // (0x3B) to '<' (0x3C) on the note above.
+    private const uint SaveMagicV12 = 0x534C413C;
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV11);
+        w.Write(SaveMagicV12);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -192,6 +205,22 @@ public sealed partial class World
             w.Write(id);
             w.Write(_disabledUntil[id]);
         }
+        // P7-10 (v12): which gates stand open and the earliest tick each may
+        // close, sorted by entity id for the reason every block above is sorted -
+        // dictionary iteration order must never leak into a serialized artefact.
+        // Written unconditionally as a count, so the format stays strictly
+        // positional and a world with no gate costs four bytes. Without this
+        // block a save taken with a gate open would resume with the full
+        // hysteresis ahead of it rather than what was left of it, which is a
+        // divergence rather than a missing feature.
+        var openGates = new List<int>(_gateOpenUntil.Keys);
+        openGates.Sort();
+        w.Write(openGates.Count);
+        foreach (int id in openGates)
+        {
+            w.Write(id);
+            w.Write(_gateOpenUntil[id]);
+        }
         w.Write(SaveTrailer);
     }
 
@@ -216,7 +245,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10 && magic != SaveMagicV11)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10 && magic != SaveMagicV11 && magic != SaveMagicV12)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -225,30 +254,33 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
-        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11; // ADR-015: v7+ entities carry the command stance tail
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12; // ADR-015: v7+ entities carry the command stance tail
         // P7-3: every version from v8 ONWARD carries the lane block, not v8
         // alone. Written as an equality it silently skipped the block on a v9
         // save and the reader then fell out of step with the writer, which
         // surfaced as "save truncated or corrupt" - a version test that names
         // one version is the same enumeration trap as a rule that names one
         // kind, and it will bite again at v10 unless it is written as a floor.
-        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10 or SaveMagicV11; // ADR-023
+        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12; // ADR-023
         // P7-11a: the warning above came true at v10 exactly as written. The
         // cargo block's own test was `magic == SaveMagicV9`, an equality, so
         // adding v10 skipped it on a save that HAD written it and every later
         // read fell out of step with the writer. Both tests are floors now.
-        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10 or SaveMagicV11;   // P7-3
-        bool hasSabotage = magic is SaveMagicV10 or SaveMagicV11;               // P7-11a
+        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12;   // P7-3
+        bool hasSabotage = magic is SaveMagicV10 or SaveMagicV11 or SaveMagicV12;               // P7-11a
         // P7-8c: v11 and every later format carry the per-player team id. A
         // floor from the first line it is written on, for the reason the two
         // comments above record twice over.
-        bool hasTeams = magic is SaveMagicV11;
+        bool hasTeams = magic is SaveMagicV11 or SaveMagicV12;
+        // P7-10: v12 and every later format carry the open-gates block. A floor
+        // from the first line it is written on, for the reason above.
+        bool hasOpenGates = magic is SaveMagicV12;
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -305,8 +337,13 @@ public sealed partial class World
         // is not state (see World._minesInPlay: with no living mine the system
         // writes nothing either way), so a save carries no bit for it and every
         // save written before the mine existed resumes correctly by construction.
+        // P7-10 restores GateSystem's fast path the same way and for the same
+        // reason. Written as its own walk rather than folded into the mine's, so
+        // that neither loop's early break can end the other's search.
         foreach (var e in world._entities)
             if (e.Kind == EntityKind.Mine) { world._minesInPlay = true; break; }
+        foreach (var e in world._entities)
+            if (e.Kind == EntityKind.Gate) { world._gatesInPlay = true; break; }
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {
@@ -386,6 +423,31 @@ public sealed partial class World
                 // switched off" invariant the guarded fold rests on - the same
                 // reason an inert lane and an empty hold are refused above.
                 if (until > world.Tick) world._disabledUntil[id] = until;
+            }
+        }
+        // P7-10 (v12): the open gates. A pre-v12 save carries no block and loads
+        // with every gate shut, which is exactly what those saves meant, so they
+        // resume identically.
+        if (hasOpenGates)
+        {
+            int openGateCount = r.ReadInt32();
+            for (int i = 0; i < openGateCount; i++)
+            {
+                int id = r.ReadInt32();
+                int until = r.ReadInt32();
+                // Refuse to resurrect an entry for anything that is not a LIVING
+                // GATE, from a hand-edited file: "present means this gate stands
+                // open" is the invariant the guarded fold and the prune sweep
+                // both rest on, and an entry against a dead or wrong entity would
+                // fold into the state hash while gating nothing - the same reason
+                // an inert lane, an empty hold and a lapsed disable are all
+                // refused above. The deadline itself is deliberately NOT
+                // range-checked: a lapsed one simply means the gate shuts on the
+                // first tick after the resume with nobody near, which is a legal
+                // state GateSystem reaches on its own every time one closes.
+                if ((uint)id < (uint)world._entities.Count
+                    && world._entities[id].Alive && world._entities[id].Kind == EntityKind.Gate)
+                    world._gateOpenUntil[id] = until;
             }
         }
         if (r.ReadUInt32() != SaveTrailer) throw new InvalidDataException("save truncated or corrupt");

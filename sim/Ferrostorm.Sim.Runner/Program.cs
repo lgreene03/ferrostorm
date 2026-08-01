@@ -32,6 +32,7 @@ using Ferrostorm.Sim;
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   herogate           - P7-11b: the hero DAMAGES a building rather than deleting it and survives doing so, "one at a time" is enforced where a unit is queued and where it completes, and an uncapped unit is untouched
 //   minegate           - P7-11c: a mine is ORDERED and placed like any building, detonates on an enemy and not its owner, does NOT block where a wall does, hides until a detector finds it, obeys max_alive, and two going off together are deterministic
+//   wallgategate       - P7-10: a gate is ORDERED and placed like a wall, blocks while shut, opens for an ALLY and shuts 45 ticks after the last one leaves, lets an ENEMY follow them through (the design, not an oversight), does not flutter, and round-trips its remaining delay through a save
 //   teamgate           - P7-8c: every seat starts on its own team so a free-for-all is unchanged by construction; allies are not targets, victory is by TEAM while elimination stays per player, contact effects and detectors respect the alliance, and tech, fog, the veil and splash deliberately do not
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
@@ -1815,7 +1816,7 @@ int SelfTest()
     if (fp.FootprintOf(4) != 2) return Fail("FootprintOf: construction yard is 2x2");
     if (fp.FootprintOf(9) != 1) return Fail("FootprintOf: wall is 1x1");
     if (fp.FootprintOf(0) != 2) return Fail("FootprintOf: unknown type defaults to 2x2");
-    if (fp.FootprintOf(World.GateStructType) != 1) return Fail("FootprintOf: ADR-005 clause 6 reserves the gate as 1x1");
+    if (fp.FootprintOf(World.GateStructType) != 1) return Fail("FootprintOf: the gate is 1x1, the wall's shape (ADR-005)");
     // A 2x2 centred at 9 anchors at 8; a 1x1 centred at 8.5 anchors at 8.
     if (fp.AnchorOf(Fix64.FromInt(9), 4) != 8) return Fail("AnchorOf 2x2");
     if (fp.AnchorOf(Fix64.FromInt(8) + Fix64.Half, 9) != 8) return Fail("AnchorOf 1x1");
@@ -1947,18 +1948,26 @@ int SelfTest()
         }
         // Every compiled type must be authored: a file missing is how a
         // hard-coded value survives a catalogue migration unnoticed. Bounded
-        // by the catalogue's own constant (TICKET-P5-PROD-02), and the gate is
-        // skipped EXPLICITLY: type 10 is ADR-005's reservation, with no def
-        // and no file, and this loop is exactly where the reservation bites.
+        // by the catalogue's own constant (TICKET-P5-PROD-02). P7-10 removed the
+        // explicit skip of type 10 that used to sit here for ADR-005's
+        // reservation, and the pair of assertions below is what replaced the
+        // "the reserved gate must have no def" check it also removed.
         for (int t = 1; t <= World.MaxStructType; t++)
         {
-            if (t == World.GateStructType) continue;
             if (!seenTypes.Contains(t)) return Fail($"structure catalogue: no /data/buildings file for compiled type {t}");
         }
-        // The gate (ADR-005 clause 6) is deferred and must stay unbuildable:
-        // Cost 0 is what every command handler tests to refuse a type.
-        if (refWorld.GetStructureType(World.GateStructType).Cost != 0)
-            return Fail("structure catalogue: the reserved gate type must have no def");
+        // P7-10: the gate is a real type now, and the two things that make it a
+        // BARRIER rather than an ordinary building are asserted here rather than
+        // trusted, because both are silent when wrong. A non-zero cost is what
+        // every command handler tests before accepting a type at all; and
+        // World.IsBarrier is what routes it to the upfront-payment placement
+        // path in the sim, in /data's own queueability check and in the two
+        // client reads.
+        if (refWorld.GetStructureType(World.GateStructType).Cost <= 0)
+            return Fail("structure catalogue: the gate has no cost, so every command handler refuses it (P7-10)");
+        if (!World.IsBarrier(refWorld.GetStructureType(World.GateStructType).Kind))
+            return Fail("structure catalogue: the gate must answer World.IsBarrier, or it is a building with no "
+                        + "build time that nothing will ever queue or place");
         // RegisterStructureType is the /data override path; legal before tick 0.
         var rw = new World(0);
         rw.RegisterStructureType(1, StructureCatalogue.ToTypeDef(
@@ -2330,23 +2339,23 @@ int CatalogueRefuse()
 // shared, layout-aware helper.)
 byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu;
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu, magicV12 = 0x534C413Cu;
     using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    // P7-8c: the SOURCE is whatever Save() currently writes, which is v11 now.
+    // P7-10: the SOURCE is whatever Save() currently writes, which is v12 now.
     // Pinned to a literal version this helper breaks the moment the format
     // moves, and it breaks in the BATTERY rather than here - the same
-    // name-one-version trap the loader's hasBuildLanes had, and it caught v11
-    // exactly as it caught v10 and v9. The one line to change is this one, plus
-    // a walk step for whatever field the new format appended (here, the
-    // per-player team id) and one more entry in each "keep" predicate, because
+    // name-one-version trap the loader's hasBuildLanes had, and it caught v12
+    // exactly as it caught v11, v10 and v9. The one line to change is this one,
+    // plus a walk step for whatever field the new format appended (here, the
+    // open-gates block) and one more entry in each "keep" predicate, because
     // the format that WAS the source is now a legal target.
-    if (input.ReadUInt32() != magicV11)
-        throw new InvalidOperationException("save surgery expects a v11 stream (the current Save format)");
+    if (input.ReadUInt32() != magicV12)
+        throw new InvalidOperationException("save surgery expects a v12 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10 or magicV11) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2358,11 +2367,13 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     {
         byte faction = input.ReadByte();
         if (targetMagic != magicV1) w.Write(faction); // v1 predates the faction byte (Q001)
-        // P7-8c (v11 only): the team id, consumed and DROPPED. Every target this
-        // helper produces predates teams, so an alliance cannot be expressed in
-        // any of them, and those worlds load as the free-for-alls they were -
-        // which is what those formats meant.
-        input.ReadInt32();
+        // P7-8c: the team id. KEPT for a v11 target, which is the format that
+        // introduced it and is now a legal target because v12 is the source;
+        // dropped for every older one, where an alliance cannot be expressed at
+        // all and those worlds load as the free-for-alls they were, which is what
+        // those formats meant.
+        int team = input.ReadInt32();
+        if (targetMagic == magicV11) w.Write(team);
         w.Write(input.ReadInt64());   // credits
         w.Write(input.ReadBoolean()); // eliminated flag
         int words = input.ReadInt32(); w.Write(words);
@@ -2410,11 +2421,11 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         for (int k = 0; k < n; k++) w.Write(input.ReadBytes(34)); // one serialized Command
     }
     // ADR-023's lane block: kept for a v8 target and above, dropped below it.
-    // v11 is the SOURCE format and is refused as a target rather than
-    // half-copied, the same reason v10 and v9 each used to be.
-    if (targetMagic == magicV11) throw new InvalidOperationException("save surgery downgrades; v11 is the source format, not a target");
+    // v12 is the SOURCE format and is refused as a target rather than
+    // half-copied, the same reason v11, v10 and v9 each used to be.
+    if (targetMagic == magicV12) throw new InvalidOperationException("save surgery downgrades; v12 is the source format, not a target");
     int laneCount = input.ReadInt32();
-    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10;
+    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10 or magicV11;
     if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
@@ -2428,7 +2439,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // hold cannot be expressed at all - and a unit that was aboard is simply
     // not in that older world, which is what those formats meant.
     int cargoCount = input.ReadInt32();
-    bool keepCargo = targetMagic is magicV9 or magicV10;
+    bool keepCargo = targetMagic is magicV9 or magicV10 or magicV11;
     if (keepCargo) w.Write(cargoCount);
     for (int i = 0; i < cargoCount; i++)
     {
@@ -2445,13 +2456,19 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // where a disable cannot be expressed at all - and a building that was dark
     // simply works in that older world, which is what those formats meant.
     int disabledCount = input.ReadInt32();
-    bool keepSabotage = targetMagic == magicV10;
+    bool keepSabotage = targetMagic is magicV10 or magicV11;
     if (keepSabotage) w.Write(disabledCount);
     for (int i = 0; i < disabledCount; i++)
     {
         int id = input.ReadInt32(), until = input.ReadInt32();
         if (keepSabotage) { w.Write(id); w.Write(until); }
     }
+    // P7-10's open gates: dropped for EVERY target, because v12 is the format
+    // that introduced the block and v12 is refused as a target above. A gate
+    // cannot be open in any older world, and one that was resumes shut - which
+    // GateSystem reopens on the first tick an ally is still standing beside it.
+    int openGateCount = input.ReadInt32();
+    for (int i = 0; i < openGateCount; i++) { input.ReadInt32(); input.ReadInt32(); }
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
@@ -6941,6 +6958,566 @@ int MineGate()
     return 0;
 }
 
+int WallGateGate()
+{
+    // P7-10. Additive, the minegate pattern it is modelled on: a standalone mode
+    // and a Match battery stage, never a golden scenario, so the golden list
+    // stays 24 and every hash in it stays byte-identical.
+    //
+    // WHAT THIS WAVE IS NOT. ADR-005 clause 6 deferred gates because "a gate
+    // that is passable to its owner and solid to the enemy" needs per-player
+    // flow fields or an incremental flow repair, and neither exists. Nothing
+    // here builds either. The blocker is scoped to SIMULTANEOUS per-player
+    // passability, and this gate has ONE GLOBAL state, so an open gate is
+    // passable to everybody and a closed one is solid to everybody - which the
+    // single global grid already expresses. Stage 5 is where that shows its
+    // price, and it is asserted as a REQUIREMENT rather than tolerated.
+    //
+    // The fixture is one wall line with a single gap, and the gate fills the
+    // gap. Every stage measures the MAP's own passability at the gate's cell and
+    // where units actually walked, never the sim's own open flag: a feature that
+    // set a flag and moved no ground would pass an assertion on itself.
+    const int GateType = World.GateStructType;
+    const int WallY = 30, WallX0 = 20, WallX1 = 44, GateAx = 32, GateAy = WallY;
+    Fix64 GateCx = Map.CellCentre(GateAx), GateCy = Map.CellCentre(GateAy);
+    // South of the line and north of it, twelve cells apart down the gate's own
+    // column: a unit sent from one to the other either goes through the gap or
+    // round the end of the wall, and nothing else.
+    Fix64 SouthY = Map.CellCentre(GateAy + 6), NorthY = Map.CellCentre(GateAy - 6);
+
+    List<Command> One(Command c) => new() { c };
+    void Step(World w, List<Command>? cmds = null) =>
+        w.Step(cmds is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+    int CountGates(World w, int player)
+    {
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && e.Kind == EntityKind.Gate) n++;
+        }
+        return n;
+    }
+    int FindGate(World w, int player)
+    {
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && e.Kind == EntityKind.Gate) return i;
+        }
+        return -1;
+    }
+    bool Shut(World w) => w.Map.IsBlocked(GateAx, GateAy);
+    bool AtGateCell(World w, int id) => Map.CellOf(w.Entities[id].X) == GateAx && Map.CellOf(w.Entities[id].Y) == GateAy;
+
+    // A wall line with ONE cell missing, and a Construction Yard well away from
+    // it to carry the placement command. The yard's own anchor is irrelevant to
+    // where the gate may go: a barrier anchors only other barriers and only two
+    // cells (ADR-005 clause 4), so it is the wall segments beside the gap that
+    // make the gap a legal cell.
+    (World W, int Cy) Base(ulong seed, bool withWalls = true)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        int cy = w.SpawnConstructionYard(0, 10, 10);
+        w.GrantCredits(0, 200_000);
+        if (withWalls)
+            for (int x = WallX0; x <= WallX1; x++)
+                if (x != GateAx) w.SpawnWall(0, x, WallY);
+        return (w, cy);
+    }
+
+    // ORDER ONE GATE, exactly as the sidebar does - and for a BARRIER that is
+    // the placement path rather than the yard queue. THE DIVERGENCE FROM THE
+    // MINE IS DELIBERATE AND IS ASSERTED HERE RATHER THAN ASSUMED: ADR-005
+    // clause 3 gives a barrier no build time and no ready slot, and
+    // BuildStructure refuses anything with BuildTicks <= 0, so the first half of
+    // this helper sends the queue order and proves the yard REFUSES it. A gate
+    // that could be queued would be a gate that is not a barrier, and half this
+    // file's reasoning would be wrong. Nothing here spawns anything.
+    string? OrderGate(World w, int cy, int ax, int ay)
+    {
+        int before = CountGates(w, 0);
+        long purse = w.Credits(0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, GateType)));
+        if (w.QueueLength(cy) != 0 || w.Entities[cy].ReadyStructure != 0)
+            return $"the Construction Yard QUEUED it (queue {w.QueueLength(cy)}, ready slot "
+                   + $"{w.Entities[cy].ReadyStructure}), and a barrier has no ready slot (ADR-005 clause 3)";
+        if (w.Credits(0) != purse)
+            return $"the refused queue order still charged {purse - w.Credits(0)} credits";
+        Step(w, One(new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                Map.CellCentre(ax), Map.CellCentre(ay), GateType)));
+        if (CountGates(w, 0) != before + 1)
+            return $"the placement at ({ax}, {ay}) was refused";
+        return null;
+    }
+
+    // --- 1. A player can actually HAVE one. Ordered, never constructed.
+    long charged = 0;
+    {
+        var (w, cy) = Base(4800);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why)
+            return Fail($"wallgate: a gate could not be obtained through the ordinary command path: {why}. "
+                        + "A building nobody can order is a building no player can have, whatever the sim does "
+                        + "with one that is spawned");
+        int g = FindGate(w, 0);
+        if (g < 0) return Fail("wallgate: the placement counted but no gate stands");
+        var e = w.Entities[g];
+        if (e.StructType != GateType)
+            return Fail($"wallgate: the placed entity carries struct type {e.StructType}, not {GateType} - its "
+                        + "authored def cannot be read back off it");
+        if (!World.IsStructure(e.Kind))
+            return Fail("wallgate: a gate must BE a structure to the sim, or it is placeable and nothing else");
+        if (!World.IsBarrier(e.Kind))
+            return Fail("wallgate: a gate must answer World.IsBarrier. That predicate is what excludes it from the "
+                        + "victory test, from engineer capture and from combat auto-acquisition (ADR-005 clause 2), "
+                        + "what routes it to the upfront-payment placement path, and what gives it a sidebar button "
+                        + "that places rather than queues");
+        charged = 200_000 - w.Credits(0);
+        if (charged != w.GetStructureType(GateType).Cost)
+            return Fail($"wallgate: the treasury lost {charged} where com_gate.yaml prices the segment at "
+                        + $"{w.GetStructureType(GateType).Cost}. A barrier is charged as it lands, not at a yard");
+        if (!Shut(w))
+            return Fail($"wallgate: a freshly placed gate must be SHUT, and cell ({GateAx}, {GateAy}) reads passable. "
+                        + "A gate that arrived open would be a hole in the perimeter for its first three seconds");
+    }
+
+    // --- 2. A SHUT gate blocks, exactly as the wall it is a segment of does.
+    //        The unit is an ENEMY, which is what keeps the gate shut while it
+    //        approaches, and the fixture leaves a way round the end of the wall
+    //        so that "blocked" is measured as a DETOUR rather than as a unit
+    //        that simply never arrived.
+    //
+    //        The control is the identical fixture with the gap left EMPTY. Both
+    //        halves are needed: without the control, "it did not cross the gate
+    //        cell" reads the same over a broken pathfinder.
+    int detourTicks = 0, straightTicks = 0;
+    {
+        // First the direct twin of stage 3, and it is here because the stage
+        // below turned out not to prove it: an enemy ORDERED ACROSS a shut gate
+        // detours long before it reaches the three-cell radius, so "the gate
+        // stayed shut" was measuring a gate nothing went near. This walks an
+        // enemy one cell past the gate along the OUTSIDE of the wall, exactly as
+        // stage 3 walks an ally one cell past it along the inside.
+        var (x, xcy) = Base(4800 + 10);
+        if (OrderGate(x, xcy, GateAx, GateAy) is { } xwhy) return Fail($"wallgate: fixture could not place a gate ({xwhy})");
+        Fix64 outerY = Map.CellCentre(GateAy - 1);
+        int prowler = x.SpawnUnit(1, Map.CellCentre(GateAx - 8), outerY, Fix64.FromFraction(1, 5),
+                                  hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(x, One(new Command(x.Tick, 1, CommandType.PathMove, prowler, Map.CellCentre(GateAx + 10), outerY)));
+        bool camped = false;
+        for (int t = 0; t < 300; t++)
+        {
+            Step(x);
+            var u = x.Entities[prowler];
+            if (Fix64.DistSq(u.X - Map.CellCentre(GateAx), u.Y - Map.CellCentre(GateAy)) <= World.GateOpenRadiusSq)
+                camped = true;
+            if (!Shut(x))
+                return Fail($"wallgate: an ENEMY unit walked past the gate and it OPENED. It opens for units allied "
+                            + "to its owner and for nobody else; an enemy gets through only by following an ally "
+                            + "in, which is stage 5");
+        }
+        if (!camped)
+            return Fail("wallgate control: the enemy never came inside the gate's open radius, so the assertion "
+                        + "above is about a gate nothing went near");
+
+        var (w, cy) = Base(4801);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        int foe = w.SpawnUnit(1, GateCx, SouthY, Fix64.FromFraction(1, 5), hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 1, CommandType.PathMove, foe, GateCx, NorthY)));
+        bool crossed = false; int arrived = -1;
+        for (int t = 0; t < 900; t++)
+        {
+            Step(w);
+            if (AtGateCell(w, foe)) crossed = true;
+            if (arrived < 0 && Map.CellOf(w.Entities[foe].Y) < WallY) arrived = t;
+        }
+        if (crossed)
+            return Fail($"wallgate: an enemy unit walked straight through a SHUT gate's cell ({GateAx}, {GateAy}). "
+                        + "A gate that never blocks is a gap with a price tag");
+        if (Shut(w) == false)
+            return Fail("wallgate: the gate opened for an ENEMY. It opens for units allied to its owner and for "
+                        + "nobody else; an enemy gets through only by following an ally in, which is stage 5");
+        if (arrived < 0)
+            return Fail("wallgate: the enemy never reached the far side at all, so this stage cannot tell a gate "
+                        + "that blocks from a fixture with no route in it");
+        detourTicks = arrived;
+
+        // The control: the same fixture, the same order, and no gate in the gap.
+        var (c, _) = Base(4801);
+        int cfoe = c.SpawnUnit(1, GateCx, SouthY, Fix64.FromFraction(1, 5), hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(c, One(new Command(c.Tick, 1, CommandType.PathMove, cfoe, GateCx, NorthY)));
+        bool cCrossed = false; int cArrived = -1;
+        for (int t = 0; t < 900; t++)
+        {
+            Step(c);
+            if (AtGateCell(c, cfoe)) cCrossed = true;
+            if (cArrived < 0 && Map.CellOf(c.Entities[cfoe].Y) < WallY) cArrived = t;
+        }
+        if (!cCrossed || cArrived < 0)
+            return Fail("wallgate control: with the gap left EMPTY the same unit must walk straight through it, and "
+                        + "it did not - so the fixture, not the gate, is what stopped the unit in the stage above");
+        straightTicks = cArrived;
+        if (detourTicks <= straightTicks)
+            return Fail($"wallgate control: the detour round the wall took {detourTicks} ticks and the straight line "
+                        + $"through the empty gap took {straightTicks}, which cannot both be true of the same "
+                        + "geometry - the two fixtures are not the same fixture");
+    }
+
+    // --- 3. AN ALLY OPENS IT, and 4. IT SHUTS AGAIN. One fixture, because the
+    //        second measurement is only meaningful on a gate the first one has
+    //        just opened.
+    //
+    //        THE UNIT IS DRIVEN UP TO THE GATE, and that is a FINDING rather
+    //        than a convenience. A shut gate is a blocked cell like any other,
+    //        so the flow field toward the far side routes AROUND the end of the
+    //        wall and the unit never comes within the three-cell radius at all -
+    //        which is exactly what the first draft of this stage measured, and
+    //        it read as "the gate never opened" when nothing had gone near it.
+    //        A single order across a shut gate therefore does not open it; the
+    //        player drives up to the gate, it opens, and they carry on. Making
+    //        an order across a shut gate route THROUGH it would mean the flow
+    //        field treating one cell as passable for one player and not for
+    //        another, which is precisely the per-player passability ADR-005
+    //        clause 6 refused, so it is not something this wave may quietly do.
+    //        The detour is measured below rather than asserted, so that a later
+    //        wave which answers the ADR's question is not blocked by this gate.
+    //        A SECOND FIXTURE RULE, learned the same way. StepToward's crowd
+    //        arrival ends a PathMove within FOUR cells of its destination, and
+    //        the gate's open radius is THREE, so a unit ORDERED TO the gate stops
+    //        outside the radius every time and never opens anything. The ally
+    //        therefore walks PAST the gate along the wall's inner face, which is
+    //        what a garrison does anyway, rather than being sent at it.
+    int openedAtTick = 0, measuredHysteresis = 0, detourWithoutApproach = 0;
+    {
+        var (w, cy) = Base(4802);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        int gate = FindGate(w, 0);
+        // One cell inside the wall's own line, eight cells west of the gate, and
+        // sent eight cells east of it: the walk passes a single cell from the
+        // gate without ever being aimed at it.
+        Fix64 innerY = Map.CellCentre(GateAy + 1);
+        int friend = w.SpawnUnit(0, Map.CellCentre(GateAx - 8), innerY, Fix64.FromFraction(1, 5),
+                                 hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, friend, Map.CellCentre(GateAx + 10), innerY)));
+        int opened = -1;
+        for (int t = 0; t < 300 && opened < 0; t++)
+        {
+            Step(w);
+            if (!Shut(w)) opened = w.Tick;
+        }
+        if (opened < 0)
+        {
+            var u0 = w.Entities[friend];
+            return Fail($"wallgate: an ALLIED unit walked a single cell from the gate and cell ({GateAx}, "
+                        + $"{GateAy}) never became passable. This is the feature; without it the wave ships an "
+                        + $"expensive wall segment. The ally ended at cell ({Map.CellOf(u0.X)}, {Map.CellOf(u0.Y)}), "
+                        + "which is the first thing to check: StepToward ends a PathMove four cells short of its "
+                        + "destination and the open radius is three, so a unit ORDERED AT a gate stops outside it");
+        }
+        openedAtTick = opened;
+        if (!w.IsGateOpen(gate))
+            return Fail("wallgate: the map says the cell is passable and the sim does not call the gate open. The "
+                        + "two must agree, because the collection is what the state hash and the save carry and "
+                        + "the map is what the units walk on");
+
+        // ...and now through it, which is what says the flow field was told the
+        // ground had changed. An open cell nothing will path into would be a
+        // toggle that skipped the sim's own invalidation. The destination is far
+        // enough north that the crowd arrival leaves the unit OUTSIDE the open
+        // radius, which is what makes the hysteresis below measurable at all.
+        Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, friend, GateCx, Map.CellCentre(GateAy - 10))));
+        bool crossed = false;
+        int lastNear = -1, shutAgain = -1;
+        for (int t = 0; t < 900; t++)
+        {
+            Step(w);
+            if (AtGateCell(w, friend)) crossed = true;
+            var u = w.Entities[friend];
+            if (Fix64.DistSq(u.X - w.Entities[gate].X, u.Y - w.Entities[gate].Y) <= World.GateOpenRadiusSq)
+                lastNear = w.Tick;
+            if (lastNear > 0 && shutAgain < 0 && Shut(w)) shutAgain = w.Tick;
+        }
+        if (!crossed)
+            return Fail("wallgate: the cell went passable and the unit still did not walk through it, so the flow "
+                        + "field was never told the ground had changed - the toggle must call the sim's own "
+                        + "invalidation, which is what BlockFootprint and UnblockFootprint do");
+        if (Map.CellOf(w.Entities[friend].Y) >= WallY)
+            return Fail("wallgate: the ally never reached the far side, so nothing here says the opening was useful");
+
+        // --- 4. THE HYSTERESIS, asserted as an EXACT interval rather than as
+        //        "eventually", because the delay is the load-bearing part of the
+        //        design: every toggle throws away every cached flow field on the
+        //        map, so the rate at which a gate may shut is a performance
+        //        guarantee and not a feel setting.
+        if (shutAgain < 0)
+            return Fail($"wallgate: the ally left the gate's radius at tick {lastNear} and cell ({GateAx}, "
+                        + $"{GateAy}) was still passable at tick {w.Tick}. A gate that never shuts is a hole in "
+                        + "the perimeter that cost 200 credits to dig");
+        measuredHysteresis = shutAgain - lastNear;
+        if (measuredHysteresis != World.GateHysteresisTicks)
+            return Fail($"wallgate: the gate shut {measuredHysteresis} ticks after the last ally left its radius, "
+                        + $"where GateHysteresisTicks is {World.GateHysteresisTicks}. The deadline must be REFRESHED "
+                        + "on every tick an ally is near, so the delay runs from the last one leaving rather than "
+                        + "from the first one arriving");
+        if (w.IsGateOpen(gate))
+            return Fail("wallgate: the map says the cell is solid and the sim still calls the gate open");
+    }
+    {
+        // The finding above, measured. One order straight across a SHUT gate,
+        // with no approach: the unit takes the long way round and the gate is
+        // never touched. Reported, deliberately not asserted.
+        var (w, cy) = Base(4809);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        int friend = w.SpawnUnit(0, GateCx, SouthY, Fix64.FromFraction(1, 5), hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, friend, GateCx, NorthY)));
+        for (int t = 0; t < 900; t++)
+        {
+            Step(w);
+            if (!Shut(w)) { detourWithoutApproach = -1; break; }
+            if (detourWithoutApproach == 0 && Map.CellOf(w.Entities[friend].Y) < WallY) detourWithoutApproach = w.Tick;
+        }
+    }
+
+    // --- 5. AN ENEMY CAN WALK THROUGH AN OPEN GATE. THIS IS THE DESIGN
+    //        DECISION, NOT AN OVERSIGHT, and it is asserted as a requirement so
+    //        that a later wave cannot quietly "fix" it into the per-player rule
+    //        ADR-005 clause 6 refused to build.
+    //
+    //        One global state means an open gate is open to everybody. The price
+    //        is that you can be followed in; the prize is that no per-player flow
+    //        field or incremental flow repair has to exist. Stage 2 is this
+    //        stage's control: the identical enemy on the identical geometry is
+    //        turned away when no ally is holding the gate open.
+    int enemyThroughTick = 0;
+    {
+        var (w, cy) = Base(4804);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        // The ally that holds it open: parked beside the gateway rather than in
+        // it, so it is inside the open radius and out of the doorway.
+        w.SpawnUnit(0, Map.CellCentre(GateAx - 2), Map.CellCentre(GateAy + 1), Fix64.Zero,
+                    hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        int foe = w.SpawnUnit(1, GateCx, SouthY, Fix64.FromFraction(1, 5), hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 1, CommandType.PathMove, foe, GateCx, NorthY)));
+        bool crossedWhileOpen = false; int through = -1;
+        for (int t = 0; t < 900; t++)
+        {
+            Step(w);
+            if (AtGateCell(w, foe) && !Shut(w)) { crossedWhileOpen = true; if (through < 0) through = w.Tick; }
+        }
+        if (!crossedWhileOpen)
+            return Fail($"wallgate: an enemy could not cross an OPEN gate. That is not a fix, it is the per-player "
+                        + "passability ADR-005 clause 6 deferred, arriving through the back door: a gate that is "
+                        + "open to its owner and shut to the enemy at the same moment needs per-player flow fields "
+                        + "or an incremental flow repair, and this wave built neither. Being followed in is the "
+                        + "price of the design that needs neither, and it is a real mechanic rather than a defect");
+        if (Map.CellOf(w.Entities[foe].Y) >= WallY)
+            return Fail("wallgate: the enemy entered the open gateway and never got out the other side");
+        enemyThroughTick = through;
+    }
+
+    // --- 6. IT DOES NOT FLUTTER. Every toggle calls FlowFieldCache.Clear, which
+    //        throws away every cached field on the map, so a gate that answered
+    //        the proximity question per tick would rebuild every route in the
+    //        game several times a second. Measured as TRANSITIONS OF THE MAP BIT,
+    //        which is the thing that actually costs, not as anything the gate
+    //        reports about itself.
+    //
+    //        Two fixtures, because they fail differently. A parked ally is the
+    //        "does it settle" case; a unit crossing the radius boundary over and
+    //        over is the "is the delay real" case, and its bound comes from the
+    //        hysteresis rather than from a number typed here.
+    int parkedToggles = 0, patrolToggles = 0, patrolBound = 0;
+    const int FlutterTicks = 900;
+    {
+        var (w, cy) = Base(4805);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        w.SpawnUnit(0, Map.CellCentre(GateAx - 2), Map.CellCentre(GateAy + 1), Fix64.Zero,
+                    hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        bool was = Shut(w);
+        for (int t = 0; t < FlutterTicks; t++)
+        {
+            Step(w);
+            if (Shut(w) != was) { parkedToggles++; was = Shut(w); }
+        }
+        if (Shut(w))
+            return Fail("wallgate: the ally never left and the gate shut anyway, so this measurement is of the "
+                        + "wrong thing");
+        if (parkedToggles != 1)
+            return Fail($"wallgate: a single ally standing beside the gate for {FlutterTicks} ticks moved the "
+                        + $"passability grid {parkedToggles} times. It must move exactly once, the opening: every "
+                        + "toggle throws away every cached flow field on the map, and a per-tick answer would "
+                        + $"have flushed the pathfinder about {FlutterTicks} times");
+    }
+    {
+        var (w, cy) = Base(4806);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        // A sentry pacing the inside of its own wall, east and west past the
+        // gate on a fixed beat. It crosses the open radius on every leg, which
+        // is the worst case the hysteresis exists for, and it is paced along the
+        // wall rather than at the gate for the crowd-arrival reason stage 3
+        // records.
+        Fix64 innerY = Map.CellCentre(GateAy + 1);
+        Fix64 westX = Map.CellCentre(WallX0), eastX = Map.CellCentre(WallX1 + 2);
+        int walker = w.SpawnUnit(0, westX, innerY, Fix64.FromFraction(1, 5), hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        bool was = Shut(w), goEast = true;
+        int legs = 0;
+        for (int t = 0; t < FlutterTicks; t++)
+        {
+            if (t % 150 == 0)
+            {
+                Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, walker, goEast ? eastX : westX, innerY)));
+                goEast = !goEast;
+                legs++;
+            }
+            else Step(w);
+            if (Shut(w) != was) { patrolToggles++; was = Shut(w); }
+        }
+        if (legs < 4)
+            return Fail($"wallgate: the patrol fixture only issued {legs} legs, which is not enough crossings of the "
+                        + "radius to say anything about flutter");
+        // Two toggles per cycle and a cycle cannot be shorter than the
+        // hysteresis, plus three for the ends of the run. Derived, not typed.
+        patrolBound = 2 * (FlutterTicks / World.GateHysteresisTicks) + 3;
+        if (patrolToggles > patrolBound)
+            return Fail($"wallgate: a unit crossing the open radius {legs} times moved the passability grid "
+                        + $"{patrolToggles} times over {FlutterTicks} ticks, and the hysteresis bounds it at "
+                        + $"{patrolBound}. A gate that can shut more often than once per {World.GateHysteresisTicks} "
+                        + "ticks is not honouring the delay");
+        if (patrolToggles < 2)
+            return Fail($"wallgate control: the patrol moved the grid {patrolToggles} times, so the walker never "
+                        + "actually crossed the radius and the bound above was measured against a gate nobody "
+                        + "went near");
+    }
+
+    // --- 7. DETERMINISM. The whole scenario twice, to an identical state hash.
+    //        The open-state collection is keyed by entity id and walked by entity
+    //        INDEX, never over dictionary keys, and this is what says so.
+    ulong hashA = 0;
+    {
+        (ulong Hash, int Toggles) Run(ulong seed)
+        {
+            var (w, cy) = Base(seed);
+            if (OrderGate(w, cy, GateAx, GateAy) is not null) return (0, -1);
+            Fix64 innerY = Map.CellCentre(GateAy + 1);
+            int friend = w.SpawnUnit(0, Map.CellCentre(WallX0), innerY, Fix64.FromFraction(1, 5),
+                                     hp: 1000, ArmourClass.Heavy, weaponId: 0);
+            int foe = w.SpawnUnit(1, GateCx, SouthY, Fix64.FromFraction(1, 5),
+                                  hp: 1000, ArmourClass.Heavy, weaponId: 0);
+            Step(w, new List<Command>
+            {
+                new(w.Tick, 0, CommandType.PathMove, friend, Map.CellCentre(WallX1 + 2), innerY),
+                new(w.Tick, 1, CommandType.PathMove, foe, GateCx, NorthY),
+            });
+            bool was = Shut(w);
+            int toggles = 0;
+            for (int t = 0; t < 600; t++)
+            {
+                Step(w);
+                if (Shut(w) != was) { toggles++; was = Shut(w); }
+            }
+            return (w.ComputeStateHash(), toggles);
+        }
+        var r1 = Run(4807);
+        var r2 = Run(4807);
+        if (r1.Toggles < 0) return Fail("wallgate: the determinism fixture could not place its gate");
+        if (r1.Toggles < 2)
+            return Fail($"wallgate: the determinism fixture toggled the gate {r1.Toggles} times, so it never "
+                        + "exercised the state this stage exists to prove is deterministic");
+        if (r1.Hash != r2.Hash)
+            return Fail($"wallgate: two runs of the identical scenario diverged (0x{r1.Hash:X16} against "
+                        + $"0x{r2.Hash:X16}). The gate scan walks entity indices and its open-state collection "
+                        + "must never leak dictionary order into the world");
+        hashA = r1.Hash;
+    }
+
+    // --- 8. THE SAVE BLOCK, round-tripped with a gate OPEN and mid-hysteresis.
+    //        Every other save stage in this suite writes an EMPTY block of its
+    //        kind, which proves the format is positional and nothing about its
+    //        contents. What is actually at risk here is the REMAINING delay: the
+    //        map's passability bitmap is already saved, so an open gate resumes
+    //        passable either way, and a save that dropped the deadline would
+    //        resume with the full three seconds ahead of it and diverge from the
+    //        uninterrupted run without any of it being visible at the moment of
+    //        loading.
+    int savedRemaining = 0;
+    {
+        var (w, cy) = Base(4808);
+        if (OrderGate(w, cy, GateAx, GateAy) is { } why) return Fail($"wallgate: fixture could not place a gate ({why})");
+        int gate = FindGate(w, 0);
+        // An ally walks past the gate, opens it and carries on out of the
+        // radius, so the save is taken with the gate open and the clock running.
+        Fix64 innerY = Map.CellCentre(GateAy + 1);
+        int friend = w.SpawnUnit(0, Map.CellCentre(WallX0), innerY, Fix64.FromFraction(1, 5),
+                                 hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, friend, Map.CellCentre(WallX1 + 2), innerY)));
+        int lastNear = -1;
+        for (int t = 0; t < 400; t++)
+        {
+            Step(w);
+            var u = w.Entities[friend];
+            if (Fix64.DistSq(u.X - w.Entities[gate].X, u.Y - w.Entities[gate].Y) <= World.GateOpenRadiusSq)
+                lastNear = w.Tick;
+            // Stop a third of the way into the delay, so the remainder is a
+            // number a dropped block could not reproduce by accident.
+            if (lastNear > 0 && w.Tick - lastNear >= World.GateHysteresisTicks / 3) break;
+        }
+        if (!w.IsGateOpen(gate) || Shut(w))
+            return Fail("wallgate: the save fixture never got the gate open, so the round trip below proves nothing");
+        savedRemaining = World.GateHysteresisTicks - (w.Tick - lastNear);
+
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != w.ComputeStateHash())
+            return Fail($"wallgate: a world saved with a gate open loaded to a different state hash "
+                        + $"(0x{loaded.ComputeStateHash():X16} against 0x{w.ComputeStateHash():X16})");
+        if (!loaded.IsGateOpen(gate) || loaded.Map.IsBlocked(GateAx, GateAy))
+            return Fail("wallgate: the gate did not resume OPEN, so the open-gates block is not being read back");
+        // And the futures agree, which is the part the hash alone cannot say: a
+        // resumed gate must shut on the same tick the uninterrupted one does.
+        int shutOriginal = -1, shutLoaded = -1;
+        for (int t = 0; t < 200; t++)
+        {
+            Step(w); Step(loaded);
+            if (shutOriginal < 0 && Shut(w)) shutOriginal = w.Tick;
+            if (shutLoaded < 0 && loaded.Map.IsBlocked(GateAx, GateAy)) shutLoaded = loaded.Tick;
+        }
+        if (shutOriginal < 0 || shutOriginal != shutLoaded)
+            return Fail($"wallgate: the uninterrupted world shut its gate at tick {shutOriginal} and the resumed one "
+                        + $"at {shutLoaded}. The remaining hysteresis is what the v12 block carries, and dropping it "
+                        + "would look exactly like this - correct at the moment of loading and wrong three seconds "
+                        + "later");
+        if (w.ComputeStateHash() != loaded.ComputeStateHash())
+            return Fail("wallgate: the two worlds shut their gates together and then diverged anyway");
+    }
+
+    Console.WriteLine($"wallgategate: a gate is OBTAINED through the ordinary command path and never spawned - the "
+                      + $"Construction Yard REFUSES to queue it, because a barrier has no build time and no ready "
+                      + $"slot, and the placement command charges {charged} credits as the segment lands; it stands "
+                      + $"SHUT, and an enemy sent through its cell is turned away and takes the detour round the end "
+                      + $"of the wall in {detourTicks} ticks where the same unit crosses an empty gap in "
+                      + $"{straightTicks}; an ALLIED unit walking PAST it opens it at tick {openedAtTick} and then "
+                      + $"walks through, and it shuts again exactly {measuredHysteresis} ticks after the last ally left "
+                      + $"its three-cell radius; the finding beside that, measured and reported rather than "
+                      + $"asserted, is that a single order straight ACROSS a shut gate does not open it - the flow "
+                      + $"field routes round the wall instead and the ally arrived by detour at tick "
+                      + $"{detourWithoutApproach}, because making that order path through the gate would be the "
+                      + $"per-player passability ADR-005 clause 6 refused; AN ENEMY CROSSES IT WHILE IT IS OPEN "
+                      + $"(tick {enemyThroughTick}), which is the "
+                      + $"design and not an oversight - one global open state is what lets this ship without the "
+                      + $"per-player flow fields ADR-005 clause 6 refused, and being followed in is its price; it "
+                      + $"does not flutter, moving the passability grid {parkedToggles} time for an ally parked "
+                      + $"beside it for {FlutterTicks} ticks and {patrolToggles} times for one crossing the radius "
+                      + $"repeatedly over the same run, against a hysteresis bound of {patrolBound} and against the "
+                      + $"{FlutterTicks} flushes of every cached flow field a per-tick answer would have cost; the "
+                      + $"same scenario twice hashes 0x{hashA:X16} both times; and a world saved with a gate open "
+                      + $"and {savedRemaining} ticks left on its delay resumes open and shuts on the same tick the "
+                      + $"uninterrupted run does");
+    return 0;
+}
+
 int TeamGate()
 {
     // P7-8c. GDD s9 promises "custom lobbies up to 4v4" and the sim had no
@@ -8856,6 +9433,11 @@ int Match(ulong seed)
     // the ground it stands on.
     int mine = MineGate();
     if (mine != 0) return mine;
+    // P7-10: the gate opens for its own side and shuts behind them, on one
+    // global state - so an enemy can follow you through, which is the trade that
+    // lets it ship without the per-player flow fields ADR-005 clause 6 refused.
+    int wallGate = WallGateGate();
+    if (wallGate != 0) return wallGate;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -9241,7 +9823,11 @@ int ReachabilityGate()
     {
         var def = w.GetStructureType(structType);
         int before = CountStructures(w, player, structType);
-        if (def.Kind != EntityKind.Wall)
+        // P7-10: BARRIER, not wall. This named the one kind and the gate is the
+        // second, which would have sent a BuildStructure the sim refuses and then
+        // failed the gate with "the Construction Yard never finished it" over a
+        // building that is not meant to be queued at all.
+        if (!World.IsBarrier(def.Kind))
         {
             Step(w, One(new Command(w.Tick, player, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, structType)));
             // Four times the authored build time plus slack: a browned-out base
@@ -9319,9 +9905,10 @@ int ReachabilityGate()
         bool excluded = mapPlaced.ContainsKey(def.Kind);
         // The sim's OWN refusal, BuildStructure's `bd.BuildTicks <= 0`, is what
         // actually keeps these out of a queue. A barrier shares that zero and is
-        // buildable anyway, by the placement path, so it is the one type where
-        // "no build time" does not mean "no player may have it".
-        bool queueable = def.BuildTicks > 0 || def.Kind == EntityKind.Wall;
+        // buildable anyway, by the placement path, so it is the one class of type
+        // where "no build time" does not mean "no player may have it". P7-10:
+        // asked of World.IsBarrier, so the gate enrolled itself here.
+        bool queueable = def.BuildTicks > 0 || World.IsBarrier(def.Kind);
         if (excluded && queueable)
             return Fail($"reachability: {StructName(world, t)} is excluded as \"{mapPlaced[def.Kind]}\" and yet /data "
                         + "makes it perfectly buildable - the exclusion list has outlived its reason");
@@ -10371,6 +10958,7 @@ return args.Length == 0
         "saboteurgate" => SaboteurGate(),
         "herogate" => HeroGate(),
         "minegate" => MineGate(),
+        "wallgategate" => WallGateGate(),
         "teamgate" => TeamGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),

@@ -2919,16 +2919,21 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
-    /// DEF-08: is this STRUCT type a barrier? ADR-005 reserves struct type 9 for
-    /// the wall and 10 for the deferred gate, and the sim maps both to
-    /// EntityKind.Wall (11). The two numbering spaces are different and the ADR
-    /// warns that a mismatch is silent and fatal, so ask the sim's own table
+    /// DEF-08: is this STRUCT type a barrier? ADR-005 gives struct type 9 to the
+    /// wall and 10 to the gate, and the sim maps them to EntityKind.Wall (11)
+    /// and EntityKind.Gate (20). The two numbering spaces are different and the
+    /// ADR warns that a mismatch is silent and fatal, so ask the sim's own table
     /// rather than writing 9 in the client.
+    ///
+    /// P7-10: and ask the sim's own PREDICATE too. This read
+    /// `Kind == EntityKind.Wall`, which was right while there was one barrier
+    /// and would have quietly excluded the second; World.IsBarrier is now
+    /// public precisely so that the four places asking this question ask it once.
     /// </summary>
     // BD-06 made the catalogue an instance read, so this is no longer static:
     // the answer belongs to this match's catalogue, not to the compiled one.
     private bool IsBarrier(int structType) =>
-        _world.GetStructureType(structType).Kind == EntityKind.Wall;
+        World.IsBarrier(_world.GetStructureType(structType).Kind);
 
     /// <summary>
     /// TICKET-P5-SPAWN-01: the one placement truth the ghost tint and the

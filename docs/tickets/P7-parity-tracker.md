@@ -39,7 +39,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | - (authorised 2026-08-01; design recorded reversibly in ADR-038) | goldens NEUTRAL, measured; catalogue checksum UNMOVED; save format v11 | **DONE** - ADR-038 (sim) and ADR-039 (lobby); teamgate 8 stages, client harness 174 -> 189 checks |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | ~~and onto self-declared setup, retiring `switch (setup.MissionIndex)`~~ **DONE** (ADR-034). Still owed: bring missions 01 to 03 under the GENERATOR, which is content rather than a defect | D1 | - | ONE golden regenerated (`mission`), measured; `mission03` was predicted to move and did not, for a reason worth reading | **PART DONE** - campaigngate proves every mission's setup comes from its own file |
-| P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
+| P7-10 | Wall GATES (the "wall tiers" half of this row is untouched and still open) | B7 | ~~C6b~~ - resolved WITHOUT an override: ADR-005 clause 6 stands, and the P7-10 amendment records that its blocker is scoped to SIMULTANEOUS per-player passability, which a single global open state does not need | goldens NEUTRAL, measured (predicted to move, and did not); catalogue checksum MOVES; save format v12 | **PART DONE** - ADR-005 amendment; wallgategate (8 stages incl. the enemy walking through an open gate, asserted as the DESIGN); client harness 194 checks |
 | P7-11 | ~~Hero unit, mines, support infantry~~ - **SPLIT, 2026-08-01.** One row bundling one thing that is written, one the project has already ruled is a sample, and one that appears in no design document at all | B3/B4/B6 | - | - | **SPLIT** - see "What P7-11 turned out to be" below |
 | P7-11a | The Sodality's Saboteur: temporarily disables a building | B3 | - (GDD s7 names the unit AND its effect; only the duration is my call) | goldens NEUTRAL, measured; catalogue checksum MOVES; save format v10 | **DONE** - ADR-030; saboteurgate (6 stages) |
 | P7-7a | **Client defect carried by P7-7:** the Infiltrator's theft raised `GameEventType.Captured`, which the client reads as an ownership CHANGE, so robbing a building told its owner "STRUCTURE LOST TO CAPTURE" about a building they still held, klaxon and all | - | - | goldens NEUTRAL, measured (the event enum is neither hashed nor saved) | **DONE** - `GameEventType.Robbed`; infiltratorgate gained the stage that catches it (proved by restoring the defect and watching it fail); client harness 130 -> 133 checks |
@@ -789,6 +789,48 @@ no formation or timing. And an ally that is losing will still be allowed to lose
 because the responder only reacts inside its own guard radius of a team structure
 - a commander will not cross the map to help. That is a number in the same scan
 rather than a policy.
+
+## Wall gates: the blocker was narrower than it read
+
+ADR-005 clause 6 deferred gates and stated the blocker precisely: passability is
+ONE global grid and `FlowFieldCache`'s only invalidation is `Clear()`, so **"a
+gate that is passable to its owner AND solid to the enemy"** needs per-player flow
+fields or incremental flow repair, and neither exists.
+
+**That is entirely correct, and it is scoped to SIMULTANEOUS per-player
+passability.** It does not consider a gate with a single GLOBAL open/closed state,
+which needs neither mechanism: an open gate is passable to everyone and a closed
+one is solid to everyone, and toggling uses the `_flow.Clear()` that already fires
+whenever a wall goes up or a bridge falls.
+
+So clause 6 was **sidestepped, not overridden.** It stands untouched, with an
+amendment recording the distinction and the price: **an enemy can follow you
+through an open gate.** That is the design rather than an oversight, and the gate
+asserts it deliberately so it cannot later be "fixed" into the per-player
+passability clause 6 refused.
+
+The hysteresis is load-bearing rather than polish, and the numbers say why: **1
+grid flush** for an ally parked beside a gate for 900 ticks and **12** for one
+crossing repeatedly, against the roughly 900 a per-tick answer would have cost.
+
+**Two findings worth more than the row:**
+
+- **A gate stage was green while proving nothing.** The enemy ordered across a
+  shut gate detoured round the wall long before entering the three-cell radius,
+  so "it stayed shut" was measured on a gate nothing approached. The sabotage
+  probe exposed it; the replacement walks an enemy PAST the gate, with a control
+  asserting it really entered the radius.
+- **`ValidPlacement` skipped every structure's cells as "already blocked", which
+  is false for a mine, a live bridge and an open gate.** Left in, a player could
+  open their own gate, drop a wall segment on its cell, and the gate's next
+  opening would unblock the wall. Removing the skip is provably inert for anything
+  that blocks, and the goldens confirm it.
+
+**One thing deliberately NOT done, measured and reported rather than asserted:** a
+shut gate is not pathable, so an order straight ACROSS one detours round the wall
+instead of waiting for it to open. Making that order path through would be exactly
+the per-player passability clause 6 refused, so a later wave answering clause 6 on
+its own terms is not blocked by this one.
 
 ## What this phase does NOT do
 

@@ -1,0 +1,51 @@
+# Gate - struct type 10 (P7-10), the number ADR-005 clause 6 reserved and then
+# deferred. The deferral is not overturned here and the ADR carries a P7-10
+# amendment saying so: clause 6's blocker is a gate that is passable to its
+# OWNER and solid to the enemy at the same moment, which needs per-player flow
+# fields. This gate has ONE GLOBAL open/closed state, so an open gate is
+# passable to everybody and a closed one is solid to everybody, and the single
+# global passability grid already says exactly that.
+#
+# The trade that buys it: an enemy can follow you through an open gate. That is
+# chosen, not missed, and wallgategate asserts it as a requirement.
+id: com_gate
+name: Gate
+faction: common
+cost: 200
+build_time_ticks: 0
+hp: 500
+power_supply: 0
+power_draw: 0
+sight_range: 0
+footprint: 1
+weapon_ids: []
+prerequisites: []
+# DEFENCE, beside the wall it is a segment of. The second file in the catalogue
+# with build_time_ticks 0 and a tab, and it is legal for the wall's exact
+# reason: a BARRIER is bought outright by the placement path, so "no build time"
+# does not mean "no player may have it". The loader asks World.IsBarrier rather
+# than naming the wall, which is what let this file be legal without editing the
+# rule that judges it.
+build_tab: defence
+notes: >
+  A barrier segment that opens for its own side. It blocks its cell while shut,
+  exactly as a wall does; it unblocks while open, exactly as bare ground; and it
+  opens when a unit ALLIED to its owner comes within 3 cells, shutting again 45
+  ticks (three seconds) after the last of them leaves.
+  The 45 ticks are load-bearing rather than polish. The only flow invalidation
+  this sim has throws away every cached field on the map, so a gate that
+  flickered as an army milled about would rebuild every route in the game
+  several times a second. The delay bounds the toggle rate at one close per 45
+  ticks per gate whatever the units do, and it is also long enough for a column
+  to follow the unit that opened it.
+  Cost 200 is twice a wall segment: a gate is the one place in a perimeter that
+  lets your own army through, and it should not be the cheap way to build a
+  wall. hp 500 IS the wall's, so a besieger breaches the gate and the wall
+  beside it at the same rate and the gate is not a soft spot to aim at.
+  sight_range 0 for the wall's reason: FogSystem skips zero-sight entities, so a
+  run of barriers costs nothing in the fog pass and grants no vision.
+  Empty prerequisites because a barrier is never queued at a yard and so never
+  reaches the tree check (ADR-005 clause 3, ADR-009 clause 3). It counts against
+  the same 80-segment per-player barrier cap the wall does, which is a
+  performance guarantee rather than a design flourish, and the cap does not care
+  which of the two is standing.
