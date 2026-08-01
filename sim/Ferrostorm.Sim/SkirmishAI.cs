@@ -208,7 +208,12 @@ public sealed class SkirmishAI
         {
             var e = w.Entities[i];
             if (!e.Alive) continue;
-            if (e.PlayerId == _player)
+            // P7-8g: the AI's census splits on exactly the two questions the sim
+            // now names. The first arm is OWNERSHIP (what have I got), the second
+            // is HOSTILITY (what should I hit), and they are not each other's
+            // negation the moment teams exist - which is why the else-if below
+            // restates the question rather than relying on falling through.
+            if (World.IsOwnedBy(in e, _player))
             {
                 switch (e.Kind)
                 {
@@ -252,7 +257,7 @@ public sealed class SkirmishAI
             // wave-target kinds, or the AI walks straight past the building
             // this wave exists to add - an enemy barracks pumping infantry
             // would never be picked as the nearest production structure.
-            else if (e.PlayerId >= 0 && e.PlayerId != _player
+            else if (World.IsEnemyOf(in e, _player)
                      && e.Kind is EntityKind.ConstructionYard or EntityKind.Factory or EntityKind.Refinery
                         or EntityKind.PowerPlant or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield)
             {
@@ -312,7 +317,7 @@ public sealed class SkirmishAI
             for (int i = 0; i < w.Entities.Count; i++)
             {
                 var e = w.Entities[i];
-                if (!e.Alive || e.PlayerId != _player) continue;
+                if (!e.Alive || !World.IsOwnedBy(in e, _player)) continue;
                 if (World.IsStructure(e.Kind))
                     output.Add(new Command(w.Tick, _player, CommandType.SellStructure, i, Fix64.Zero, Fix64.Zero));
                 else if (e.Kind is EntityKind.Unit or EntityKind.Harvester)
@@ -424,7 +429,7 @@ public sealed class SkirmishAI
             for (int i = 0; i < w.Entities.Count; i++)
             {
                 var s = w.Entities[i];
-                if (!s.Alive || s.PlayerId != _player || !World.IsStructure(s.Kind)) continue;
+                if (!s.Alive || !World.IsOwnedBy(in s, _player) || !World.IsStructure(s.Kind)) continue;
                 if (s.Hp < s.MaxHp && !s.Repairing)
                     output.Add(new Command(w.Tick, _player, CommandType.Repair, i, Fix64.Zero, Fix64.Zero));
             }
@@ -482,7 +487,7 @@ public sealed class SkirmishAI
         for (int i = 0; i < w.Entities.Count; i++)
         {
             var e = w.Entities[i];
-            if (!e.Alive || e.PlayerId != _player || e.Kind != EntityKind.Harvester) continue;
+            if (!e.Alive || !World.IsOwnedBy(in e, _player) || e.Kind != EntityKind.Harvester) continue;
             if (e.HState != HarvestState.Idle) continue;
             int field = NearestField(w, e.X, e.Y);
             if (field >= 0)
@@ -567,7 +572,7 @@ public sealed class SkirmishAI
         for (int i = 0; i < w.Entities.Count && garrisonCount < garrisonSize && garrisonCount < 8; i++)
         {
             var e = w.Entities[i];
-            if (e.Alive && e.PlayerId == _player && e.Kind == EntityKind.Unit
+            if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
                 && e.UnitType != 6 && e.UnitType != World.McvUnitType && e.UnitType != EngineerType
                 && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9))
                 garrison[garrisonCount++] = i;
@@ -583,12 +588,12 @@ public sealed class SkirmishAI
         for (int i = 0; i < w.Entities.Count; i++)
         {
             var hostile = w.Entities[i];
-            if (!hostile.Alive || hostile.PlayerId < 0 || hostile.PlayerId == _player) continue;
+            if (!hostile.Alive || !World.IsEnemyOf(in hostile, _player)) continue;   // P7-8g: hostility
             if (hostile.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
             for (int j = 0; j < w.Entities.Count; j++)
             {
                 var own = w.Entities[j];
-                if (!own.Alive || own.PlayerId != _player) continue;
+                if (!own.Alive || !World.IsOwnedBy(in own, _player)) continue;       // P7-8g: ownership
                 bool isEconomy = own.Kind == EntityKind.Harvester;
                 if (!isEconomy && own.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant
                     or EntityKind.Refinery or EntityKind.Factory or EntityKind.Turret)) continue;
@@ -626,13 +631,13 @@ public sealed class SkirmishAI
             for (int i = 0; i < w.Entities.Count; i++)
             {
                 var sc = w.Entities[i];
-                if (!sc.Alive || sc.PlayerId != _player || sc.UnitType != 6) continue;
+                if (!sc.Alive || !World.IsOwnedBy(in sc, _player) || sc.UnitType != 6) continue;
                 if (sc.Moving) continue;
                 int ward = -1; Fix64 wardD = Fix64.MaxValue;
                 for (int j = 0; j < w.Entities.Count; j++)
                 {
                     var h = w.Entities[j];
-                    if (!h.Alive || h.PlayerId != _player || h.Kind != EntityKind.Harvester) continue;
+                    if (!h.Alive || !World.IsOwnedBy(in h, _player) || h.Kind != EntityKind.Harvester) continue;
                     Fix64 d = Fix64.DistSq(h.X - sc.X, h.Y - sc.Y);
                     if (d < wardD) { wardD = d; ward = j; }
                 }
@@ -654,13 +659,16 @@ public sealed class SkirmishAI
             for (int i = 0; i < w.Entities.Count; i++)
             {
                 var ph = w.Entities[i];
-                if (!ph.Alive || ph.PlayerId != _player || ph.UnitType != 9) continue;
+                if (!ph.Alive || !World.IsOwnedBy(in ph, _player) || ph.UnitType != 9) continue;
                 if (ph.ExplicitTarget >= 0 || ph.Moving) continue;
                 int prey = -1; Fix64 preyD = Fix64.MaxValue;
                 for (int j = 0; j < w.Entities.Count; j++)
                 {
                     var h = w.Entities[j];
-                    if (!h.Alive || h.PlayerId < 0 || h.PlayerId == _player || h.Kind != EntityKind.Harvester) continue;
+                    // P7-8g: hostility. The phantom picks PREY, so this is the
+                    // question that changes under teams, unlike the ownership
+                    // test that found the phantom itself two lines up.
+                    if (!h.Alive || !World.IsEnemyOf(in h, _player) || h.Kind != EntityKind.Harvester) continue;
                     Fix64 d = Fix64.DistSq(h.X - ph.X, h.Y - ph.Y);
                     if (d < preyD) { preyD = d; prey = j; }
                 }
@@ -679,7 +687,7 @@ public sealed class SkirmishAI
                 var e = w.Entities[i];
                 // MCVs found bases and sentinels are eyes, not spears: the
                 // wave conscripts fighting units only.
-                if (e.Alive && e.PlayerId == _player && e.Kind == EntityKind.Unit
+                if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
                     && e.UnitType != World.McvUnitType && e.UnitType != 6 && e.UnitType != EngineerType
                     && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
                     && !InGarrison(i))
@@ -760,7 +768,7 @@ public sealed class SkirmishAI
         for (int i = w.Entities.Count - 1; i >= 0; i--)
         {
             var s = w.Entities[i];
-            if (!s.Alive || s.PlayerId != _player) continue;
+            if (!s.Alive || !World.IsOwnedBy(in s, _player)) continue;
             if (s.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant or EntityKind.Factory or EntityKind.Refinery)) continue;
             int oax = w.AnchorOf(s.X, s.StructType), oay = w.AnchorOf(s.Y, s.StructType);
             for (int ring = 3; ring <= World.BuildRadius; ring++)

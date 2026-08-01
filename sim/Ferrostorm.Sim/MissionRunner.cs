@@ -82,7 +82,10 @@ public sealed class MissionRunner
         // at tick 0) still loses on exactly the skirmish terms.
         "eliminated" => !w.HasHope(I(cond[1])),
         "owned" => _tags.TryGetValue(cond[1], out var owned)
-                   && owned.TrueForAll(id => w.Entities[id].Alive && w.Entities[id].PlayerId == I(cond[2])),
+                   // P7-8g: ownership, and the trigger is named for it. A mission
+                   // that asks "does P hold this" wants the flag on the building,
+                   // not "is P friendly to whoever holds it".
+                   && owned.TrueForAll(id => w.Entities[id].Alive && World.IsOwnedBy(w.Entities[id], I(cond[2]))),
         _ => throw new FormatException($"unknown trigger condition '{cond[0]}'"),
     };
 
@@ -93,7 +96,7 @@ public sealed class MissionRunner
         for (int i = 0; i < w.Entities.Count; i++)
         {
             var e = w.Entities[i];
-            if (!e.Alive || e.PlayerId != player) continue;
+            if (!e.Alive || !World.IsOwnedBy(in e, player)) continue;
             if (e.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
             if (Fix64.DistSq(e.X - px, e.Y - py) <= rr) return true;
         }
@@ -137,7 +140,7 @@ public sealed class MissionRunner
                 for (int i = 0; i < w.Entities.Count; i++)
                 {
                     var e = w.Entities[i];
-                    if (!e.Alive || e.PlayerId != player || e.Kind != EntityKind.Unit) continue;
+                    if (!e.Alive || !World.IsOwnedBy(in e, player) || e.Kind != EntityKind.Unit) continue;
                     output.Add(new Command(w.Tick, player, CommandType.AttackMove, i, ax, ay));
                 }
                 break;

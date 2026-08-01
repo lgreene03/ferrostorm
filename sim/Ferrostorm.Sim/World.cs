@@ -699,7 +699,82 @@ public sealed partial class World
     /// testing the flag itself. A first pass guarded two of the three and the
     /// gate shot a plane down with a rifle.</summary>
     public bool WeaponCanEngage(in WeaponDef w, in Entity target)
-        => w.AntiAir == IsAirborne(target);
+        => WeaponCanEngage(w.AntiAir, in target);
+
+    /// <summary>P7-8g: clause 3 taking the FLAG rather than the weapon, so a
+    /// shooter that has no WeaponDef can still ask it. The mine is one: it
+    /// carries WeaponId 0 and a blast radius, and it is not anti-air.</summary>
+    public bool WeaponCanEngage(bool antiAir, in Entity target)
+        => antiAir == IsAirborne(target);
+
+    /// <summary>
+    /// P7-8g: "is this entity player P's OWN?" One of the TWO questions the sim
+    /// answered everywhere with the same hand-written comparison, and the reason
+    /// for pulling them apart is that teams (P7-8c) is exactly what separates
+    /// them: a teammate's unit is neither yours nor an enemy.
+    ///
+    /// Ownership is what commanding, loading a transport, repairing, selling,
+    /// placing and every "count my own" census ask. It is NOT friendliness. When
+    /// alliances land this predicate must NOT change: an ally's tank is still not
+    /// yours to order about.
+    ///
+    /// A neutral (PlayerId -1) is nobody's own, which falls out of the compare
+    /// rather than needing a clause of its own.
+    /// </summary>
+    public static bool IsOwnedBy(in Entity e, int player) => e.PlayerId == player;
+
+    /// <summary>
+    /// P7-8g: "is this entity an ENEMY of player P?" The other question, asked by
+    /// target acquisition, the mine trigger, the crush rule, the attack-move
+    /// completion test and every scan the AI runs.
+    ///
+    /// Today an enemy is anything owned by somebody else. The PlayerId >= 0
+    /// clause is what keeps the neutrals out - ferrite fields, uncaptured
+    /// outposts and bridges - which is why a wave does not march on a rock and a
+    /// minefield does not go off under a bridge.
+    ///
+    /// THIS IS THE ONE EXPRESSION P7-8c CHANGES. When teams exist the body
+    /// becomes "owned by somebody else AND not allied to P" and nothing else in
+    /// the sim needs editing. That is the whole reason for naming it. The air
+    /// layer was added by editing each site that needed it by hand, and ADR-028
+    /// records that the first pass guarded two of three paths and shot an
+    /// aircraft down with a rifle, while the mine - a fourth path - was missed
+    /// again in its own first draft. A question spelled out by hand at every site
+    /// is a question somebody forgets.
+    /// </summary>
+    public static bool IsEnemyOf(in Entity e, int player) => e.PlayerId >= 0 && e.PlayerId != player;
+
+    /// <summary>
+    /// P7-8g: the ONE entry point for a path that PICKS SOMETHING TO SHOOT. It
+    /// asks the two questions such a path can never skip - is the candidate an
+    /// enemy, and can the gun doing the picking reach it - so a new scan cannot
+    /// acquire a target while leaving either unasked. The anti-air flag is a
+    /// required argument for precisely that reason: there is no way to call this
+    /// and quietly skip the air question, which is the failure ADR-028 and the
+    /// mine each paid for once.
+    ///
+    /// EVERY path that chooses a victim, and what each of them asks:
+    ///   1. CombatSystem's auto-acquire scan - here, plus the stealth test and
+    ///      the ADR-005 clause 2 skip of barriers and ferrite fields.
+    ///   2. StanceSystem's Guard leash scan - here, plus those same two.
+    ///   3. MineSystem's proximity trigger - here, with antiAir false, because a
+    ///      buried charge cannot reach a plane; plus its Unit-or-Harvester
+    ///      filter. It deliberately does NOT ask CanTarget: a cloaked scout still
+    ///      treads on a mine.
+    ///   4. CombatSystem's explicit-target branch VALIDATES a target it was
+    ///      handed rather than picking one, so it asks CanTarget and
+    ///      WeaponCanEngage directly and asks no hostility question at all - an
+    ///      ordered Attack may legitimately be aimed at a wall or a bridge.
+    ///   5. NearestEnemyBarrier, the breach pick, asks hostility alone. What it
+    ///      returns becomes an ExplicitTarget, so path 4 is where the air rule
+    ///      lands on it and an anti-air unit's breach target is dropped there.
+    ///   6. EnemyNearAMovePoint is NOT target selection. It asks whether the
+    ///      ordered ground is clear, so it must count enemies this unit cannot
+    ///      personally shoot; routing it through here would end an attack-move
+    ///      that still had work to do.
+    /// </summary>
+    private bool CanBeEngagedBy(int byPlayer, bool antiAir, in Entity t)
+        => t.Alive && IsEnemyOf(in t, byPlayer) && WeaponCanEngage(antiAir, in t);
 
     public bool IsCarryable(int unitType)
         => unitType != CarrierUnitType && GetUnitType(unitType).ProducedAt == BarracksStructType;
@@ -1731,7 +1806,7 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
-            if (e.Alive && e.PlayerId == player && IsBarrier(e.Kind)) n++;
+            if (e.Alive && IsOwnedBy(in e, player) && IsBarrier(e.Kind)) n++;
         }
         return n;
     }
@@ -1893,18 +1968,18 @@ public sealed partial class World
                     {
                         Fix64 bestD = Fix64.MaxValue;
                         Fix64 leashSq = e.Sight * e.Sight;
+                        var gw = GetWeaponType(e.WeaponId);
                         for (int j = 0; j < _entities.Count; j++)
                         {
                             var t = _entities[j];
-                            if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId
-                                || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
+                            // P7-8g: the shared target-selection gate. It carries
+                            // the hostility question AND ADR-028's air rule,
+                            // which is what this path used to spell out for
+                            // itself - it was the THIRD of three paths and the
+                            // one a first pass at the air layer forgot.
+                            if (!CanBeEngagedBy(e.PlayerId, gw.AntiAir, in t)) continue;
+                            if (t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
                             if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
-                            // ADR-028. This is the THIRD target-selection path -
-                            // the guard stance's leash scan - and it needs the
-                            // rule as much as the other two. Finding it only
-                            // because the shared predicate failed to compile
-                            // here is the argument for the shared predicate.
-                            if (!WeaponCanEngage(GetWeaponType(e.WeaponId), in t)) continue;
                             Fix64 d = Fix64.DistSq(t.X - e.PostX, t.Y - e.PostY);
                             if (d <= leashSq && d < bestD) { bestD = d; target = j; }
                         }
@@ -1966,7 +2041,7 @@ public sealed partial class World
         if (!ValidId(c.EntityId)) return;
         {
             var carrier = _entities[c.EntityId];
-            if (!carrier.Alive || carrier.PlayerId != c.PlayerId) return;
+            if (!carrier.Alive || !IsOwnedBy(in carrier, c.PlayerId)) return;
             if (c.Queued)
             {
                 // Shift-queue: order preservation demands appending whenever a
@@ -1989,7 +2064,10 @@ public sealed partial class World
     private void ApplyCommandCore(in Command c)
     {
         var e = _entities[c.EntityId];
-        if (!e.Alive || e.PlayerId != c.PlayerId) return; // players command only their own entities
+        // P7-8g: OWNERSHIP, and the site that most needs the name. Teams must not
+        // change this line: an ally's tank is not an enemy and is still not yours
+        // to order about.
+        if (!e.Alive || !IsOwnedBy(in e, c.PlayerId)) return; // players command only their own entities
 
         switch (c.Type)
         {
@@ -2131,7 +2209,7 @@ public sealed partial class World
                     for (int i = 0; i < _entities.Count; i++)
                     {
                         var o = _entities[i];
-                        if (o.Alive && o.PlayerId == c.PlayerId && o.Kind == EntityKind.ConstructionYard
+                        if (o.Alive && IsOwnedBy(in o, c.PlayerId) && o.Kind == EntityKind.ConstructionYard
                             && o.ReadyStructure == c.AuxId) { readyCy = i; break; }
                     }
                     // ADR-023: nothing ready in any lane 1, so try the second
@@ -2142,7 +2220,7 @@ public sealed partial class World
                         for (int i = 0; i < _entities.Count; i++)
                         {
                             var o = _entities[i];
-                            if (!o.Alive || o.PlayerId != c.PlayerId || o.Kind != EntityKind.ConstructionYard) continue;
+                            if (!o.Alive || !IsOwnedBy(in o, c.PlayerId) || o.Kind != EntityKind.ConstructionYard) continue;
                             if (LaneOf(i) is { } l && l.Ready == c.AuxId) { readyCy = i; readyInLane2 = true; break; }
                         }
                     }
@@ -2260,7 +2338,9 @@ public sealed partial class World
                 if (e.Kind != EntityKind.Unit || !IsCarryable(e.UnitType)) break;
                 if (c.AuxId < 0 || c.AuxId >= _entities.Count) break;
                 var carrier = _entities[c.AuxId];
-                if (!carrier.Alive || carrier.PlayerId != e.PlayerId
+                // P7-8g: ownership. You board YOUR transport, and teams does not
+                // change that even once an ally's transport is not an enemy.
+                if (!carrier.Alive || !IsOwnedBy(in carrier, e.PlayerId)
                     || carrier.Kind != EntityKind.Unit || carrier.UnitType != CarrierUnitType) break;
                 if (!_cargo.TryGetValue(c.AuxId, out var hold)) hold = null;
                 if ((hold?.Count ?? 0) >= CarrierCapacity) break;
@@ -2495,7 +2575,7 @@ public sealed partial class World
              or EntityKind.Emplacement or EntityKind.Bastion
              // ADR-021: the Outpost is a structure, which is what makes it
              // engineer-capturable through the untouched CaptureSystem (whose
-             // only ownership test, t.PlayerId == e.PlayerId, a neutral -1
+             // only ownership test, IsOwnedBy(t, e.PlayerId), a neutral -1
              // passes). VictorySystem excludes it from hope explicitly.
              or EntityKind.Outpost
              // ADR-025: the Bridge is a structure so that it takes damage, dies,
@@ -2652,7 +2732,7 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var o = _entities[i];
-            if (o.Alive && o.PlayerId == player && o.UnitType == unitType && ++alive >= cap) return true;
+            if (o.Alive && IsOwnedBy(in o, player) && o.UnitType == unitType && ++alive >= cap) return true;
         }
         return false;
     }
@@ -2684,7 +2764,7 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var o = _entities[i];
-            if (o.Alive && o.PlayerId == player && o.StructType == structType
+            if (o.Alive && IsOwnedBy(in o, player) && o.StructType == structType
                 && IsStructure(o.Kind) && ++alive >= cap) return true;
         }
         return false;
@@ -2699,7 +2779,10 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
             {
                 var o = _entities[i];
-                if (o.Alive && o.PlayerId == player && o.StructType == ids[r]) { found = true; break; }
+                // P7-8g: ownership. A prerequisite is a building YOU hold, and an
+                // ally's radar unlocking your tech is a design question for
+                // P7-8c rather than something this line already answers.
+                if (o.Alive && IsOwnedBy(in o, player) && o.StructType == ids[r]) { found = true; break; }
             }
             if (!found) return false;
         }
@@ -2787,7 +2870,7 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var o = _entities[i];
-            if (!o.Alive || o.PlayerId != player || !IsStructure(o.Kind)) continue;
+            if (!o.Alive || !IsOwnedBy(in o, player) || !IsStructure(o.Kind)) continue;
             bool anchorIsBarrier = IsBarrier(o.Kind);
             if (anchorIsBarrier && !candidateIsBarrier) continue; // a wall never anchors a real building
             int oax = AnchorOf(o.X, o.StructType), oay = AnchorOf(o.Y, o.StructType);
@@ -2804,7 +2887,7 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var r = _entities[i];
-            if (!r.Alive || r.Kind != EntityKind.Refinery || r.PlayerId != player) continue;
+            if (!r.Alive || r.Kind != EntityKind.Refinery || !IsOwnedBy(in r, player)) continue;
             Fix64 d = Fix64.DistSq(r.X - x, r.Y - y);
             if (d < bestD || (d == bestD && i < best)) { bestD = d; best = i; }
         }
@@ -3013,7 +3096,9 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
             {
                 var e = _entities[i];
-                if (!e.Alive || e.PlayerId != vp.PlayerId) continue;
+                // P7-8g: ownership. The veil covers YOUR units today; whether it
+                // should cover an ally's is a P7-8c decision, not this line's.
+                if (!e.Alive || !IsOwnedBy(in e, vp.PlayerId)) continue;
                 if (e.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                 if (Fix64.DistSq(e.X - vp.X, e.Y - vp.Y) > vp.Sight * vp.Sight) continue;
                 e.FieldCloaked = true;
@@ -3028,7 +3113,14 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
             {
                 var e = _entities[i];
-                if (!e.Alive || !(e.Stealth || e.FieldCloaked) || e.PlayerId == det.PlayerId) continue;
+                // P7-8g: written as NOT-MINE rather than as hostility, and the
+                // two are not the same predicate - "not mine" also uncloaks a
+                // NEUTRAL. Nothing neutral carries Stealth or FieldCloaked today,
+                // so the choice is unobservable, and the exact expression that
+                // stood here is kept rather than tightened on a guess. P7-8c has
+                // to decide whether a detector reveals an ally's phantom to its
+                // owner's own mask, and this is where that decision lands.
+                if (!e.Alive || !(e.Stealth || e.FieldCloaked) || IsOwnedBy(in e, det.PlayerId)) continue;
                 if (Fix64.DistSq(e.X - det.X, e.Y - det.Y) > det.Sight * det.Sight) continue;
                 e.DetectedMask |= bit;
                 _entities[i] = e;
@@ -3106,25 +3198,30 @@ public sealed partial class World
             for (int j = 0; j < _entities.Count; j++)
             {
                 var t = _entities[j];
-                // Enemy only, which is what makes a minefield a defence rather
-                // than a hazard to its own side; PlayerId < 0 keeps the neutrals
-                // (ferrite, outposts, bridges) out with the same test.
-                if (!t.Alive || t.PlayerId < 0 || t.PlayerId == m.PlayerId) continue;
-                if (t.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
-                // AIRCRAFT DO NOT SET OFF GROUND MINES. ADR-028 clause 2 says an
-                // aircraft is not on the ground: it ignores terrain, blocks no
-                // cell and takes no part in separation. A buried charge it flies
-                // over is the same category of thing, and a mine that downed a
-                // Strike Flyer would also be the only anti-air answer in the
-                // game that is not the flak track, which ADR-028 clause 4 makes
-                // deliberate.
+                // P7-8g: the mine goes through the SAME target-selection gate as
+                // the two combat scans, because it is a target-selection path and
+                // being treated as something else is how it went wrong before.
                 //
-                // Written out because this project has been bitten twice by the
-                // air layer being forgotten in a target-selection path: ADR-028
-                // records a first pass that guarded two of THREE paths and shot
-                // an aircraft down with a rifle. This is the fourth path and it
-                // was missed again in the first draft of the mine.
-                if (IsAirborne(t)) continue;
+                // Enemy only, which is what makes a minefield a defence rather
+                // than a hazard to its own side, and the gate's PlayerId >= 0
+                // clause keeps the neutrals (ferrite, outposts, bridges) out with
+                // the same test.
+                //
+                // AIRCRAFT DO NOT SET OFF GROUND MINES, which is what the false
+                // says. ADR-028 clause 2 makes an aircraft not on the ground: it
+                // ignores terrain, blocks no cell and takes no part in
+                // separation. A buried charge it flies over is the same category
+                // of thing, and a mine that downed a Strike Flyer would also be
+                // the only anti-air answer in the game that is not the flak
+                // track, which ADR-028 clause 4 makes deliberate. Passing that
+                // flag is no longer optional: the gate demands it, so the fifth
+                // path cannot repeat the omission the fourth one made in its
+                // first draft.
+                //
+                // The gate is asked WITHOUT CanTarget, deliberately: a cloaked
+                // scout still treads on a mine.
+                if (!CanBeEngagedBy(m.PlayerId, antiAir: false, in t)) continue;
+                if (t.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                 if (Fix64.DistSq(t.X - m.X, t.Y - m.Y) > MineTriggerRadiusSq) continue;
                 (triggered ??= new List<int>()).Add(i);
                 break;   // one trigger is enough; the blast is not per victim
@@ -3167,15 +3264,19 @@ public sealed partial class World
     ///
     /// ADR-005 clause 2: engineers do not capture fences.
     /// ADR-025: a bridge is excluded explicitly. It is neutral, so it would
-    /// otherwise pass the only ownership test this guard has (PlayerId != mine)
+    /// otherwise pass the only ownership test this guard has (!IsOwnedBy)
     /// exactly as a neutral outpost does, and an engineer walking into a river
     /// crossing to "capture" it is nonsense. You fell a bridge with an explicit
     /// Attack instead - and by the same token a hero ordered at a bridge shoots
     /// it, because this predicate says no and CombatSystem's skip does not fire.
     /// </summary>
+    /// <remarks>P7-8g: the player test here is NOT-MINE, not hostility, and the
+    /// difference is the feature - a neutral outpost is nobody's enemy and
+    /// capturing one is the outpost's whole point (ADR-021). Named as the
+    /// negation of the ownership predicate so it stays that way.</remarks>
     private static bool CanBeActedOn(in Entity actor, in Entity t)
         => t.Alive && IsStructure(t.Kind) && !IsBarrier(t.Kind)
-           && t.Kind != EntityKind.Bridge && t.PlayerId != actor.PlayerId;
+           && t.Kind != EntityKind.Bridge && !IsOwnedBy(in t, actor.PlayerId);
 
     private void CaptureSystem()
     {
@@ -3338,7 +3439,10 @@ public sealed partial class World
         for (int j = 0; j < _entities.Count; j++)
         {
             var t = _entities[j];
-            if (!t.Alive || !IsBarrier(t.Kind) || t.PlayerId < 0 || t.PlayerId == e.PlayerId) continue;
+            // P7-8g: hostility, and hostility ALONE. This pick hands its answer
+            // to CombatSystem's explicit-target branch, which is where the air
+            // rule then lands on it, so it does not go through CanBeEngagedBy.
+            if (!t.Alive || !IsBarrier(t.Kind) || !IsEnemyOf(in t, e.PlayerId)) continue;
             Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
             if (d < bestD) { bestD = d; best = j; }
         }
@@ -3367,7 +3471,11 @@ public sealed partial class World
         for (int j = 0; j < _entities.Count; j++)
         {
             var t = _entities[j];
-            if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
+            // P7-8g: hostility, NOT engagement. This is the "is the ordered
+            // ground clear" question, so it must count an enemy this unit cannot
+            // personally shoot; sending it through CanBeEngagedBy would let an
+            // attack-move report success with the enemy still standing there.
+            if (!t.Alive || !IsEnemyOf(in t, e.PlayerId) || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
             if (!CanTarget(e.PlayerId, in t)) continue;
             if (Fix64.DistSq(t.X - e.AMoveX, t.Y - e.AMoveY) <= e.Sight * e.Sight) return true;
         }
@@ -3500,21 +3608,20 @@ public sealed partial class World
                 for (int j = 0; j < _entities.Count; j++)
                 {
                     var t = _entities[j];
+                    // P7-8g: the shared target-selection gate carries both the
+                    // hostility question and ADR-028's air rule, which this scan
+                    // used to spell out for itself. A first pass at the air layer
+                    // patched two paths and left this one, and the gate caught it
+                    // immediately by shooting a plane down with a rifle.
+                    if (!CanBeEngagedBy(e.PlayerId, w.AntiAir, in t)) continue;
                     // Barriers are skipped exactly as ferrite fields are (ADR-005
                     // clause 2): without this your tanks stop to plink at a wall
                     // instead of the turret behind it, and this O(n) inner scan
                     // grows by 160 entities for every armed unit every tick. An
                     // explicit Attack order still targets a wall; only
                     // auto-acquisition declines to.
-                    if (!t.Alive || t.PlayerId < 0 || t.PlayerId == e.PlayerId || t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
+                    if (t.Kind == EntityKind.FerriteField || IsBarrier(t.Kind)) continue;
                     if (!CanTarget(e.PlayerId, in t)) continue; // stealth: unseen is untargetable
-                    // ADR-028: a ground weapon cannot reach an aircraft. This is
-                    // the MAIN auto-acquire scan and it is the third of three
-                    // target-selection paths that need the rule; a first pass at
-                    // this wave patched the other two and left this one, which
-                    // the gate caught immediately by shooting a plane down with
-                    // a rifle.
-                    if (!WeaponCanEngage(in w, in t)) continue;
                     Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
                     if (d >= w.MinRange * w.MinRange && d <= w.Range * w.Range && d < bestD) { bestD = d; target = j; }
                     if (e.AMove && d <= e.Sight * e.Sight && d < bestSightD) { bestSightD = d; sightTarget = j; }
@@ -3845,7 +3952,7 @@ public sealed partial class World
                         // thirty tonnes that cannot see you.
                         if (e.Kind == EntityKind.Unit && e.Armour == ArmourClass.Heavy
                             && o.Kind == EntityKind.Unit && o.Armour == ArmourClass.None
-                            && o.PlayerId >= 0 && o.PlayerId != e.PlayerId)
+                            && IsEnemyOf(in o, e.PlayerId))   // P7-8g: hostility, not ownership
                         {
                             // Treads do not yield: a crush-eligible squad
                             // exerts NO separation push on the vehicle, so
@@ -3913,7 +4020,11 @@ public sealed partial class World
                         // ADR-027: somebody is trying to get past this unit.
                         // dx/dy already point AWAY from the neighbour, so the
                         // accumulated vector is the direction out of the way.
-                        if (!e.Moving && o.Moving && o.PlayerId == e.PlayerId)
+                        // P7-8g: ownership. Today you only step aside for your
+                        // OWN units; whether an ally earns the courtesy is a
+                        // P7-8c call and it belongs here, not in the hostility
+                        // predicate.
+                        if (!e.Moving && o.Moving && IsOwnedBy(in o, e.PlayerId))
                         {
                             pressedByMover = true;
                             yieldX += dx * overlap / d;
@@ -4111,7 +4222,9 @@ public sealed partial class World
                 for (int u = 0; u < _entities.Count; u++)
                 {
                     var v = _entities[u];
-                    if (!v.Alive || v.PlayerId != e.PlayerId || v.Hp >= v.MaxHp) continue;
+                    // P7-8g: ownership - a depot mends its OWN, and it is the
+                    // owner's treasury that pays per tick just below.
+                    if (!v.Alive || !IsOwnedBy(in v, e.PlayerId) || v.Hp >= v.MaxHp) continue;
                     if (v.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                     // Squared distance, so the compare is radius squared: 16.
                     if (Fix64.DistSq(v.X - e.X, v.Y - e.Y)
@@ -4140,7 +4253,7 @@ public sealed partial class World
                 {
                     if (u == i) continue;              // repairs others, not itself
                     var v = _entities[u];
-                    if (!v.Alive || v.PlayerId != e.PlayerId || v.Hp >= v.MaxHp) continue;
+                    if (!v.Alive || !IsOwnedBy(in v, e.PlayerId) || v.Hp >= v.MaxHp) continue;   // P7-8g: ownership, as the depot
                     if (v.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
                     if (Fix64.DistSq(v.X - e.X, v.Y - e.Y)
                         > Fix64.FromInt(DepotRepairRadiusCells * DepotRepairRadiusCells)) continue;
@@ -4482,7 +4595,10 @@ public sealed partial class World
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
-            if (!e.Alive || e.PlayerId != player) continue;
+            // P7-8g: ownership. Hope is what YOU still hold. Whether a team is
+            // eliminated only when every member is is a P7-8c question, and the
+            // answer would be given by the caller, not by widening this scan.
+            if (!e.Alive || !IsOwnedBy(in e, player)) continue;
             if (IsHope(e)) return true;
         }
         return false;
