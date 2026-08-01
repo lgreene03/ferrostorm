@@ -51,16 +51,42 @@ jobs:
           # "_winner == 0" - did PLAYER 0 win, not did I win. At seat 1 that is
           # exactly inverted: the joiner who had just won was shown DEFEAT and
           # the host who lost was congratulated. The last thing a match says.
-          HITS=$(grep -nE 'PlayerId (==|!=) [01]\b|_world\.Credits\(0\)|UpdateFrom\(_world, [01]\)|IsVisible\([01],|IsExplored\([01],|ValidPlacement\([01],|_winner (==|!=) [01]\b' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+          # WIDENED A FOURTH TIME by P7-8a, which made the engine N-player for
+          # the free-for-all GDD s9 promises. Two things were wrong with the
+          # patterns rather than with any one site. They all keyed on the
+          # LITERALS [01], so 'PlayerId == 2' - a perfectly possible mistake
+          # once there are eight seats - sailed through; the seat range is
+          # [0-9]+ now. And the seat-FLIPPING ternary evaded them completely,
+          # which is exactly how three live sites survived: the victory latch
+          # wrote 'OnEliminated(_world.Winner == 0 ? 1 : 0)', converting a
+          # winner the sim already knew into a made-up eliminated player so the
+          # banner could flip it back. Two inversions that cancel at two seats
+          # and are simply wrong at three, with no literal seat anywhere in
+          # sight. Checked across ALL of game/scripts/, because that shape is
+          # not peculiar to the battle scene.
+          HITS=$(grep -nE 'PlayerId (==|!=) [0-9]+\b|_world\.Credits\([0-9]+\)|UpdateFrom\(_world, [0-9]+\)|IsVisible\([0-9]+,|IsExplored\([0-9]+,|ValidPlacement\([0-9]+,|_winner (==|!=) [0-9]+\b' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
           if [ -n "$HITS" ]; then
             echo "$HITS"
-            echo "::error::Hardcoded seat in the battle scene - use LocalPlayerId / EnemyPlayerId (C7b)"; exit 1
+            echo "::error::Hardcoded seat in the battle scene - compare against LocalPlayerId, or read the seat from the sim (World.Winner, e.PlayerId). EnemyPlayerId is a TWO-PLAYER convenience and is not the answer where seats can exceed two (C7b, P7-8a)"; exit 1
+          fi
+          # The seat-flipping ternary, in both directions. A seat id is not a
+          # boolean and cannot be recovered by negating one: whatever "the other
+          # player" meant, ask the sim for it instead.
+          HITS=$(grep -rnE '(==|!=)[[:space:]]*0[[:space:]]*\?[[:space:]]*1[[:space:]]*:[[:space:]]*0\b|(==|!=)[[:space:]]*1[[:space:]]*\?[[:space:]]*0[[:space:]]*:[[:space:]]*1\b' game/scripts/ | grep -vE ':[[:space:]]*//' || true)
+          if [ -n "$HITS" ]; then
+            echo "$HITS"
+            echo "::error::A seat number inverted by a ternary - correct only for exactly two players. Read the seat the sim already holds (P7-8a)"; exit 1
           fi
           # Team colour is a property of WHICH PLAYER an entity belongs to, not
           # of who is looking, or the minimap and the battlefield disagree for
           # the joiner. BattlefieldView.MarkFor is the only place allowed to
           # decide it; a seat-relative ternary over the marks is the exact shape
           # that was there.
+          # P7-8a: MarkFor is a table of eight seat colours now, because GDD s9
+          # seats up to eight commanders and the old two-arm ternary painted
+          # every seat above 0 the same. Only the two named below and the
+          # neutral mark are public, so a rival copy has nothing else to build
+          # itself out of and this pair of names still covers the shape.
           HITS=$(grep -rnE '(LocalPlayerId|EnemyPlayerId).*\?.*(DirectorateMark|SodalityMark)' game/scripts/ | grep -vE ':[[:space:]]*//' || true)
           if [ -n "$HITS" ]; then
             echo "$HITS"

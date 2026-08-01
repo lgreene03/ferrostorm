@@ -81,8 +81,13 @@ public partial class MainMenu : Control
         // Through GameFiles.RepoRoot, not the res://-parent idiom open-coded:
         // that idiom is true only when running from source, so a packaged build
         // listed no maps at all and the theatre picker came up empty.
+        // P7-8a: "skirmish-*.fmap" rather than "*.fmap". data/maps now also
+        // holds a four-start TEST FIXTURE for the runner's multiseatgate, and a
+        // fixture carries no fairness proof by construction - an unfiltered
+        // listing would have offered it here as a theatre to play, which is
+        // exactly what its own header says must never happen.
         foreach (var f in System.IO.Directory.GetFiles(
-            System.IO.Path.Combine(GameFiles.RepoRoot, "data", "maps"), "*.fmap"))
+            System.IO.Path.Combine(GameFiles.RepoRoot, "data", "maps"), "skirmish-*.fmap"))
         {
             _maps.Add(f);
             _mapPick.AddItem(System.IO.Path.GetFileNameWithoutExtension(f).ToUpperInvariant());

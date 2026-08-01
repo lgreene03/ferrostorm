@@ -291,7 +291,7 @@ public sealed class MapData
 
     /// <summary>
     /// ADR-011 (Wave B5): the skirmish opening hand, authored here in the sim's
-    /// MapLoader layer rather than in the client. Grants both players the
+    /// MapLoader layer rather than in the client. Grants every seat the
     /// treasury, spawns a construction yard per player at this map's start
     /// cells, and mirrors the classic opening force - one harvester and three
     /// rifle squads each - around those cells. The runner's gated skirmish
@@ -311,19 +311,55 @@ public sealed class MapData
     ///
     /// Faction-neutral (common hardware only), so the caller sets factions
     /// itself: the runner leaves them at the default and the client applies the
-    /// player's menu choice (TICKET-P6-FACTION-01) before this call. Two-player
-    /// skirmish only, exactly as the branch this replaces was.
+    /// player's menu choice (TICKET-P6-FACTION-01) before this call.
+    ///
+    /// P7-8a: N seats, not two. GDD s9 promises "1-7 opponents" and this was the
+    /// last thing in the sim that could not deliver it - the seat count comes
+    /// from the WORLD now and the start cells from the MAP, and the two are
+    /// intersected. A world with more seats than the map declares starts is a
+    /// setup error and says so; a map with SPARE starts simply leaves them
+    /// unused, which is what lets an eight-start map host a three-player game.
+    /// Seats are walked in ASCENDING SEAT ORDER, over the world's seat range and
+    /// never over Starts itself: iteration order decides entity ids and entity
+    /// ids are hashed, so taking a Dictionary in its own order here would be an
+    /// unordered-iteration determinism violation of exactly the kind CLAUDE.md
+    /// forbids. Starts is only ever INDEXED, so it contributes no order at all.
     /// </summary>
     public void PlaceSkirmishStart(World world, long startCredits)
     {
-        world.GrantCredits(0, startCredits);
-        world.GrantCredits(1, startCredits);
-        world.SpawnConstructionYard(0, Starts[0].Cx, Starts[0].Cy);
-        world.SpawnConstructionYard(1, Starts[1].Cx, Starts[1].Cy);
-        for (int p = 0; p < 2; p++)
+        int seats = world.PlayerCount;
+        // Checked in full before anything is spawned, so a bad setup leaves no
+        // half-placed world behind and the message names both counts. The
+        // dictionary indexer this replaced threw KeyNotFoundException, which
+        // names neither and reads as an engine fault rather than as "four
+        // players were asked for on a two-player map".
+        for (int p = 0; p < seats; p++)
+            if (!Starts.ContainsKey(p))
+                throw new FormatException(
+                    $"skirmish start: the world has {seats} seats but this map declares "
+                    + $"{Starts.Count} start position(s), and seat {p} has none. Add a 'start {p} CX CY' "
+                    + "line to the map or build the world with fewer seats.");
+        // The three passes stay in this order - every treasury, then every yard,
+        // then every opening force - because that is the order the two-player
+        // form spawned in and the spawn order IS the entity id order the state
+        // hash folds. Rearranged into one pass per seat it would still play the
+        // same and hash differently, which is a replay-compatibility break for
+        // no gain.
+        for (int p = 0; p < seats; p++) world.GrantCredits(p, startCredits);
+        for (int p = 0; p < seats; p++) world.SpawnConstructionYard(p, Starts[p].Cx, Starts[p].Cy);
+        for (int p = 0; p < seats; p++)
         {
             int sx = Starts[p].Cx, sy = Starts[p].Cy;
-            int side = p == 0 ? 1 : -1;
+            // Which way the opening force is laid out beside its yard. This was
+            // "player 0 leans right, player 1 leans left", a binary that has no
+            // meaning once there is a seat 2. Read as a PROPERTY rather than as
+            // a seat number it says "lay the force out towards the middle of the
+            // map", and that is what this is. On all eight committed skirmish
+            // maps start 0 sits left of centre and start 1 sits right of it, so
+            // this reproduces the old ternary seat for seat on every map that
+            // ships, while also being meaningful for a seat anywhere on a map
+            // with four or eight of them.
+            int side = 2 * sx < Width ? 1 : -1;
             world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2));
             for (int i = 0; i < 3; i++)
                 world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2),

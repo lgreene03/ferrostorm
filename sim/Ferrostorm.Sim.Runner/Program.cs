@@ -27,6 +27,7 @@ using Ferrostorm.Sim;
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
+//   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
@@ -4560,6 +4561,275 @@ int SizeProbe()
     return 0;
 }
 
+int MultiSeatGate()
+{
+    // P7-8a. GDD s9 promises "Skirmish vs AI, 1-7 opponents" and the engine was
+    // built for exactly two seats. Additive, the infiltratorgate pattern: a
+    // standalone mode and a Match battery stage, never a golden scenario, so the
+    // golden list stays 24.
+    //
+    // The claim being tested is not "a world can be constructed with players: 4"
+    // - it always could. It is that the three things which quietly assumed two
+    // seats now behave at four: the opening hand places all of them, victory
+    // waits for all but one to fall rather than firing on the first casualty,
+    // and the commander does not care which seat it sits in. Stage 5 is the
+    // other half of the claim: that generalising the placement moved nothing at
+    // two seats, asserted against a hash measured before the change rather than
+    // inferred from a green golden run.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    string mapPath = Path.Combine(root, "data", "maps", "test-4seat.fmap");
+    const int Seats = 4;
+
+    (MapData Map, World World) FourSeat(ulong seed)
+    {
+        var m = MapData.Load(mapPath);
+        var w = m.BuildWorld(seed, players: Seats, out _, ww =>
+        {
+            CatalogueFiles.RegisterAll(ww,
+                Path.Combine(root, "data", "units"), Path.Combine(root, "data", "buildings"));
+            CatalogueFiles.RegisterFields(ww, Path.Combine(root, "data", "fields"));
+        });
+        m.PlaceSkirmishStart(w, 8000);
+        return (m, w);
+    }
+
+    int leftLeaning = 0, rightLeaning = 0;
+
+    // --- 1. PLACEMENT: four seats, four opening hands, each laid out towards
+    //        the middle of the map. The lean is measured off the SPAWNED
+    //        ENTITIES rather than read back off the rule that placed them, and
+    //        it is checked against the map centre, because a placement that put
+    //        every force on the same side of its yard would satisfy "all four
+    //        seats got a force" perfectly.
+    {
+        var (map, w) = FourSeat(4100);
+        if (w.PlayerCount != Seats)
+            return Fail($"multiseat: the world reports {w.PlayerCount} seats, not {Seats}");
+        for (int p = 0; p < Seats; p++)
+        {
+            int yards = 0, harvesters = 0, squads = 0, sumX = 0, mobiles = 0;
+            foreach (var e in w.Entities)
+            {
+                if (!e.Alive || e.PlayerId != p) continue;
+                if (e.Kind == EntityKind.ConstructionYard) yards++;
+                if (e.Kind == EntityKind.Harvester) { harvesters++; sumX += Map.CellOf(e.X); mobiles++; }
+                if (e.Kind == EntityKind.Unit) { squads++; sumX += Map.CellOf(e.X); mobiles++; }
+            }
+            if (yards != 1)
+                return Fail($"multiseat: seat {p} got {yards} construction yards, not 1");
+            if (w.Credits(p) != 8000)
+                return Fail($"multiseat: seat {p} got {w.Credits(p)} credits, not the 8000 granted");
+            if (harvesters != 1 || squads != 3)
+                return Fail($"multiseat: seat {p} got {harvesters} harvesters and {squads} squads, "
+                            + "not the 1 and 3 of the opening hand");
+            int sx = map.Starts[p].Cx;
+            int lean = sumX / mobiles - sx;            // mean cell offset of the force from the yard
+            int towardsCentre = map.Width / 2 - sx;    // which way the middle of the map lies
+            if (lean == 0 || (lean > 0) != (towardsCentre > 0))
+                return Fail($"multiseat: seat {p}'s opening force sits {lean} cells from its yard at x={sx} "
+                            + $"on a {map.Width}-wide map - that is away from the centre, not towards it");
+            if (lean > 0) rightLeaning++; else leftLeaning++;
+        }
+        // The property that a one-sided placement would fail: the four seats do
+        // NOT all lean the same way, because they are not all on the same side
+        // of the map.
+        if (leftLeaning == 0 || rightLeaning == 0)
+            return Fail($"multiseat: all four opening forces lean the same way ({rightLeaning} right, "
+                        + $"{leftLeaning} left) - the layout is a constant, not a bearing on the map centre");
+    }
+
+    // --- 1b. And a world with more seats than the map has starts is a SETUP
+    //         ERROR that says so. The dictionary indexer this replaced threw
+    //         KeyNotFoundException, which names neither number and reads like an
+    //         engine fault rather than "you asked for four players on a
+    //         two-player map". The message is asserted, not just the throw: an
+    //         unhelpful exception is the defect here.
+    {
+        var two = MapData.Load(Path.Combine(root, "data", "maps", "skirmish-01.fmap"));
+        var w = two.BuildWorld(4104, players: Seats, out _);
+        try
+        {
+            two.PlaceSkirmishStart(w, 8000);
+            return Fail("multiseat: four seats on a two-start map placed silently - "
+                        + "two commanders would have begun with nothing");
+        }
+        catch (FormatException ex)
+        {
+            if (!ex.Message.Contains("4") || !ex.Message.Contains("2"))
+                return Fail($"multiseat: the refusal must name both counts, and says: {ex.Message}");
+        }
+    }
+
+    // --- 2 and 3. FREE-FOR-ALL VICTORY, and one elimination event per seat.
+    //        This is precisely what the client was getting wrong: it ended the
+    //        match on the FIRST elimination and named the winner by flipping a
+    //        seat number. With four seats, two of them falling leaves two still
+    //        fighting and there is no winner to name. The intermediate state is
+    //        asserted at every step, because a rule that declared a winner on
+    //        the last elimination alone would pass a check that only looked at
+    //        the end.
+    int elimTotal = 0;
+    {
+        var w = new World(4101, 64, 64, players: Seats);
+        var yard = new int[Seats];
+        for (int p = 0; p < Seats; p++) yard[p] = w.SpawnConstructionYard(p, 6 + 14 * p, 8);
+        var elims = new int[Seats];
+        void Advance(int ticks)
+        {
+            for (int t = 0; t < ticks; t++)
+            {
+                w.Step(default);
+                foreach (var ev in w.Events)
+                    if (ev.Type == GameEventType.PlayerEliminated) elims[ev.B]++;
+            }
+        }
+        void Fell(int p)
+        {
+            var e = w.Entities[yard[p]];
+            e.Alive = false;
+            w.SetEntityForTest(yard[p], e);
+        }
+
+        Advance(20);
+        if (w.Winner >= 0)
+            return Fail($"multiseat: four seats all standing and the sim declared seat {w.Winner} the winner");
+
+        Fell(1);
+        Advance(20);
+        if (w.Winner >= 0)
+            return Fail($"multiseat: one seat of four is out and the sim declared seat {w.Winner} the winner - "
+                        + "three are still standing");
+        if (elims[1] != 1)
+            return Fail($"multiseat: seat 1 fell and the sim announced it {elims[1]} times, not once");
+
+        Fell(2);
+        Advance(20);
+        if (w.Winner >= 0)
+            return Fail($"multiseat: TWO seats of four are out and the sim declared seat {w.Winner} the winner - "
+                        + "two are still standing, which is the whole free-for-all case");
+        if (elims[2] != 1)
+            return Fail($"multiseat: seat 2 fell and the sim announced it {elims[2]} times, not once");
+
+        Fell(3);
+        Advance(20);
+        if (w.Winner != 0)
+            return Fail($"multiseat: three seats of four are out and the winner is {w.Winner}, not the last seat 0");
+
+        // ...and the announcements do not repeat once the match is settled. 400
+        // further ticks, because a per-tick announcement would look identical to
+        // a correct one over the 20 the stages above run.
+        Advance(400);
+        if (elims[0] != 0)
+            return Fail($"multiseat: the SURVIVOR was announced eliminated {elims[0]} times");
+        for (int p = 1; p < Seats; p++)
+            if (elims[p] != 1)
+                return Fail($"multiseat: seat {p} was announced eliminated {elims[p]} times over 480 ticks, not once");
+        elimTotal = elims[1] + elims[2] + elims[3];
+    }
+
+    // --- 4. THE COMMANDER IS SEAT-AGNOSTIC. Four SkirmishAI instances on four
+    //        seats: every one of them must actually issue orders (a commander
+    //        that silently did nothing at seat 3 would leave every other
+    //        assertion here true), and the run must be reproducible, which is
+    //        the sim's own definition of consistent.
+    var ordersPerSeat = new int[Seats];
+    ulong aiHash;
+    {
+        ulong Play(int[]? tally)
+        {
+            var (_, w) = FourSeat(4102);
+            var ais = new SkirmishAI[Seats];
+            for (int p = 0; p < Seats; p++) ais[p] = new SkirmishAI(p);
+            var cmds = new List<Command>();
+            for (int t = 0; t < 400; t++)
+            {
+                cmds.Clear();
+                for (int p = 0; p < Seats; p++)
+                {
+                    int mark = cmds.Count;
+                    ais[p].Act(w, cmds);
+                    if (tally != null) tally[p] += cmds.Count - mark;
+                }
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            }
+            return w.ComputeStateHash();
+        }
+        aiHash = Play(ordersPerSeat);
+        for (int p = 0; p < Seats; p++)
+            if (ordersPerSeat[p] == 0)
+                return Fail($"multiseat: the commander at seat {p} issued no orders in 400 ticks - "
+                            + "it is keyed on the seat, not on what it owns");
+        if (Play(null) != aiHash)
+            return Fail("multiseat: a four-seat AI match is not reproducible - the world is not consistent");
+    }
+
+    // --- 5. HASH-NEUTRALITY OF THE PLACEMENT CHANGE, asserted directly rather
+    //        than inferred from a green golden diff. Both numbers below were
+    //        MEASURED ON MAIN, before PlaceSkirmishStart was generalised, by
+    //        building this same two-player skirmish-01 world and printing its
+    //        hash at placement and after 600 quiet ticks. If the generalisation
+    //        had shifted a spawn order, a cell centre or the mirroring of the
+    //        opening force by so much as one unit, these would move.
+    const ulong PlacedOnMain = 0x944F9440A28B59FBUL;
+    const ulong Tick600OnMain = 0x6DB7E79AAD62EFADUL;
+    {
+        var w = BuildSkirmishWorld(4105);
+        ulong placed = w.ComputeStateHash();
+        if (placed != PlacedOnMain)
+            return Fail($"multiseat: two-player placement on skirmish-01 hashes 0x{placed:X16}, "
+                        + $"but on main it hashed 0x{PlacedOnMain:X16} - the generalisation changed 2-player behaviour");
+        for (int t = 0; t < 600; t++) w.Step(default);
+        ulong played = w.ComputeStateHash();
+        if (played != Tick600OnMain)
+            return Fail($"multiseat: 600 ticks on from that placement hashes 0x{played:X16}, "
+                        + $"but on main it hashed 0x{Tick600OnMain:X16}");
+    }
+
+    // --- 6. A FOUR-SEAT WORLD SURVIVES SAVE AND LOAD. The format has always
+    //        written the player count, so this is expected to pass - which is
+    //        exactly why it is worth asserting rather than assuming, since
+    //        nothing else in the suite has ever saved a world with more than two
+    //        seats and a format that dropped the count would round-trip a
+    //        two-player world perfectly.
+    long saveBytes;
+    {
+        var (_, w) = FourSeat(4103);
+        var ais = new SkirmishAI[Seats];
+        for (int p = 0; p < Seats; p++) ais[p] = new SkirmishAI(p);
+        var cmds = new List<Command>();
+        for (int t = 0; t < 200; t++)
+        {
+            cmds.Clear();
+            for (int p = 0; p < Seats; p++) ais[p].Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        ulong before = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        saveBytes = ms.Length;
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.PlayerCount != Seats)
+            return Fail($"multiseat: a {Seats}-seat world loaded back with {loaded.PlayerCount} seats");
+        if (loaded.ComputeStateHash() != before)
+            return Fail($"multiseat: the {Seats}-seat round trip hashes 0x{loaded.ComputeStateHash():X16}, "
+                        + $"not the saved 0x{before:X16}");
+        for (int p = 0; p < Seats; p++)
+            if (loaded.Credits(p) != w.Credits(p))
+                return Fail($"multiseat: seat {p}'s treasury came back as {loaded.Credits(p)}, not {w.Credits(p)}");
+    }
+
+    Console.WriteLine($"multiseatgate: four seats each get a yard, 8000 credits and a hand of one harvester and three "
+                      + $"squads, laid out towards the map centre from both sides ({rightLeaning} leaning right, "
+                      + $"{leftLeaning} left); the sim names no winner while two of the four still stand and names "
+                      + $"seat 0 only when the third falls, announcing each of the {elimTotal} eliminations exactly "
+                      + $"once over 480 ticks; four commanders all issue orders and the match replays to the same "
+                      + $"hash 0x{aiHash:X16}; the four-seat world round-trips through {saveBytes} bytes of save "
+                      + $"unchanged; and a two-player skirmish-01 still hashes 0x{PlacedOnMain:X16} at placement and "
+                      + $"0x{Tick600OnMain:X16} 600 ticks on, the values measured on main before the change");
+    return 0;
+}
+
 int InfiltratorGate()
 {
     // P7-7. Additive, the factiondefencegate pattern: a standalone mode and a
@@ -6272,6 +6542,10 @@ int Match(ulong seed)
     // P7-7: the Infiltrator robs rather than captures.
     int infil = InfiltratorGate();
     if (infil != 0) return infil;
+    // P7-8a: the engine seats more than two commanders, and a free-for-all ends
+    // when one is left rather than when the first falls.
+    int multiseat = MultiSeatGate();
+    if (multiseat != 0) return multiseat;
     // P7-11a: the Saboteur switches a building off rather than taking it.
     int sab = SaboteurGate();
     if (sab != 0) return sab;
@@ -7132,6 +7406,7 @@ return args.Length == 0
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
         "infiltratorgate" => InfiltratorGate(),
+        "multiseatgate" => MultiSeatGate(),
         "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
         "sizeprobe" => SizeProbe(),

@@ -201,12 +201,38 @@ Still open on this row: nine or so more missions to reach the benchmarks, the
 voice set, and bringing missions 01 to 03 under the generator (P7-9a, deferred
 because it moves two goldens).
 
-**D2. Two player seats.** Every committed map declares exactly two starts and
-`MapLoader.PlaceSkirmishStart` is hardcoded to two players, while GDD section 9
-promises skirmish against one to seven opponents and custom lobbies up to four
-against four, and the production plan lists 4v4 as in scope. This is the widest
-single divergence between what ships and what is written down. It is a sim
-change and needs Producer sign-off.
+**D2. Two player seats.** GDD section 9 promises skirmish against one to seven
+opponents and custom lobbies up to four against four, and the production plan
+lists 4v4 as in scope. This was called the widest single divergence between what
+ships and what is written down, and the call was right.
+
+**The ENGINE half is closed, 2026-08-01** (P7-8a, ADR-031): the sim plays
+free-for-all with any number of seats, `PlaceSkirmishStart` places N, and the
+client no longer infers a winner by flipping a seat number. All 24 goldens
+byte-identical.
+
+The survey that preceded it inverted the expected cost and is worth recording,
+because this entry had assumed the sim was the hard part. It was not:
+`VictorySystem`, the save format, the LAN relay and `SkirmishAI` were ALREADY
+correct for N players. Three of the four two-player assumptions were in the
+client, and the worst of them was silent - with three seats the victory banner
+was exactly inverted, showing VICTORY to a player who had not won.
+
+What remains, and it is most of the player-facing half:
+
+- **No shipped map can host a third player** (P7-8b). All eight declare exactly
+  two starts, so every multi-seat map is new content, and `tools/mapgen.py`
+  assumes 180-degree rotation throughout. A fair four-start map needs the
+  cell-and-its-one-image pairing generalised to a symmetry ORBIT; 90-degree
+  rotation additionally requires a square map and none of the eight are square.
+- **The lobby cannot express a third seat.** `MatchSetup` carries one
+  `OppFaction`, and both codecs that persist it are shaped for two.
+- **4v4 is a separate project** (P7-8c, Producer-blocked). There is no team
+  field, no alliance table and no `AreAllied` predicate anywhere in the sim;
+  hostility is decided everywhere by "not me and not neutral". It touches
+  targeting, splash friendly-fire, detection and fog sharing, victory and the
+  AI, and it has no code to build on. Free-for-all was reachable from here and
+  teams are not, which is why the row was split rather than half-delivered.
 
 ## Deliberately out of scope, so the comparison stays honest
 
