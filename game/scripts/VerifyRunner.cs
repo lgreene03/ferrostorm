@@ -691,11 +691,16 @@ public partial class VerifyRunner : Node
         // the active tab - the digit keys' third meaning, all off the event.
         int tabBefore = _game.SidebarView.CurrentTabForTest;
         _game.PressKey(Settings.BindOf("sidebar_tab"));
-        Check(_game.SidebarView.CurrentTabForTest == (tabBefore + 1) % 4,
+        // Tab COUNT is read, not written: this check hardcoded 4 and broke the
+        // day an AIRCRAFT tab was added, which is a test failing for a reason
+        // that is not a defect. What it means to assert is "one press advances
+        // one tab and a full lap returns", and that is true at any count.
+        int tabs = Sidebar.TabTitleCount;
+        Check(_game.SidebarView.CurrentTabForTest == (tabBefore + 1) % tabs,
               $"Tab cycles the sidebar tab ({tabBefore} -> {_game.SidebarView.CurrentTabForTest})");
-        for (int t = 0; t < 3; t++) _game.PressKey(Settings.BindOf("sidebar_tab"));
+        for (int t = 0; t < tabs - 1; t++) _game.PressKey(Settings.BindOf("sidebar_tab"));
         Check(_game.SidebarView.CurrentTabForTest == tabBefore,
-              "...and wraps back around after four presses");
+              $"...and wraps back around after {tabs} presses");
 
         // Alt+1 on the BUILDINGS tab queues slot one, the power plant, through
         // the button's own Pressed signal - the same handler the mouse runs.
@@ -804,12 +809,19 @@ public partial class VerifyRunner : Node
         {
             registered++;
             if (sb.UnitButtonText(t).Length > 0) buttoned++;
-            else if (_game.LiveWorld.GetUnitType(t).ProducedAt is not (World.FactoryStructType or World.BarracksStructType))
+            else if (_game.LiveWorld.GetUnitType(t).ProducedAt is not (World.FactoryStructType
+                     or World.BarracksStructType or World.AirfieldStructType))
                 offTab++;
         }
         Check(registered == 20, $"the catalogue registers {registered} unit types");
-        Check(buttoned == 19 && sb.UnitButtonCount == buttoned,
-              $"...and {buttoned} of them carry a sidebar button (the hand-kept table stopped at 13)");
+        // EVERY registered unit now has a button. This asserted 19 while the
+        // Strike Flyer had no tab, and 19 was never the goal - it was the
+        // symptom of World.IsProducer omitting the Airfield, so the aircraft
+        // was unbuildable and a button for it would have been a lie. Both are
+        // fixed, so the honest assertion is the whole catalogue.
+        Check(buttoned == registered && sb.UnitButtonCount == buttoned,
+              $"...and ALL {buttoned} carry a sidebar button (the hand-kept table stopped at 13, and the "
+              + "Strike Flyer had no producer until the Airfield joined IsProducer)");
         Check(buttoned + offTab == registered,
               $"every unit without a button is one whose PRODUCER this panel has no tab for ({offTab}), "
               + "never one somebody forgot to list");
