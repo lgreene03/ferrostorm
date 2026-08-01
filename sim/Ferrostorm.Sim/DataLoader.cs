@@ -23,7 +23,8 @@ public static class DataLoader
     public sealed record StructureData(
         string Id, string Name, string Faction, int Cost, int BuildTimeTicks,
         int Hp, int PowerSupply, int PowerDraw, int SightRange, int Footprint,
-        IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes);
+        IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes,
+        int MaxAlive = 0);   // P7-11c: 0 means unlimited, which is every building but the mine
 
     public static Dictionary<string, string> ParseFlatYaml(string text)
     {
@@ -179,6 +180,11 @@ public static class DataLoader
             Footprint: footprint,
             WeaponIds: m.TryGetValue("weapon_ids", out var w) ? ParseInlineList(w) : new List<string>(),
             Prerequisites: m.TryGetValue("prerequisites", out var p) ? ParseInlineList(p) : new List<string>(),
+            // P7-11c: the per-player cap on LIVING buildings of this type, the
+            // unit loader's own key above. Absent means 0 and 0 means
+            // unlimited, so every file written before the mine is unchanged and
+            // the enforcement is a no-op for it.
+            MaxAlive: m.TryGetValue("max_alive", out _) ? ReqInt(m, "max_alive") : 0,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
 
@@ -542,6 +548,7 @@ public static class StructureCatalogue
         "com_radar_uplink" => 12,
         "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
         "com_bridge" => 14,    // ADR-025 (P6 Wave C6a): map-placed, never built
+        "com_mine" => 19,      // P7-11c: the hidden charge, built and placed like any other building
         _ => throw new FormatException($"unknown structure id '{id}'"),
     };
 
@@ -565,6 +572,7 @@ public static class StructureCatalogue
         12 => EntityKind.RadarUplink,
         13 => EntityKind.Outpost,   // ADR-021
         14 => EntityKind.Bridge,    // ADR-025
+        19 => EntityKind.Mine,      // P7-11c
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 
@@ -597,7 +605,12 @@ public static class StructureCatalogue
                    "directorate" => World.FactionDirectorate,
                    "sodality" => World.FactionSodality,
                    _ => World.FactionCommon,
-               });
+               },
+               // P7-11c: and the cap crosses too. A max_alive parsed and then
+               // dropped would be this project's most-repeated defect in a new
+               // place, and a loud one: the file would advertise a limit the
+               // sim never applied.
+               s.MaxAlive);
 }
 
 /// <summary>

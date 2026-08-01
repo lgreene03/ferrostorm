@@ -44,7 +44,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-11a | The Sodality's Saboteur: temporarily disables a building | B3 | - (GDD s7 names the unit AND its effect; only the duration is my call) | goldens NEUTRAL, measured; catalogue checksum MOVES; save format v10 | **DONE** - ADR-030; saboteurgate (6 stages) |
 | P7-7a | **Client defect carried by P7-7:** the Infiltrator's theft raised `GameEventType.Captured`, which the client reads as an ownership CHANGE, so robbing a building told its owner "STRUCTURE LOST TO CAPTURE" about a building they still held, klaxon and all | - | - | goldens NEUTRAL, measured (the event enum is neither hashed nor saved) | **DONE** - `GameEventType.Robbed`; infiltratorgate gained the stage that catches it (proved by restoring the defect and watching it fail); client harness 130 -> 133 checks |
 | P7-11b | Hero unit: Commando and Shadow Commando | B4 | - (authorised 2026-08-01; the design is INVENTED and recorded reversibly in ADR-035) | goldens NEUTRAL, measured; catalogue checksum MOVES | **DONE** - ADR-035; herogate (7 stages incl. the no-cap control that protects the goldens) |
-| P7-11c | Mines and a minelayer | B6 | **PRODUCER.** The word does not appear in the GDD, in any ADR, or anywhere in `sim/`. B6 is a one-line entry in doc 24 sitting on top of an entire new mechanic | MOVES | **NOT TAKEN** |
+| P7-11c | Mines | B6 | - (authorised 2026-08-01; the design is INVENTED and recorded reversibly in ADR-037) | goldens NEUTRAL, measured; catalogue checksum MOVES | **DONE** - ADR-037; minegate (8 stages) |
 
 Out of scope until a GDD amendment with Producer sign-off: naval, FMV briefings,
 crates, a map editor. Recorded in doc 24 so the comparison stays honest.
@@ -558,6 +558,41 @@ lookups are all blind to it. It also hardcodes hp, armour, sight and speed, and
 every harvester moves at 0.20 where the data says 0.18.** P7-1's defect exactly,
 in the oldest spawner in the file. Fixing it moves every golden with a harvester
 in it, so it is its own wave and it is next.
+
+## Mines, and the fourth path to forget the air layer
+
+P7-11c was refused three times, and the refusal named the reason exactly: the
+damage half was nearly free because splash, `ApplyAreaDamage` and the
+superweapon's countdown all exist, and **the trigger was the entire feature**.
+
+Modelling a mine as a STRUCTURE YOU PLACE is what made it small. It inherits the
+placement command path, ownership, cost, prerequisites, the catalogue, the save
+format and `reachabilitygate`'s coverage - that gate's count moved from 14
+buildable structure types to 15 without being told mines existed. It is hidden by
+the SAME stealth flag a Phantom Tank uses, so the detector rule already IS the
+public counter GDD line 56 demands.
+
+Three findings worth more than the feature:
+
+- **A blocking mine would have corrupted the map, not merely leaked.** The flow
+  field is shared ground truth, so a blocking mine leaks its position to enemy
+  pathing while cloaked. Worse, `ValidPlacement` skips structure cells as
+  already-blocked, which a mine's are not, so a 2x2 building can legally sit over
+  a live mine - and unblocking on detonation would have cleared a cell that
+  building occupies. Skipping both block and unblock is a correctness
+  requirement, not symmetry.
+- **AIRCRAFT SET OFF GROUND MINES in the first draft.** ADR-028 records its own
+  first pass guarding two of THREE target-selection paths and shooting an
+  aircraft down with a rifle. This is the fourth path and it was missed again.
+  **Three misses across four paths says the omission is structural**: nothing in
+  the codebase makes "is this target airborne" a question a new path has to
+  answer. Fixed here; the general problem is a row of its own.
+- **The sidebar's STRUCTURE lists are still hand-kept arrays.** The unit list was
+  derived after seven units were found unbuildable; the two structure tables were
+  not, and the mine needed a hand-added entry. It is GUARDED rather than fixed -
+  the harness asserts every registered structure carries a button, so the next
+  building fails CI rather than shipping unreachable - but deriving it properly
+  is owed.
 
 ## What this phase does NOT do
 

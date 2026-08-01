@@ -49,7 +49,7 @@ public readonly struct Command
 // reserving is free and a later collision with a saved byte is silent and
 // fatal. Outpost (17) graduated under ADR-021 and Bridge (18) under ADR-025.
 // APPEND ONLY: the byte is written into saves.
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18 }
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 // APPEND ONLY (like EntityKind): the hash stores (int)e.Stance and the save
@@ -790,7 +790,12 @@ public sealed partial class World
     public readonly record struct StructureTypeDef(int Cost, EntityKind Kind, int BuildTicks,
         int Hp = 0, int PowerSupply = 0, int PowerDraw = 0, int SightCells = 0,
         int Footprint = FootprintSize, int WeaponId = 0, int[]? Prereqs = null,
-        int Faction = FactionCommon)
+        int Faction = FactionCommon,
+        // P7-11c: the per-player cap on LIVING structures of this type, the
+        // UnitTypeDef column of the same name for the building catalogue. 0
+        // means unlimited, so every building authored before the mine is
+        // untouched and the enforcement is a no-op for all of them.
+        int MaxAlive = 0)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -801,12 +806,14 @@ public sealed partial class World
             => Cost == other.Cost && Kind == other.Kind && BuildTicks == other.BuildTicks
             && Hp == other.Hp && PowerSupply == other.PowerSupply && PowerDraw == other.PowerDraw
             && SightCells == other.SightCells && Footprint == other.Footprint
-            && WeaponId == other.WeaponId && PrereqsEqual(Prereqs, other.Prereqs);
+            && WeaponId == other.WeaponId && MaxAlive == other.MaxAlive
+            && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
             var h = new HashCode();
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
+            h.Add(MaxAlive);
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -884,6 +891,29 @@ public sealed partial class World
         // many entities and none of them should enter the fog pass. Hp 800 makes
         // felling one a deliberate act rather than incidental splash.
         14 => new StructureTypeDef(400, EntityKind.Bridge, 0, Hp: 800, SightCells: 0, Footprint: 1),
+        // P7-11c: the Mine. A STRUCTURE rather than a new kind of thing, which
+        // is what lets it inherit the BuildStructure/PlaceStructure path,
+        // ownership, cost, the tech tree, the catalogue and the sidebar whole.
+        //
+        // Footprint 1, the wall's and the bridge's shape: a mine is one cell.
+        // SightCells 0 for the wall's reason and one of its own - a buried
+        // charge that lit the fog would be a free scout that also explodes.
+        // BuildTicks 60 (four seconds) keeps it in the yard queue like every
+        // other building, which is what stage 1 of minegate asserts; a 0 here
+        // would make it a barrier-shaped upfront purchase and would put it in
+        // reachabilitygate's map-placed exclusion list by accident.
+        // Hp 100 makes a revealed mine cheap to clear, which is the other half
+        // of GDD line 56's "every stealth tool has a public counter".
+        // Prereqs the radar uplink (type 12), the tier the superweapon and the
+        // airfield already wait behind.
+        // MaxAlive 20 is the cap, and it is set where it is for two reasons.
+        // 20 x 400 credits is 8000, EXACTLY the ceiling MaxBarriersPerPlayer
+        // already sets on the other tool that can carpet a map (80 walls at
+        // 100), so the two cost the same to max out and neither is the cheap
+        // way to tile the ground. And it bounds MineSystem's per-tick scan at
+        // 20 mines per player rather than at whatever a treasury can afford.
+        19 => new StructureTypeDef(400, EntityKind.Mine, 60, Hp: 100, SightCells: 0, Footprint: 1,
+                                   Prereqs: new[] { 12 }, MaxAlive: MinesPerPlayer),
         _ => default,
     };
 
@@ -900,7 +930,7 @@ public sealed partial class World
     // free despite the gap in the id map: it is GateStructType, reserved by
     // ADR-005 for the deferred wall gates, and SeedStructureTypes skips it.
     // Taking it would have silently collided with C6b the day it lands.
-    public const int MaxStructType = 18;   // P7-2b raised it for the two faction defences
+    public const int MaxStructType = 19;   // P7-11c raised it for the Mine
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -1088,6 +1118,13 @@ public sealed partial class World
                 h.Add(id); h.Add(d.Cost); h.Add((int)d.Kind); h.Add(d.BuildTicks); h.Add(d.Hp);
                 h.Add(d.PowerSupply); h.Add(d.PowerDraw); h.Add(d.SightCells); h.Add(d.Footprint);
                 h.Add(d.WeaponId);
+                // P7-11c: the building cap rides the checksum for the argument
+                // its unit twin above records verbatim. It decides whether a
+                // BuildStructure and a PlaceStructure are ACCEPTED, so two peers
+                // holding different caps would lay different numbers of mines
+                // from the same command stream while agreeing on every stat in
+                // the game - a desync no other comparison in the protocol sees.
+                h.Add(d.MaxAlive);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -1181,6 +1218,42 @@ public sealed partial class World
     public const int BarrierBuildRadius = 2;
     /// <summary>Per-player barrier cap (ADR-005 clause 5). Derived from the TDD s6 ratified budget of 200 structures (03-technical-design-document.md:59): 2 x 80 + ~32 real buildings = ~192, inside budget. A performance guarantee, not a design flourish.</summary>
     public const int MaxBarriersPerPlayer = 80;
+
+    /// <summary>P7-11c: the Mine's structure type id, named for the reason the
+    /// three above it are - a bare 19 in a comparison is a number nobody can
+    /// check on sight.</summary>
+    public const int MineStructType = 19;
+
+    /// <summary>
+    /// The per-player mine cap, authored as com_mine.yaml's max_alive and
+    /// stated here so the file and the compiled reference def name one number.
+    /// Read through the def like every other column; nothing tests this
+    /// constant at runtime.
+    /// </summary>
+    public const int MinesPerPlayer = 20;
+
+    /// <summary>
+    /// What a mine does when it goes off, in ApplyAreaDamage's terms: full
+    /// Omni damage within 1.5 cells of the charge and half within 3, exactly
+    /// as a superweapon strike lands.
+    ///
+    /// A COMPILED constant rather than an authored one, and the precedent is
+    /// deliberate: the superweapon's 900 and the hero's DemolitionDamage are
+    /// both compiled, because neither is a WEAPON. Authoring this in
+    /// data/weapons and hanging it off the def's weapon_ids would put a
+    /// non-zero WeaponId on the entity, and an armed structure in this sim
+    /// AUTO-ACQUIRES and FIRES (CombatSystem keys on exactly that), so a mine
+    /// would sit in the ground shooting at people instead of waiting for them.
+    /// </summary>
+    public const int MineDamage = 400;
+
+    /// <summary>
+    /// How close an enemy must come, SQUARED, so the per-tick scan never takes
+    /// a square root: 1.5 cells, which is ApplyAreaDamage's own inner radius,
+    /// so a triggered mine's full damage covers exactly what set it off.
+    /// Fix64.FromFraction(9, 4) is 1.5^2 stated without a multiply.
+    /// </summary>
+    public static readonly Fix64 MineTriggerRadiusSq = Fix64.FromFraction(9, 4);
 
     /// <summary>TICKET-P5-REP-07: the Service Depot's field-repair reach, in
     /// cells. A system constant, deliberately NOT sight_range - the depot sees
@@ -1530,15 +1603,64 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// P7-11c: the Mine. The SECOND spawn in the sim that deliberately does not
+    /// call BlockFootprint, and the reason is not the bridge's.
+    ///
+    /// A mine that blocked would be a wall that explodes, and worse than that
+    /// it would LEAK. Blocked cells are what the flow field routes around, and
+    /// the flow field is shared ground truth rather than anything fog hides, so
+    /// an enemy could read a cloaked minefield straight off the way their own
+    /// units chose to walk. The Stealth flag would be decoration. The whole
+    /// point of the property is that the field is invisible until a detector
+    /// finds it, so the cells must stay exactly as passable as bare ground.
+    ///
+    /// The complement is in FootprintOnDeath, which must skip the UNBLOCK for
+    /// the same reason. See the note there: it is not symmetry for its own
+    /// sake, it is a correctness requirement.
+    ///
+    /// Stealth is the entity flag every other cloaked thing in the game sets,
+    /// so the mine inherits CanTarget, the decloak-on-firing rule and
+    /// DetectionSystem's detector sweep with no new machinery - which is what
+    /// gives GDD line 56 its public counter here (a Sentinel Scout reveals the
+    /// field and a revealed mine can simply be shot).
+    /// </summary>
+    public int SpawnMine(int player, int ax, int ay)
+    {
+        var def = GetStructureType(MineStructType);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        _minesInPlay = true;
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Mine,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = MineStructType,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+            // WeaponId is left at 0 on purpose and MineDamage explains why: an
+            // armed structure fires, and a mine waits.
+            Stealth = true,
+        });
+    }
+
+    /// <summary>
     /// ADR-025: what a destroyed structure does to its footprint. Everything
     /// leaves passable rubble, EXCEPT a bridge, which was the crossing: its
     /// wreck BLOCKS the cell, so routes re-form around the gap.
     ///
     /// This is the only place in the sim where an entity dying makes ground
     /// LESS passable, and it is why the wave needed its own gate.
+    ///
+    /// P7-11c adds the third case, and it is a correctness requirement rather
+    /// than tidiness. A mine never blocked, so it has nothing to give back, and
+    /// calling UnblockFootprint here would clear a cell the mine does not own:
+    /// ValidPlacement skips structure cells as "already blocked", which a mine's
+    /// are not, so a 2x2 building may legally be sited over a live mine. Were
+    /// the detonation to unblock, that building's cell would go passable
+    /// underneath it and units would path INTO it. The unblock would also flush
+    /// the whole flow cache on every detonation for nothing.
     /// </summary>
     private void FootprintOnDeath(in Entity t)
     {
+        if (t.Kind == EntityKind.Mine) return;
         int ax = AnchorOf(t.X, t.StructType), ay = AnchorOf(t.Y, t.StructType);
         int f = FootprintOf(t.StructType);
         if (t.Kind == EntityKind.Bridge) BlockFootprint(ax, ay, f);
@@ -1663,6 +1785,11 @@ public sealed partial class World
         MovementSystem();
         SeparationSystem();
         DetectionSystem();
+        // P7-11c: mines read the tick's SETTLED positions, so this sits after
+        // movement and separation and before anything that shoots. It is a
+        // single branch when no mine has ever been placed, which is every
+        // golden scenario, and that is what keeps their hashes byte-identical.
+        MineSystem();
         // P7-3: a destroyed carrier takes its hold with it. Walked by ENTITY
         // INDEX rather than over the dictionary's keys, because dictionary
         // iteration order is a determinism hazard and this runs every tick on
@@ -1988,6 +2115,12 @@ public sealed partial class World
                 // lane 1 (the Entity's own ReadyStructure), otherwise the yard's
                 // second lane.
                 bool readyInLane2 = false;
+                // P7-11c: the per-type building cap, checked before either
+                // payment model runs, so a refused placement costs nothing and
+                // (for the queued path) keeps its readiness for a later attempt
+                // once a mine has gone off. A no-op for every type whose def
+                // carries no cap, which is every type but the Mine.
+                if (AtMaxAliveStructure(c.PlayerId, c.AuxId)) break;
                 if (barrier)
                 {
                     if (_credits[c.PlayerId] < sd.Cost) break;
@@ -2062,6 +2195,7 @@ public sealed partial class World
                     case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
                     case EntityKind.Barracks: SpawnBarracks(c.PlayerId, ax, ay); break;
                     case EntityKind.RadarUplink: SpawnRadarUplink(c.PlayerId, ax, ay); break;
+                    case EntityKind.Mine: SpawnMine(c.PlayerId, ax, ay); break;               // P7-11c
                 }
                 break;
             }
@@ -2081,6 +2215,10 @@ public sealed partial class World
                 // prerequisite mid-build does not cancel what is already in
                 // the queue.
                 if (!HasPrereqs(c.PlayerId, bd.Prereqs)) break;
+                // P7-11c: the per-type building cap, refused where the order is
+                // QUEUED as well as where it is placed, so a player at the cap
+                // never sinks credits into a mine that can never be sited.
+                if (AtMaxAliveStructure(c.PlayerId, c.AuxId)) break;
                 if (!_queues.TryGetValue(e.Id, out var bq)) _queues[e.Id] = bq = new List<int>();
                 // ADR-023, THE OVERFLOW RULE, and the whole reason this wave is
                 // hash-neutral. Lane 1 takes the order whenever lane 1 is IDLE;
@@ -2366,7 +2504,14 @@ public sealed partial class World
              // PlayerId < 0 and a bridge is always neutral; and it is not
              // capturable, which CaptureSystem excludes explicitly, because
              // capture is the outpost's whole point and would be nonsense here.
-             or EntityKind.Bridge;
+             or EntityKind.Bridge
+             // P7-11c: the Mine is a structure, and that membership is the
+             // feature rather than a detail. It is what makes it placeable
+             // through PlaceStructure, damageable, killable, sellable and
+             // counted by every scan that says "a building". Left out of this
+             // enumeration it would be a thing the sim does not recognise at
+             // all, which the Emplacement's entry above records the cost of.
+             or EntityKind.Mine;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
@@ -2508,6 +2653,39 @@ public sealed partial class World
         {
             var o = _entities[i];
             if (o.Alive && o.PlayerId == player && o.UnitType == unitType && ++alive >= cap) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// P7-11c: AtMaxAlive for the BUILDING catalogue, and deliberately its twin
+    /// down to the shape rather than a differently-argued rule. A cap of 0 means
+    /// unlimited and returns false before anything is counted, which is what
+    /// every structure but the Mine carries, so this is one dictionary read and
+    /// a compare for the whole existing catalogue and no golden can move on it.
+    ///
+    /// Enforced at BOTH command-path points, which is the lesson P7-11b's own
+    /// gate paid for: refusing only at PlaceStructure would let a player queue
+    /// and PAY for a mine past the cap and then find it unplaceable, with the
+    /// credits sunk in a ready slot that can never be spent.
+    ///
+    /// PUBLIC for HasPrereqs' and AtMaxAlive's reason: the sidebar must be able
+    /// to ask the same question the sim gates on, or it lights a button whose
+    /// order is then silently dropped.
+    ///
+    /// An entity-index scan, deterministic by construction, stopping at the cap
+    /// rather than totalling the base.
+    /// </summary>
+    public bool AtMaxAliveStructure(int player, int structType)
+    {
+        int cap = GetStructureType(structType).MaxAlive;
+        if (cap <= 0) return false;
+        int alive = 0;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var o = _entities[i];
+            if (o.Alive && o.PlayerId == player && o.StructType == structType
+                && IsStructure(o.Kind) && ++alive >= cap) return true;
         }
         return false;
     }
@@ -2861,6 +3039,116 @@ public sealed partial class World
     /// <summary>Can observer player target this entity? Stealth blocks targeting unless revealed by firing or detected by that player's detectors.</summary>
     private static bool CanTarget(int byPlayer, in Entity t)
         => !(t.Stealth || t.FieldCloaked) || t.RevealTicks > 0 || (t.DetectedMask & (1 << byPlayer)) != 0;
+
+    /// <summary>
+    /// Has this world ever held a mine? The gate on MineSystem's scan, and the
+    /// reason all 24 goldens stay byte-identical: no golden scenario, save or
+    /// replay places one, so the flag is never set and the system costs a
+    /// single branch per tick.
+    ///
+    /// Deliberately NOT hashed and NOT serialized. It is a fast path and
+    /// nothing else: with no LIVING mine the scan below writes no entity,
+    /// raises no event and draws no random number, so a world that resumes with
+    /// this false is in the identical state to one that resumes with it true.
+    /// The deserializer sets it from the entities it reads (see
+    /// World.Serialization.cs) so a save taken mid-minefield resumes on the
+    /// fast path's correct side rather than relying on that equivalence.
+    ///
+    /// Monotone on purpose: it is never cleared when the last mine dies,
+    /// because a player who laid one will lay another and a flag that flickered
+    /// would be one more thing to keep true.
+    /// </summary>
+    private bool _minesInPlay;
+
+    /// <summary>
+    /// P7-11c: the proximity trigger. A mine detonates when a living enemy UNIT
+    /// or HARVESTER comes within MineTriggerRadiusSq of it, and detonating
+    /// consumes it.
+    ///
+    /// SCAN THEN APPLY, and the choice is the whole determinism argument of
+    /// this wave rather than a style preference.
+    ///
+    /// Phase one reads the tick's settled positions and collects every mine
+    /// whose trigger holds, walking ENTITY INDICES ascending - never a
+    /// dictionary, never a set, so the collection order is the world's own
+    /// order on every machine. Phase two consumes all of them, then blasts all
+    /// of them, in that same index order.
+    ///
+    /// Apply-as-you-go was rejected and the counter-example is exact: mine A at
+    /// a lower index kills the scout that was one tick from mine B, so under
+    /// apply-as-you-go B reads a dead trigger and does NOT go off, and whether
+    /// it goes off depends on which mine happens to hold the lower index. That
+    /// is a rule the player cannot predict and, worse, a rule whose outcome
+    /// changes if entity ids are ever assigned differently. Under scan-then-
+    /// apply both mines saw a living target when the tick began, so both go off.
+    ///
+    /// Consuming every triggered mine BEFORE any blast lands is the second half
+    /// of the same argument. A mine is a structure and ApplyAreaDamage damages
+    /// structures, so mine A's blast would otherwise kill mine B outright -
+    /// same asymmetry, decided by index. Marking them all dead first makes
+    /// sympathetic detonation total: each triggered mine lands its own charge
+    /// and none of them absorbs another's.
+    ///
+    /// An UNTRIGGERED mine caught in the blast simply dies, with no detonation.
+    /// That is the deliberate rule and not an oversight: proximity is the only
+    /// thing that sets a mine off, so being shot, sold or splashed destroys it
+    /// the way it destroys any other building.
+    /// </summary>
+    private void MineSystem()
+    {
+        if (!_minesInPlay) return;
+
+        List<int>? triggered = null;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var m = _entities[i];
+            if (!m.Alive || m.Kind != EntityKind.Mine) continue;
+            for (int j = 0; j < _entities.Count; j++)
+            {
+                var t = _entities[j];
+                // Enemy only, which is what makes a minefield a defence rather
+                // than a hazard to its own side; PlayerId < 0 keeps the neutrals
+                // (ferrite, outposts, bridges) out with the same test.
+                if (!t.Alive || t.PlayerId < 0 || t.PlayerId == m.PlayerId) continue;
+                if (t.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
+                // AIRCRAFT DO NOT SET OFF GROUND MINES. ADR-028 clause 2 says an
+                // aircraft is not on the ground: it ignores terrain, blocks no
+                // cell and takes no part in separation. A buried charge it flies
+                // over is the same category of thing, and a mine that downed a
+                // Strike Flyer would also be the only anti-air answer in the
+                // game that is not the flak track, which ADR-028 clause 4 makes
+                // deliberate.
+                //
+                // Written out because this project has been bitten twice by the
+                // air layer being forgotten in a target-selection path: ADR-028
+                // records a first pass that guarded two of THREE paths and shot
+                // an aircraft down with a rifle. This is the fourth path and it
+                // was missed again in the first draft of the mine.
+                if (IsAirborne(t)) continue;
+                if (Fix64.DistSq(t.X - m.X, t.Y - m.Y) > MineTriggerRadiusSq) continue;
+                (triggered ??= new List<int>()).Add(i);
+                break;   // one trigger is enough; the blast is not per victim
+            }
+        }
+        if (triggered is null) return;
+
+        for (int k = 0; k < triggered.Count; k++)
+        {
+            int i = triggered[k];
+            var m = _entities[i];
+            m.Alive = false;
+            _entities[i] = m;
+            // The ordinary death event, so the client removes the actor exactly
+            // as it does for any other building. FootprintOnDeath is not called
+            // and must not be: a mine never blocked (see the note there).
+            _events.Add(new GameEvent(GameEventType.Died, i, -1));
+        }
+        for (int k = 0; k < triggered.Count; k++)
+        {
+            var m = _entities[triggered[k]];
+            ApplyAreaDamage(m.X, m.Y, MineDamage);
+        }
+    }
 
     /// <summary>
     /// TICKET-P3-FAC-03: engineers (unit type 11) ordered onto an enemy
@@ -4176,7 +4464,12 @@ public sealed partial class World
     /// never ends. ADR-021 adds the Outpost to the same exclusion: a captured
     /// income node is not a base.</summary>
     private static bool IsHope(in Entity e)
-        => (IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost)
+        // P7-11c joins the Mine to the same exclusion on the barrier's exact
+        // argument: a player whose last possession is one buried 400-credit
+        // charge nobody can even see is not still in the game, and counting it
+        // would mean the match never ends.
+        => (IsStructure(e.Kind) && !IsBarrier(e.Kind) && e.Kind != EntityKind.Outpost
+            && e.Kind != EntityKind.Mine)
            || e.UnitType == McvUnitType;
 
     /// <summary>Does this player still hold anything that counts as being in

@@ -93,6 +93,17 @@ public partial class Sidebar : PanelContainer
         // (World.cs BuildStructure's faction check, which stays authoritative).
         new("VEIL PROJECTOR", World.VeilStructType, "sod_veil_projector"),
         new("SUPERWEAPON", 6, "dir_superweapon"),
+        // P7-11c: the Mine. Listed here BY HAND, and the fact that it has to be
+        // is worth stating: the UNIT list on this panel is derived from the
+        // catalogue (see UnitItem, and the seven unbuildable units that taught
+        // it), but the two STRUCTURE tables above are still hand-kept, so a new
+        // building does NOT get a button automatically. VerifyRunner's
+        // "every registered STRUCTURE carries a button" check is what catches
+        // the omission, and it is the only thing that would.
+        // It wears the wall segment's icon for now, a low slab that reads as
+        // something laid on the ground; a bespoke one is owed to art-pipeline,
+        // the ADR-019 interim precedent.
+        new("MINE", World.MineStructType, "com_wall_straight"),
     };
     /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
     /// deferred gate). The TABLE may name it, because a table of buttons is a

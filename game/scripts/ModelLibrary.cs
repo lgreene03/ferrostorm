@@ -59,6 +59,13 @@ public partial class ModelLibrary : Node
         // segment, a low slab that reads as decking; the bespoke model is owed
         // to art-pipeline.
         { 18, "com_wall_straight" },
+        // 19 = Mine (P7-11c). No com_mine.glb exists yet; it takes the straight
+        // wall segment, the lowest slab in the library, which is the closest
+        // thing to something laid flat on the ground. The bespoke model is owed
+        // to art-pipeline. Note that this actor is only ever DRAWN for its owner
+        // or for a player whose detector has found it - the sim's stealth rules
+        // decide that, not this table.
+        { 19, "com_wall_straight" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit
