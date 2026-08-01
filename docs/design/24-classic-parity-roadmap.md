@@ -290,10 +290,26 @@ always", and **that rule has no termination condition.** Two economy rows in a
 row lengthened the build ladder, so the commander spends longer and longer
 building and a richer economy makes it *less* able to fight rather than more.
 
-**So the next row is the commander's SPENDING, not its income**, and the free
-harvester ships once income becomes army. Until then GDD s4's economy stays
-two-thirds implemented on purpose, with the reason recorded rather than
-suspected.
+**That diagnosis was wrong, and the correction closed the row** (P7-7d,
+ADR-049). `economyprobe` gained army columns, and they disproved it in a single
+run: on main the commander goes 3, 6, 9, 12 units while its credits oscillate
+between 1292 and 4018, and the seat that banked 38,823 had **the biggest army on
+the board** at 22 units. It was never failing to spend - it was out-earning one
+factory and one barracks, whose queues cap at two items each. A throughput
+ceiling, not a build-order stall.
+
+The real culprit was a **`+1 bought harvester` derived and shipped beside** the
+GDD clause, and never isolated from it. On its own the free harvester makes the
+commander **faster**: mission-01 clears its camp at tick **3462**, against a 3688
+baseline and the 4946 that ADR-047 left it at. The `+1` was not even necessary -
+the skirmish start already provides one harvester, so two purchased refineries
+deliver two more and the commander reaches **2 refineries and 3 harvesters**, the
+float GDD s4 specifies, with no derived addition at all.
+
+**GDD s4's economy is now fully implemented.** The lesson banked, because it cost
+a wave: ADR-048 shipped two changes together, measured the pair, and blamed the
+written one. Two changes in a wave is one change too many when either could
+explain the result.
 
 ## Tier D: content volume
 
