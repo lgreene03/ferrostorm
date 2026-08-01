@@ -27,6 +27,7 @@ using Ferrostorm.Sim;
 //   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
 //   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
+//   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
@@ -2291,7 +2292,7 @@ int CatalogueRefuse()
 }
 
 // Byte surgery for the backwards-compatibility gates: rebuild a CURRENT
-// (v4) save as an older format on disk. v4 -> v3 strips the ADR-007 rally
+// (v10) save as an older format on disk. v4 -> v3 strips the ADR-007 rally
 // fields from every entity record; below v3 the ADR-006 catalogue checksum
 // goes too, and below v2 the per-player faction byte. The walk mirrors the
 // serializer's layout field by field; if that layout drifts, the load
@@ -2301,19 +2302,21 @@ int CatalogueRefuse()
 // shared, layout-aware helper.)
 byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u;
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au;
     using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    // P7-3: the SOURCE is whatever Save() currently writes, which is v9 now.
-    // Pinned to a literal version this helper broke the moment the format
-    // moved, and it broke in the battery rather than here - the same
-    // name-one-version trap the loader's hasBuildLanes had.
-    if (input.ReadUInt32() != magicV9)
-        throw new InvalidOperationException("save surgery expects a v9 stream (the current Save format)");
+    // P7-11a: the SOURCE is whatever Save() currently writes, which is v10 now.
+    // Pinned to a literal version this helper breaks the moment the format
+    // moves, and it breaks in the BATTERY rather than here - the same
+    // name-one-version trap the loader's hasBuildLanes had, and it caught v10
+    // exactly as it caught v9. The one line to change is this one, plus a walk
+    // step for whatever block the new format appended.
+    if (input.ReadUInt32() != magicV10)
+        throw new InvalidOperationException("save surgery expects a v10 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2371,12 +2374,12 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         int n = input.ReadInt32(); w.Write(n);
         for (int k = 0; k < n; k++) w.Write(input.ReadBytes(34)); // one serialized Command
     }
-    // ADR-023's lane block: kept for a v8 target, dropped below it. v9 is the
-    // SOURCE format and is refused as a target rather than half-copied, the
-    // same reason v8 used to be.
-    if (targetMagic == magicV9) throw new InvalidOperationException("save surgery downgrades; v9 is the source format, not a target");
+    // ADR-023's lane block: kept for a v8 target and above, dropped below it.
+    // v10 is the SOURCE format and is refused as a target rather than
+    // half-copied, the same reason v9 used to be.
+    if (targetMagic == magicV10) throw new InvalidOperationException("save surgery downgrades; v10 is the source format, not a target");
     int laneCount = input.ReadInt32();
-    bool keepLanes = targetMagic == magicV8;
+    bool keepLanes = targetMagic is magicV8 or magicV9;
     if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
@@ -2386,17 +2389,29 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         if (keepLanes) { w.Write(yard); w.Write(prog); w.Write(paid); w.Write(ready); w.Write(n); }
         for (int k = 0; k < n; k++) { int t = input.ReadInt32(); if (keepLanes) w.Write(t); }
     }
-    // P7-3 (v9 only): the transport holds, consumed and DROPPED. Every target
-    // this helper produces predates transports, so a hold cannot be expressed
-    // in any of them - and a unit that was aboard is simply not in that older
-    // world, which is what those formats meant.
+    // P7-3's transport holds: kept for a v9 target, dropped below it, where a
+    // hold cannot be expressed at all - and a unit that was aboard is simply
+    // not in that older world, which is what those formats meant.
     int cargoCount = input.ReadInt32();
+    bool keepCargo = targetMagic == magicV9;
+    if (keepCargo) w.Write(cargoCount);
     for (int i = 0; i < cargoCount; i++)
     {
-        input.ReadInt32();                                // carrier id
+        int carrier = input.ReadInt32();
         int n = input.ReadInt32();
-        for (int k = 0; k < n; k++) { input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); }
+        if (keepCargo) { w.Write(carrier); w.Write(n); }
+        for (int k = 0; k < n; k++)
+        {
+            int ut = input.ReadInt32(), hp = input.ReadInt32(), rank = input.ReadInt32();
+            if (keepCargo) { w.Write(ut); w.Write(hp); w.Write(rank); }
+        }
     }
+    // P7-11a (v10 only): the switched-off buildings, consumed and DROPPED.
+    // Every target this helper produces predates the saboteur, so a disable
+    // cannot be expressed in any of them, and a building that was dark simply
+    // works in that older world - which is what those formats meant.
+    int disabledCount = input.ReadInt32();
+    for (int i = 0; i < disabledCount; i++) { input.ReadInt32(); input.ReadInt32(); }
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
@@ -4641,6 +4656,231 @@ int InfiltratorGate()
     return 0;
 }
 
+int SaboteurGate()
+{
+    // P7-11a. Additive, the infiltratorgate pattern it is modelled on: a
+    // standalone mode and a Match battery stage, never a golden scenario, so
+    // the golden list stays 24 and the hashes stay byte-identical.
+    //
+    // The claim is not "a unit exists that sets a flag". It is that switching a
+    // building off has the CONSEQUENCE the GDD line promises, which is why
+    // every stage below asserts a measured number - a supply figure, a hit
+    // point total, an owner - rather than the flag that produced it. A gate
+    // that asserted IsDisabled would pass over a sabotage that did nothing.
+    const int Sab = World.SaboteurUnitType, Infil = World.InfiltratorUnitType,
+              Engineer = World.EngineerUnitType;
+
+    (World W, int Wrecker, int Plant) Setup(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int plant = w.SpawnPowerPlant(1, 30, 20);
+        var d = w.GetUnitType(Sab);
+        int wrecker = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp,
+                                  d.Armour, 0, veterancy: false, unitType: Sab);
+        return (w, wrecker, plant);
+    }
+
+    // Walk the saboteur onto its target and report the tick the building is due
+    // back, read from the event rather than recomputed here: a gate that
+    // recomputed the deadline could not catch the sim getting it wrong.
+    int RunOnto(World w, int wrecker, int target)
+    {
+        int until = -1;
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, wrecker, Fix64.Zero, Fix64.Zero, target) };
+        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order);
+        for (int t = 0; t < 60 && w.Entities[wrecker].Alive; t++)
+        {
+            w.Step(t == 0 ? span : default);
+            foreach (var ev in w.Events)
+                if (ev.Type == GameEventType.Sabotaged && ev.A == target) until = ev.C;
+        }
+        return until;
+    }
+
+    int supBefore = 0, supDark = 0, supBack = 0;
+
+    // --- 1. It switches the lights off, and the SUPPLY falls. The power tally
+    //        is the load-bearing consequence: a plant that is off browns the
+    //        base out through ADR-008's existing rules, so this is the stage
+    //        that proves the feature does something rather than records
+    //        something.
+    {
+        var (w, wrecker, plant) = Setup(3400);
+        supBefore = w.PowerOf(1).Supply;
+        if (supBefore <= 0)
+            return Fail($"saboteur: the fixture must supply power before the raid ({supBefore}) - otherwise the drop proves nothing");
+        int until = RunOnto(w, wrecker, plant);
+        if (until < 0)
+            return Fail("saboteur: reaching the building must raise a Sabotaged event carrying the tick it comes back");
+        if (w.Entities[wrecker].Alive)
+            return Fail("saboteur: the act must consume the saboteur, as capture consumes an engineer");
+        if (!w.IsDisabled(plant))
+            return Fail("saboteur: the building must be switched off after the raid");
+        supDark = w.PowerOf(1).Supply;
+        if (supDark != 0)
+            return Fail($"saboteur: a switched-off plant must supply nothing (supply {supBefore} before, {supDark} after)");
+    }
+
+    // --- 2. It is SABOTAGE, not capture and not demolition. Both of the other
+    //        answers to a building already exist; a saboteur that damaged it
+    //        would be a slow bomb, and one that took it would be a second
+    //        engineer, and either way the unit would not be the one GDD s7
+    //        names.
+    {
+        var (w, wrecker, plant) = Setup(3401);
+        int hp = w.Entities[plant].Hp;
+        RunOnto(w, wrecker, plant);
+        if (!w.Entities[plant].Alive)
+            return Fail("saboteur: the building must still be STANDING - this is sabotage, not demolition");
+        if (w.Entities[plant].Hp != hp || w.Entities[plant].Hp != w.Entities[plant].MaxHp)
+            return Fail($"saboteur: the building must be unharmed (hp {w.Entities[plant].Hp} of {w.Entities[plant].MaxHp}) - the saboteur is not a demolition charge");
+        if (w.Entities[plant].PlayerId != 1)
+            return Fail("saboteur: the building must STAY the victim's - switching it off is not taking it");
+    }
+
+    // --- 3. It WEARS OFF, on the tick the event promised. A disable with no
+    //        end would be a destruction that left the wreck standing, which is
+    //        strictly worse than destroying it and would make the unit a
+    //        cheaper demolition charge after all.
+    {
+        var (w, wrecker, plant) = Setup(3402);
+        int until = RunOnto(w, wrecker, plant);
+        if (!w.IsDisabled(plant)) return Fail("saboteur: the fixture must be dark before the expiry is measured");
+        for (int t = 0; t < World.SabotageDurationTicks * 2 && w.IsDisabled(plant); t++) w.Step(default);
+        if (w.IsDisabled(plant))
+            return Fail($"saboteur: the sabotage must lapse (still dark {World.SabotageDurationTicks * 2} ticks on)");
+        if (w.Tick != until)
+            return Fail($"saboteur: it must come back on the promised tick (came back at {w.Tick}, the event said {until})");
+        supBack = w.PowerOf(1).Supply;
+        if (supBack != supBefore)
+            return Fail($"saboteur: the supply must RETURN when the sabotage lapses ({supBefore} before, {supDark} dark, {supBack} after)");
+    }
+
+    // --- 4. A dark turret does not shoot. Proved against a CONTROL that does,
+    //        because "the target survived" on its own is what a gate reads when
+    //        the fixture is wrong rather than when the feature works.
+    int liveKill;
+    {
+        (World W, int Turret, int Foe, int Wrecker) Fixture(ulong seed)
+        {
+            var w = new World(seed, 64, 64, players: 2);
+            w.SetFaction(0, World.FactionSodality);
+            int turret = w.SpawnTurret(1, 20, 20);       // centre (21,21), range 5
+            w.SpawnPowerPlant(1, 30, 30, supply: 500);   // or ADR-008 silences it and the stage measures nothing
+            int foe = w.SpawnUnit(0, Fix64.FromInt(23), Fix64.FromInt(21),
+                                  Fix64.Zero, 100, ArmourClass.Heavy, weaponId: 0);
+            var d = w.GetUnitType(Sab);
+            int wrecker = w.SpawnUnit(0, Fix64.FromInt(21), Fix64.FromInt(21), d.Speed, d.Hp,
+                                      d.Armour, 0, veterancy: false, unitType: Sab);
+            return (w, turret, foe, wrecker);
+        }
+
+        // The control: the gun works, and it kills the man standing in front of it.
+        var (wc, _, foeC, _) = Fixture(3403);
+        liveKill = -1;
+        for (int t = 0; t < World.SabotageDurationTicks; t++)
+        {
+            wc.Step(default);
+            if (!wc.Entities[foeC].Alive) { liveKill = t; break; }
+        }
+        if (liveKill < 0)
+            return Fail("saboteur control: the turret must kill this target when it is working - if it cannot, the silence stage proves nothing");
+
+        // The same fixture, sabotaged. The target must be untouched, not merely
+        // alive: full hit points is the difference between a gun that held its
+        // fire and one that fired slowly.
+        var (w, turret, foe, wrecker) = Fixture(3404);
+        int drawBefore = w.PowerOf(1).Draw;
+        RunOnto(w, wrecker, turret);
+        if (!w.IsDisabled(turret)) return Fail("saboteur: the turret must be switched off before its silence is measured");
+        if (w.PowerOf(1).Draw >= drawBefore)
+            return Fail($"saboteur: a switched-off building must draw nothing either (draw {drawBefore} before, {w.PowerOf(1).Draw} after)");
+        for (int t = 0; t < World.SabotageDurationTicks - 1 && w.IsDisabled(turret); t++) w.Step(default);
+        if (!w.Entities[foe].Alive || w.Entities[foe].Hp != w.Entities[foe].MaxHp)
+            return Fail($"saboteur: a dark turret must not fire (target hp {w.Entities[foe].Hp} of {w.Entities[foe].MaxHp} "
+                        + $"after {World.SabotageDurationTicks} ticks, and the working control killed it in {liveKill})");
+        // And it shoots again afterwards: the silence is the sabotage, not a
+        // turret this gate quietly broke.
+        bool killed = false;
+        for (int t = 0; t < World.SabotageDurationTicks && !killed; t++)
+        {
+            w.Step(default);
+            killed = !w.Entities[foe].Alive;
+        }
+        if (!killed)
+            return Fail("saboteur: the turret must fire again once the sabotage lapses - the silence must be temporary");
+    }
+
+    // --- 5. The engineer and the infiltrator are UNCHANGED. The contact system
+    //        carried two effects and now carries three, and a generalisation
+    //        that quietly altered either older behaviour would be a regression
+    //        wearing a refactor's clothes.
+    {
+        var w = new World(3405, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int plant = w.SpawnPowerPlant(1, 30, 20);
+        int vault = w.SpawnRefinery(1, 40, 20);
+        w.GrantCredits(1, 5000);
+        var de = w.GetUnitType(Engineer);
+        int eng = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), de.Speed, de.Hp,
+                              de.Armour, 0, veterancy: false, unitType: Engineer);
+        var di = w.GetUnitType(Infil);
+        int spy = w.SpawnUnit(0, Fix64.FromInt(41), Fix64.FromInt(21), di.Speed, di.Hp,
+                              di.Armour, 0, veterancy: false, unitType: Infil);
+        long theirs = w.Credits(1), mine = w.Credits(0);
+        var orders = new List<Command>
+        {
+            new(w.Tick, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, plant),
+            new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, vault),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(orders));
+        for (int t = 0; t < 60 && (w.Entities[eng].Alive || w.Entities[spy].Alive); t++) w.Step(default);
+        if (w.Entities[plant].PlayerId != 0 || w.Entities[eng].Alive)
+            return Fail("saboteur: adding a third effect must leave the engineer's CAPTURE working, and still consumed by it");
+        if (w.IsDisabled(plant))
+            return Fail("saboteur: a captured building must not be switched off - the effects must not bleed into each other");
+        long taken = w.Credits(0) - mine;
+        if (taken <= 0 || theirs - w.Credits(1) != taken || w.Entities[spy].Alive)
+            return Fail($"saboteur: adding a third effect must leave the infiltrator's THEFT working (gained {taken}, victim lost {theirs - w.Credits(1)})");
+        if (w.IsDisabled(vault))
+            return Fail("saboteur: a robbed building must not be switched off - the effects must not bleed into each other");
+    }
+
+    // --- 6. A save carries the darkness, the transportgate stage-6 precedent.
+    //        Without this a player who saved during a brown-out would load with
+    //        the lights back on, which is a divergence rather than a missing
+    //        feature, and nothing else in the battery would notice: the rest of
+    //        the suite only ever saves worlds with an EMPTY block, which proves
+    //        the format is positional and nothing about its contents.
+    {
+        var (w, wrecker, plant) = Setup(3406);
+        int until = RunOnto(w, wrecker, plant);
+        var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var back = World.Load(ms);
+        if (!back.IsDisabled(plant))
+            return Fail("saboteur: a v10 save must carry the switched-off buildings");
+        if (back.PowerOf(1).Supply != 0)
+            return Fail($"saboteur: a loaded world must resume DARK (supply {back.PowerOf(1).Supply}), not merely remember a flag");
+        if (back.ComputeStateHash() != w.ComputeStateHash())
+            return Fail("saboteur: a loaded world carrying a sabotage must hash identically to the one saved");
+        for (int t = 0; t < World.SabotageDurationTicks * 2 && back.IsDisabled(plant); t++) back.Step(default);
+        if (back.Tick != until)
+            return Fail($"saboteur: the resumed sabotage must lapse on the SAME tick as the original ({back.Tick} against {until})");
+    }
+
+    Console.WriteLine($"saboteurgate: the Saboteur switches a building off and the CONSEQUENCE is real - a plant supplying "
+                      + $"{supBefore} supplies {supDark} while it is dark and {supBack} again once the charge lapses, on the "
+                      + $"exact tick the event promised; the building is left standing, unharmed and still the victim's, so "
+                      + $"this is sabotage rather than capture or demolition; a dark turret holds its fire for the whole "
+                      + $"{World.SabotageDurationTicks} ticks against a control that kills the same target in {liveKill}, and "
+                      + $"shoots again afterwards; the engineer's capture and the infiltrator's theft are untouched by "
+                      + $"the third effect; and a v10 save resumes DARK and lapses on the same tick it would have");
+    return 0;
+}
+
 int CampaignGate()
 {
     // P7-9. The campaign is now six missions and a manifest of magic numbers,
@@ -6032,6 +6272,9 @@ int Match(ulong seed)
     // P7-7: the Infiltrator robs rather than captures.
     int infil = InfiltratorGate();
     if (infil != 0) return infil;
+    // P7-11a: the Saboteur switches a building off rather than taking it.
+    int sab = SaboteurGate();
+    if (sab != 0) return sab;
     // P7-9: six missions the game can open, and the two things missions 04 to
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
@@ -6889,6 +7132,7 @@ return args.Length == 0
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
         "infiltratorgate" => InfiltratorGate(),
+        "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),

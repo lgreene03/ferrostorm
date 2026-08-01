@@ -117,9 +117,28 @@ here, so banking is free and there is never a reason not to hoard.
 
 **B3. No support infantry.** No medic, no field mechanic, no scout animal. The
 repair vehicle covers part of the mechanic's role; nothing covers the rest.
+**Partly closed 2026-08-01** (P7-11a, ADR-030): the Sodality's Saboteur ships,
+and with it a third state a building can be in - standing, rubble, and now
+switched OFF. It is the sabotage half of the doctrine GDD line 30 describes,
+of which the faction previously had only the theft half.
+
+The rest of this entry is left open and should be read carefully, because it is
+the weakest entry in this document. The medic, the field mechanic and the scout
+animal are named HERE as absences and appear nowhere in the GDD. B3's own second
+sentence concedes the repair vehicle already covers the mechanic's role. A gap
+analysis noticing that a benchmark had something is not the same as this game's
+design asking for it, and the remainder of B3 needs a Producer to say which of
+those three, if any, this game actually wants before it is a ticket.
 
 **B4. No hero unit.** Each benchmark had one, and it carried a disproportionate
-share of that game's character.
+share of that game's character. **NOT TAKEN, and blocked on the Producer**
+(P7-11b). The GDD names both heroes - `Commando (hero, one at a time)` and
+`Shadow Commando (hero)` - and gives neither an ability, stats nor a tier, and
+"one at a time" has no machinery in the sim at all: there is no per-unit-type
+build cap anywhere. Everything interesting about a hero would be invention.
+Doc 23 has moreover already ruled on this exact GDD line, at s142 and again at
+s599: it "mandates the Repair Vehicle exactly as much as it mandates the
+Commando, which is to say it is a sample, not a system statement."
 
 **B5. Infiltration: HALF DELIVERED (P7-7).** The Sodality's Infiltrator steals
 a share of an enemy treasury and is consumed by the act - the credits MOVE
@@ -130,7 +149,15 @@ information warfare. It has nothing that steals, reveals, disables or denies: no
 spy, no thief, no jamming structure. The Sodality's written identity is raiding
 and economy denial, and the roster gives it no tool for the second half of that.
 
-**B6. No mines or minelayer.**
+**B6. No mines or minelayer.** **NOT TAKEN, and blocked on the Producer**
+(P7-11c). Worth stating what this one-line entry is actually asking for, because
+the line badly understates it: the word "mine" appears nowhere in the GDD, in
+any ADR, or anywhere in `sim/`. The damage half would be nearly free - splash
+damage exists, `ApplyAreaDamage` exists, and the superweapon is a working
+countdown precedent - but the TRIGGER is the entire feature, and a dormant,
+invisible, proximity-fired entity that is owned but not targetable has no
+precedent in this sim at any point. One line of gap analysis, one whole new
+mechanic, and no design behind it.
 
 **B7. One wall type at a flat 100 credits**, where the benchmarks tiered
 barriers by cost and durability - and gates are still deferred (C6b).

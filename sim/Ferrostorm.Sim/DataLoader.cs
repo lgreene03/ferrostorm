@@ -275,6 +275,7 @@ public static class UnitCatalogue
         "com_strike_flyer" => 15,     // ADR-028 (P7-4)
         "com_flak_track" => 16,       // ADR-028 clause 4: the answer
         "sod_infiltrator" => 17,      // P7-7: GDD s7's "Infiltrator (steals intel/credits)"
+        "sod_saboteur" => 18,         // P7-11a: GDD s7's "Saboteur (disables buildings)"
         _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 

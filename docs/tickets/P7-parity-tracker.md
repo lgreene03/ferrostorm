@@ -36,7 +36,11 @@ system removes a category of decision while a missing unit removes an option.
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | Bring missions 01 to 03 under the generator, and onto self-declared setup, retiring `switch (setup.MissionIndex)` in SkirmishLive.cs | D1 | - | MOVES (two goldens: entity spawn order changes) | pending - **created by P7-9, not inherited.** Missions 04 to 06 declare their own yard and credits in the fmap; 01 and 03 still get theirs from a per-mission case in C#. Two mechanisms is the duplication this phase keeps finding, and the only reason it was left is that fixing it moves goldens for no behavioural gain |
 | P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
-| P7-11 | Hero unit, mines, support infantry | B3/B4/B6 | Producer: roster additions | MOVES | pending |
+| P7-11 | ~~Hero unit, mines, support infantry~~ - **SPLIT, 2026-08-01.** One row bundling one thing that is written, one the project has already ruled is a sample, and one that appears in no design document at all | B3/B4/B6 | - | - | **SPLIT** - see "What P7-11 turned out to be" below |
+| P7-11a | The Sodality's Saboteur: temporarily disables a building | B3 | - (GDD s7 names the unit AND its effect; only the duration is my call) | goldens NEUTRAL, measured; catalogue checksum MOVES; save format v10 | **DONE** - ADR-030; saboteurgate (6 stages) |
+| P7-7a | **Client defect carried by P7-7:** the Infiltrator's theft raises `GameEventType.Captured`, which `SkirmishLive.cs:1715` consumes as an ownership CHANGE - it fires the "you lost it" alert and re-caches the owner from `ev.B`. So robbing a building announces to the victim that they have lost a building they still own | - | - | client only, no hash | pending - **found while building P7-11a, and it is mine.** Not fixed in passing because the right fix is a distinct event AND a robbery alert in the client, which needs the Godot harness. The Saboteur deliberately does NOT repeat it: it raises `Sabotaged` rather than reusing `Captured` |
+| P7-11b | Hero unit (Commando / Shadow Commando) | B4 | **PRODUCER.** Named in GDD s7, but with no ability, no stats, and a "one at a time" qualifier that has no machinery anywhere in the sim. Doc 23 s142 has ALREADY ruled on this line: "The GDD mandates the Repair Vehicle exactly as much as it mandates the Commando, which is to say it is a sample, not a system statement" | MOVES | **NOT TAKEN** |
+| P7-11c | Mines and a minelayer | B6 | **PRODUCER.** The word does not appear in the GDD, in any ADR, or anywhere in `sim/`. B6 is a one-line entry in doc 24 sitting on top of an entire new mechanic | MOVES | **NOT TAKEN** |
 
 Out of scope until a GDD amendment with Producer sign-off: naval, FMV briefings,
 crates, a map editor. Recorded in doc 24 so the comparison stays honest.
@@ -99,6 +103,48 @@ third is P7-9a above, deliberately deferred because fixing it moves goldens.
 **The lesson worth keeping:** a row estimated as "data only" was carrying three
 code defects, and none of them were found by reading the tickets. They were
 found by trying to use the feature end to end for the first time.
+
+## What P7-11 turned out to be
+
+Three rows in a trenchcoat, and only one of them is mine to take. The bar is the
+one P7-7 set and P7-6 was refused by: **is the thing written down, with what it
+does, or would I be inventing it?**
+
+- **The Saboteur is written**, in the same GDD line and the same form as the
+  Infiltrator I shipped in P7-7: `Saboteur (disables buildings)` (GDD s7,
+  line 64). Unit named, faction assigned, effect stated. Only the duration is a
+  judgement call, exactly as only the Infiltrator's 20 per cent share was. Taken,
+  as P7-11a.
+
+- **The hero is named and nothing else.** GDD line 62 gives `Commando (hero, one
+  at a time)` and line 64 `Shadow Commando (hero)`. No ability, no stats, no tier,
+  and "one at a time" has no machinery in the sim at all - there is no per-unit-
+  type build cap anywhere, only ADR-005's `MaxBarriersPerPlayer`. Every
+  interesting thing about a hero would be invention. And the project has already
+  ruled on this exact line, in doc 23 at 142 and again at 599: the GDD "mandates
+  the Repair Vehicle exactly as much as it mandates the Commando, which is to
+  say it is a sample, not a system statement." Refusing it here is consistency
+  with a decision already taken, not caution.
+
+- **Mines are written nowhere.** Not in the GDD, not in ADR-005, not in any ADR,
+  and nothing resembling the mechanic exists in `sim/`: no dormant entity, no
+  proximity trigger, no hidden-but-not-stealthed state. The damage half would be
+  nearly free (splash exists, `ApplyAreaDamage` exists, the superweapon is a
+  countdown precedent) and the TRIGGER is the whole feature. B6 is one line of
+  text in doc 24 with no design behind it.
+
+Doc 24's B3 also names a medic, a field mechanic and a scout animal - as
+ABSENCES. None appears in the GDD, and B3's own text concedes the repair vehicle
+already covers the mechanic's role. A gap analysis noticing something is missing
+is not the same as a design document asking for it, and this row is where that
+distinction has to be made rather than blurred.
+
+**Also worth recording, because it was found looking for something else:**
+`data/schema.unit.json` declares `"additionalProperties": false` and does not
+list the `air` key that `com_strike_flyer.yaml` authors and `DataLoader` reads.
+There is no runtime JSON-schema validator in `sim/`, so the schema is
+documentation that has silently drifted from the loader. Filed rather than
+fixed in passing.
 
 ## What this phase does NOT do
 
