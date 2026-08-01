@@ -621,7 +621,7 @@ public partial class SkirmishLive : Node3D
                 // loop adds nothing and the LAN match is exactly what it was.
                 var rung = (AiDifficulty)System.Math.Clamp(_setup.AiDifficulty, 0, 3);
                 var netCommanders = new System.Collections.Generic.List<SkirmishAI>();
-                for (int seat = LanLobby.HumanSeats; seat < _world.PlayerCount; seat++)
+                foreach (int seat in LanCommandedSeats(_world.PlayerCount))
                     netCommanders.Add(_setup.AiPreset switch
                     {
                         1 => SkirmishAI.Rusher(seat, rung, _world),
@@ -651,7 +651,7 @@ public partial class SkirmishLive : Node3D
                 // nothing calls that until this scene is ready.
                 long handicap = SkirmishAI.StartingCreditHandicap(rung, _world);
                 if (handicap > 0)
-                    for (int seat = LanLobby.HumanSeats; seat < _world.PlayerCount; seat++)
+                    foreach (int seat in LanCommandedSeats(_world.PlayerCount))
                         _world.GrantCredits(seat, handicap);
             }
 
@@ -767,6 +767,30 @@ public partial class SkirmishLive : Node3D
     /// not take the menu down with it" posture the difficulty rung takes.
     /// Zero, the value every sidecar written before this field carries, means
     /// fill the map.</summary>
+    /// <summary>Which seats a LAN match gives an AI commander: every seat no
+    /// peer holds. ADR-033.
+    ///
+    /// A method rather than two loops sharing a bound, because it WAS two
+    /// loops - one building commanders and one granting Brutal's handicap -
+    /// and the pair of them are the same rule. The commanded seats and the
+    /// handicapped seats drifting apart would be a desync that reads correct
+    /// on either machine alone, which is the exact species of defect that
+    /// preceded this method.
+    ///
+    /// It deliberately does NOT take the local seat. The offline arm grants
+    /// the handicap to "every seat that is not the local one", and that rule
+    /// cannot cross into LAN because `LocalPlayerId` differs BETWEEN THE
+    /// PEERS: the host would answer one set and the joiner another, and the
+    /// two worlds would part company before tick 0. Peer-independence here is
+    /// structural, and the harness pins it by asserting the answer from the
+    /// seat-1 side, where the old rule would have returned seat 0.</summary>
+    public static System.Collections.Generic.List<int> LanCommandedSeats(int playerCount)
+    {
+        var seats = new System.Collections.Generic.List<int>();
+        for (int seat = LanLobby.HumanSeats; seat < playerCount; seat++) seats.Add(seat);
+        return seats;
+    }
+
     public static int SeatsFor(MapData map, MatchSetup setup)
     {
         int ceiling = SeatsFor(map);

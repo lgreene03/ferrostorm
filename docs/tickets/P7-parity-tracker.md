@@ -390,6 +390,32 @@ could not disagree. Anything that can differ between peers and change the
 command stream must be in the catalogue checksum. The gate proves the fold is
 real by moving the checksum on one unit of wave size.
 
+## The harness gap ADR-033 left, closed
+
+ADR-033 recorded honestly that the client-side rule about WHICH seats get
+commanders rested on reasoning and a blob round-trip check, not on the harness,
+whose LAN stage built a two-seat world. That gap is closed.
+
+Two things now hold it. The lobby stage runs a second time on **skirmish-09
+across a real socket**, and asserts the joiner took the host's seat count, that
+both peers built a FOUR-seat world, and that the two are byte-identical before
+tick 0. The two-seat stage could not see this class at all: on a two-start map
+both sides answer 2 whatever either believes, so a peer that DISAGREES about how
+many seats exist is invisible there.
+
+And `LanCommandedSeats` is asserted **from seat 1**, which is the seat this
+harness drives and the seat where the old rule's absence shows: "every seat that
+is not the local one" read from seat 1 returns seat 0, the human on the other end
+of the socket, and would have handed Brutal's handicap to a person.
+
+The method exists at all because the rule was **two loops sharing a bound** - one
+building commanders, one granting the handicap. They are the same rule, and the
+two drifting apart would be a desync that reads correct on either machine alone,
+which is the exact species of defect that preceded it.
+
+Client harness 146 to 153 checks. Also corrected a message from the previous wave
+that contradicted itself, reporting "came back 3, not the host's 3" on success.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against
