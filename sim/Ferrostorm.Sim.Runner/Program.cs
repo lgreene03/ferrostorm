@@ -919,7 +919,15 @@ ulong ScenarioExpansion(ulong seed, Action<int, ulong>? cp = null, Action<string
         if (e.Kind == EntityKind.Harvester && e.HState != HarvestState.Idle) working++;
     }
     if (cys != 2) throw new Exception($"expansion: expected a second base, got {cys} CYs");
-    if (refineries != 2) throw new Exception($"expansion: expected a refinery per base, got {refineries}");
+    // P7-7a: TWO refineries per base, from GDD s4's stated equilibrium. This
+    // read `refineries != 2` and called it "a refinery per base", which was
+    // TICKET-AI-03's rule written into an assertion - so the scenario enforced
+    // the very cap this row removes. Expressed against the constant rather than
+    // as a literal, so the two cannot drift apart again.
+    int wantRefineries = cys * SkirmishAI.RefineriesPerBase;
+    if (refineries != wantRefineries)
+        throw new Exception($"expansion: expected {SkirmishAI.RefineriesPerBase} refineries per base across {cys} "
+                            + $"bases ({wantRefineries}), got {refineries}");
     if (world.Entities[farField].FerriteAmount >= 12000)
         throw new Exception("expansion: the far field was never mined");
     if (working < 1) throw new Exception("expansion: no harvester working at the end");
@@ -8472,6 +8480,96 @@ int FactionPowerGate()
     return 0;
 }
 
+int EconomyFloatGate()
+{
+    // P7-7a (ADR-047). Additive, the airgate pattern: a standalone mode and a
+    // Match battery stage.
+    //
+    // GDD s4 states the designed equilibrium outright:
+    //   "A player FLOATS AT 2 REFINERIES / 3 HARVESTERS on one base; expansion
+    //    or raiding decides who out-produces whom."
+    //
+    // The commander ran ONE of each. ADR-041 measured that while refusing a
+    // credit ceiling, and drew the conclusion that made this row: the economy
+    // is UNDERSIZED, not overflowing. This gate is what stops it drifting back.
+
+    // THE NUMBER COMES FROM THE GDD, NOT FROM THE CODE, and that distinction is
+    // the whole reason this gate is worth having.
+    //
+    // The first draft asserted `SkirmishAI.RefineriesPerBase != 2` and then
+    // measured the commander against SkirmishAI.RefineriesPerBase. Both were
+    // useless. The first is a compile-time constant compared to a literal, so
+    // the compiler folded it away and the build said so ("unreachable code
+    // detected") - a dead assertion that could never fail. The second was worse
+    // for being alive: a gate that compares the code against its own constant
+    // FOLLOWS THE CODE WHEREVER IT GOES, so setting the constant back to 1 would
+    // have passed cleanly.
+    //
+    // So the target is written here as a literal, sourced from GDD s4, and the
+    // commander is measured against THAT.
+    const int GddRefineriesOnOneBase = 2;   // GDD s4: "floats at 2 refineries / 3 harvesters on one base"
+
+    // A rich commander with room to build, run long enough to settle.
+    (int Refineries, int Harvesters, long MinCredits) Settle(ulong seed)
+    {
+        var w = new World(seed, 96, 64, players: 2);
+        w.GrantCredits(0, 12000);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 12, 30, supply: 2000);
+        int harv = w.SpawnHarvester(0, Fix64.FromInt(14), Fix64.FromInt(34));
+        int field = w.SpawnFerriteField(Fix64.FromInt(22), Fix64.FromInt(30), 200000);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(34), 200000);
+        w.SpawnConstructionYard(1, 86, 30);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+        long minCredits = long.MaxValue;
+        for (int t = 0; t < 9000; t++)
+        {
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+            // Only once the base is genuinely running, so the opening's
+            // deliberate poverty is not read as starvation.
+            if (t > 3000 && w.Credits(0) < minCredits) minCredits = w.Credits(0);
+        }
+        int refineries = 0, harvesters = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (e.Kind == EntityKind.Refinery) refineries++;
+            if (e.Kind == EntityKind.Harvester) harvesters++;
+        }
+        return (refineries, harvesters, minCredits);
+    }
+
+    // --- 2. THE BEHAVIOUR. One base, so the target is exactly what GDD s4
+    //        writes for one base.
+    {
+        var s = Settle(3900);
+        if (s.Refineries < GddRefineriesOnOneBase)
+            return Fail($"economy float: GDD s4 has a player float at {GddRefineriesOnOneBase} refineries on one "
+                        + $"base and this commander settled at {s.Refineries} - TICKET-AI-03's one-per-base cap is "
+                        + "back");
+        if (s.Harvesters < GddRefineriesOnOneBase)
+            return Fail($"economy float: {s.Refineries} refineries must be worked by at least as many harvesters "
+                        + $"and there were {s.Harvesters} - a refinery with nothing mining into it is 2000 credits "
+                        + "of decoration");
+        Console.WriteLine($"  economyfloat: settled at {s.Refineries} refineries and {s.Harvesters} harvesters, "
+                          + $"treasury never below {s.MinCredits} after the opening");
+    }
+
+    Console.WriteLine("economyfloatgate: the commander runs the economy GDD s4 designs rather than half of it - two "
+                      + "refineries on one base against the one TICKET-AI-03 capped it at, each of them worked. "
+                      + "ADR-041 refused a credit ceiling and said in the same breath that the economy was "
+                      + "UNDERSIZED rather than overflowing; this is the row that refusal pointed at, and the "
+                      + "measurement is in ADR-047 as a before-and-after rather than as an opinion. NOT yet the "
+                      + "third harvester GDD s4 also writes: that one depends on the same section's 'refinery "
+                      + "includes one free harvester', which the sim has never implemented, and which is a row of "
+                      + "its own with a far wider blast radius");
+    return 0;
+}
+
 int SeismicAimGate()
 {
     // P7-5e (ADR-046). Additive, the airgate pattern: a standalone mode and a
@@ -8981,7 +9079,11 @@ int SodalityDetectorGate()
     // case that is worse and was not named, because a COMMON stealth tool had a
     // faction-locked counter.
     const int WatchPost = World.WatchPostStructType;   // 21
-    const int Mine = 19, Raider = 5, Turret = 5;
+    // P7-7a: Mine and Turret were declared here and never read, which the build
+    // has been warning about since P7-5b wrote this gate. Left as a warning they
+    // are noise that trains a reader to ignore warnings; the mine is spawned by
+    // SpawnMine and the turret by SpawnTurret, so neither number was ever needed.
+    const int Raider = 5;
 
     // --- 1. The Sodality's, and only the Sodality's.
     {
@@ -10415,6 +10517,10 @@ int Match(ulong seed)
     // P7-5e: and it aims the weapon at what the weapon is FOR.
     int seismicAim = SeismicAimGate();
     if (seismicAim != 0) return seismicAim;
+    // P7-7a: and the commander runs the economy GDD s4 designs rather than half
+    // of it, which is the row ADR-041's refusal pointed at.
+    int economyFloat = EconomyFloatGate();
+    if (economyFloat != 0) return economyFloat;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -11792,7 +11898,22 @@ int CampaignSave()
     // state, load both, resume - the winner, the messages, and the final
     // hash must all match the uninterrupted run.
     const ulong seed = 2026;
-    const int half = 1800, full = 4500; // horizon covers scripted victory under garrison-era AI doctrine
+    // P7-7a raised the horizon from 4500, and the reason is worth stating rather
+    // than absorbing. The old comment said the horizon "covers scripted victory
+    // under garrison-era AI doctrine", which was honest about being tied to how
+    // the commander played - and the commander changed. With two refineries per
+    // base it spends 2000 credits on the economy before its army, and mission-01
+    // is a camp-clearing sprint: MEASURED, scripted victory moved from tick 3688
+    // to 4946, about 34 per cent later.
+    //
+    // The mission still WINS, which is the question that mattered. This is a
+    // test driver taking longer, not the campaign getting harder - the human
+    // plays this seat in the real thing. But the slowdown is a real consequence
+    // of the row and it is recorded in ADR-047: a deeper economy is slower to
+    // first blood, and whether that trade is right for a rush personality is a
+    // balance question for the playtest rather than something to hide by
+    // widening a number.
+    const int half = 1800, full = 7000;
     string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/missions/mission-01.fmap"));
     var map = MapData.Load(path);
 
@@ -11996,6 +12117,7 @@ return args.Length == 0
         "factionsuperweapongate" => FactionSuperweaponGate(),
         "aifactiongate" => AiFactionGate(),
         "seismicaimgate" => SeismicAimGate(),
+        "economyfloatgate" => EconomyFloatGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

@@ -5262,7 +5262,7 @@ public sealed partial class World
     ///     infantry, harvesters and a power plant; NOT enough to kill a factory
     ///     (1500) or a Construction Yard (3000). That boundary is the design:
     ///     the orbital cannon ends a base, the seismic charge denies ground.
-    ///   inner 3 cells, outer 6 - "wide", exactly double the cannon's 1.5/3, so
+    ///   inner 3 cells, outer 6 - "wide", exactly twice the cannon's 1.5/3, so
     ///     it covers four times the area for under half the damage.
     ///   fields DIE rather than draining, because "destroys" is the written
     ///     word and a half-emptied field is a slower version of harvesting it.
