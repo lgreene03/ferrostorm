@@ -2235,13 +2235,23 @@ public partial class SkirmishLive : Node3D
     // toasted "UNIT DEPLOYED" and its selection readout said "UNIT". The
     // length guards at both lookups turned a missing entry into a shrug
     // instead of an error, which is why it went unnoticed.
-    private static readonly string[] UnitNames = { "", "CANNON TANK", "RIFLE SQUAD", "ROCKET SQUAD", "HARVESTER", "SHADE RAIDER", "SENTINEL SCOUT", "MCV", "HOWITZER", "PHANTOM TANK", "BULWARK TANK", "ENGINEER", "VANGUARD CAR", "REPAIR VEHICLE" };
-    /// <summary>The display name for a unit type, or "UNIT" past the table's
-    /// end. ONE lookup, because there were three and two carried their own copy
-    /// of the length guard - which turned a missing table entry into a silent
-    /// shrug in three separate readouts rather than one obvious gap.</summary>
+    /// <summary>The display name for a unit type, derived from the catalogue.
+    ///
+    /// This WAS a hand-maintained thirteen-entry table with a length guard that
+    /// returned "UNIT" past its end. The comment above records the table
+    /// falling behind once already and being fixed by adding entries; it then
+    /// fell behind again, and every unit from 14 up - the carrier, the whole
+    /// air layer, the Infiltrator, the Saboteur and both heroes - read as
+    /// "UNIT" in the selection readout and in every toast. Adding entries
+    /// treats the symptom. A hand-maintained list of something the catalogue
+    /// already knows will fall behind again, and the length guard is what makes
+    /// it silent when it does.
+    ///
+    /// One derivation now, shared with the sidebar, in UnitCatalogue. The
+    /// throw-on-unknown is deliberate and replaces the shrug: a type the
+    /// catalogue does not know is a bug, not a thing to name "UNIT".</summary>
     private static string UnitNameOf(int type) =>
-        type > 0 && type < UnitNames.Length ? UnitNames[type] : "UNIT";
+        type > 0 ? UnitCatalogue.DisplayNameOf(type) : "UNIT";
 
     /// <summary>Verification read: what a unit type is CALLED on screen.</summary>
     public string UnitNameForTest(int type) => UnitNameOf(type);
@@ -4940,6 +4950,12 @@ public partial class SkirmishLive : Node3D
     /// <summary>DR-09's check needs a live radar: the minimap swallows every
     /// click while dark, pings included, so the blackout must lift first.</summary>
     public int SpawnRadarForTest(int cx, int cy) => _world.SpawnRadarUplink(LocalPlayerId, cx, cy);
+    /// <summary>Verification hook: stand a finished FACTORY for the local seat.
+    /// A unit button carries three visibility clauses and the third is a LIVING
+    /// producer, so nothing in the VEHICLES tab can be shown to be reachable
+    /// until one stands - and reachability, not presence, is the claim worth
+    /// checking about a button.</summary>
+    public int SpawnFactoryForTest(int cx, int cy) => _world.SpawnFactory(LocalPlayerId, cx, cy);
 
     public void SetOwnerForTest(int id, int player)
     {

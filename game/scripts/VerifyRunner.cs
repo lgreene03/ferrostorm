@@ -764,6 +764,122 @@ public partial class VerifyRunner : Node
             }
         }
 
+        // --- The sidebar offers every unit the CATALOGUE registers ------------
+        // LAST, and after the block above rather than before it, because it
+        // stands a factory and queues at it: a check that leaves the world
+        // changed breaks the ones after it, so it goes where there are none.
+        //
+        // The unit list used to be a hand-kept table in Sidebar.cs and had
+        // fallen SEVEN units behind the sim - the transport, the flak track, the
+        // infiltrator, the saboteur and both heroes were registered, priced and
+        // unbuildable, because a unit reached the panel only if whoever added it
+        // remembered that file. Both halves are pinned here: that deriving the
+        // list is INERT for the thirteen that already had a button, and that it
+        // actually REACHES the ones that did not.
+        var sb = _game.SidebarView;
+        int myFaction = _game.FactionOf(_game.LocalPlayerId);
+
+        // 1. Inertness. The label is derived from the /data id now, so these
+        //    read the four id shapes that could break the derivation: two
+        //    words, one word, an initialism, and a three-word id.
+        Check(sb.UnitButtonText(2).StartsWith("RIFLE SQUAD  "),
+              $"the derived label matches the old table for com_rifle_squad (\"{sb.UnitButtonText(2)}\")");
+        Check(sb.UnitButtonText(4).StartsWith("HARVESTER  "),
+              $"...and for com_harvester (\"{sb.UnitButtonText(4)}\")");
+        Check(sb.UnitButtonText(7).StartsWith("MCV  "),
+              $"...and for com_mcv, where the whole name is the initialism (\"{sb.UnitButtonText(7)}\")");
+        Check(sb.UnitButtonText(World.RepairVehicleType).StartsWith("REPAIR VEHICLE  "),
+              $"...and for com_repair_vehicle (\"{sb.UnitButtonText(World.RepairVehicleType)}\")");
+        // Tab routing is unchanged too: produced_at still decides, so the
+        // infantry stay in INFANTRY and everything else in VEHICLES.
+        Check(sb.TabOfUnit(2) == Sidebar.TabInfantry, "a barracks unit still lands in INFANTRY");
+        Check(sb.TabOfUnit(1) == Sidebar.TabVehicles, "a factory unit still lands in VEHICLES");
+
+        // 2. The count, measured rather than assumed, plus the PROPERTY that
+        //    explains the gap. The third check is the one that never needs
+        //    editing: whatever the totals become, no unit may be missing for
+        //    any reason but a producer this panel has no tab for.
+        int registered = 0, buttoned = 0, offTab = 0;
+        foreach (int t in _game.LiveWorld.UnitTypeIds())
+        {
+            registered++;
+            if (sb.UnitButtonText(t).Length > 0) buttoned++;
+            else if (_game.LiveWorld.GetUnitType(t).ProducedAt is not (World.FactoryStructType or World.BarracksStructType))
+                offTab++;
+        }
+        Check(registered == 20, $"the catalogue registers {registered} unit types");
+        Check(buttoned == 19 && sb.UnitButtonCount == buttoned,
+              $"...and {buttoned} of them carry a sidebar button (the hand-kept table stopped at 13)");
+        Check(buttoned + offTab == registered,
+              $"every unit without a button is one whose PRODUCER this panel has no tab for ({offTab}), "
+              + "never one somebody forgot to list");
+
+        // 3. The faction gate still binds, on every button rather than on the
+        //    two it was written for. The sim refuses a Produce whose unit is
+        //    neither common nor this seat's side; the panel must hide exactly
+        //    those and no others.
+        int gateWrong = 0;
+        foreach (int t in _game.LiveWorld.UnitTypeIds())
+        {
+            if (sb.UnitButtonText(t).Length == 0) continue;
+            int f = _game.LiveWorld.GetUnitType(t).Faction;
+            if (sb.UnitFixedGateForTest(t) != (f == World.FactionCommon || f == myFaction)) gateWrong++;
+        }
+        Check(gateWrong == 0,
+              $"every unit button's faction gate agrees with the sim's own Produce refusal ({gateWrong} disagree)");
+
+        // 4. Reachability, which is the claim worth making: the flak track (type
+        //    16, ADR-028's answer to the air layer) had NO button at all before
+        //    this change. Its prerequisite is the radar uplink stood earlier, so
+        //    a factory is the only thing missing.
+        int fyard = _game.FindEntity(EntityKind.ConstructionYard, _game.LocalPlayerId);
+        if (fyard >= 0)
+        {
+            var (fx, fy) = _game.CellOfForTest(fyard);
+            int factory = _game.SpawnFactoryForTest(fx + 8, fy - 8);
+            // TWO ticks, for the reason the radar check above needs two: the
+            // sidebar refresh lives in the FRAME half, and the producer it reads
+            // is found through the client's VIEW, which is a tick behind the
+            // world a spawn was written into.
+            _game.StepOneTick();
+            _game.StepOneTick();
+            Check(sb.UnitButtonText(16).Length > 0, "the flak track HAS a button (it had none before)");
+            Check(factory >= 0 && _game.ProducerForUnitForTest(16) == factory,
+                  $"...and the client routes a flak-track order to the factory just stood ({_game.ProducerForUnitForTest(16)} vs {factory})");
+            Check(_game.SidebarUnitVisible(16), "...and it is on offer once a factory stands");
+            int qFlak = _game.QueueLengthOf(factory);
+            Check(sb.PressUnitButton(16), "...and the button can actually be pressed");
+            _game.StepTicks(2);
+            Check(_game.QueueLengthOf(factory) == qFlak + 1,
+                  $"...and the SIM accepted what it sent ({_game.QueueLengthOf(factory)} queued at the factory)");
+
+            // The control, and it is what separates "the gate binds" from "the
+            // panel shows everything": a factory unit of the OTHER side must be
+            // absent here AND refused by the sim if the command is sent anyway.
+            // Chosen from the catalogue at run time, so the check does not care
+            // which seat it is sitting in.
+            int foreign = -1;
+            foreach (int t in _game.LiveWorld.UnitTypeIds())
+            {
+                var d = _game.LiveWorld.GetUnitType(t);
+                if (d.ProducedAt != World.FactoryStructType) continue;
+                if (d.Faction == World.FactionCommon || d.Faction == myFaction) continue;
+                foreign = t;
+                break;
+            }
+            Check(foreign > 0, $"the catalogue carries a factory unit of the other side to control against (type {foreign})");
+            if (foreign > 0)
+            {
+                Check(!_game.SidebarUnitVisible(foreign), $"unit type {foreign} is ABSENT at this seat, not merely greyed");
+                Check(!sb.PressUnitButton(foreign), "...so its button cannot be pressed either");
+                int qForeign = _game.QueueLengthOf(factory);
+                _game.QueueUnit(foreign);          // the command by hand, past the panel
+                _game.StepTicks(2);
+                Check(_game.QueueLengthOf(factory) == qForeign,
+                      "...and the sim refuses it even when the order is sent past the panel");
+            }
+        }
+
         RunLanChecks();
     }
 

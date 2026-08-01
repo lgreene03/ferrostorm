@@ -470,6 +470,42 @@ the existing three assumed**, and both findings are worse than the feature:
   right-clicking an outpost, latent since P7-7, proved by removing the guard and
   watching the gate throw.
 
+## Seven units were unbuildable, and one still is
+
+Found 2026-08-01 while giving the Infiltrator and the heroes sidebar buttons.
+The panel had a **hand-maintained thirteen-entry table** against a catalogue of
+twenty, so the Carrier, the Strike Flyer, the Flak Track, the Infiltrator, the
+Saboteur and both heroes had no button at all. **P7-3 and P7-4 were reported as
+DONE with their units unreachable by any player.**
+
+The list is derived from the catalogue now, and the refactor is provably inert:
+all thirteen hand-written labels are EXACTLY what stripping the faction prefix
+and upper-casing produces, with zero mismatches. Nineteen buttons where there
+were thirteen.
+
+**The same defect had a second instance**, which the first one's own comment
+predicted. `SkirmishLive` carried another thirteen-entry name table with a
+length guard returning "UNIT" past its end, so every unit from 14 up read as
+"UNIT" in the selection readout and in every toast. That comment records the
+table falling behind once already and being fixed BY ADDING ENTRIES, which
+treats the symptom: a hand-maintained list of something the catalogue already
+knows will fall behind again, and the length guard is what makes it silent. One
+derivation now, shared, throwing on an unknown type rather than shrugging.
+
+**AND THE ONE STILL BROKEN, which is worse than any of the above.**
+`World.IsProducer` is `Factory or ConstructionYard or Barracks`. **The Airfield
+is not in it.** `Produce` breaks on that predicate before reading anything else,
+so **the Strike Flyer cannot be built by anybody, in any mode, and never could
+be.** ADR-028 shipped an air layer whose aircraft is unreachable.
+
+`airgate` never caught it because it spawns flyers with `SpawnUnit` directly and
+never ORDERS one - the same shape as P7-7a, where a gate proved the sim's
+behaviour and said nothing about what the game does. The sidebar wave therefore
+ships 19 buttons rather than 20, deliberately: a button the sim silently drops
+would break the one property that panel guarantees. Fixing `IsProducer` is a sim
+change touching the four sites that predicate's comment names, including a
+queue-hash fold, so it is its own wave and it is next.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against
