@@ -1,0 +1,49 @@
+# P7-5b (DR-03, ADR-043): the Sodality's answer to cloak, and the first
+# STRUCTURE in the game that reveals it.
+#
+# GDD line 56 is the written requirement: "Cloaked units decloak on firing and
+# near detectors; detectors are visible and killable. EVERY STEALTH TOOL HAS A
+# PUBLIC COUNTER." The Directorate owned the only detector in the game
+# (dir_sentinel_scout), so that sentence was true for one side and false for the
+# other. WHICH thing carries the counter is invented; that there must be one is
+# not.
+#
+# Set against the Sentinel Scout rather than priced alone, because the two are
+# the same answer given in two shapes, and the shape is the identity:
+#   the Directorate SWEEPS - a scout car drives where it suspects
+#   the Sodality WAITS     - a post is planted where it predicts
+id: sod_watch_post
+name: Watch Post
+faction: sodality
+cost: 350
+build_time_ticks: 80
+hp: 260
+power_supply: 0
+power_draw: 15
+sight_range: 8
+footprint: 1
+detector: true
+weapon_ids: []
+prerequisites: [com_power_plant]
+build_tab: defence
+notes: >
+  Reveals cloaked hostiles within sight_range, which for a detector IS the
+  detection radius: the sim has never carried a separate detection range, and
+  giving this one would have been a second number meaning almost the same thing.
+
+  UNARMED on purpose. GDD line 56 says detectors are "visible and killable", and
+  a detector that shoots is a turret with a bonus rather than a thing an
+  opponent can plan around. Killing this is how a Sodality cloak gets its
+  cover back, so it has to be killable without also being free.
+
+  350 credits against the Sentinel Scout's 400, and 260 hit points against its
+  90, so it is cheaper and far harder to pick off. It pays for both by never
+  moving. Sight 8 against the scout's 7 is the one number where it wins
+  outright, and it has to: a detector that cannot be repositioned must cover
+  more ground to be worth planting at all.
+
+  prerequisites names com_power_plant, which since P7-5a means A POWER PLANT
+  rather than that specific building, so the Sodality's own generator unlocks
+  it. Early on purpose - a counter that arrives after the tech tree is a
+  counter to nothing, since the stealth it answers is available from the
+  barracks.

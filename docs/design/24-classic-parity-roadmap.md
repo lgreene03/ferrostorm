@@ -195,8 +195,22 @@ branch was the only one in the sim that did not exclude fields. GDD s8 reserves
 destroying a field to the Sodality seismic charge, so that identity could not
 have shipped on top of it.
 
-DR-03 and DR-04 remain open, and Q017's sequencing question is now answered by
-having taken its own first candidate.
+**Two thirds closed 2026-08-01** (P7-5b, ADR-043): DR-03 shipped, so GDD line
+56's "every stealth tool has a public counter" is true for both sides rather than
+one. The Sodality gets a Watch Post, a **structure** rather than a unit, because
+every Sodality unit is itself cloaked and a cloaked detector contradicts the same
+line that requires one. The shape is the identity: the Directorate **sweeps**
+with a mobile scout, the Sodality **waits** behind a planted post.
+
+The justification Q017 gave for DR-03 was the mirror match, and it turned out to
+be the weaker half. **`com_mine` is faction COMMON and stealthed, and its own
+`/data` notes claim line 56 is satisfied "by a Sentinel Scout revealing the
+field" - a unit only the Directorate can build.** A common tool with a
+faction-locked counter is a defect rather than a missing feature, and the file
+asserting otherwise was wrong for half the players.
+
+DR-04 remains open, and Q017's sequencing question is answered by having taken
+its own first candidate.
 
 ## Tier D: content volume
 

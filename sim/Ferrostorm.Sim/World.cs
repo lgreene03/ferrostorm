@@ -53,7 +53,7 @@ public readonly struct Command
 // borrowed from that reservation, because the two numbering spaces are
 // different and ADR-005 line 76 records that confusing them is silent and fatal.
 // APPEND ONLY: the byte is written into saves.
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19, Gate = 20 }
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19, Gate = 20, WatchPost = 21 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 /// <summary>
@@ -982,6 +982,13 @@ public sealed partial class World
         // means unlimited, so every building authored before the mine is
         // untouched and the enforcement is a no-op for all of them.
         int MaxAlive = 0,
+        // P7-5b: this building reveals stealth within its SightCells, the
+        // UnitTypeDef column of the same name for the building catalogue.
+        // Until now only a unit could detect, because Entity.Detector was
+        // written in exactly one place (SpawnUnit), so the Directorate's mobile
+        // Sentinel Scout was the only counter to cloak in the game and the
+        // Sodality had none at all.
+        bool Detector = false,
         // Which build tab offers this building, authored in /data. The ONE
         // column on this def the sim never reads: it decides nothing about what
         // a command does, only about where a player finds the button. It is
@@ -1003,6 +1010,17 @@ public sealed partial class World
             && Hp == other.Hp && PowerSupply == other.PowerSupply && PowerDraw == other.PowerDraw
             && SightCells == other.SightCells && Footprint == other.Footprint
             && WeaponId == other.WeaponId && MaxAlive == other.MaxAlive
+            // P7-5b: FACTION, which this hand-written comparison has been
+            // missing since P7-1 put the field on the def - and the omission
+            // matters more than it looks. This Equals is what the /data
+            // round-trip selftest uses, so a building whose yaml said one side
+            // and whose compiled reference said the other would round-trip
+            // CLEAN. P7-5a moved com_power_plant to directorate in both places
+            // and would have passed having moved it in either.
+            && Faction == other.Faction
+            // And Detector with it, so the same hole is not opened by the same
+            // field arriving a second time.
+            && Detector == other.Detector
             // The tab joins the comparison even though it joins no checksum: it
             // is what makes the /data round-trip in selftest prove the authored
             // key against the compiled reference, which is the only thing that
@@ -1015,7 +1033,7 @@ public sealed partial class World
             var h = new HashCode();
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
-            h.Add(MaxAlive); h.Add(Tab);
+            h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector);
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -1201,6 +1219,23 @@ public sealed partial class World
         20 => new StructureTypeDef(130, EntityKind.PowerPlant, 45, Hp: 70, SightCells: 3,
                                    PowerSupply: 40, Footprint: 1, Faction: FactionSodality,
                                    Tab: BuildTab.Buildings),
+        // P7-5b (DR-03): the Sodality's Watch Post, and the answer to GDD line
+        // 56's "every stealth tool has a public counter" for the side that had
+        // none. Set against dir_sentinel_scout (unit 6, 400 credits, 90 hp,
+        // sight 7, mobile, unarmed) rather than priced alone, because the two
+        // are the same answer given in two shapes and the SHAPE is the identity:
+        //   the Directorate SWEEPS - a scout car drives where it suspects
+        //   the Sodality WAITS   - a post is planted where it predicts
+        // 350 against 400 and 260 hit points against 90, so it is cheaper and
+        // far harder to pick off, paid for by never moving. Sight 8 against 7 is
+        // the one number where it wins outright, and it has to: a detector that
+        // cannot move must cover more ground to be worth planting at all.
+        // Unarmed on purpose - GDD line 56 says detectors are "visible and
+        // killable", and a detector that shoots is a turret with a bonus.
+        21 => new StructureTypeDef(350, EntityKind.WatchPost, 80, Hp: 260, SightCells: 8,
+                                   PowerDraw: 15, Footprint: 1, Prereqs: new[] { 1 },
+                                   Faction: FactionSodality, Detector: true,
+                                   Tab: BuildTab.Defence),
         _ => default,
     };
 
@@ -1218,7 +1253,11 @@ public sealed partial class World
     /// a no-op waiting to be wrong.
     /// </summary>
     // P7-2 raised this from 14 to 15 for the Emplacement.
-    public const int MaxStructType = 20;   // P7-5 raised it for the Sodality generator
+    public const int MaxStructType = 21;   // P7-5b raised it for the Sodality Watch Post
+
+    /// <summary>P7-5b: the Sodality's detector, named for the sites that spawn
+    /// or assert it rather than written as a literal.</summary>
+    public const int WatchPostStructType = 21;
 
     /// <summary>
     /// P7-5 (DR-02): the two power plants, named rather than written as literals
@@ -1438,6 +1477,13 @@ public sealed partial class World
                 // latent from here, because DR-02 makes the answer to "may I
                 // build a power plant" faction-dependent for the first time.
                 h.Add(d.Faction);
+                // P7-5b: whether this building reveals cloak. It decides what a
+                // player can SEE and therefore what its units may target, so two
+                // peers disagreeing about it would resolve the same firefight
+                // differently while every stat in the game matched. That is the
+                // ADR-032 clause exactly, and detection is the clearest case of
+                // it yet: the disagreement would not even be about a number.
+                h.Add(d.Detector);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -1870,6 +1916,32 @@ public sealed partial class World
             X = x, Y = y, TargetX = x, TargetY = y, StructType = 16,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>
+    /// P7-5b: the Sodality's Watch Post, the first STRUCTURE in the game that
+    /// reveals cloak.
+    ///
+    /// Detector is read from the def rather than written as a literal here, and
+    /// that is the point rather than a style preference: it is what makes the
+    /// authored `detector:` key drive the runtime instead of decorating it,
+    /// which is this project's most-repeated defect. The gate proves it by
+    /// registering this same type with the flag OFF and watching the post go
+    /// blind.
+    /// </summary>
+    public int SpawnWatchPost(int player, int ax, int ay)
+    {
+        var def = GetStructureType(WatchPostStructType);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.WatchPost,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = WatchPostStructType,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+            Detector = def.Detector,
         });
     }
 
@@ -2599,6 +2671,7 @@ public sealed partial class World
                     case EntityKind.Barracks: SpawnBarracks(c.PlayerId, ax, ay); break;
                     case EntityKind.RadarUplink: SpawnRadarUplink(c.PlayerId, ax, ay); break;
                     case EntityKind.Mine: SpawnMine(c.PlayerId, ax, ay); break;               // P7-11c
+                    case EntityKind.WatchPost: SpawnWatchPost(c.PlayerId, ax, ay); break;    // P7-5b
                 }
                 break;
             }
@@ -2898,6 +2971,9 @@ public sealed partial class World
              // silent. Adding the reserved kind now closes the identical trap
              // before it is stepped in.
              or EntityKind.Emplacement or EntityKind.Bastion
+             // P7-5b: the Watch Post, added in the same breath as its kind for
+             // the reason this comment already gives twice over.
+             or EntityKind.WatchPost
              // ADR-021: the Outpost is a structure, which is what makes it
              // engineer-capturable through the untouched CaptureSystem (whose
              // only ownership test, IsOwnedBy(t, e.PlayerId), a neutral -1

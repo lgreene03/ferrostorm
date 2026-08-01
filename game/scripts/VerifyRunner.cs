@@ -987,6 +987,10 @@ public partial class VerifyRunner : Node
                 // so a Directorate player never sees it; the count here is of
                 // buttons BUILT, before FixedGatesAllow hides any.
                 "sod_generator",
+                // P7-5b (DR-03): struct type 21, the Sodality's Watch Post and
+                // the first detector that side has ever had. Faction-gated the
+                // same way, and it wears the veil projector's model and icon.
+                "sod_watch_post",
             };
             Check(sButtoned == wasListed.Length + addedSince.Length,
                   $"...and the derivation dropped none of the {wasListed.Length} it transcribed, adding only the "

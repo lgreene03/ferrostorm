@@ -8472,6 +8472,158 @@ int FactionPowerGate()
     return 0;
 }
 
+int SodalityDetectorGate()
+{
+    // P7-5b (DR-03, ADR-043). Additive, the airgate pattern: a standalone mode
+    // and a Match battery stage, never a golden scenario.
+    //
+    // GDD line 56 is the written requirement, and it is written as an absolute:
+    //
+    //   "Cloaked units decloak on firing and near detectors; detectors are
+    //    visible and killable. EVERY STEALTH TOOL HAS A PUBLIC COUNTER."
+    //
+    // It was true for one side. `dir_sentinel_scout` was the only detector in
+    // the game and it is Directorate-only, so a Sodality player had no answer to
+    // cloak at all. Stage 2 is the mirror match that Q017 named; stage 3 is the
+    // case that is worse and was not named, because a COMMON stealth tool had a
+    // faction-locked counter.
+    const int WatchPost = World.WatchPostStructType;   // 21
+    const int Mine = 19, Raider = 5, Turret = 5;
+
+    // --- 1. The Sodality's, and only the Sodality's.
+    {
+        var w = new World(3500, 64, 64, players: 2);
+        if (!w.StructureAllowedForFaction(WatchPost, World.FactionSodality))
+            return Fail("sodality detector: the Sodality must be able to build its own Watch Post");
+        if (w.StructureAllowedForFaction(WatchPost, World.FactionDirectorate))
+            return Fail("sodality detector: the Watch Post is the Sodality's answer, not a second Directorate one");
+        // GDD line 56 calls detectors "visible and killable", so it is unarmed.
+        // A detector that shoots is a turret with a bonus, and killing it is how
+        // an opponent buys its cloak back.
+        if (w.GetStructureType(WatchPost).WeaponId != 0)
+            return Fail("sodality detector: the Watch Post must be UNARMED - a detector that shoots is a turret "
+                        + "with a bonus, and GDD line 56 makes killing it the counterplay");
+    }
+
+    // --- 2. THE MIRROR MATCH, measured as behaviour with its control. A cloaked
+    //        raider walks past a Sodality turret. Without a Watch Post the
+    //        turret cannot see it and never fires; with one, it does. Two runs
+    //        of one fixture, and the DIFFERENCE is the assertion - a stage that
+    //        ran only the second would pass on a turret that shoots at anything.
+    int HpAfter(bool withPost)
+    {
+        var w = new World(3501, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        w.SetFaction(1, World.FactionSodality);
+        w.SpawnPowerPlant(0, 30, 30, supply: 500, structType: World.SodalityGeneratorStructType);
+        w.SpawnTurret(0, 20, 20);
+        if (withPost) w.SpawnWatchPost(0, 22, 20);
+        var d = w.GetUnitType(Raider);
+        int raider = w.SpawnUnit(1, Fix64.FromInt(21), Fix64.FromInt(22), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                                 veterancy: false, unitType: Raider, stealth: d.Stealth);
+        if (!w.Entities[raider].Stealth)
+            return int.MinValue;   // the fixture is not testing cloak at all
+        // HOLD FIRE, and this is the fixture's whole subtlety rather than a
+        // convenience: a shade raider that shoots decloaks itself for 45 ticks
+        // by the ordinary rule, so an armed lurker dies with or without a Watch
+        // Post and the stage would measure the decloak-on-firing rule instead of
+        // detection. The passive lurker is the only thing that isolates it.
+        w.Step(new[] { new Command(w.Tick, 1, CommandType.SetStance, raider, Fix64.Zero, Fix64.Zero,
+                                   (int)Stance.HoldFire) });
+        for (int t = 0; t < 400; t++) w.Step(default);
+        return w.Entities[raider].Alive ? w.Entities[raider].Hp : 0;
+    }
+    {
+        int full = new World(3504, 8, 8, players: 2).GetUnitType(Raider).Hp;
+        int blind = HpAfter(withPost: false), seeing = HpAfter(withPost: true);
+        if (blind == int.MinValue || seeing == int.MinValue)
+            return Fail("sodality detector: the shade raider is not cloaked in this fixture, so stage 2 proves nothing");
+        if (blind != full)
+            return Fail($"sodality detector: the CONTROL failed - a cloaked raider took {full - blind} damage from "
+                        + "a turret with no detector, so this fixture cannot tell detection from ordinary targeting");
+        if (seeing >= blind)
+            return Fail($"sodality detector: a Watch Post must let the turret engage a cloaked raider "
+                        + $"({seeing} hit points left against {blind} with no post) - the mirror match still has "
+                        + "no answer to cloak");
+        Console.WriteLine($"  sodalitydetector: cloaked raider past a Sodality turret - {blind} hp with no post, "
+                          + $"{seeing} hp with one");
+    }
+
+    // --- 3. AND THE CASE THAT IS WORSE, which Q017 did not name. `com_mine` is
+    //        faction COMMON and stealthed, and com_mine.yaml states in its own
+    //        notes that GDD line 56 is satisfied "by a Sentinel Scout revealing
+    //        the field" - a unit only the Directorate can build. So a Directorate
+    //        player could mine a Sodality player's ground and the Sodality had no
+    //        way to see it. That is not a mirror-match edge case, it is a common
+    //        tool with a faction-locked counter, and the file asserting otherwise
+    //        was simply wrong for half the players.
+    {
+        var w = new World(3502, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        w.SetFaction(1, World.FactionDirectorate);
+        int mine = w.SpawnMine(1, 25, 25);
+        if (!w.Entities[mine].Stealth)
+            return Fail("sodality detector: this stage assumes a mine is stealthed - it is not, and the stage needs "
+                        + "rewriting rather than deleting");
+        w.Step(default);
+        if ((w.Entities[mine].DetectedMask & (1 << 0)) != 0)
+            return Fail("sodality detector: the CONTROL failed - a Sodality player sees an enemy mine with no "
+                        + "detector at all");
+        w.SpawnWatchPost(0, 24, 25);
+        w.Step(default);
+        if ((w.Entities[mine].DetectedMask & (1 << 0)) == 0)
+            return Fail("sodality detector: a Watch Post must reveal an enemy MINE - the mine is faction common and "
+                        + "its own /data notes name a Directorate-only unit as its counter, so without this the "
+                        + "Sodality cannot answer a stealth tool that both sides can lay");
+    }
+
+    // --- 4. The flag is READ from /data, not hardcoded to this building. The
+    //        same type registered with detector off must go blind, which is the
+    //        check that would have failed no matter what the file said if the
+    //        spawner had written `Detector = true` as a literal.
+    {
+        var w = new World(3503, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        var real = w.GetStructureType(WatchPost);
+        w.RegisterStructureType(WatchPost, real with { Detector = false });
+        int mine = w.SpawnMine(1, 25, 25);
+        w.SpawnWatchPost(0, 24, 25);
+        w.Step(default);
+        if ((w.Entities[mine].DetectedMask & (1 << 0)) != 0)
+            return Fail("sodality detector: a Watch Post whose def says detector: false must NOT detect - the "
+                        + "authored key is decoration and the sim is hardcoded");
+    }
+
+    // --- 5. And the /data round-trip can now SEE a faction or detector drift.
+    //        The hand-written StructureTypeDef.Equals compared eleven fields and
+    //        not Faction, which is what the selftest uses: a building whose yaml
+    //        said one side and whose compiled reference said the other would
+    //        have round-tripped clean. P7-5a moved com_power_plant to directorate
+    //        in both places and would have passed having moved it in either.
+    {
+        var baseDef = World.DefaultStructureType(WatchPost);
+        if (baseDef == baseDef with { Faction = World.FactionDirectorate })
+            return Fail("sodality detector: two defs differing ONLY in faction compare EQUAL, so the /data "
+                        + "round-trip cannot see a side drifting between a yaml and its compiled reference");
+        if (baseDef == baseDef with { Detector = false })
+            return Fail("sodality detector: two defs differing ONLY in detector compare EQUAL, so the /data "
+                        + "round-trip cannot see a detector drifting");
+    }
+
+    Console.WriteLine("sodalitydetectorgate: GDD line 56 says every stealth tool has a public counter, and it was true "
+                      + "for one side only - the Directorate owned the game's only detector, so the Sodality had no "
+                      + "answer to cloak at all. The Watch Post is the Sodality's and unarmed, because line 56 makes "
+                      + "detectors 'visible and killable' rather than turrets; a cloaked raider that walks past a "
+                      + "Sodality turret untouched is engaged once a post stands, measured both ways so the control "
+                      + "proves the difference is DETECTION; a Watch Post reveals an enemy MINE, which matters more "
+                      + "than the mirror match because the mine is faction COMMON and its own /data notes name a "
+                      + "Directorate-only unit as its counter; the flag is READ from the def, proved by registering "
+                      + "the same building with it off and watching it go blind; and two defs differing only in "
+                      + "faction no longer compare equal, closing a hole that let a side drift between a yaml and "
+                      + "its compiled reference unseen");
+    return 0;
+}
+
 int FerriteFieldGate()
 {
     // P7-5. A defect found while reading GDD s8 for DR-04, not a feature.
@@ -9755,6 +9907,10 @@ int Match(ulong seed)
     // GDD s8 reserves to the Sodality seismic charge alone.
     int ferriteField = FerriteFieldGate();
     if (ferriteField != 0) return ferriteField;
+    // P7-5b: GDD line 56's "every stealth tool has a public counter" becomes
+    // true for BOTH sides, which it had never been.
+    int sodDetector = SodalityDetectorGate();
+    if (sodDetector != 0) return sodDetector;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -11332,6 +11488,7 @@ return args.Length == 0
         "factiondefencegate" => FactionDefenceGate(),
         "factionpowergate" => FactionPowerGate(),
         "ferritefieldgate" => FerriteFieldGate(),
+        "sodalitydetectorgate" => SodalityDetectorGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
