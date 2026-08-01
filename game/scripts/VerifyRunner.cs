@@ -1047,6 +1047,7 @@ public partial class VerifyRunner : Node
             Seed = 987654321UL,
             Faction = 1,
             OppFaction = 0,
+            Seats = 3,                 // P7-8f: a host choice, not the map's ceiling
         };
         var round = MatchSetupBlob.Decode(MatchSetupBlob.Encode(original));
         Check(round.MapPath == original.MapPath && round.MissionIndex == original.MissionIndex
@@ -1060,6 +1061,13 @@ public partial class VerifyRunner : Node
         // one true clause among seven reads as green. This one fails alone.
         Check(round.AiDifficulty == original.AiDifficulty,
               "the difficulty rung survives the wire round trip");
+        // P7-8f, asserted alone for the same reason. Zero is the value this field
+        // held for every joiner before it travelled, and SeatsFor reads zero as
+        // "fill the map": on a four-start map a host asking for two seats would
+        // have built a two-seat world against the joiner's four-seat one, which is
+        // two different worlds at tick 0 rather than a desync anyone could trace.
+        Check(round.Seats == original.Seats,
+              $"the seat count survives the wire round trip (came back {round.Seats}, not the host's {original.Seats})");
 
         // A host running a build the joiner cannot read must be told so in the
         // lobby. The alternative is building a world from a misread blob and

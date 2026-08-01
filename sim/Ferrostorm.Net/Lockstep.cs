@@ -367,6 +367,15 @@ public sealed class LockstepClient : IDisposable
     private readonly object _gate = new();
     private readonly Thread _reader;
     public readonly World World;
+
+    /// <summary>P7-8f: the commanders playing the seats no peer holds, in
+    /// ascending seat order. Empty in every two-seat match, which is every LAN
+    /// match that has ever run.</summary>
+    private SkirmishAI[] _ai = System.Array.Empty<SkirmishAI>();
+    private int[] _aiCommandCounts = System.Array.Empty<int>();
+    /// <summary>Reused across ticks so a commanded tick allocates nothing beyond
+    /// what it must. Touched only from the thread that drives the ticks.</summary>
+    private readonly List<Command> _tickCommands = new();
     public int PlayerId { get; private set; } = -1;
     public int PlayerCount { get; private set; }
     public bool DesyncNotified { get; private set; }
@@ -477,6 +486,89 @@ public sealed class LockstepClient : IDisposable
         catch (Exception) { lock (_gate) Monitor.PulseAll(_gate); }
     }
 
+    /// <summary>
+    /// P7-8f: attach the commanders that play the seats no peer holds, on a map
+    /// that seats more players than the relay carries.
+    ///
+    /// THEIR COMMANDS DO NOT TRAVEL THE WIRE, and cannot: the relay gathers one
+    /// batch per PLAYER per tick and its players are peers, so a seat with no
+    /// peer has no batch to be counted in. Each client generates them locally
+    /// instead and folds them into the same tick, which is sound because the
+    /// world at tick T is identical on both peers by the lockstep guarantee,
+    /// SkirmishAI is deterministic and reads nothing but world state, and its
+    /// tuning is catalogue data that rides World.CatalogueChecksum - which the
+    /// hello compares BEFORE tick 0 and refuses on. Two peers therefore provably
+    /// run the same commander, which is the whole argument for doing it this way
+    /// rather than nominating one peer to issue the AI's orders over the relay.
+    ///
+    /// Sorted by SEAT here rather than trusted to arrive sorted, because the
+    /// order the commanders act in is part of the tick and a caller-side
+    /// convention is not something the other peer can check. Attaching is refused
+    /// once the match has begun, for the same reason: a commander that appeared
+    /// mid-match on one peer only is a desync with a plausible-looking cause.
+    /// </summary>
+    public void SetAiCommanders(IReadOnlyList<SkirmishAI> commanders)
+    {
+        if (World.Tick != 0)
+            throw new InvalidOperationException(
+                $"commanders must be attached before the match begins; this world is already at tick {World.Tick}. "
+                + "A commander attached mid-match exists on one peer and not the other, which is a desync.");
+        _ai = commanders.OrderBy(a => a.Seat).ToArray();
+        _aiCommandCounts = new int[_ai.Length];
+    }
+
+    /// <summary>The attached commanders, in the ascending seat order they act
+    /// in.</summary>
+    public IReadOnlyList<SkirmishAI> AiCommanders => _ai;
+
+    /// <summary>How many commands each attached commander has issued so far,
+    /// indexed alongside AiCommanders. Diagnostic: a seat whose count is stuck at
+    /// zero is a commander that is present and doing nothing, which reads
+    /// identically to a healthy match from every other angle.</summary>
+    public IReadOnlyList<int> AiCommandsIssued => _aiCommandCounts;
+
+    /// <summary>
+    /// THE ONLY PLACE THIS CLIENT STEPS ITS WORLD. Both TryAdvanceTick and
+    /// AdvanceTick come through here, deliberately: they differ solely in how
+    /// they wait for the merged batch, and a rule about what a tick CONTAINS that
+    /// was stated twice would eventually be fixed once.
+    ///
+    /// THE ORDER IS LOAD-BEARING and must be identical on both peers: the relay's
+    /// merged batch first, exactly as it arrived (the relay has already ordered it
+    /// by player id), then each commander in ascending seat order. Any other order
+    /// is a different sequence of commands into World.Step, and two peers that
+    /// disagreed about it would desync while every catalogue, map and seed still
+    /// matched.
+    /// </summary>
+    private void StepAndReport(Command[] merged)
+    {
+        if (_ai.Length == 0)
+        {
+            // The overwhelmingly common case, and byte-identical to what shipped
+            // before commanders existed: the merged batch is stepped as it
+            // arrived, with nothing appended and nothing copied.
+            World.Step(merged);
+        }
+        else
+        {
+            _tickCommands.Clear();
+            _tickCommands.AddRange(merged);
+            for (int i = 0; i < _ai.Length; i++)
+            {
+                int mark = _tickCommands.Count;
+                _ai[i].Act(World, _tickCommands);
+                _aiCommandCounts[i] += _tickCommands.Count - mark;
+            }
+            World.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCommands));
+        }
+        if (World.Tick % HashInterval == 0)
+        {
+            ulong h = World.ComputeStateHash();
+            int t = World.Tick;
+            Wire.SendFrame(_stream, Wire.Hash, w => { w.Write(t); w.Write(h); });
+        }
+    }
+
     /// <summary>Seed empty batches for ticks 0..CommandDelay-1 so the match can start. Call once before the loop.</summary>
     public void Prime()
     {
@@ -526,13 +618,7 @@ public sealed class LockstepClient : IDisposable
             if (desynced || !_merged.TryGetValue(World.Tick, out cmds!)) return false;
             _merged.Remove(World.Tick);
         }
-        World.Step(cmds);
-        if (World.Tick % HashInterval == 0)
-        {
-            ulong h = World.ComputeStateHash();
-            int t = World.Tick;
-            Wire.SendFrame(_stream, Wire.Hash, w => { w.Write(t); w.Write(h); });
-        }
+        StepAndReport(cmds);
         return true;
     }
 
@@ -552,13 +638,7 @@ public sealed class LockstepClient : IDisposable
             if (DesyncNotified) return false;
             _merged.Remove(World.Tick);
         }
-        World.Step(cmds);
-        if (World.Tick % HashInterval == 0)
-        {
-            ulong h = World.ComputeStateHash();
-            int t = World.Tick;
-            Wire.SendFrame(_stream, Wire.Hash, w => { w.Write(t); w.Write(h); });
-        }
+        StepAndReport(cmds);
         return true;
     }
 

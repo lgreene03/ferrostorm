@@ -553,7 +553,9 @@ public partial class SkirmishLive : Node3D
             // the mission tags, the same reason ResumeFromSave keeps it.
             if (_net != null) _world = _net.World;
             if (_setup.IsMission && _net == null) _mission = new MissionRunner(map, tags);
-            // ...and there is NO AI in a LAN match: both seats are humans.
+            // ...and in a LAN match the commanders play the seats no peer holds,
+            // which until P7-8f was no seats at all, because the lobby refused any
+            // map seating more than the two peers. See the LAN arm below.
             else if (_net == null)
             {
                 // DR-14b: the rung the player picked, clamped because a
@@ -601,6 +603,56 @@ public partial class SkirmishLive : Node3D
                 if (handicap > 0)
                     for (int seat = 0; seat < _world.PlayerCount; seat++)
                         if (seat != LocalPlayerId) _world.GrantCredits(seat, handicap);
+            }
+            else
+            {
+                // P7-8f: A LAN MATCH ON A MAP THAT SEATS MORE THAN THE TWO PEERS.
+                // The relay assigns seats by arrival order, so the peers hold the
+                // seats below LanLobby.HumanSeats and every seat above them has no
+                // controller. Those get a commander, and the commanders' orders
+                // are generated LOCALLY by each peer inside the lockstep client
+                // rather than sent over the relay, which counts one batch per peer
+                // and has no batch for a seat with nobody behind it. Both peers
+                // stay on one world because the commander is deterministic, reads
+                // only world state, and its numbers are /data riding the catalogue
+                // checksum the hello already refuses on (ADR-032).
+                //
+                // On every two-seat map, which is every map but skirmish-09, this
+                // loop adds nothing and the LAN match is exactly what it was.
+                var rung = (AiDifficulty)System.Math.Clamp(_setup.AiDifficulty, 0, 3);
+                var netCommanders = new System.Collections.Generic.List<SkirmishAI>();
+                for (int seat = LanLobby.HumanSeats; seat < _world.PlayerCount; seat++)
+                    netCommanders.Add(_setup.AiPreset switch
+                    {
+                        1 => SkirmishAI.Rusher(seat, rung, _world),
+                        2 => SkirmishAI.Turtle(seat, rung, _world),
+                        _ => SkirmishAI.Standard(seat, rung, _world),
+                    });
+                // Deliberately NOT added to _commanders, which RunOneTick walks:
+                // a networked tick never calls RunOneTick, and a commander sitting
+                // in both places is one Act away from issuing every order twice
+                // the day the two paths meet.
+                if (netCommanders.Count > 0) _net.SetAiCommanders(netCommanders);
+                // Brutal's handicap, and WHICH SEATS GET IT is the whole care
+                // here. The offline arm above grants it to every seat that is not
+                // the local one, and that rule cannot cross into LAN: the local
+                // seat differs BETWEEN THE PEERS, so the host would grant it to
+                // seat 1 and the joiner to seat 0 and the two worlds would part
+                // company before tick 0 over a rule that reads correct on either
+                // machine alone. The seats that get it are the COMMANDED ones,
+                // which is peer-independent by construction and is also the honest
+                // answer: a handicap is compensation for a commander, and the
+                // other peer is a person.
+                //
+                // Applied here rather than in LanLobby.BuildFrom because it
+                // belongs beside the loop that decides which seats are commanded;
+                // one rule, one place. It still lands before tick 0 on both peers,
+                // because a lockstep world is stepped only by AdvanceOneTick and
+                // nothing calls that until this scene is ready.
+                long handicap = SkirmishAI.StartingCreditHandicap(rung, _world);
+                if (handicap > 0)
+                    for (int seat = LanLobby.HumanSeats; seat < _world.PlayerCount; seat++)
+                        _world.GrantCredits(seat, handicap);
             }
 
             // TICKET-P5-SAVE-01: a scene is one of three things, decided here once.
