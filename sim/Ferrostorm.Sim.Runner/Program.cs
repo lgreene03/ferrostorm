@@ -8537,6 +8537,93 @@ int FactionPowerGate()
     return 0;
 }
 
+int ArrivalGate()
+{
+    // P7-11. aitargetgate proves where a wave is AIMED. Nothing had ever asked
+    // whether it ARRIVES - the question one step to the side of an existing
+    // gate, which is the shape that found a project-long defect three waves
+    // running.
+    //
+    // This one found NO defect, and it is a gate rather than a probe for that
+    // reason: arrival is CORRECTNESS, not balance. A commander that aims
+    // perfectly and never crosses the map has not attacked, and every targeting
+    // gate would still pass. Measured, both seats close a 269-cell gap to within
+    // four cells - so the claim worth keeping is not a finding but a guarantee,
+    // and this is what stops a pathfinding or targeting change quietly removing
+    // it.
+    //
+    // skirmish-07 is the case that matters: its starts are the furthest apart of
+    // any shipped map, precisely so a crossing is a commitment.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var map = MapData.Load(Path.Combine(root, "data/maps/skirmish-07.fmap"));
+    var w = map.BuildWorld(2026, players: 2, out _);
+    CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+    map.PlaceSkirmishStart(w, 8000);
+    var a0 = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+    var a1 = SkirmishAI.Standard(1, AiDifficulty.Normal, w);
+    var cmds = new List<Command>();
+
+    Fix64 hx0 = Fix64.Zero, hy0 = Fix64.Zero, hx1 = Fix64.Zero, hy1 = Fix64.Zero;
+    for (int i = 0; i < w.EntityCount; i++)
+    {
+        var e = w.Entities[i];
+        if (!e.Alive || e.Kind != EntityKind.ConstructionYard) continue;
+        if (e.PlayerId == 0) { hx0 = e.X; hy0 = e.Y; }
+        else if (e.PlayerId == 1) { hx1 = e.X; hy1 = e.Y; }
+    }
+    int gx0 = Map.CellOf(hx0), gy0 = Map.CellOf(hy0), gx1 = Map.CellOf(hx1), gy1 = Map.CellOf(hy1);
+    int startGap = (int)System.Math.Sqrt((gx1 - gx0) * (gx1 - gx0) + (gy1 - gy0) * (gy1 - gy0));
+
+    // ARRIVED means inside the enemy base rather than merely nearer than it
+    // started, and the bound is the yard's own build radius rather than a number
+    // I picked: CyBuildRadius is how far that yard's own buildings may sit, so
+    // being within it is being among them. A shade of slack on top for a unit
+    // that stops at weapon range of the first thing it meets.
+    int arrived = World.CyBuildRadius + 3;
+
+    int closest0 = int.MaxValue, closest1 = int.MaxValue;
+    for (int t = 1; t <= 20000; t++)   // basingate's horizon on this same map
+    {
+        cmds.Clear();
+        a0.Act(w, cmds); a1.Act(w, cmds);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Unit) continue;
+            if (e.PlayerId == 0)
+            {
+                int dx = Map.CellOf(e.X) - gx1, dy = Map.CellOf(e.Y) - gy1;
+                int d = (int)System.Math.Sqrt(dx * dx + dy * dy);
+                if (d < closest0) closest0 = d;
+            }
+            else if (e.PlayerId == 1)
+            {
+                int dx = Map.CellOf(e.X) - gx0, dy = Map.CellOf(e.Y) - gy0;
+                int d = (int)System.Math.Sqrt(dx * dx + dy * dy);
+                if (d < closest1) closest1 = d;
+            }
+        }
+    }
+
+    if (closest0 > arrived)
+        return Fail($"arrival: seat 0 never reached seat 1's base - closest approach {closest0} cells from a start "
+                    + $"gap of {startGap}, against {arrived} to count as arrived. Its waves are AIMED correctly and "
+                    + "aitargetgate would still pass; they simply never get there");
+    if (closest1 > arrived)
+        return Fail($"arrival: seat 1 never reached seat 0's base - closest approach {closest1} cells from a start "
+                    + $"gap of {startGap}, against {arrived} to count as arrived");
+
+    Console.WriteLine($"arrivalgate: on skirmish-07, whose starts are {startGap} cells apart and the furthest of any "
+                      + $"shipped map, BOTH commanders' waves reach the enemy base - seat 0 within {closest0} cells "
+                      + $"and seat 1 within {closest1}, against {arrived} (CyBuildRadius plus a shade) to count as "
+                      + "arrived. aitargetgate proves where a wave is aimed and nothing asked whether it gets there; "
+                      + "a commander that aims perfectly and never crosses the map has not attacked, and every "
+                      + "targeting gate would pass regardless. No defect was found - this exists so that a "
+                      + "pathfinding or targeting change cannot quietly remove it");
+    return 0;
+}
+
 int ChurnProbe()
 {
     // P7-10. Entity ids are stable by construction - Add appends and death sets
@@ -10896,6 +10983,10 @@ int Match(ulong seed)
     // trail of buildings walking off the map.
     int baseShape = BaseShapeGate();
     if (baseShape != 0) return baseShape;
+    // P7-11: and the waves it aims actually ARRIVE, which aitargetgate proves
+    // nothing about - it asserts where a wave is pointed.
+    int arrival = ArrivalGate();
+    if (arrival != 0) return arrival;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -12497,6 +12588,7 @@ return args.Length == 0
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),
+        "arrivalgate" => ArrivalGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

@@ -372,8 +372,24 @@ tune blind.
 gate that asked a neighbouring question.** `basingate` plays skirmish-07 and asks
 whether it is a stalemate, never whether it ends. The load scenario asks what 600
 units cost, never what a match accumulates. `aitargetgate` asks where a wave is
-aimed, never whether it arrives. Asking one step to the side of an existing gate
-has found something every single time.
+aimed, never whether it arrives.
+
+**The fourth outing found nothing wrong, and that is worth its own note**
+(P7-11, ADR-053). Waves DO arrive: both commanders close skirmish-07's 269-cell
+gap to within four or five cells, with units standing inside the enemy base.
+
+It shipped as a **gate rather than a probe**, and the distinction is the useful
+part. The three previous hunts produced probes because what they found were
+balance questions, where an assertion would be a number invented to pass itself.
+**Arrival is correctness** - there is no reading of the design under which a wave
+that never lands is acceptable - so it earns an assertion. Disabling attack waves
+makes it report a closest approach of 139 cells while `aitargetgate` still
+passes, which is exactly the silence it exists to break.
+
+So the ledger for the method is three defects and one guarantee from four
+questions. **A hunt that finds nothing has still bought something, provided it
+leaves an assertion behind**; the alternative, concluding "probably fine" and
+moving on, buys nothing and has to be re-asked after every change.
 
 ## Tier D: content volume
 
