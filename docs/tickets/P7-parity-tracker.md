@@ -29,7 +29,9 @@ system removes a category of decision while a missing unit removes an option.
 | P7-2b | A distinctive defence per SIDE: the Directorate's Bastion and the Sodality's Shroud Nest, both from WRITTEN GDD s3 doctrine | B1/C | - (no new doctrine invented, so Q017 is untouched) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - factiondefencegate (4 stages incl. the cloak and its decloak-on-firing) |
 | P7-3 | Transports: the Carrier, the first unit that exists to move OTHER units | A2 | - | goldens NEUTRAL; catalogue checksum MOVES; save format v9 | **DONE** - transportgate (6 stages incl. save round-trip and cargo dying with its carrier) |
 | P7-4 | The air layer: Airfield, Strike Flyer, Flak Track | A1 | ADR-028 (ratified under the standing directive) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - airgate (5 stages, both halves of clause 4); no reload cycle and the AI does not fly, both stated in the ADR |
-| P7-5 | Faction identity: DR-02/03/04 as one package rather than three tickets | C | **Q017 (Luke's roster call)** | MOVES | pending - **first open row, and it needs a human** |
+| P7-5a | Faction identity, DR-02: power economics, the Directorate centralised and the Sodality decentralised | C | - (authorised 2026-08-01; GDD s3 writes BOTH halves, so only the numbers are invented, and they are recorded reversibly in ADR-042) | goldens NEUTRAL and **measured, against a tracker prediction that they would MOVE**; catalogue checksum MOVES (0x2495D0E393438B38 to 0x64768008B78985FB) | **DONE** - ADR-042; factionpowergate (5 stages) and ferritefieldgate (3 stages), 4 of them proved to bite. Carried the enabling refactor (a prerequisite is a CAPABILITY, not a named building) and three defects: the placement switch handed a Sodality player a Directorate plant, `StructureTypeDef.Faction` was missing from the catalogue checksum, and ONE RIFLE SHOT deleted a whole ferrite field |
+| P7-5b | Faction identity, DR-03: a Sodality stealth-detection answer | C | - (GDD line 56 requires it: "every stealth tool has a public counter"; WHICH unit carries it is invention) | expected NEUTRAL (a new def nothing spawns) | pending - **next open row.** The Directorate owns the only detector in the game (`dir_sentinel_scout`), so a Sodality mirror match has no stealth answer beyond the firing reveal |
+| P7-5c | Faction identity, DR-04: faction superweapons | C | - (GDD s8 writes both precisely) | MOVES | pending - the Sodality seismic charge is "wide, lower-damage area denial that also destroys resource fields". Its precondition shipped in P7-5a: nothing else can destroy a field any more |
 | P7-6 | Storage and a credit ceiling (silo) | B2 | - (authorised 2026-08-01) | no code, no hash | **REFUSED, and MEASURED rather than argued** - ADR-041; `economyprobe` shows the treasury oscillating near zero, so a ceiling would constrain something that never approaches a limit. Reversal conditions recorded |
 | P7-7 | Infiltration: the Sodality's Infiltrator, from GDD s7's named roster | B5 | - (the unit is written; only the 20 per cent share is my call) | goldens NEUTRAL; catalogue checksum MOVES | **DONE** - infiltratorgate (4 stages incl. conservation and an engineer regression check) |
 | P7-8 | ~~More than two player seats~~ - **SPLIT, 2026-08-01.** GDD s9 makes TWO promises of very different sizes and one row cannot hold both | D2 | - | - | **SPLIT**, see "What P7-8 turned out to be" |
@@ -888,7 +890,16 @@ missing, not that the lists are the same length.
 
 These block rows above and are not P7's to solve:
 
-- **Q017**, the faction-identity sequencing question, blocks P7-5.
+- ~~**Q017**, the faction-identity sequencing question, blocks P7-5.~~ **Answered
+  2026-08-01 by taking its own first candidate.** Q017 asked which identity step
+  comes first and listed four; DR-02 (power economics) shipped as P7-5a under
+  ADR-042, on the question's own argument that it is "the most thematic option
+  and the one the GDD already designed in prose". DR-03 and DR-04 are now
+  ordinary open rows (P7-5b, P7-5c) rather than blocked ones, because both are
+  WRITTEN in the GDD - line 56 requires that every stealth tool have a public
+  counter, and s8 specifies both superweapons precisely. What Q017 called a
+  roster call turned out to be a roster call only for candidate 4
+  (per-faction refinery economics), which nothing has asked for.
 - **Q014**, the second-resource question, is unrelated to parity and stays in P6.
 - **ADR-027**, the crowd-aware movement decision, blocks nothing here directly
   but distorts every AI-vs-AI measurement any of these rows would be judged by,

@@ -8299,6 +8299,265 @@ int CampaignGate()
     return 0;
 }
 
+int FactionPowerGate()
+{
+    // P7-5 (DR-02, ADR-042). Additive, the airgate pattern: a standalone mode
+    // and a Match battery stage, never a golden scenario, so the list stays 24.
+    //
+    // GDD s3 gives the Directorate a grid that is "centralised (fewer, bigger
+    // power plants = juicier targets)" and the Sodality "decentralised power
+    // (many small generators)". Written doctrine, so nothing here is invented
+    // except the numbers, and the numbers are asserted as RATIOS rather than
+    // literals so a balance pass can move them without quietly turning one
+    // side's identity into the other's.
+    //
+    // The stage that matters is 3. Everything above it compares stat lines,
+    // which is what a pair of buildings LOOK like; 3 destroys one building on
+    // each side and measures what the base can still do, which is what the
+    // doctrine actually claims.
+    const int Plant = World.DirectoratePlantStructType;      // 1
+    const int Gen = World.SodalityGeneratorStructType;       // 20
+    const int Refinery = 3;
+
+    // --- 1. Each side builds its OWN grid and not the other's. Before this row
+    //        both sides built type 1, which is the whole of what was wrong: one
+    //        plant, one opening, and a pillar-3 promise ("factions differ in how
+    //        they THINK") unkept in the one system every opening is tuned round.
+    {
+        var w = new World(3300, 64, 64, players: 2);
+        if (!w.StructureAllowedForFaction(Plant, World.FactionDirectorate))
+            return Fail("faction power: the Directorate must be able to build its own plant");
+        if (w.StructureAllowedForFaction(Plant, World.FactionSodality))
+            return Fail("faction power: the Directorate plant is NOT the Sodality's - that is the row");
+        if (!w.StructureAllowedForFaction(Gen, World.FactionSodality))
+            return Fail("faction power: the Sodality must be able to build its generator");
+        if (w.StructureAllowedForFaction(Gen, World.FactionDirectorate))
+            return Fail("faction power: the generator is NOT the Directorate's");
+    }
+
+    // --- 2. The trade is a TRADE, not an upgrade. Three generators are the unit
+    //        of comparison, being what it takes to beat one plant's supply.
+    {
+        var w = new World(3301, 64, 64, players: 2);
+        var plant = w.GetStructureType(Plant);
+        var gen = w.GetStructureType(Gen);
+        int n = (plant.PowerSupply + gen.PowerSupply - 1) / gen.PowerSupply;   // generators per plant
+        if (n < 2)
+            return Fail($"faction power: 'many small generators' means MANY - {n} of them already beat a plant, "
+                        + "so the Sodality grid is not decentralised, it is a cheaper plant");
+        // Centralised must be more EFFICIENT per credit, or "bigger" buys
+        // nothing and the Sodality is strictly better off.
+        if (plant.Cost * (long)(n * gen.PowerSupply) >= gen.Cost * (long)n * plant.PowerSupply)
+            return Fail($"faction power: the Directorate must buy power more cheaply than the Sodality, or its "
+                        + $"single juicy target is a pure downside ({plant.Cost}cr/{plant.PowerSupply} against "
+                        + $"{n}x{gen.Cost}cr/{n * gen.PowerSupply})");
+        // And decentralised must be more RESILIENT in total, or "many" buys
+        // nothing either and the trade runs one way.
+        if (n * gen.Hp <= plant.Hp)
+            return Fail("faction power: the Sodality grid must take more total damage to remove than the plant it "
+                        + "replaces, or decentralising costs credits and buys nothing");
+        // The generator must not also be the better scout, which is the one axis
+        // on which a cheap building could have been strictly better.
+        if (gen.SightCells >= plant.SightCells)
+            return Fail("faction power: a cheap generator that sees as far as the plant is a cheap watchtower");
+    }
+
+    // --- 3. THE BEHAVIOUR, and the reason the stat lines above are not enough.
+    //        Two bases at comparable supply. Destroy exactly ONE power building
+    //        in each and ask what the base can still do. The Directorate's whole
+    //        grid is one building, so it browns out; the Sodality loses a third
+    //        and stays lit. "Juicier target" measured rather than described.
+    {
+        var w = new World(3302, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        int dirPlant = w.SpawnPowerPlant(0, 10, 10);
+        var gens = new List<int>();
+        int need = (w.GetStructureType(Plant).PowerSupply + w.GetStructureType(Gen).PowerSupply - 1)
+                   / w.GetStructureType(Gen).PowerSupply;
+        for (int i = 0; i < need; i++) gens.Add(w.SpawnPowerPlant(1, 40 + i * 2, 40, structType: Gen));
+
+        var (ds0, _) = w.PowerOf(0);
+        var (ss0, _) = w.PowerOf(1);
+        if (ds0 <= 0 || ss0 <= 0) return Fail("faction power: both fixtures must start lit");
+
+        // ONE building leaves each side. Sold rather than killed, because a sale
+        // is a real player action through the ordinary command path and there is
+        // no test-only demolition hook to reach for.
+        w.Step(new[]
+        {
+            new Command(w.Tick, 0, CommandType.SellStructure, dirPlant, Fix64.Zero, Fix64.Zero),
+            new Command(w.Tick, 1, CommandType.SellStructure, gens[0], Fix64.Zero, Fix64.Zero),
+        });
+        var (ds1, _) = w.PowerOf(0);
+        var (ss1, _) = w.PowerOf(1);
+
+        if (ds1 != 0)
+            return Fail($"faction power: one dead Directorate plant must take the WHOLE grid ({ds0} -> {ds1}), "
+                        + "which is what 'fewer, bigger, juicier' means");
+        if (ss1 <= 0)
+            return Fail($"faction power: one dead Sodality generator must NOT dark the base ({ss0} -> {ss1}) - "
+                        + "decentralised power that dies all at once is centralised power in small boxes");
+        // The proportion, not just the sign: a single loss must cost the
+        // Sodality strictly less than half its grid.
+        if (ss1 * 2 <= ss0)
+            return Fail($"faction power: one generator of {need} took {ss0 - ss1} of {ss0} supply - more than half "
+                        + "the grid is not decentralised");
+        Console.WriteLine($"  factionpower: one building lost - Directorate {ds0} -> {ds1} supply, "
+                          + $"Sodality {ss0} -> {ss1} across {need} generators");
+    }
+
+    // --- 4. The capability rule that made the row buildable at all. Five
+    //        prerequisites in the tree name the Directorate plant by type id. A
+    //        Sodality player holding only generators must satisfy them, or its
+    //        side can build a generator and NOTHING ELSE, forever - a dead end
+    //        rather than a balance problem.
+    {
+        var w = new World(3303, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        if (!Array.Exists(w.GetStructureType(Refinery).Prereqs ?? Array.Empty<int>(), p => p == Plant))
+            return Fail("faction power: this stage assumes the refinery is gated behind the Directorate plant's "
+                        + "type id - the tree changed and the stage needs rewriting, not deleting");
+        // The control FIRST, so a stage that passes vacuously is impossible: no
+        // power building at all means no refinery.
+        if (w.HasPrereqs(0, w.GetStructureType(Refinery).Prereqs))
+            return Fail("faction power: a player with no power building must NOT satisfy the refinery prerequisite");
+        w.SpawnPowerPlant(0, 20, 20, structType: Gen);
+        if (!w.HasPrereqs(0, w.GetStructureType(Refinery).Prereqs))
+            return Fail("faction power: a Sodality generator must satisfy a prerequisite that names the Directorate "
+                        + "plant - a prerequisite is a CAPABILITY, or the Sodality tech tree is one building deep");
+    }
+
+    // --- 5. And the building that is ORDERED is the building that ARRIVES.
+    //        The placement dispatch is keyed on EntityKind, and Kind stopped
+    //        identifying a building the moment a second power plant existed: a
+    //        Sodality player placing a generator got a Directorate plant, at the
+    //        generator's price, silently. Found by reachabilitygate rather than
+    //        by reading, and pinned here so it cannot come back.
+    {
+        var w = new World(3304, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int cy = w.SpawnConstructionYard(0, 20, 20);
+        w.GrantCredits(0, 100000);
+        var gd = w.GetStructureType(Gen);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, Gen) });
+        for (int t = 0; t < gd.BuildTicks * 4 + 400 && w.Entities[cy].ReadyStructure != Gen; t++) w.Step(default);
+        if (w.Entities[cy].ReadyStructure != Gen)
+            return Fail("faction power: the yard never finished a generator, so stage 5 cannot ask its question");
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                   Map.CellCentre(24), Map.CellCentre(20), Gen) });
+        int placed = -1;
+        for (int i = 0; i < w.Entities.Count; i++)
+            if (w.Entities[i].Alive && w.Entities[i].PlayerId == 0
+                && w.Entities[i].Kind == EntityKind.PowerPlant) { placed = i; break; }
+        if (placed < 0) return Fail("faction power: ordering a generator produced no power building at all");
+        if (w.Entities[placed].StructType != Gen)
+            return Fail($"faction power: a Sodality player ordered a generator and got structure type "
+                        + $"{w.Entities[placed].StructType} - the placement switch is keyed on Kind, and Kind no "
+                        + "longer names one building");
+        if (w.Entities[placed].PowerSupply != gd.PowerSupply)
+            return Fail($"faction power: the placed generator supplies {w.Entities[placed].PowerSupply}, not the "
+                        + $"{gd.PowerSupply} its def authors");
+    }
+
+    Console.WriteLine("factionpowergate: each side owns its own grid and cannot build the other's, which is the first "
+                      + "time the two economies differ at all; the trade runs BOTH ways (the Directorate buys power "
+                      + "more cheaply per credit, the Sodality's grid takes more total damage to remove, and the "
+                      + "generator does not also out-scout the plant it replaces); and the doctrine is measured as "
+                      + "BEHAVIOUR rather than described - one dead building darks the Directorate base completely "
+                      + "and costs the Sodality under half its supply. A prerequisite is now a CAPABILITY, proved "
+                      + "with its control, so a Sodality generator unlocks a tree that names the Directorate plant; "
+                      + "and a generator ORDERED through the real command path arrives as a generator rather than as "
+                      + "the plant whose EntityKind it shares");
+    return 0;
+}
+
+int FerriteFieldGate()
+{
+    // P7-5. A defect found while reading GDD s8 for DR-04, not a feature.
+    //
+    // GDD s8 gives DESTROYING A RESOURCE FIELD to one superweapon on one side,
+    // as that faction's economic-warfare identity: "Sodality seismic charge
+    // (wide, lower-damage area denial that also destroys resource fields)".
+    // Anything else that can do it takes that identity away before it ships.
+    //
+    // Every other system already excluded fields by hand - auto-acquire, splash,
+    // area damage, the guard leash, EnemyNearAMovePoint - and the explicit
+    // Attack branch did not, because it "asks no hostility question at all" by
+    // design. A field has Hp 1. So one rifle shot deleted an entire field and
+    // every credit left in it, permanently, since regrowth skips dead fields.
+    //
+    // Unreachable from the sidebar today, which is not a defence: it is
+    // reachable from a LAN peer's command stream, and a rule that is safe only
+    // because the local UI declines to send it is the exact shape this project
+    // has been caught by three times.
+    const int Rifle = 1;
+
+    // --- 1. A field ordered attacked is NOT destroyed, and does not lose a
+    //        single unit of ferrite. Both, because a field that survived on 1 hp
+    //        with its contents drained would pass a liveness check and still be
+    //        the bug.
+    {
+        var w = new World(3400, 64, 64, players: 2);
+        int field = w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(20), 5000);
+        var d = w.GetUnitType(Rifle);
+        int shooter = w.SpawnUnit(0, Fix64.FromInt(19), Fix64.FromInt(20), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                                  veterancy: false, unitType: Rifle);
+        int before = w.Entities[field].FerriteAmount;
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Attack, shooter, Fix64.Zero, Fix64.Zero, field) });
+        for (int t = 0; t < 300; t++) w.Step(default);
+        if (!w.Entities[field].Alive)
+            return Fail("ferrite field: an explicit Attack order destroyed a ferrite field - one shot, one field, "
+                        + "and every credit in it gone permanently");
+        if (w.Entities[field].FerriteAmount != before)
+            return Fail($"ferrite field: the field survived but lost ferrite ({before} -> "
+                        + $"{w.Entities[field].FerriteAmount}) - shooting a field must do NOTHING");
+    }
+
+    // --- 2. THE CONTROL, and without it stage 1 proves only that the fixture
+    //        cannot shoot. The same unit, the same order shape, a real target:
+    //        it must die. A field that survives because nothing ever fired is
+    //        the failure this gate exists to avoid.
+    {
+        var w = new World(3401, 64, 64, players: 2);
+        int victim = w.SpawnPowerPlant(1, 20, 20);
+        var d = w.GetUnitType(Rifle);
+        int shooter = w.SpawnUnit(0, Fix64.FromInt(18), Fix64.FromInt(21), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                                  veterancy: false, unitType: Rifle);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Attack, shooter, Fix64.Zero, Fix64.Zero, victim) });
+        for (int t = 0; t < 600 && w.Entities[victim].Alive; t++) w.Step(default);
+        if (w.Entities[victim].Alive)
+            return Fail("ferrite field: the CONTROL failed - this rifle squad cannot destroy a 150-hit-point power "
+                        + "plant either, so stage 1 proved nothing about ferrite fields");
+    }
+
+    // --- 3. And the fix took nothing away from the economy: a field is still
+    //        HARVESTED down and still dies when it is empty, which is the one
+    //        way a field is supposed to disappear.
+    {
+        var w = new World(3402, 64, 64, players: 2);
+        int field = w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(20), 700);
+        w.SpawnRefinery(0, 24, 24);
+        int harv = w.SpawnHarvester(0, Fix64.FromInt(21), Fix64.FromInt(21));
+        int before = w.Entities[field].FerriteAmount;
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) });
+        for (int t = 0; t < 3000 && w.Entities[field].Alive; t++) w.Step(default);
+        if (w.Entities[field].FerriteAmount >= before)
+            return Fail("ferrite field: harvesting must still draw a field down - the fix must not have made fields "
+                        + "immortal, only unshootable");
+    }
+
+    Console.WriteLine("ferritefieldgate: an explicit Attack order at a ferrite field now does nothing at all - the "
+                      + "field lives and does not lose one unit of ferrite - where before ONE rifle shot deleted the "
+                      + "whole field and every credit in it, permanently, because a field has 1 hit point and this "
+                      + "was the only branch in the sim that did not exclude them; the control proves the same squad "
+                      + "under the same order shape still destroys a power plant, so the stage is not passing because "
+                      + "nothing fired; and harvesting still draws a field down and still empties it, which is the "
+                      + "one way a field is meant to go. GDD s8 gives destroying a field to the Sodality seismic "
+                      + "charge alone, and that identity cannot ship while any rifle can do it");
+    return 0;
+}
+
 int FactionDefenceGate()
 {
     // P7-2b. Additive, the airgate pattern: a standalone mode and a Match
@@ -8770,13 +9029,17 @@ int FactionGate()
     //    matters: its file said "directorate" and both sides could build it,
     //    and the repair was to make the DATA true rather than to take the
     //    turret away from a faction that has had it all along.
-    const int Turret = 5, Veil = 7, Plant = 1;
+    const int Turret = 5, Veil = 7;
     foreach (int f in new[] { World.FactionDirectorate, World.FactionSodality })
     {
         if (!w.StructureAllowedForFaction(Turret, f))
             return Fail($"faction: the turret is common and faction {f} must be able to build it");
-        if (!w.StructureAllowedForFaction(Plant, f))
-            return Fail($"faction: a power plant is common and faction {f} must be able to build it");
+        // P7-5 (DR-02) DELETED the power plant's line from this loop, and the
+        // deletion is the point rather than a casualty. This gate used to assert
+        // that BOTH sides could build type 1, which was true and was also the
+        // whole of the problem: one plant, one grid, one opening, and GDD s3's
+        // centralised-against-decentralised promise unkept. Each side now has
+        // its own, and factionpowergate asserts that instead.
     }
 
     // 2. A declared building is buildable ONLY by its side, and the declaration
@@ -9482,6 +9745,16 @@ int Match(ulong seed)
     // lets it ship without the per-player flow fields ADR-005 clause 6 refused.
     int wallGate = WallGateGate();
     if (wallGate != 0) return wallGate;
+    // P7-5: the two sides stop sharing one power grid, which is the first time
+    // their economies differ at all, and a prerequisite becomes a capability
+    // rather than a named building so the Sodality tech tree is more than one
+    // rung deep.
+    int factionPower = FactionPowerGate();
+    if (factionPower != 0) return factionPower;
+    // P7-5: and a ferrite field stops being deletable by one rifle shot, which
+    // GDD s8 reserves to the Sodality seismic charge alone.
+    int ferriteField = FerriteFieldGate();
+    if (ferriteField != 0) return ferriteField;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -9883,13 +10156,30 @@ int ReachabilityGate()
                 return $"the Construction Yard never finished it in {budget} ticks "
                        + $"(queue {w.QueueLength(cy)}, ready slot {w.Entities[cy].ReadyStructure}, credits {w.Credits(player)})";
         }
-        var (ax, ay) = FreeAnchor(w, player, structType);
-        if (ax < 0) return "the fixture found no legal placement cell beside the base - out of room, not unbuildable";
-        Step(w, One(new Command(w.Tick, player, CommandType.PlaceStructure, cy,
-                                Map.CellCentre(ax), Map.CellCentre(ay), structType)));
-        if (CountStructures(w, player, structType) != before + 1)
-            return $"the placement at ({ax}, {ay}) was refused";
-        return null;
+        // P7-5: RETRIED, because FreeAnchor picks a cell one tick before the
+        // placement lands and a unit can walk onto it in between. That race was
+        // always here and never bit, because every building the fixture placed
+        // had a 2x2 footprint and went on open ground beside the base. The
+        // Sodality generator is 1x1 and a Sodality base wants a dozen of them,
+        // so the fixture now places small buildings into the crowded middle of a
+        // base full of moving units, and loses the cell perhaps one time in ten.
+        //
+        // A retry rather than a wider search: the point is to prove the building
+        // is ORDERABLE, and a lost race is not a refusal. Readiness survives a
+        // rejected placement by design (the sidebar flow's own rule), so the
+        // next attempt spends nothing.
+        int ax = -1, ay = -1;
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            (ax, ay) = FreeAnchor(w, player, structType);
+            if (ax < 0) return "the fixture found no legal placement cell beside the base - out of room, not unbuildable";
+            Step(w, One(new Command(w.Tick, player, CommandType.PlaceStructure, cy,
+                                    Map.CellCentre(ax), Map.CellCentre(ay), structType)));
+            if (CountStructures(w, player, structType) == before + 1) return null;
+        }
+        return $"the placement was refused 8 times running, last at ({ax}, {ay}) "
+               + $"[type {structType} kind {def.Kind} footprint {def.Footprint} cost {def.Cost} "
+               + $"credits {w.Credits(player)} ready slot {w.Entities[cy].ReadyStructure}]";
     }
 
     // ORDER ONE UNIT: a Produce command at a producer this player owns, then
@@ -9987,9 +10277,27 @@ int ReachabilityGate()
     // The power plant is found by its KIND, not by the id 1: a browned-out base
     // builds at half rate, and the fixture keeps supply ahead of draw so that a
     // slow gate can never be mistaken for a broken one.
-    int plantType = -1;
-    foreach (int t in registeredStructs) if (world.GetStructureType(t).Kind == EntityKind.PowerPlant) { plantType = t; break; }
-    if (plantType < 0) return Fail("reachability: no registered structure supplies power, so nothing here can be kept lit");
+    //
+    // P7-5 (DR-02) made that half-right rather than right. Keying on the KIND
+    // instead of the id was already the correct instinct, but it took the FIRST
+    // plant it found and used it for every seat, and there are now two - one per
+    // side. A Sodality seat handed the Directorate's plant cannot build it, and
+    // the gate reported that as "the yard never finished it", which reads as a
+    // production bug rather than a faction refusal. So the lookup is per PLAYER.
+    var plantType = new int[world.PlayerCount];
+    for (int p = 0; p < world.PlayerCount; p++)
+    {
+        plantType[p] = -1;
+        foreach (int t in registeredStructs)
+        {
+            var d = world.GetStructureType(t);
+            if (d.Kind == EntityKind.PowerPlant && world.StructureAllowedForFaction(t, world.FactionOf(p)))
+            { plantType[p] = t; break; }
+        }
+        if (plantType[p] < 0)
+            return Fail($"reachability: player {p} has no buildable structure that supplies power, so its side can "
+                        + "never light a base - every prerequisite in the tree is behind one");
+    }
 
     bool progress = true;
     while (pending.Count > 0 && progress)
@@ -10000,13 +10308,40 @@ int ReachabilityGate()
             var (t, p) = pending[i];
             var def = world.GetStructureType(t);
             if (!world.HasPrereqs(p, def.Prereqs)) continue;
-            if (t != plantType)
+            if (t != plantType[p])
             {
                 var (supply, draw) = world.PowerOf(p);
                 if (supply < draw + def.PowerDraw)
                 {
-                    if (OrderStructure(world, p, yard[p], plantType) is { } pw)
-                        return Fail($"reachability: player {p} could not build a power plant to light the base ({pw})");
+                    // P7-5: SPAWNED scaffolding, not an ordered building, and the
+                    // change is deliberate rather than a convenience.
+                    //
+                    // Keeping the base lit is a PRECONDITION of this gate, never
+                    // the thing under test: the plant's own orderability is
+                    // proved by its ordinary turn in `pending`, like every other
+                    // building. Ordering top-ups as well was a fixture that
+                    // happened to work while one plant supplied 100 and a base
+                    // needed one of them.
+                    //
+                    // DR-02 broke that, and the way it broke is worth recording
+                    // because it looked like three different bugs. A Sodality
+                    // base needs a dozen 40-supply generators to run everything
+                    // in the catalogue; a dozen 1x1 buildings sprawl far past a
+                    // 2x2 plant's footprint; the sprawl reached the OTHER seat's
+                    // guns, which are two cells apart in this fixture; and the
+                    // generators were then shot down as fast as they went up. The
+                    // gate reported "the placement was refused", which is the one
+                    // thing that was not happening.
+                    //
+                    // A single spawn with a supply override ends all of it. The
+                    // override is the parameter SpawnPowerPlant has carried since
+                    // BD-06 for exactly this purpose, and it spawns the player's
+                    // OWN side's plant so the fixture never holds a building its
+                    // faction could not build.
+                    var (sax, say) = FreeAnchor(world, p, plantType[p]);
+                    if (sax < 0) return Fail($"reachability: no room beside player {p}'s base for the fixture's "
+                                             + "power scaffolding");
+                    world.SpawnPowerPlant(p, sax, say, supply: 100000, structType: plantType[p]);
                     powerTopUps++;
                 }
             }
@@ -10995,6 +11330,8 @@ return args.Length == 0
         "transportgate" => TransportGate(),
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
+        "factionpowergate" => FactionPowerGate(),
+        "ferritefieldgate" => FerriteFieldGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

@@ -10,7 +10,7 @@
     "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
     "faction": {
       "enum": ["directorate", "sodality", "common"],
-      "description": "DESCRIPTIVE ONLY at present, unlike the unit schema's faction key. The sim gates exactly one structure by faction (the veil projector, World.cs BuildStructure) and StructureTypeDef carries no Faction field; wiring the rest is a behaviour change and belongs to a sim ticket, not to this file."
+      "description": "BEHAVIOURAL, exactly like the unit schema's faction key. StructureTypeDef.Faction carries it (added P7-1) and World.StructureAllowedForFaction refuses a BuildStructure command from the wrong side, so this key decides what a player can build. It is folded into CatalogueChecksum (added P7-5), so two peers authoring it differently refuse to play rather than desyncing. 'common' means both sides. Note the id prefix is a LEGACY LABEL and not this key: com_power_plant is directorate-only and dir_turret is common."
     },
     "cost": { "type": "integer", "minimum": 1, "description": "Credits" },
     "build_time_ticks": {

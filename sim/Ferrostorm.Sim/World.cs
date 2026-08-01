@@ -1038,7 +1038,13 @@ public sealed partial class World
         // same round-trip proves it. The values are the two hand-kept arrays the
         // sidebar used to carry, transcribed once: nothing on this def implies
         // the split, which is why it is authored (see the BuildTab enum).
-        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4,
+        // P7-5 (DR-02): the Directorate's plant, and the numbers are UNCHANGED.
+        // GDD s3 gives this side "fewer, bigger power plants (= juicier
+        // targets)", and that is what 100 supply behind 150 hp already was: the
+        // whole base on one fragile building. The row did not need a rebalance,
+        // it needed the OTHER side to stop sharing this.
+        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, SightCells: 4,
+                                  PowerSupply: 100, Faction: FactionDirectorate,
                                   Tab: BuildTab.Buildings),
         2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5, Prereqs: new[] { 3 },
                                   Tab: BuildTab.Buildings),
@@ -1170,6 +1176,31 @@ public sealed partial class World
         19 => new StructureTypeDef(400, EntityKind.Mine, 60, Hp: 100, SightCells: 0, Footprint: 1,
                                    Prereqs: new[] { 12 }, MaxAlive: MinesPerPlayer,
                                    Tab: BuildTab.Defence),
+        // P7-5 (DR-02): the Sodality's generator, the other half of GDD s3's
+        // "decentralised power (many small generators)". Every number is set
+        // against the Directorate plant above rather than chosen on its own,
+        // because the identity IS the comparison and a generator priced in
+        // isolation would just be a cheaper building.
+        //
+        // Three generators are the unit of comparison, being what it takes to
+        // beat one plant's 100 supply:
+        //   supply     120 for 390 credits, against 100 for 300. The Sodality
+        //              pays 3.25 credits per power to the Directorate's 3.00,
+        //              so CENTRALISED IS MORE EFFICIENT - that is the upside
+        //              the GDD's "bigger" has to buy, or the trade is one-way.
+        //   hp         210 across three buildings against 150 in one. Tougher
+        //              in total and, decisively, no single kill takes more than
+        //              a THIRD of the supply. That is the whole of
+        //              "decentralised", and it is what the gate measures.
+        //   build      135 ticks against 100, and three placements against one.
+        //              The sprawl costs time and attention, not just credits.
+        //   footprint  1 against 2, so the sprawl fits a base rather than
+        //              needing three times the room.
+        // Sight 3 (against 4) keeps a cheap generator from being a cheap
+        // watchtower, which is the one way this could have been strictly better.
+        20 => new StructureTypeDef(130, EntityKind.PowerPlant, 45, Hp: 70, SightCells: 3,
+                                   PowerSupply: 40, Footprint: 1, Faction: FactionSodality,
+                                   Tab: BuildTab.Buildings),
         _ => default,
     };
 
@@ -1187,7 +1218,20 @@ public sealed partial class World
     /// a no-op waiting to be wrong.
     /// </summary>
     // P7-2 raised this from 14 to 15 for the Emplacement.
-    public const int MaxStructType = 19;   // P7-11c raised it for the Mine
+    public const int MaxStructType = 20;   // P7-5 raised it for the Sodality generator
+
+    /// <summary>
+    /// P7-5 (DR-02): the two power plants, named rather than written as literals
+    /// at the sites that choose between them. GDD s3 gives each side its own
+    /// grid, so "the power plant" is no longer a thing that exists.
+    /// </summary>
+    public const int DirectoratePlantStructType = 1;
+    public const int SodalityGeneratorStructType = 20;
+
+    /// <summary>The plant a given side actually builds. One place, so the AI,
+    /// the gates and any future opening all ask the same question.</summary>
+    public static int PlantTypeForFaction(int faction)
+        => faction == FactionSodality ? SodalityGeneratorStructType : DirectoratePlantStructType;
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
@@ -1381,6 +1425,19 @@ public sealed partial class World
                 // from the same command stream while agreeing on every stat in
                 // the game - a desync no other comparison in the protocol sees.
                 h.Add(d.MaxAlive);
+                // P7-5: the structure's SIDE, which had been missing since P7-1
+                // made it decide whether a BuildStructure is accepted. Its unit
+                // twin has been folded since the roster existed; this one was
+                // simply never added when the field arrived, and the omission
+                // is the same shape as the Air one recorded above.
+                //
+                // Two peers holding different /data could disagree about which
+                // side may build the Bastion while every other number in the
+                // game matched, and the protocol would see nothing. Latent
+                // until now because both peers load the same /data - and NOT
+                // latent from here, because DR-02 makes the answer to "may I
+                // build a power plant" faction-dependent for the first time.
+                h.Add(d.Faction);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -1664,16 +1721,20 @@ public sealed partial class World
     private static Fix64 FootprintCentre(int anchor, int size) => Fix64.FromInt(anchor) + Fix64.FromFraction(size, 2);
 
     /// <summary>The supply and hp overrides survive BD-06 as nullable rather than literal defaults: passing nothing takes the catalogue value, so there is one place to edit, and the scenarios that pass an explicit number are bit-identical either way.</summary>
-    public int SpawnPowerPlant(int player, int ax, int ay, int? supply = null, int? hp = null)
+    /// <param name="structType">P7-5: which side's plant. Defaults to the
+    /// Directorate's, so every existing caller and every golden scenario spawns
+    /// exactly the building it always did.</param>
+    public int SpawnPowerPlant(int player, int ax, int ay, int? supply = null, int? hp = null,
+                               int structType = DirectoratePlantStructType)
     {
-        var def = GetStructureType(1);
+        var def = GetStructureType(structType);
         int sup = supply ?? def.PowerSupply, php = hp ?? def.Hp;
         BlockFootprint(ax, ay, def.Footprint);
         Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.PowerPlant,
-            X = x, Y = y, TargetX = x, TargetY = y, StructType = 1,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = structType,
             Hp = php, MaxHp = php, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerSupply = sup,
             PowerDraw = def.PowerDraw,
@@ -2508,7 +2569,15 @@ public sealed partial class World
                 _events.Add(new GameEvent(GameEventType.StructurePlaced, _entities.Count, c.AuxId));
                 switch (sd.Kind)
                 {
-                    case EntityKind.PowerPlant: SpawnPowerPlant(c.PlayerId, ax, ay); break;
+                    // P7-5 (DR-02): the TYPE, not just the kind. This switch is
+                    // keyed on Kind, and Kind stopped identifying a building the
+                    // moment a second power plant existed - so a Sodality player
+                    // placing a generator got a Directorate plant, silently and
+                    // at the generator's price. The Emplacement case below has
+                    // carried the same collision since P7-2b and answers it the
+                    // same way, by asking c.AuxId which building was actually
+                    // ordered.
+                    case EntityKind.PowerPlant: SpawnPowerPlant(c.PlayerId, ax, ay, structType: c.AuxId); break;
                     case EntityKind.Factory: SpawnFactory(c.PlayerId, ax, ay); break;
                     case EntityKind.Refinery: SpawnRefinery(c.PlayerId, ax, ay); break;
                     case EntityKind.ConstructionYard: SpawnConstructionYard(c.PlayerId, ax, ay); break;
@@ -3033,11 +3102,36 @@ public sealed partial class World
         return false;
     }
 
+    /// <summary>
+    /// P7-5 (DR-02) made this ask for a CAPABILITY rather than an instance, and
+    /// the row could not be built without it.
+    ///
+    /// Every prerequisite in the tree names a structure TYPE ID, and five of
+    /// them name type 1, the power plant. The moment the two sides stop sharing
+    /// one plant - which is exactly what GDD s3's "centralised" against
+    /// "decentralised" asks for - a Sodality player holding three generators
+    /// satisfies no prerequisite in the game and can build nothing but a
+    /// generator, forever. Not a balance problem: a dead end.
+    ///
+    /// So a prerequisite is satisfied by any owned structure of the same KIND as
+    /// the type named, and the authored id is an EXEMPLAR of the capability
+    /// rather than the only thing that provides it. "You need a power plant",
+    /// not "you need building number one".
+    ///
+    /// This is the same correction P7 has now made about a dozen times - read a
+    /// rule as the property it means rather than the instance it names - and it
+    /// is hash-neutral by construction here, because no two structure types
+    /// share a Kind that anything requires. The one Kind with two types today is
+    /// Emplacement (15 and 18), which nothing takes as a prerequisite; when
+    /// something does, the Shroud Nest satisfying an Emplacement requirement is
+    /// the intended reading rather than a leak.
+    /// </summary>
     public bool HasPrereqs(int player, int[]? ids)
     {
         if (ids == null) return true;
         for (int r = 0; r < ids.Length; r++)
         {
+            EntityKind need = GetStructureType(ids[r]).Kind;
             bool found = false;
             for (int i = 0; i < _entities.Count; i++)
             {
@@ -3052,7 +3146,7 @@ public sealed partial class World
                 // where one seat builds the radar and three seats spend nothing
                 // makes the tree free, which is not what "up to 4v4" was asking
                 // for. IsOwnedBy, never IsAlliedTo.
-                if (o.Alive && IsOwnedBy(in o, player) && o.StructType == ids[r]) { found = true; break; }
+                if (o.Alive && IsOwnedBy(in o, player) && IsStructure(o.Kind) && o.Kind == need) { found = true; break; }
             }
             if (!found) return false;
         }
@@ -3994,7 +4088,21 @@ public sealed partial class World
                 // order rather than executing it. Without this an explicit
                 // Attack would shoot a plane down with a rifle and the whole
                 // point of the layer would be a scan-only rule.
-                || !WeaponCanEngage(in w, _entities[e.ExplicitTarget])))
+                || !WeaponCanEngage(in w, _entities[e.ExplicitTarget])
+                // P7-5: and a ferrite field is not a target. Found while
+                // reading GDD s8 for DR-04, which gives DESTROYING A FIELD to
+                // one superweapon on one side as that faction's economic-warfare
+                // identity - so anything else being able to do it is a defect,
+                // and this one was total. Every other system already excludes
+                // fields by hand (auto-acquire, splash, area damage, the guard
+                // leash, EnemyNearAMovePoint); this branch was the only way in,
+                // and a field has Hp 1, so ONE rifle shot deleted an entire
+                // field and its whole remaining ferrite, permanently, because
+                // regrowth skips dead fields. Unreachable from the sidebar, and
+                // that is not a defence: it is reachable from a LAN peer's
+                // command stream, which is the seat this project has been
+                // caught by three times.
+                || _entities[e.ExplicitTarget].Kind == EntityKind.FerriteField))
                 e.ExplicitTarget = -1;
 
             if (e.ExplicitTarget >= 0)

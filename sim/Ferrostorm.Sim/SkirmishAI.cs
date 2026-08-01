@@ -367,7 +367,13 @@ public sealed class SkirmishAI
         // the ONLY units both faction branches produce until a wave's worth of
         // army stands, so an AI that reaches the factory first would have
         // nothing it could legally build there.
-        int wanted = !hasPlant ? 1
+        // P7-5 (DR-02): its OWN side's plant. hasPlant above already asked the
+        // right question - it keys on EntityKind.PowerPlant, a property - so
+        // only the two sites that name a type id needed teaching. A Directorate
+        // commander picks type 1 and its behaviour is unchanged to the byte,
+        // which is why the goldens do not move.
+        int plant = World.PlantTypeForFaction(w.FactionOf(_player));
+        int wanted = !hasPlant ? plant
                    : refinery < 0 ? 3
                    : barracks < 0 ? 11
                    : factory < 0 ? 2
@@ -387,7 +393,7 @@ public sealed class SkirmishAI
                    // every harvester and the commander rebuys the economy
                    // before it rebuys anything else.
                    : harvesters == 0 ? 0
-                   : supply < draw + 40 ? 1
+                   : supply < draw + 40 ? plant
                    : refineryCount < cyCount ? 3 // one refinery per base (TICKET-AI-03)
                    : !hasTurret ? 5
                    // ADR-008 clause 4: the radar before the superweapon, at
