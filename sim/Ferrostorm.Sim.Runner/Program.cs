@@ -4552,6 +4552,50 @@ int PinProbe()
     return 0;
 }
 
+int EconomyProbe()
+{
+    // P7-6 asks for a silo and a credit ceiling. Before deciding whether one is
+    // wanted, this measures the thing GDD s4 actually SPECIFIES, which nothing
+    // has ever checked: "A player floats at 2 refineries / 3 harvesters on one
+    // base." A ceiling only earns its place if the treasury runs away, so the
+    // question is whether it does.
+    //
+    // A PROBE, not a gate: it reports and asserts nothing. Balance is a
+    // playtest, and a hard threshold here would be a number invented to pass
+    // itself.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var map = MapData.Load(Path.Combine(root, "data/maps/skirmish-01.fmap"));
+    var w = map.BuildWorld(2026, players: 2, out _);
+    CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+    map.PlaceSkirmishStart(w, 8000);
+    var a0 = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+    var a1 = SkirmishAI.Standard(1, AiDifficulty.Normal, w);
+    var cmds = new List<Command>();
+    Console.WriteLine("economyprobe: GDD s4 says a player FLOATS at 2 refineries / 3 harvesters. Measuring whether "
+                      + "the treasury runs away, which is the only thing a ceiling would fix.");
+    Console.WriteLine("   tick   credits0   credits1   refineries0   harvesters0");
+    for (int t = 1; t <= 9000; t++)
+    {
+        cmds.Clear();
+        a0.Act(w, cmds); a1.Act(w, cmds);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (t % 1500 != 0) continue;
+        int refineries = 0, harvesters = 0;
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (e.Kind == EntityKind.Refinery) refineries++;
+            if (e.Kind == EntityKind.Harvester) harvesters++;
+        }
+        Console.WriteLine($"  {t,5}   {w.Credits(0),8}   {w.Credits(1),8}   {refineries,11}   {harvesters,11}");
+    }
+    Console.WriteLine("economyprobe: read the credit columns. A treasury that oscillates around a working balance is "
+                      + "the GDD's float and needs no ceiling; one that climbs monotonically to a large number is a "
+                      + "stockpile, and a stockpile is what a silo exists to make a decision about.");
+    return 0;
+}
+
 int SizeProbe()
 {
     // Doc 26 calls 192x128 "the tested map ceiling", which is a statement about
@@ -10968,6 +11012,7 @@ return args.Length == 0
         "aituninggate" => AiTuningGate(),
         "catalogueloadgate" => CatalogueLoadGate(),
         "sizeprobe" => SizeProbe(),
+        "economyprobe" => EconomyProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
