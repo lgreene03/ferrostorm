@@ -17,3 +17,4 @@ sight_range: 7
 footprint: 2
 weapon_ids: [wpn_turret_gun]
 prerequisites: [com_radar_uplink]
+build_tab: defence

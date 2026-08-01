@@ -10,6 +10,7 @@ sight_range: 5
 footprint: 2
 weapon_ids: []
 prerequisites: [com_refinery]
+build_tab: buildings
 notes: >
   Produces the VEHICLE roster (ADR-009: every unit whose produced_at names
   com_factory). The infantry moved to the barracks. The sim keeps one queue

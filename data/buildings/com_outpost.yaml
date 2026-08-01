@@ -20,6 +20,9 @@ sight_range: 5
 footprint: 2
 weapon_ids: []
 prerequisites: []
+# No button: map-placed and captured, and the loader checks that answer against
+# the build_time_ticks 0 above rather than taking it on trust.
+build_tab: none
 notes: >
   Secondary income: capture with an engineer to gain a passive credit trickle
   and a little map-control vision. An outpost is an income node, not a base:

@@ -24,6 +24,9 @@ sight_range: 0
 footprint: 1
 weapon_ids: []
 prerequisites: []
+# No button: map-placed, and the loader checks that answer against the
+# build_time_ticks 0 above rather than taking it on trust.
+build_tab: none
 notes: >
   sight_range 0 for the barrier's reason: a long deck is many entities and none
   of them belong in the fog pass. hp 800 makes felling a span a deliberate act

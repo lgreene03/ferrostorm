@@ -17,6 +17,10 @@ footprint: 1
 weapon_ids: []
 prerequisites: [com_radar_uplink]
 max_alive: 20
+# DEFENCE, beside the wall it shares a cost ceiling with. It had to be added to
+# the sidebar's hand-kept array by hand in the wave that shipped it; this key is
+# what ends that.
+build_tab: defence
 notes: >
   A hidden charge that detonates on the first enemy unit or harvester to come
   within 1.5 cells, and is consumed doing it. Three of its four properties are

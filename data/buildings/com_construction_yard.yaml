@@ -10,6 +10,9 @@ sight_range: 6
 footprint: 2
 weapon_ids: []
 prerequisites: []
+# No button: MCV-deployed rather than ordered, and the loader checks that
+# against the build_time_ticks 0 above rather than taking it on trust.
+build_tab: none
 notes: >
   Empty prerequisites because it is never queued: it arrives by MCV deploy,
   which runs no tree check at all (ADR-009 clause 3).

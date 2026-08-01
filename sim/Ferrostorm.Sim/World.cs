@@ -52,6 +52,27 @@ public readonly struct Command
 public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
+/// <summary>
+/// Which tab of the build sidebar offers a structure, authored per building in
+/// /data. PRESENTATION, and the sim reads it nowhere: it cannot change which
+/// commands are accepted, so it is deliberately NOT folded into
+/// <see cref="World.CatalogueChecksum"/> - two peers with different tabs would
+/// play the same match with the same army from the same command stream, which
+/// is the exact test ADR-032 sets for what must ride the checksum. Keeping it
+/// out also means adding it moves no save and refuses no replay.
+///
+/// It exists because the split is EDITORIAL and nothing derivable stands in for
+/// it. The client kept two hand-written arrays instead, and they fell behind the
+/// catalogue the way the unit array did before them: the mine had to be added to
+/// one by hand in the wave that shipped it.
+///
+/// <see cref="None"/> is no button at all, which the three map-placed buildings
+/// carry (the MCV-deployed yard, the outpost and the bridge). That is the same
+/// set reachabilitygate excludes, and StructureCatalogue.ToTypeDef refuses any
+/// file where the two disagree rather than letting a second list grow here.
+/// </summary>
+public enum BuildTab : byte { None = 0, Buildings = 1, Defence = 2 }
+
 // APPEND ONLY (like EntityKind): the hash stores (int)e.Stance and the save
 // writes (byte)e.Stance, so a new value is invisible to both for every existing
 // stance; renumbering one rewrites every golden and every replay. Aggressive is
@@ -278,7 +299,26 @@ public sealed partial class World
     public const int FactionDirectorate = 0;
     public const int FactionSodality = 1;
     private readonly byte[] _playerFaction;
-    public void SetFaction(int player, int faction) => _playerFaction[player] = (byte)faction;
+    /// <summary>The player's side, fixed before tick 0.
+    ///
+    /// This was a bare array write with NO GUARD, found while writing SetTeam's
+    /// and noted then rather than fixed. The faction is HASHED state, so a call
+    /// after tick 0 would change the state hash mid-match: every replay of that
+    /// match would then diverge at the tick it happened, and in LAN the two
+    /// peers would part company the instant one of them made the call. Nothing
+    /// does today - both call sites run before the first Step - which is why it
+    /// has cost nothing and why it is a trap rather than a bug.
+    ///
+    /// Guarded on the same terms as SetTeam and the catalogue registrars, so
+    /// the three things that are "match setup, frozen at the start" now all say
+    /// so in the same way instead of two saying it and one meaning it.</summary>
+    public void SetFaction(int player, int faction)
+    {
+        if (Tick != 0) throw new InvalidOperationException("factions are fixed once the match starts");
+        if ((uint)player >= (uint)_players)
+            throw new ArgumentOutOfRangeException(nameof(player), $"no seat {player} in a {_players}-player world");
+        _playerFaction[player] = (byte)faction;
+    }
     public int FactionOf(int player) => _playerFaction[player];
 
     // Teams and alliances (P7-8c). GDD s9 promises "custom lobbies up to 4v4"
@@ -937,7 +977,17 @@ public sealed partial class World
         // UnitTypeDef column of the same name for the building catalogue. 0
         // means unlimited, so every building authored before the mine is
         // untouched and the enforcement is a no-op for all of them.
-        int MaxAlive = 0)
+        int MaxAlive = 0,
+        // Which build tab offers this building, authored in /data. The ONE
+        // column on this def the sim never reads: it decides nothing about what
+        // a command does, only about where a player finds the button. It is
+        // carried here because the catalogue is the only channel from /data to
+        // the client, and it is authored rather than derived because the split
+        // is EDITORIAL and nothing else on this def implies it - the Airfield
+        // is a producer that belongs beside the defences, and the wall, the
+        // veil, the superweapon and the mine carry no weapon. See the enum for
+        // why it is deliberately absent from CatalogueChecksum.
+        BuildTab Tab = BuildTab.None)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -949,13 +999,19 @@ public sealed partial class World
             && Hp == other.Hp && PowerSupply == other.PowerSupply && PowerDraw == other.PowerDraw
             && SightCells == other.SightCells && Footprint == other.Footprint
             && WeaponId == other.WeaponId && MaxAlive == other.MaxAlive
+            // The tab joins the comparison even though it joins no checksum: it
+            // is what makes the /data round-trip in selftest prove the authored
+            // key against the compiled reference, which is the only thing that
+            // stops a bare World (no /data at all) offering a different sidebar
+            // from a loaded one.
+            && Tab == other.Tab
             && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
             var h = new HashCode();
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
-            h.Add(MaxAlive);
+            h.Add(MaxAlive); h.Add(Tab);
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -973,37 +1029,63 @@ public sealed partial class World
         // cheap hangs off the plant, the factory waits on an economy, the
         // tier-2 support buildings wait on the factory, and the superweapon
         // waits on the radar.
-        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4),
-        2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5, Prereqs: new[] { 3 }),
+        //
+        // Every Tab here mirrors its /data/buildings file verbatim too, and the
+        // same round-trip proves it. The values are the two hand-kept arrays the
+        // sidebar used to carry, transcribed once: nothing on this def implies
+        // the split, which is why it is authored (see the BuildTab enum).
+        1 => new StructureTypeDef(300, EntityKind.PowerPlant, 100, Hp: 150, PowerSupply: 100, SightCells: 4,
+                                  Tab: BuildTab.Buildings),
+        2 => new StructureTypeDef(2000, EntityKind.Factory, 300, Hp: 1500, PowerDraw: 40, SightCells: 5, Prereqs: new[] { 3 },
+                                  Tab: BuildTab.Buildings),
         // Honest draws (ADR-008 clause 3, BD-07 rebased; A11 co-sign recorded
         // in the ADR): the refinery 0 to 40, the yard 0 to 20, the superweapon
         // 100 to 150. The opening base is then EXACTLY 100 supply against 100
         // draw - the zero-margin boundary the ADR accepts explicitly.
-        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, PowerDraw: 40, SightCells: 6, Prereqs: new[] { 1 }),
-        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, PowerDraw: 20, SightCells: 6), // MCV-deployed, never queued
-        5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4, Prereqs: new[] { 1 }),
-        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 }),
+        3 => new StructureTypeDef(2000, EntityKind.Refinery, 300, Hp: 2000, PowerDraw: 40, SightCells: 6, Prereqs: new[] { 1 },
+                                  Tab: BuildTab.Buildings),
+        // MCV-deployed, never queued - and so no tab, which the loader checks
+        // against the same BuildTicks 0 that keeps it out of the yard's queue.
+        4 => new StructureTypeDef(3000, EntityKind.ConstructionYard, 0, Hp: 3000, PowerDraw: 20, SightCells: 6,
+                                  Tab: BuildTab.None),
+        5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4, Prereqs: new[] { 1 },
+                                  Tab: BuildTab.Defence),
+        6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 },
+                                  Tab: BuildTab.Defence),
         // P7-1: the Veil declares its side here as data rather than being
         // named in a hardcoded predicate. The compiled default must agree
         // with sod_veil_projector.yaml or the /data round-trip fails loudly,
         // which is exactly the check that now protects the rule.
         // P7-2: the Emplacement. Cheap, short-lived under armour, and the only
         // thing in the game that answers massed infantry from a fixed position.
-        15 => new StructureTypeDef(350, EntityKind.Emplacement, 90, Hp: 300, PowerDraw: 10, SightCells: 5, WeaponId: 8, Prereqs: new[] { 1 }),
-        // ADR-028: the Airfield, behind the radar uplink (struct type 12).
-        16 => new StructureTypeDef(1800, EntityKind.Airfield, 260, Hp: 1100, PowerDraw: 50, SightCells: 6, Prereqs: new[] { 12 }),
+        15 => new StructureTypeDef(350, EntityKind.Emplacement, 90, Hp: 300, PowerDraw: 10, SightCells: 5, WeaponId: 8, Prereqs: new[] { 1 },
+                                   Tab: BuildTab.Defence),
+        // ADR-028: the Airfield, behind the radar uplink (struct type 12). It
+        // is the one entry where the tab CANNOT be guessed from the rest of the
+        // def: a producer with no weapon, filed under DEFENCE because that is
+        // where the tech buildings sit.
+        16 => new StructureTypeDef(1800, EntityKind.Airfield, 260, Hp: 1100, PowerDraw: 50, SightCells: 6, Prereqs: new[] { 12 },
+                                   Tab: BuildTab.Defence),
         // P7-2b: the faction defences, both from written GDD s3 doctrine - the
         // Directorate's buildings are "tough but expensive", the Sodality has
         // "cloaked units AND structures".
-        17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate),
-        18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality),
-        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality),
-        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 }),
+        17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
+                                   Tab: BuildTab.Defence),
+        18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
+                                   Tab: BuildTab.Defence),
+        7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality,
+                                  Tab: BuildTab.Defence),
+        8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 },
+                                  Tab: BuildTab.Buildings),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
         // Yard queue by the existing guard in BuildStructure, exactly as type 4 is
         // kept out: barriers are bought upfront at placement instead. SightCells 0
         // keeps 80 segments per player out of the fog pass entirely.
-        9 => new StructureTypeDef(100, EntityKind.Wall, 0, Hp: 500, SightCells: 0, Footprint: 1),
+        // The one buildable type with no build time: DEFENCE all the same,
+        // because the Wall kind is the sim's own exception to "BuildTicks 0
+        // means no player may have it" (the placement path buys it outright).
+        9 => new StructureTypeDef(100, EntityKind.Wall, 0, Hp: 500, SightCells: 0, Footprint: 1,
+                                  Tab: BuildTab.Defence),
         // 10 is the gate: RESERVED by ADR-005 clause 6, deliberately no def.
         // Barracks (TICKET-P5-PROD-03, numbers from doc 23 s4.3): cheap and
         // early, because that is what makes an infantry rush a real strategy
@@ -1011,12 +1093,14 @@ public sealed partial class World
         // UNIT type 11 is the engineer - different namespaces, no clash.
         // Buildable since ADR-009 clause 5: it is the producer of every unit
         // whose ProducedAt names struct type 11 (the infantry).
-        11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 }),
+        11 => new StructureTypeDef(500, EntityKind.Barracks, 100, Hp: 800, PowerDraw: 20, SightCells: 5, Prereqs: new[] { 1 },
+                                   Tab: BuildTab.Buildings),
         // Radar uplink (doc 23 s4.2 numbers): buildable since ADR-008 clause 4.
         // The client's minimap is lit only while a living uplink stands with
         // supply covering draw. Its Prereqs are READ since ADR-009: the radar
         // waits on a factory, and the superweapon waits on the radar.
-        12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 }),
+        12 => new StructureTypeDef(900, EntityKind.RadarUplink, 150, Hp: 1000, PowerDraw: 80, SightCells: 10, Prereqs: new[] { 2 },
+                                   Tab: BuildTab.Buildings),
         // Neutral Outpost (ADR-021, P6 Wave C4): the capturable income structure
         // of GDD line 41. MAP-PLACED ONLY, never player-built: BuildTicks 0 keeps
         // it out of every Construction Yard queue by the existing guard (the yard
@@ -1025,14 +1109,16 @@ public sealed partial class World
         // it is never charged. PowerDraw 0 so a captured income building never
         // browns out the grid it funds. Unarmed; a modest Sight gives its owner
         // map-control vision beside the income.
-        13 => new StructureTypeDef(500, EntityKind.Outpost, 0, Hp: 1000, SightCells: 5),
+        13 => new StructureTypeDef(500, EntityKind.Outpost, 0, Hp: 1000, SightCells: 5,
+                                   Tab: BuildTab.None),
         // Destroyable bridge (ADR-025, P6 Wave C6a). MAP-PLACED ONLY, like the
         // outpost: BuildTicks 0 keeps it out of every yard queue and no sidebar
         // item names it. Footprint 1, the wall's shape, because a bridge deck is
         // a single cell wide. SightCells 0 for the wall's reason: a long deck is
         // many entities and none of them should enter the fog pass. Hp 800 makes
         // felling one a deliberate act rather than incidental splash.
-        14 => new StructureTypeDef(400, EntityKind.Bridge, 0, Hp: 800, SightCells: 0, Footprint: 1),
+        14 => new StructureTypeDef(400, EntityKind.Bridge, 0, Hp: 800, SightCells: 0, Footprint: 1,
+                                   Tab: BuildTab.None),
         // P7-11c: the Mine. A STRUCTURE rather than a new kind of thing, which
         // is what lets it inherit the BuildStructure/PlaceStructure path,
         // ownership, cost, the tech tree, the catalogue and the sidebar whole.
@@ -1055,7 +1141,8 @@ public sealed partial class World
         // way to tile the ground. And it bounds MineSystem's per-tick scan at
         // 20 mines per player rather than at whatever a treasury can afford.
         19 => new StructureTypeDef(400, EntityKind.Mine, 60, Hp: 100, SightCells: 0, Footprint: 1,
-                                   Prereqs: new[] { 12 }, MaxAlive: MinesPerPlayer),
+                                   Prereqs: new[] { 12 }, MaxAlive: MinesPerPlayer,
+                                   Tab: BuildTab.Defence),
         _ => default,
     };
 
