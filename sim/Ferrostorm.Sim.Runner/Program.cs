@@ -8537,6 +8537,85 @@ int FactionPowerGate()
     return 0;
 }
 
+int DockProbe()
+{
+    // P7-9. GDD s4 says two things about a refinery that only make sense
+    // together:
+    //
+    //   "Refinery: 2,000 credits, includes one free harvester. Processes a load
+    //    in 8 seconds."
+    //   "A player FLOATS AT 2 REFINERIES / 3 HARVESTERS on one base."
+    //
+    // The second is only a design if the first is a BUILDING rate. If a refinery
+    // can serve any number of harvesters at once, nobody would ever buy the
+    // second one, and the specified float has no explanation.
+    //
+    // A PROBE, not a gate: it reports and asserts nothing, because what to do
+    // about the answer is a balance decision (ADR-051) rather than a fact.
+    long Run(ulong seed, int refineries, int harvesters)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SpawnRefinery(0, 20, 20);
+        if (refineries > 1) w.SpawnRefinery(0, 20, 26);
+        int field = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(23), 4000000);
+        var cmds = new List<Command>();
+        for (int h = 0; h < harvesters; h++)
+        {
+            int id = w.SpawnHarvester(0, Fix64.FromInt(24), Fix64.FromInt(20 + h));
+            cmds.Add(new Command(0, 0, CommandType.Harvest, id, Fix64.Zero, Fix64.Zero, field));
+        }
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        for (int t = 0; t < 4000; t++) w.Step(default);
+        return w.Credits(0);
+    }
+
+    // How many can be unloading at the SAME refinery on the same tick.
+    int Concurrency(ulong seed, int harvesters)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SpawnRefinery(0, 20, 20);
+        int field = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(20), 4000000);
+        var cmds = new List<Command>();
+        for (int h = 0; h < harvesters; h++)
+        {
+            int id = w.SpawnHarvester(0, Fix64.FromInt(24), Fix64.FromInt(18 + h));
+            cmds.Add(new Command(0, 0, CommandType.Harvest, id, Fix64.Zero, Fix64.Zero, field));
+        }
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        int worst = 0;
+        for (int t = 0; t < 4000; t++)
+        {
+            w.Step(default);
+            int n = 0;
+            for (int i = 0; i < w.Entities.Count; i++)
+                if (w.Entities[i].Alive && w.Entities[i].Kind == EntityKind.Harvester
+                    && w.Entities[i].HState == HarvestState.Unloading) n++;
+            if (n > worst) worst = n;
+        }
+        return worst;
+    }
+
+    Console.WriteLine("dockprobe: GDD s4 says a refinery \"processes a load in 8 seconds\" and that a player floats "
+                      + "at 2 refineries / 3 harvesters. The second only makes sense if the first is a BUILDING rate. "
+                      + "Measuring whether a refinery is a bottleneck at all.");
+    Console.WriteLine("   harvesters   max unloading at ONE refinery");
+    foreach (int h in new[] { 2, 4, 6, 8 })
+        Console.WriteLine($"   {h,10}   {Concurrency(4200 + (ulong)h, h),29}");
+
+    Console.WriteLine("   harvesters   credits w/ 1 refinery   credits w/ 2   gain");
+    foreach (int h in new[] { 3, 6 })
+    {
+        long one = Run(4300 + (ulong)h, 1, h), two = Run(4400 + (ulong)h, 2, h);
+        string gain = one == 0 ? "n/a" : $"{(two - one) * 100 / one}%";
+        Console.WriteLine($"   {h,10}   {one,21}   {two,12}   {gain,4}");
+    }
+    Console.WriteLine("dockprobe: if the concurrency column tracks the harvester count, a refinery serves any number "
+                      + "at once and is not a bottleneck; and if the second refinery earns nothing, GDD s4's float of "
+                      + "2 has no explanation in the sim as built. ADR-051 records what was decided about that and "
+                      + "the conditions for revisiting it.");
+    return 0;
+}
+
 int BaseShapeGate()
 {
     // P7-8 (ADR-050). A commander's base must be a BASE - a cluster around its
@@ -12363,6 +12442,7 @@ return args.Length == 0
         "economyfloatgate" => EconomyFloatGate(),
         "freeharvestergate" => FreeHarvesterGate(),
         "baseshapegate" => BaseShapeGate(),
+        "dockprobe" => DockProbe(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
