@@ -36,7 +36,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
 | P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash; all 10 committed maps re-generate BYTE-IDENTICAL, which is the inertness proof | **DONE** - `mirror2` orbit group; skirmish-09 "Kilnmoor Quarters" 160x120, four starts, 9.15% density; multiseatgate stage 7 |
 | P7-8d | The lobby seats what the map declares: N commanders, one per non-local seat | D2 | - | goldens NEUTRAL, measured; NO sidecar or wire format change, because the seat count is DERIVED from the map rather than stored | **DONE** - `SeatsFor(map)`; client harness 133 -> 138 checks |
-| P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | **PRODUCER.** Not a sub-task of P7-8 but a second project of comparable size | MOVES | **NOT TAKEN** - there is no team field, no alliance table and no `AreAllied` predicate anywhere in the sim; hostility is decided everywhere by "not me and not neutral". It touches targeting, splash friendly-fire, detection and fog sharing, victory and the AI, and it has NO code to build on |
+| P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | - (authorised 2026-08-01; design recorded reversibly in ADR-038) | goldens NEUTRAL, measured; catalogue checksum UNMOVED; save format v11 | **SIM DONE** - ADR-038; teamgate (8 stages). No lobby can express a team yet, so it is reachable only from a gate |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | ~~and onto self-declared setup, retiring `switch (setup.MissionIndex)`~~ **DONE** (ADR-034). Still owed: bring missions 01 to 03 under the GENERATOR, which is content rather than a defect | D1 | - | ONE golden regenerated (`mission`), measured; `mission03` was predicted to move and did not, for a reason worth reading | **PART DONE** - campaigngate proves every mission's setup comes from its own file |
 | P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
@@ -638,6 +638,37 @@ out and why forcing them through would change behaviour.
 **Provably inert**: all 24 goldens byte-identical and the catalogue checksum
 unmoved, which is the entire proof that 41 sites were re-routed without one
 being sent to the wrong question.
+
+## Teams, and the four things being allied does NOT imply
+
+The refactor is what made this small. 41 sites, 9 of them hostility, and a team
+is a per-player id **defaulting to the player's own** - so a free-for-all is
+unchanged BY CONSTRUCTION, which is the mechanism that keeps all 24 goldens
+byte-identical rather than a happy result.
+
+**Teams change four things**: `IsEnemyOf` (and everything routed through it
+follows for free), victory counting living TEAMS rather than players, contact
+effects refusing a teammate's building while still taking a neutral outpost
+(ADR-021 untouched), and detectors not bothering to reveal an ally.
+
+**And four things being allied deliberately does NOT imply**, each left unchanged
+with a comment at the site saying it is a decision: tech does not flow, vision
+does not flow, the veil hides its owner only, and splash still hurts allies
+exactly as it already hurts your own men. Turning all four on at once, unmeasured,
+in a game nobody has played, would be four untested claims wearing one feature's
+name. Each is a one-line change and a gate when wanted.
+
+**A client defect fixed with it.** `World.Winner` is a player id and the sim names
+the last standing seat of the winning team, so the client's `winner ==
+LocalPlayerId` would have shown **the winner's own teammate a DEFEAT banner**.
+Unreachable today because no lobby calls `SetTeam` - which is exactly why it was
+fixed now rather than when a 4v4 lobby lands, since it is the same shape as the
+seat inversion the harness caught twice: a comparison right at one seat by luck.
+
+Two findings banked: **`DowngradeSave` is a third edit site for a save-format
+bump** and it fails in the battery rather than at the change; and **`SetFaction`
+does not actually refuse after tick 0** despite being the obvious model for
+`SetTeam` - a bare array write with no guard.
 
 ## What this phase does NOT do
 

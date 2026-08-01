@@ -32,6 +32,7 @@ using Ferrostorm.Sim;
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   herogate           - P7-11b: the hero DAMAGES a building rather than deleting it and survives doing so, "one at a time" is enforced where a unit is queued and where it completes, and an uncapped unit is untouched
 //   minegate           - P7-11c: a mine is ORDERED and placed like any building, detonates on an enemy and not its owner, does NOT block where a wall does, hides until a detector finds it, obeys max_alive, and two going off together are deterministic
+//   teamgate           - P7-8c: every seat starts on its own team so a free-for-all is unchanged by construction; allies are not targets, victory is by TEAM while elimination stays per player, contact effects and detectors respect the alliance, and tech, fog, the veil and splash deliberately do not
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
@@ -2319,7 +2320,7 @@ int CatalogueRefuse()
 }
 
 // Byte surgery for the backwards-compatibility gates: rebuild a CURRENT
-// (v10) save as an older format on disk. v4 -> v3 strips the ADR-007 rally
+// (v11) save as an older format on disk. v4 -> v3 strips the ADR-007 rally
 // fields from every entity record; below v3 the ADR-006 catalogue checksum
 // goes too, and below v2 the per-player faction byte. The walk mirrors the
 // serializer's layout field by field; if that layout drifts, the load
@@ -2329,21 +2330,23 @@ int CatalogueRefuse()
 // shared, layout-aware helper.)
 byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au;
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu;
     using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    // P7-11a: the SOURCE is whatever Save() currently writes, which is v10 now.
+    // P7-8c: the SOURCE is whatever Save() currently writes, which is v11 now.
     // Pinned to a literal version this helper breaks the moment the format
     // moves, and it breaks in the BATTERY rather than here - the same
-    // name-one-version trap the loader's hasBuildLanes had, and it caught v10
-    // exactly as it caught v9. The one line to change is this one, plus a walk
-    // step for whatever block the new format appended.
-    if (input.ReadUInt32() != magicV10)
-        throw new InvalidOperationException("save surgery expects a v10 stream (the current Save format)");
+    // name-one-version trap the loader's hasBuildLanes had, and it caught v11
+    // exactly as it caught v10 and v9. The one line to change is this one, plus
+    // a walk step for whatever field the new format appended (here, the
+    // per-player team id) and one more entry in each "keep" predicate, because
+    // the format that WAS the source is now a legal target.
+    if (input.ReadUInt32() != magicV11)
+        throw new InvalidOperationException("save surgery expects a v11 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2355,6 +2358,11 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     {
         byte faction = input.ReadByte();
         if (targetMagic != magicV1) w.Write(faction); // v1 predates the faction byte (Q001)
+        // P7-8c (v11 only): the team id, consumed and DROPPED. Every target this
+        // helper produces predates teams, so an alliance cannot be expressed in
+        // any of them, and those worlds load as the free-for-alls they were -
+        // which is what those formats meant.
+        input.ReadInt32();
         w.Write(input.ReadInt64());   // credits
         w.Write(input.ReadBoolean()); // eliminated flag
         int words = input.ReadInt32(); w.Write(words);
@@ -2402,11 +2410,11 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         for (int k = 0; k < n; k++) w.Write(input.ReadBytes(34)); // one serialized Command
     }
     // ADR-023's lane block: kept for a v8 target and above, dropped below it.
-    // v10 is the SOURCE format and is refused as a target rather than
-    // half-copied, the same reason v9 used to be.
-    if (targetMagic == magicV10) throw new InvalidOperationException("save surgery downgrades; v10 is the source format, not a target");
+    // v11 is the SOURCE format and is refused as a target rather than
+    // half-copied, the same reason v10 and v9 each used to be.
+    if (targetMagic == magicV11) throw new InvalidOperationException("save surgery downgrades; v11 is the source format, not a target");
     int laneCount = input.ReadInt32();
-    bool keepLanes = targetMagic is magicV8 or magicV9;
+    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10;
     if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
@@ -2420,7 +2428,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // hold cannot be expressed at all - and a unit that was aboard is simply
     // not in that older world, which is what those formats meant.
     int cargoCount = input.ReadInt32();
-    bool keepCargo = targetMagic == magicV9;
+    bool keepCargo = targetMagic is magicV9 or magicV10;
     if (keepCargo) w.Write(cargoCount);
     for (int i = 0; i < cargoCount; i++)
     {
@@ -2433,12 +2441,17 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
             if (keepCargo) { w.Write(ut); w.Write(hp); w.Write(rank); }
         }
     }
-    // P7-11a (v10 only): the switched-off buildings, consumed and DROPPED.
-    // Every target this helper produces predates the saboteur, so a disable
-    // cannot be expressed in any of them, and a building that was dark simply
-    // works in that older world - which is what those formats meant.
+    // P7-11a's switched-off buildings: kept for a v10 target, dropped below it,
+    // where a disable cannot be expressed at all - and a building that was dark
+    // simply works in that older world, which is what those formats meant.
     int disabledCount = input.ReadInt32();
-    for (int i = 0; i < disabledCount; i++) { input.ReadInt32(); input.ReadInt32(); }
+    bool keepSabotage = targetMagic == magicV10;
+    if (keepSabotage) w.Write(disabledCount);
+    for (int i = 0; i < disabledCount; i++)
+    {
+        int id = input.ReadInt32(), until = input.ReadInt32();
+        if (keepSabotage) { w.Write(id); w.Write(until); }
+    }
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
@@ -6928,6 +6941,382 @@ int MineGate()
     return 0;
 }
 
+int TeamGate()
+{
+    // P7-8c. GDD s9 promises "custom lobbies up to 4v4" and the sim had no
+    // notion of a side larger than a seat. Additive, the infiltratorgate
+    // pattern: a standalone mode and a Match battery stage, never a golden
+    // scenario, so the golden list stays 24 and every hash in it stays
+    // byte-identical.
+    //
+    // The design is one per-player team id DEFAULTING TO THE PLAYER'S OWN ID, so
+    // a free-for-all is unchanged BY CONSTRUCTION rather than by a special case.
+    // Stage 1 is that claim and everything after it rests on it: if the default
+    // is not exactly today's behaviour then the other stages are describing a
+    // different game from the one the 24 goldens cover.
+    //
+    // Stages 5 and 6 are here because an alliance is FOUR decisions and FOUR
+    // refusals, and the refusals are the ones that rot. Nothing in the sim would
+    // fail if an ally quietly unlocked your tech tree, so nothing but an
+    // assertion keeps it from happening in the next wave.
+    const int Rifle = 2;                 // com_rifle_squad: service rifle, range 3
+    const int RadarStructType = 12;      // the prerequisite the mine and the tech tree both name
+
+    List<Command> One(Command c) => new() { c };
+    void Step(World w, List<Command>? cmds = null) =>
+        w.Step(cmds is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+    // A rifle squad from the catalogue: armed, and it will auto-acquire.
+    int Shooter(World w, int player, Fix64 x, Fix64 y)
+    {
+        var d = w.GetUnitType(Rifle);
+        return w.SpawnUnit(player, x, y, d.Speed, d.Hp, d.Armour, d.WeaponId, veterancy: false, unitType: Rifle);
+    }
+    // A standing target: tough enough to survive being measured, UNARMED so it
+    // never shoots back and the only number that moves is the one under test.
+    int Bystander(World w, int player, Fix64 x, Fix64 y)
+        => w.SpawnUnit(player, x, y, Fix64.Zero, hp: 1000, ArmourClass.Heavy, weaponId: 0, veterancy: false);
+
+    // --- 1. THE DEFAULT IS A FREE-FOR-ALL. Three seats, no SetTeam call
+    //        anywhere, and every one of the six ordered pairs is hostile - first
+    //        as the predicate, then as three real firefights, because a
+    //        predicate that says "enemy" and a gun that does not fire would look
+    //        identical to a green run of the first half alone.
+    {
+        var w = new World(4800, 64, 64, players: 3);
+        for (int p = 0; p < 3; p++)
+            if (w.TeamOf(p) != p)
+                return Fail($"team: with no SetTeam call seat {p} sits on team {w.TeamOf(p)}, not its own. "
+                            + "The identity map IS the free-for-all, and it is the only reason the 24 goldens "
+                            + "may stay byte-identical while every hostility test in the sim changes shape");
+        var u = new int[3];
+        for (int p = 0; p < 3; p++) u[p] = Bystander(w, p, Fix64.FromInt(10 + 4 * p), Fix64.FromInt(10));
+        for (int a = 0; a < 3; a++)
+            for (int b = 0; b < 3; b++)
+            {
+                bool hostile = w.IsEnemyOf(w.Entities[u[b]], a);
+                if (a != b && !hostile)
+                    return Fail($"team: seat {b}'s unit is not an enemy of seat {a} in a world where nobody has "
+                                + "been put on a team. Three commanders who cannot fight each other is not a "
+                                + "free-for-all");
+                if (a == b && hostile)
+                    return Fail($"team: seat {a}'s own unit reads as its own enemy");
+            }
+    }
+    int ffaPairs = 0;
+    {
+        // The same claim where the player can see it: each pair, alone in its
+        // own world, shoots each other.
+        var pairs = new[] { (0, 1), (1, 2), (0, 2) };
+        foreach (var (a, b) in pairs)
+        {
+            var w = new World(4801, 32, 32, players: 3);
+            int ua = Shooter(w, a, Fix64.FromInt(16), Fix64.FromInt(16));
+            int ub = Shooter(w, b, Fix64.FromInt(17), Fix64.FromInt(16));
+            int hpA = w.Entities[ua].Hp, hpB = w.Entities[ub].Hp;
+            for (int t = 0; t < 30; t++) Step(w);
+            if (w.Entities[ua].Hp >= hpA || w.Entities[ub].Hp >= hpB)
+                return Fail($"team: seats {a} and {b} stood one cell apart for 30 ticks and took "
+                            + $"{hpA - w.Entities[ua].Hp} and {hpB - w.Entities[ub].Hp} damage. With no alliance "
+                            + "declared every seat is everybody's enemy, exactly as before teams existed");
+            ffaPairs++;
+        }
+    }
+
+    // --- 2. THE FEATURE. Two seats on one team, and a rifle squad will not
+    //        shoot its teammate even with the teammate CLOSER than the enemy. The
+    //        contrast in one fixture is the assertion: the ally sits at 2 cells
+    //        and a third player's unit at 2.5, both inside the 3-cell rifle
+    //        range, and auto-acquire takes the NEAREST - so a hostility test that
+    //        ignored teams would pick the ally every time.
+    int allyTook = -1, enemyTook = -1;
+    {
+        var w = new World(4802, 64, 64, players: 3);
+        w.SetTeam(1, 0);                    // seats 0 and 1 are one side; seat 2 fights alone
+        int shooter = Shooter(w, 0, Fix64.FromInt(30), Fix64.FromInt(30));
+        int ally = Bystander(w, 1, Fix64.FromInt(30), Fix64.FromInt(32));                       // 2.0 cells
+        int enemy = Bystander(w, 2, Fix64.FromInt(30), Fix64.FromInt(30) - Fix64.FromFraction(5, 2)); // 2.5 cells
+        if (w.IsEnemyOf(w.Entities[ally], 0))
+            return Fail("team: a unit of seat 1 reads as an enemy of seat 0 after SetTeam(1, 0)");
+        if (!w.IsEnemyOf(w.Entities[enemy], 0))
+            return Fail("team: a unit of seat 2 stopped being an enemy of seat 0 when seats 0 and 1 allied - "
+                        + "an alliance is with somebody, not with everybody");
+        int allyHp = w.Entities[ally].Hp, enemyHp = w.Entities[enemy].Hp;
+        for (int t = 0; t < 60; t++) Step(w);
+        allyTook = allyHp - w.Entities[ally].Hp;
+        enemyTook = enemyHp - w.Entities[enemy].Hp;
+        if (allyTook != 0)
+            return Fail($"team: a rifle squad auto-acquired its own team's unit two cells away and took {allyTook} "
+                        + "off it. Target acquisition asks IsEnemyOf and a teammate must not answer yes, or a 4v4 "
+                        + "is four players shooting their own side");
+        if (enemyTook <= 0)
+            return Fail("team: and the third player's unit two and a half cells from the same squad took nothing, "
+                        + "so the stage above proves only that the squad never fired. The contrast IS the "
+                        + "assertion");
+        if (w.Entities[shooter].Hp != w.GetUnitType(Rifle).Hp)
+            return Fail("team: the shooter was damaged by unarmed bystanders, so the fixture is not what it claims");
+    }
+
+    // --- 3 and 4. VICTORY IS BY TEAM, ELIMINATION IS STILL BY PLAYER. A 2v2:
+    //        felling ONE member of a side must not end the match, felling the
+    //        whole side must, and the fallen teammate is still announced
+    //        eliminated exactly once in between. The two rules are opposite
+    //        halves of one decision and they are asserted in one run because a
+    //        change to either would look correct from the other's fixture.
+    int elim3 = 0, winner = -1;
+    {
+        var w = new World(4803, 64, 64, players: 4);
+        w.SetTeam(1, 0);   // team 0: seats 0 and 1
+        w.SetTeam(3, 2);   // team 2: seats 2 and 3
+        var yard = new int[4];
+        for (int p = 0; p < 4; p++) yard[p] = w.SpawnConstructionYard(p, 6 + 14 * p, 8);
+        var elims = new int[4];
+        void Advance(int ticks)
+        {
+            for (int t = 0; t < ticks; t++)
+            {
+                Step(w);
+                foreach (var ev in w.Events)
+                    if (ev.Type == GameEventType.PlayerEliminated) elims[ev.B]++;
+            }
+        }
+        void Fell(int p)
+        {
+            var e = w.Entities[yard[p]];
+            e.Alive = false;
+            w.SetEntityForTest(yard[p], e);
+        }
+
+        Advance(20);
+        if (w.Winner >= 0)
+            return Fail($"team: two whole teams standing and the sim declared seat {w.Winner} the winner");
+
+        Fell(3);
+        Advance(20);
+        if (w.Winner >= 0)
+            return Fail($"team: seat 3 fell and the sim declared seat {w.Winner} the winner while its TEAMMATE "
+                        + "seat 2 still holds a base. A 4v4 that ends when the first player is knocked out is a "
+                        + "free-for-all with extra steps");
+        if (elims[3] != 1)
+            return Fail($"team: seat 3 lost everything and the sim announced it eliminated {elims[3]} times, not "
+                        + "once. Elimination stays PER PLAYER - being carried by a teammate is not the same as "
+                        + "still being in the game, and the defeat banner and the campaign's 'eliminated P' "
+                        + "trigger both read this event");
+        if (elims[0] + elims[1] + elims[2] != 0)
+            return Fail("team: a seat with a standing base was announced eliminated");
+
+        Fell(2);
+        Advance(20);
+        if (w.Winner < 0)
+            return Fail("team: BOTH members of team 2 are out and the sim declared no winner. The match must end "
+                        + "when one TEAM is left, and counting surviving players instead leaves a 2v2 running "
+                        + "forever once a pair has won it");
+        winner = w.Winner;
+        if (w.TeamOf(winner) != 0)
+            return Fail($"team: the winner is seat {winner}, which fights for team {w.TeamOf(winner)} and not the "
+                        + "surviving team 0");
+        if (elims[2] != 1)
+            return Fail($"team: seat 2 fell and was announced {elims[2]} times, not once");
+
+        Advance(400);
+        if (elims[0] != 0 || elims[1] != 0)
+            return Fail($"team: the WINNING side was announced eliminated ({elims[0]} and {elims[1]} times)");
+        if (elims[2] != 1 || elims[3] != 1)
+            return Fail($"team: over 460 ticks the beaten side was announced {elims[2]} and {elims[3]} times, "
+                        + "not once each");
+        elim3 = elims[3];
+    }
+
+    // --- 5. CONTACT EFFECTS RESPECT THE ALLIANCE. An engineer cannot capture a
+    //        teammate's building, CAN capture an enemy's, and CAN still walk into
+    //        a NEUTRAL outpost - which is the case the widening had to leave
+    //        alone, because capturing a neutral outpost is ADR-021's whole point
+    //        and hostility (rather than "not allied") would have deleted it.
+    {
+        // The predicate under test is "not mine AND not allied", so the three
+        // fixtures differ only in who owns the target.
+        (World W, int Eng) Approach(ulong seed)
+        {
+            var w = new World(seed, 64, 64, players: 3);
+            w.SetTeam(1, 0);
+            var d = w.GetUnitType(World.EngineerUnitType);
+            int eng = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp, d.Armour, 0,
+                                  veterancy: false, unitType: World.EngineerUnitType);
+            return (w, eng);
+        }
+
+        var (wa, enga) = Approach(4804);
+        int allyPlant = wa.SpawnPowerPlant(1, 30, 20);
+        Step(wa, One(new Command(wa.Tick, 0, CommandType.Attack, enga, Fix64.Zero, Fix64.Zero, allyPlant)));
+        for (int t = 0; t < 90; t++) Step(wa);
+        if (wa.Entities[allyPlant].PlayerId != 1)
+            return Fail("team: an engineer captured its own TEAMMATE's power plant. An alliance you can rob is "
+                        + "not an alliance, and the same predicate gates the Saboteur switching a teammate's "
+                        + "building off and the hero demolishing one");
+        if (!wa.Entities[enga].Alive)
+            return Fail("team: the engineer was consumed by a capture that never happened");
+
+        var (wb, engb) = Approach(4805);
+        int foePlant = wb.SpawnPowerPlant(2, 30, 20);
+        Step(wb, One(new Command(wb.Tick, 0, CommandType.Attack, engb, Fix64.Zero, Fix64.Zero, foePlant)));
+        for (int t = 0; t < 90 && wb.Entities[engb].Alive; t++) Step(wb);
+        if (wb.Entities[foePlant].PlayerId != 0)
+            return Fail("team: an engineer could not capture an ENEMY's power plant, so the stage above proves "
+                        + "only that capture is broken");
+
+        var (wc, engc) = Approach(4806);
+        int post = wc.SpawnOutpost(-1, 30, 20);
+        Step(wc, One(new Command(wc.Tick, 0, CommandType.Attack, engc, Fix64.Zero, Fix64.Zero, post)));
+        for (int t = 0; t < 90 && wc.Entities[engc].Alive; t++) Step(wc);
+        if (wc.Entities[post].PlayerId != 0)
+            return Fail("team: an engineer could no longer capture a NEUTRAL outpost. Teams widened the contact "
+                        + "rule from not-mine to not-ALLIED and must not have widened it to hostility - a rock is "
+                        + "nobody's enemy and taking one is ADR-021's whole feature");
+    }
+
+    // --- 6. THE DELIBERATE NON-CHANGES. Both are decisions rather than
+    //        oversights, so both are asserted: nothing in the sim would fail if
+    //        an ally's radar silently unlocked your tech tree, and nothing would
+    //        fail if splash quietly started sparing teammates.
+    int allySplash = -1, expectSplash = -1;
+    {
+        var w = new World(4807, 64, 64, players: 2);
+        w.SetTeam(1, 0);
+        w.SpawnRadarUplink(1, 20, 20);
+        if (w.HasPrereqs(0, new[] { RadarStructType }))
+            return Fail("team: an ALLY's radar uplink satisfied seat 0's prerequisite. Each player builds their "
+                        + "own tree; sharing one is a separate design lever, and a 4v4 where one seat pays for "
+                        + "the tech and three do not makes the tree free");
+        if (!w.HasPrereqs(1, new[] { RadarStructType }))
+            return Fail("team: the radar's OWNER cannot satisfy its own prerequisite, so the refusal above proves "
+                        + "only that prerequisites are broken");
+    }
+    {
+        var w = new World(4808, 64, 64, players: 3);
+        w.SetTeam(1, 0);
+        int mine = w.SpawnMine(0, 30, 20);
+        int ally = Bystander(w, 1, Fix64.FromInt(31), Fix64.FromInt(20));
+        int allyHp = w.Entities[ally].Hp;
+        for (int t = 0; t < 60; t++) Step(w);
+        if (!w.Entities[mine].Alive)
+            return Fail("team: a TEAMMATE standing on a mine set it off. The trigger asks IsEnemyOf, so an ally "
+                        + "must cross a minefield exactly as its owner does");
+        Bystander(w, 2, Fix64.FromInt(30), Fix64.FromInt(20));
+        for (int t = 0; t < 10 && w.Entities[mine].Alive; t++) Step(w);
+        if (w.Entities[mine].Alive)
+            return Fail("team: an enemy walked into the trigger radius and the mine did not go off, so nothing "
+                        + "below is measuring a blast");
+        allySplash = allyHp - w.Entities[ally].Hp;
+        expectSplash = DamageMatrix.Apply(World.MineDamage, Warhead.Omni, ArmourClass.Heavy);
+        if (allySplash != expectSplash)
+            return Fail($"team: an ally inside the blast took {allySplash} where the full inner-radius figure is "
+                        + $"{expectSplash}. Area damage asks no ownership question at all - it already hits the "
+                        + "detonator's OWN units - so sparing allies would mean treating a teammate better than "
+                        + "your own men");
+    }
+
+    // --- 7. AND THE ALLIANCE IS SETUP, NOT A MOVE. SetTeam is refused once the
+    //        match is running, mirroring the catalogue registrars: the team map
+    //        is hashed state that no command stream carries, so a mid-match
+    //        change is a silent replay divergence.
+    {
+        var w = new World(4809, 32, 32, players: 2);
+        Step(w);
+        try
+        {
+            w.SetTeam(1, 0);
+            return Fail("team: SetTeam was accepted at tick 1. Teams are hashed state that no command carries, so "
+                        + "changing one mid-match diverges every other peer's replay silently");
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    // --- 8. DETERMINISM. A 2v2 melee - allies shoulder to shoulder and the
+    //        other team two cells away - to an identical hash across two runs,
+    //        and a save that carries the teams through a round trip. The save
+    //        matters because the team map is hashed and a save that drops a
+    //        hashed field cannot honour the resume-bit-identical contract.
+    ulong runA, runB, tick0Default, tick0Teamed, catNoTeams, catTeamed;
+    {
+        World Melee(ulong seed, bool teamed)
+        {
+            var w = new World(seed, 64, 64, players: 4);
+            if (teamed) { w.SetTeam(1, 0); w.SetTeam(3, 2); }
+            for (int p = 0; p < 4; p++) w.SpawnConstructionYard(p, 8 + 16 * p, 50);
+            // Column x=29 is team 0 (seats 0 and 1), column x=31 is team 2
+            // (seats 2 and 3). Every allied pair is ONE cell apart and every
+            // hostile pair is two, so a hostility test that ignored teams would
+            // shoot the nearer man first on the very first tick.
+            Shooter(w, 0, Fix64.FromInt(29), Fix64.FromInt(29));
+            Shooter(w, 1, Fix64.FromInt(29), Fix64.FromInt(30));
+            Shooter(w, 2, Fix64.FromInt(31), Fix64.FromInt(29));
+            Shooter(w, 3, Fix64.FromInt(31), Fix64.FromInt(30));
+            return w;
+        }
+
+        var m0 = Melee(4810, teamed: false);
+        var m1 = Melee(4810, teamed: true);
+        tick0Default = m0.ComputeStateHash();
+        tick0Teamed = m1.ComputeStateHash();
+        catNoTeams = m0.CatalogueChecksum;
+        catTeamed = m1.CatalogueChecksum;
+        if (tick0Default == tick0Teamed)
+            return Fail("team: two identical worlds, one a free-for-all and one a 2v2, hash the same. Teams gate "
+                        + "target acquisition, victory and the contact effects, so a peer that disagreed about "
+                        + "them would desync with nothing in the protocol able to see it - the fold is guarded so "
+                        + "the DEFAULT costs nothing, not so that teams cost nothing");
+        if (catNoTeams != catTeamed)
+            return Fail("team: setting a team moved the CATALOGUE checksum. Teams are match setup like factions, "
+                        + "not authored numbers, and folding them there would refuse every save and every replay "
+                        + "recorded in a free-for-all");
+
+        ulong Play(ulong seed)
+        {
+            var w = Melee(seed, teamed: true);
+            for (int t = 0; t < 200; t++) Step(w);
+            return w.ComputeStateHash();
+        }
+        runA = Play(4811);
+        runB = Play(4811);
+        if (runA != runB)
+            return Fail($"team: the same 2v2 ran to 0x{runA:X16} and 0x{runB:X16}");
+
+        var live = Melee(4812, teamed: true);
+        for (int t = 0; t < 100; t++) Step(live);
+        using var ms = new MemoryStream();
+        live.Save(ms);
+        ms.Position = 0;
+        var restored = World.Load(ms);
+        for (int p = 0; p < 4; p++)
+            if (restored.TeamOf(p) != live.TeamOf(p))
+                return Fail($"team: seat {p} came back from the save on team {restored.TeamOf(p)} rather than "
+                            + $"{live.TeamOf(p)}. A save that drops a hashed field cannot resume bit-identically, "
+                            + "and a 2v2 that reloads as a free-for-all turns allies on each other mid-match");
+        if (restored.ComputeStateHash() != live.ComputeStateHash())
+            return Fail("team: the reloaded 2v2 does not hash equal to the world it was saved from");
+        for (int t = 0; t < 50; t++) { Step(live); Step(restored); }
+        if (restored.ComputeStateHash() != live.ComputeStateHash())
+            return Fail("team: the reloaded 2v2 diverged from the uninterrupted run within 50 ticks");
+    }
+
+    Console.WriteLine($"teamgate: every seat starts on its OWN team, so with no SetTeam call three seats are "
+                      + $"mutually hostile by the predicate and in all {ffaPairs} firefights, which is why the 24 "
+                      + $"goldens may stay byte-identical; put two seats on one team and a rifle squad takes "
+                      + $"{allyTook} off its teammate two cells away while taking {enemyTook} off a third "
+                      + $"player's unit two and a half cells away, the nearer man being the ally on purpose; a "
+                      + $"2v2 runs on after one member of a side falls and ends only when the whole side is out, "
+                      + $"with seat {winner} of the surviving team named the winner, while the fallen teammate is "
+                      + $"still announced eliminated exactly {elim3} time; an engineer cannot take a teammate's "
+                      + $"building, can take an enemy's and can still take a NEUTRAL outpost (ADR-021 untouched); "
+                      + $"and the two DELIBERATE non-changes hold - an ally's radar does not satisfy your "
+                      + $"prerequisite, and an ally inside a detonation takes the full {allySplash}, exactly as "
+                      + $"your own men do; SetTeam is refused after tick 0; and a 2v2 melee runs to an identical "
+                      + $"0x{runA:X16} twice over and survives a save v11 round trip with its teams intact, "
+                      + $"having moved the state hash (0x{tick0Default:X16} to 0x{tick0Teamed:X16}) and NOT the "
+                      + $"catalogue checksum (0x{catNoTeams:X16})");
+    return 0;
+}
+
 int CampaignGate()
 {
     // P7-9. The campaign is now six missions and a manifest of magic numbers,
@@ -8409,6 +8798,10 @@ int Match(ulong seed)
     // the ground it stands on.
     int mine = MineGate();
     if (mine != 0) return mine;
+    // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
+    // the free-for-all every golden runs is the default by construction.
+    int team = TeamGate();
+    if (team != 0) return team;
     // P7-9: six missions the game can open, and the two things missions 04 to
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
@@ -9920,6 +10313,7 @@ return args.Length == 0
         "saboteurgate" => SaboteurGate(),
         "herogate" => HeroGate(),
         "minegate" => MineGate(),
+        "teamgate" => TeamGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "harvesterdatagate" => HarvesterDataGate(),

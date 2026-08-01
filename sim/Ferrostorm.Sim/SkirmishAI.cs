@@ -257,7 +257,7 @@ public sealed class SkirmishAI
             // wave-target kinds, or the AI walks straight past the building
             // this wave exists to add - an enemy barracks pumping infantry
             // would never be picked as the nearest production structure.
-            else if (World.IsEnemyOf(in e, _player)
+            else if (w.IsEnemyOf(in e, _player)
                      && e.Kind is EntityKind.ConstructionYard or EntityKind.Factory or EntityKind.Refinery
                         or EntityKind.PowerPlant or EntityKind.Barracks or EntityKind.RadarUplink or EntityKind.Airfield)
             {
@@ -588,7 +588,7 @@ public sealed class SkirmishAI
         for (int i = 0; i < w.Entities.Count; i++)
         {
             var hostile = w.Entities[i];
-            if (!hostile.Alive || !World.IsEnemyOf(in hostile, _player)) continue;   // P7-8g: hostility
+            if (!hostile.Alive || !w.IsEnemyOf(in hostile, _player)) continue;   // P7-8g: hostility
             if (hostile.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
             for (int j = 0; j < w.Entities.Count; j++)
             {
@@ -668,7 +668,7 @@ public sealed class SkirmishAI
                     // P7-8g: hostility. The phantom picks PREY, so this is the
                     // question that changes under teams, unlike the ownership
                     // test that found the phantom itself two lines up.
-                    if (!h.Alive || !World.IsEnemyOf(in h, _player) || h.Kind != EntityKind.Harvester) continue;
+                    if (!h.Alive || !w.IsEnemyOf(in h, _player) || h.Kind != EntityKind.Harvester) continue;
                     Fix64 d = Fix64.DistSq(h.X - ph.X, h.Y - ph.Y);
                     if (d < preyD) { preyD = d; prey = j; }
                 }

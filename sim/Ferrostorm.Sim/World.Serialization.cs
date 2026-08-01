@@ -50,6 +50,22 @@ namespace Ferrostorm.Sim;
 /// Aggressive and every position field zero, which is exactly what those saves
 /// meant (no stance existed): those units resume with today's auto-acquire
 /// behaviour, so old saves and replays continue identically.
+/// Format v11 (P7-8c): the per-player TEAM id joins the faction byte in the
+/// per-player block, because the team map is hashed state and a save that drops
+/// a hashed field cannot honour the resume-bit-identical contract above.
+///
+/// It is written UNCONDITIONALLY, unlike the guarded fold ComputeStateHash uses
+/// for the same data, and the asymmetry is the point rather than an
+/// inconsistency. A hash is an accumulator, so an unexecuted fold costs nothing
+/// and the reader is a comparison that never has to find its place. A save is a
+/// strictly positional byte stream, so a conditional field needs a discriminator
+/// IN the stream for the reader to find the next field - which is itself new
+/// bytes, so it buys nothing - and, decisively, there is no golden save file to
+/// keep still: the goldens are state hashes, and no golden scenario saves. So
+/// the bump is real, four bytes a seat, and honest.
+/// v1..v10 saves predate the field and load with every player on their own team,
+/// which is exactly what those saves meant (no teams existed), so they resume as
+/// the free-for-alls they were recorded as.
 /// </summary>
 public sealed partial class World
 {
@@ -68,12 +84,15 @@ public sealed partial class World
     // is what every comparison here relies on, and the constant is what the
     // code reads rather than the character.
     private const uint SaveMagicV10 = 0x534C413A;
+    // v11 adds the per-player team id (P7-8c); the tag byte runs on from ':'
+    // (0x3A) to ';' (0x3B) on the note above.
+    private const uint SaveMagicV11 = 0x534C413B;
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV10);
+        w.Write(SaveMagicV11);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -95,6 +114,7 @@ public sealed partial class World
         for (int p = 0; p < _players; p++)
         {
             w.Write(_playerFaction[p]); // v2: hashed state, so saved state (Q001)
+            w.Write(_playerTeam[p]);    // v11: hashed state, so saved state (P7-8c)
             w.Write(_credits[p]);
             w.Write(_eliminatedAnnounced[p]);
             w.Write(_explored[p].Length);
@@ -196,7 +216,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10 && magic != SaveMagicV11)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -205,26 +225,30 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10;
-        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10; // ADR-015: v7+ entities carry the command stance tail
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11; // ADR-015: v7+ entities carry the command stance tail
         // P7-3: every version from v8 ONWARD carries the lane block, not v8
         // alone. Written as an equality it silently skipped the block on a v9
         // save and the reader then fell out of step with the writer, which
         // surfaced as "save truncated or corrupt" - a version test that names
         // one version is the same enumeration trap as a rule that names one
         // kind, and it will bite again at v10 unless it is written as a floor.
-        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10; // ADR-023
+        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10 or SaveMagicV11; // ADR-023
         // P7-11a: the warning above came true at v10 exactly as written. The
         // cargo block's own test was `magic == SaveMagicV9`, an equality, so
         // adding v10 skipped it on a save that HAD written it and every later
         // read fell out of step with the writer. Both tests are floors now.
-        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10;   // P7-3
-        bool hasSabotage = magic is SaveMagicV10;               // P7-11a
+        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10 or SaveMagicV11;   // P7-3
+        bool hasSabotage = magic is SaveMagicV10 or SaveMagicV11;               // P7-11a
+        // P7-8c: v11 and every later format carry the per-player team id. A
+        // floor from the first line it is written on, for the reason the two
+        // comments above record twice over.
+        bool hasTeams = magic is SaveMagicV11;
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -254,6 +278,21 @@ public sealed partial class World
             // (everyone Directorate) is exactly what v1 always produced.
             // v2 introduced the byte and every later format keeps it.
             if (magic != SaveMagicV1) world._playerFaction[p] = r.ReadByte();
+            // v11 (P7-8c): the team. A pre-v11 save carries none and keeps the
+            // constructor default - this player on their own team - which is
+            // exactly what those saves meant, so they resume as free-for-alls.
+            // An out-of-range id from a hand-edited file is REFUSED rather than
+            // clamped: it would index VictorySystem's living-team span out of
+            // bounds, and a silently corrected alliance is a desync wearing a
+            // save file.
+            if (hasTeams)
+            {
+                int team = r.ReadInt32();
+                if ((uint)team >= (uint)players)
+                    throw new InvalidDataException(
+                        $"save carries team {team} for seat {p}, which is not a seat in this {players}-player match");
+                world._playerTeam[p] = team;
+            }
             world._credits[p] = r.ReadInt64();
             world._eliminatedAnnounced[p] = r.ReadBoolean();
             int words = r.ReadInt32();
