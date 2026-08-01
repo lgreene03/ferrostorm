@@ -991,6 +991,10 @@ public partial class VerifyRunner : Node
                 // the first detector that side has ever had. Faction-gated the
                 // same way, and it wears the veil projector's model and icon.
                 "sod_watch_post",
+                // P7-5c (DR-04): struct type 22, the Sodality's seismic charge.
+                // It SHARES EntityKind.Superweapon with the orbital cannon, so
+                // it needs no model entry of its own and already wears that one.
+                "sod_seismic_charge",
             };
             Check(sButtoned == wasListed.Length + addedSince.Length,
                   $"...and the derivation dropped none of the {wasListed.Length} it transcribed, adding only the "

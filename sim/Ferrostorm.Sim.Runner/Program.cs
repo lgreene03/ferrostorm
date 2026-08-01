@@ -8472,6 +8472,206 @@ int FactionPowerGate()
     return 0;
 }
 
+int FactionSuperweaponGate()
+{
+    // P7-5c (DR-04, ADR-044), the last part of Q017. Additive, the airgate
+    // pattern: a standalone mode and a Match battery stage, never a golden.
+    //
+    // GDD s8 line 70 writes both sides precisely, which is why almost nothing
+    // here is invented:
+    //   "Directorate orbital cannon (huge single-point damage), Sodality
+    //    seismic charge (wide, lower-damage area denial THAT ALSO DESTROYS
+    //    RESOURCE FIELDS - economic warfare flavour)."
+    const int Cannon = World.OrbitalCannonStructType;   // 6
+    const int Seismic = World.SeismicChargeStructType;  // 22
+
+    // Fire a superweapon of the given type at a point and return the world.
+    World Fire(ulong seed, int structType, Action<World> setUp, int tx, int ty)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, structType == Seismic ? World.FactionSodality : World.FactionDirectorate);
+        w.SpawnPowerPlant(0, 2, 2, supply: 5000);
+        setUp(w);
+        int sw = w.SpawnSuperweapon(0, 10, 2, chargeTicks: 1, structType: structType);
+        w.Step(default);   // charge completes
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.LaunchSuper, sw, Fix64.FromInt(tx), Fix64.FromInt(ty)) });
+        for (int t = 0; t < 90; t++) w.Step(default);   // 75 ticks of warning, then impact
+        return w;
+    }
+
+    // --- 1. Each side owns its own, which is the row.
+    {
+        var w = new World(3600, 64, 64, players: 2);
+        if (!w.StructureAllowedForFaction(Cannon, World.FactionDirectorate))
+            return Fail("faction superweapon: the Directorate must be able to build its orbital cannon");
+        if (w.StructureAllowedForFaction(Cannon, World.FactionSodality))
+            return Fail("faction superweapon: the orbital cannon is the Directorate's - both sides firing the same "
+                        + "weapon on the same timer is the thing this row exists to end");
+        if (!w.StructureAllowedForFaction(Seismic, World.FactionSodality))
+            return Fail("faction superweapon: the Sodality must be able to build its seismic charge");
+        if (w.StructureAllowedForFaction(Seismic, World.FactionDirectorate))
+            return Fail("faction superweapon: the seismic charge is the Sodality's");
+        // GDD s8: "one superweapon per faction" on the same terms. The pair
+        // must differ in what it DOES, not in what it costs, or the choice is
+        // about price. Asserted so a balance pass cannot drift them apart
+        // without meeting this line.
+        var a = w.GetStructureType(Cannon);
+        var b = w.GetStructureType(Seismic);
+        if (a.Cost != b.Cost || a.BuildTicks != b.BuildTicks || a.PowerDraw != b.PowerDraw)
+            return Fail($"faction superweapon: GDD s8 gives BOTH sides one superweapon on the same terms, so the "
+                        + $"pair must differ in effect rather than price ({a.Cost}cr/{a.BuildTicks}t/{a.PowerDraw}d "
+                        + $"against {b.Cost}cr/{b.BuildTicks}t/{b.PowerDraw}d)");
+    }
+
+    // --- 2. THE ECONOMIC-WARFARE HALF, with its control. The seismic charge
+    //        destroys resource fields; the orbital cannon does not. This is the
+    //        written difference and the one that gives the Sodality an identity
+    //        rather than a second explosion.
+    {
+        int fieldA = -1, fieldB = -1;
+        var seis = Fire(3601, Seismic, w => { fieldA = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(30), 5000); },
+                        30, 30);
+        var orb = Fire(3602, Cannon, w => { fieldB = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(30), 5000); },
+                       30, 30);
+        if (orb.Entities[fieldB].Alive == false)
+            return Fail("faction superweapon: the CONTROL failed - the orbital cannon destroyed a ferrite field, so "
+                        + "the seismic charge's identity is not its own");
+        if (orb.Entities[fieldB].FerriteAmount != 5000)
+            return Fail("faction superweapon: the orbital cannon must not touch a field's contents either");
+        if (seis.Entities[fieldA].Alive)
+            return Fail("faction superweapon: the seismic charge must DESTROY resource fields - GDD s8 gives that to "
+                        + "this weapon alone and it is the whole of its economic-warfare flavour");
+        Console.WriteLine("  factionsuperweapon: a field under ground zero - destroyed by the seismic charge, "
+                          + "untouched by the orbital cannon");
+    }
+
+    // --- 3. WIDE and LOWER-DAMAGE, measured as the two adjectives GDD s8 uses.
+    //        A rifle squad is placed at 5 cells: inside the seismic fringe and
+    //        well outside the cannon's 3-cell reach entirely.
+    {
+        int farA = -1, farB = -1;
+        var d = new World(3603, 8, 8, players: 2).GetUnitType(1);
+        var seis = Fire(3604, Seismic,
+                        w => farA = w.SpawnUnit(1, Fix64.FromInt(35), Fix64.FromInt(30), d.Speed, d.Hp, d.Armour,
+                                                d.WeaponId, veterancy: false, unitType: 1), 30, 30);
+        var orb = Fire(3605, Cannon,
+                       w => farB = w.SpawnUnit(1, Fix64.FromInt(35), Fix64.FromInt(30), d.Speed, d.Hp, d.Armour,
+                                               d.WeaponId, veterancy: false, unitType: 1), 30, 30);
+        bool seisReached = !seis.Entities[farA].Alive || seis.Entities[farA].Hp < d.Hp;
+        bool orbReached = !orb.Entities[farB].Alive || orb.Entities[farB].Hp < d.Hp;
+        if (orbReached)
+            return Fail("faction superweapon: the CONTROL failed - the orbital cannon reached 5 cells, so this stage "
+                        + "cannot tell a WIDE blast from an ordinary one");
+        if (!seisReached)
+            return Fail("faction superweapon: the seismic charge must be WIDE - it did not reach a squad at 5 cells, "
+                        + "which the orbital cannon also cannot, so the two have the same footprint");
+    }
+
+    // --- 4. And "lower-damage" measured on ONE target rather than assumed from
+    //        the numbers in the defs. The first draft of this stage asserted the
+    //        cannon one-shots a factory and the charge does not; the cannon does
+    //        NOT one-shot a 1500-hit-point factory either, so the assertion was
+    //        wrong about the game rather than about the row. Measuring the pair
+    //        against the same building says the true thing instead: at ground
+    //        zero the cannon hits far harder, which is the whole of "huge
+    //        single-point" against "lower-damage".
+    {
+        int fOrb = -1, fSeis = -1;
+        var orb = Fire(3606, Cannon, w => fOrb = w.SpawnFactory(1, 30, 30), 30, 30);
+        var seis = Fire(3607, Seismic, w => fSeis = w.SpawnFactory(1, 30, 30), 30, 30);
+        int maxHp = orb.Entities[fOrb].MaxHp;
+        int orbDmg = maxHp - orb.Entities[fOrb].Hp;
+        int seisDmg = maxHp - seis.Entities[fSeis].Hp;
+        if (orbDmg <= 0 || seisDmg <= 0)
+            return Fail($"faction superweapon: both weapons must hurt a factory at ground zero (cannon {orbDmg}, "
+                        + $"charge {seisDmg}) or this stage is measuring nothing");
+        if (seisDmg >= orbDmg)
+            return Fail($"faction superweapon: 'lower-damage' must be true at the point of impact - the seismic "
+                        + $"charge dealt {seisDmg} where the orbital cannon dealt {orbDmg}, so the Sodality weapon "
+                        + "is wider AND at least as hard, which is strictly better rather than a trade");
+        // And the denial half is real: what the charge CAN clear at ground zero
+        // is a power plant, so it takes an economy apart without ending a base.
+        int plant = -1;
+        var denial = Fire(3608, Seismic, w => plant = w.SpawnPowerPlant(1, 30, 30), 30, 30);
+        if (denial.Entities[plant].Alive)
+            return Fail("faction superweapon: the seismic charge must clear a power plant at ground zero, or it "
+                        + "denies nothing at all");
+        Console.WriteLine($"  factionsuperweapon: one factory at ground zero - orbital cannon {orbDmg} damage, "
+                          + $"seismic charge {seisDmg}");
+    }
+
+    // --- 5. The building ORDERED is the building that arrives. The second
+    //        superweapon walks into the exact trap P7-5a paid for at the power
+    //        plant: the placement switch is keyed on EntityKind and the two
+    //        share one.
+    {
+        var w = new World(3610, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int cy = w.SpawnConstructionYard(0, 20, 20);
+        // The radar uplink is the superweapon's authored prerequisite, spawned
+        // rather than built because this stage is about the PLACEMENT switch
+        // and the tech tree has its own gate.
+        w.SpawnRadarUplink(0, 16, 20);
+        w.SpawnPowerPlant(0, 13, 20, supply: 5000, structType: World.SodalityGeneratorStructType);
+        w.GrantCredits(0, 1000000);
+        var sd = w.GetStructureType(Seismic);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, Seismic) });
+        for (int t = 0; t < sd.BuildTicks * 4 + 600 && w.Entities[cy].ReadyStructure != Seismic; t++) w.Step(default);
+        if (w.Entities[cy].ReadyStructure != Seismic)
+            return Fail("faction superweapon: the yard never finished a seismic charge, so stage 5 cannot ask its "
+                        + "question (is the radar prerequisite reachable in this fixture?)");
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                   Map.CellCentre(25), Map.CellCentre(20), Seismic) });
+        int placed = -1;
+        for (int i = 0; i < w.Entities.Count; i++)
+            if (w.Entities[i].Alive && w.Entities[i].PlayerId == 0
+                && w.Entities[i].Kind == EntityKind.Superweapon) { placed = i; break; }
+        if (placed < 0) return Fail("faction superweapon: ordering a seismic charge produced no superweapon at all");
+        if (w.Entities[placed].StructType != Seismic)
+            return Fail($"faction superweapon: a Sodality player ordered a seismic charge and got structure type "
+                        + $"{w.Entities[placed].StructType} - the placement switch is keyed on Kind and the two "
+                        + "superweapons share one, which is P7-5a's defect arriving a second time");
+    }
+
+    // --- 6. AND THE MINE IS UNTOUCHED. The seismic charge is its own function
+    //        rather than a widened ApplyAreaDamage precisely because that one is
+    //        shared with the mine detonation; this asserts the sharing was not
+    //        broken. A squad at 4 cells from a mine must still survive, which is
+    //        outside ApplyAreaDamage's 3-cell reach and inside the seismic
+    //        charge's 6.
+    {
+        var w = new World(3611, 64, 64, players: 2);
+        var d = w.GetUnitType(1);
+        int mine = w.SpawnMine(0, 20, 20);
+        int far = w.SpawnUnit(1, Fix64.FromInt(25), Fix64.FromInt(21), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                              veterancy: false, unitType: 1);
+        int near = w.SpawnUnit(1, Fix64.FromInt(21), Fix64.FromInt(21), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                               veterancy: false, unitType: 1);
+        for (int t = 0; t < 60 && w.Entities[mine].Alive; t++) w.Step(default);
+        if (w.Entities[mine].Alive)
+            return Fail("faction superweapon: the mine never went off, so stage 6 cannot check its blast shape");
+        if (w.Entities[near].Alive && w.Entities[near].Hp == d.Hp)
+            return Fail("faction superweapon: the mine did not hurt the unit that set it off");
+        if (!w.Entities[far].Alive || w.Entities[far].Hp != d.Hp)
+            return Fail("faction superweapon: a mine now reaches 5 cells - ApplyAreaDamage's shape was widened for "
+                        + "the seismic charge and every mine in the game changed with it");
+    }
+
+    Console.WriteLine("factionsuperweapongate: each side owns its own superweapon and cannot build the other's, and "
+                      + "the pair costs and charges IDENTICALLY, so GDD s8's 'one superweapon per faction' is a "
+                      + "choice about what it does rather than what it costs; the Sodality seismic charge DESTROYS "
+                      + "resource fields where the orbital cannon leaves them untouched, which is the written "
+                      + "economic-warfare half and the only thing in the game that can do it since P7-5a; it is WIDE "
+                      + "and LOWER-DAMAGE as two measured claims rather than one adjective - it reaches a squad at 5 "
+                      + "cells the cannon cannot touch, and against ONE factory at ground zero it deals 280 where "
+                      + "the cannon deals 720, so it is wider and demonstrably softer rather than simply bigger; it "
+                      + "still clears a power plant, which is what denying an economy costs; a seismic charge "
+                      + "ordered through the real command path arrives as one rather than as "
+                      + "the cannon whose EntityKind it shares; and the MINE is untouched, because the new effect is "
+                      + "its own function rather than a widened ApplyAreaDamage");
+    return 0;
+}
+
 int SodalityDetectorGate()
 {
     // P7-5b (DR-03, ADR-043). Additive, the airgate pattern: a standalone mode
@@ -9911,6 +10111,10 @@ int Match(ulong seed)
     // true for BOTH sides, which it had never been.
     int sodDetector = SodalityDetectorGate();
     if (sodDetector != 0) return sodDetector;
+    // P7-5c: the last part of Q017. Two superweapons where there was one, and
+    // the Sodality's destroys the ground it lands on.
+    int facSuper = FactionSuperweaponGate();
+    if (facSuper != 0) return facSuper;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -11489,6 +11693,7 @@ return args.Length == 0
         "factionpowergate" => FactionPowerGate(),
         "ferritefieldgate" => FerriteFieldGate(),
         "sodalitydetectorgate" => SodalityDetectorGate(),
+        "factionsuperweapongate" => FactionSuperweaponGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),

@@ -1078,7 +1078,12 @@ public sealed partial class World
                                   Tab: BuildTab.None),
         5 => new StructureTypeDef(600, EntityKind.Turret, 150, Hp: 400, PowerDraw: 20, SightCells: 6, WeaponId: 4, Prereqs: new[] { 1 },
                                   Tab: BuildTab.Defence),
+        // P7-5c (DR-04): the Directorate's ORBITAL CANNON, and like its power
+        // plant the numbers are UNCHANGED. GDD s8 gives this side "huge
+        // single-point damage", and 900 Omni inside a 1.5-cell core is exactly
+        // that. The row needed the other side to stop sharing it.
         6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 },
+                                  Faction: FactionDirectorate,
                                   Tab: BuildTab.Defence),
         // P7-1: the Veil declares its side here as data rather than being
         // named in a hardcoded predicate. The compiled default must agree
@@ -1236,6 +1241,21 @@ public sealed partial class World
                                    PowerDraw: 15, Footprint: 1, Prereqs: new[] { 1 },
                                    Faction: FactionSodality, Detector: true,
                                    Tab: BuildTab.Defence),
+        // P7-5c (DR-04): the Sodality's SEISMIC CHARGE. GDD s8 says "one
+        // superweapon per faction", so every number it shares with the orbital
+        // cannon is shared ON PURPOSE - same 4000 credits, same 600 build
+        // ticks, same 150 draw, same radar prerequisite, same charge. The two
+        // are meant to be the same DECISION with different consequences, and a
+        // cheaper or faster one would make the choice about price instead of
+        // about what it does.
+        //
+        // It keeps EntityKind.Superweapon deliberately: charge, the ready
+        // event, the launch command and the five-second warning are all keyed
+        // on that kind and all of it applies unchanged. Only the impact differs,
+        // and the impact branches on StructType.
+        22 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4,
+                                   Prereqs: new[] { 12 }, Faction: FactionSodality,
+                                   Tab: BuildTab.Defence),
         _ => default,
     };
 
@@ -1253,11 +1273,19 @@ public sealed partial class World
     /// a no-op waiting to be wrong.
     /// </summary>
     // P7-2 raised this from 14 to 15 for the Emplacement.
-    public const int MaxStructType = 21;   // P7-5b raised it for the Sodality Watch Post
+    public const int MaxStructType = 22;   // P7-5c raised it for the Sodality seismic charge
 
     /// <summary>P7-5b: the Sodality's detector, named for the sites that spawn
     /// or assert it rather than written as a literal.</summary>
     public const int WatchPostStructType = 21;
+
+    /// <summary>
+    /// P7-5c (DR-04): the two superweapons. Both are EntityKind.Superweapon, so
+    /// everything about charging, launching and warning is shared; these names
+    /// exist for the one place that must tell them apart, which is the impact.
+    /// </summary>
+    public const int OrbitalCannonStructType = 6;
+    public const int SeismicChargeStructType = 22;
 
     /// <summary>
     /// P7-5 (DR-02): the two power plants, named rather than written as literals
@@ -1802,15 +1830,19 @@ public sealed partial class World
     }
 
     /// <summary>Superweapon: charges over defaultCharge ticks (pausing while underpowered); a test may shorten the charge.</summary>
-    public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = 1500)
+    /// <param name="structType">P7-5c: which side's superweapon. Defaults to the
+    /// Directorate's orbital cannon, so every existing caller and every golden
+    /// scenario spawns exactly the building it always did.</param>
+    public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = 1500,
+                                int structType = OrbitalCannonStructType)
     {
-        var def = GetStructureType(6);
+        var def = GetStructureType(structType);
         BlockFootprint(ax, ay, def.Footprint);
         Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
         return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Superweapon,
-            X = x, Y = y, TargetX = x, TargetY = y, StructType = 6,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = structType,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
             ChargeTicks = chargeTicks, StrikeTicks = -1,
@@ -2663,7 +2695,12 @@ public sealed partial class World
                     // Shroud Nest shares EntityKind.Emplacement with the common
                     // one and only its type tells them apart.
                     case EntityKind.Bastion: SpawnFactionDefence(c.PlayerId, 17, ax, ay); break;
-                    case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay); break;
+                    // P7-5c: the TYPE, not just the kind - the second superweapon
+                    // walks straight into the trap P7-5a paid for at the power
+                    // plant one wave ago. Without c.AuxId a Sodality player
+                    // ordering a seismic charge would be handed an orbital
+                    // cannon, silently, and the whole row would be decoration.
+                    case EntityKind.Superweapon: SpawnSuperweapon(c.PlayerId, ax, ay, structType: c.AuxId); break;
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
                     case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
@@ -4908,7 +4945,13 @@ public sealed partial class World
                     e.ChargeTicks = 1500; // the cycle begins again
                     _events.Add(new GameEvent(GameEventType.SuperweaponImpact, i, -1, e.StrikeX, e.StrikeY));
                     _entities[i] = e;
-                    ApplyAreaDamage(e.StrikeX, e.StrikeY, 900);
+                    // P7-5c: THE ONE PLACE the two superweapons differ. Charge,
+                    // the ready event, the launch command and the five-second
+                    // warning are all shared, because GDD s8 gives both sides
+                    // "one superweapon per faction" on the same terms; what
+                    // arrives is the decision.
+                    if (e.StructType == SeismicChargeStructType) ApplySeismicCharge(e.StrikeX, e.StrikeY);
+                    else ApplyAreaDamage(e.StrikeX, e.StrikeY, 900);
                     e = _entities[i]; // the strike may have killed the launcher itself
                 }
                 _entities[i] = e;
@@ -5129,6 +5172,74 @@ public sealed partial class World
     /// inventing a rule that treats a teammate better than your own men, and
     /// neither is what "alliance" was asked to mean.
     /// </summary>
+    /// <summary>
+    /// P7-5c (DR-04): the Sodality seismic charge, written by GDD s8 as "wide,
+    /// lower-damage area denial that also destroys resource fields - economic
+    /// warfare flavour".
+    ///
+    /// A SEPARATE function rather than parameters on ApplyAreaDamage, and that
+    /// is the load-bearing decision here. ApplyAreaDamage is shared with the
+    /// MINE detonation (MineDamage), and its 1.5/3-cell shape is asserted by
+    /// minegate and by the artillery and superweapon scenarios. Widening it to
+    /// take a radius would have made every mine in the game a candidate for
+    /// changing shape by accident, on a function whose comment already records
+    /// that its constants are load-bearing in three places.
+    ///
+    /// The three numbers are INVENTED, because GDD s8 gives adjectives and not
+    /// values, and ADR-044 records the alternatives beside each:
+    ///   damage 350 against the cannon's 900 - "lower-damage". Enough to clear
+    ///     infantry, harvesters and a power plant; NOT enough to kill a factory
+    ///     (1500) or a Construction Yard (3000). That boundary is the design:
+    ///     the orbital cannon ends a base, the seismic charge denies ground.
+    ///   inner 3 cells, outer 6 - "wide", exactly double the cannon's 1.5/3, so
+    ///     it covers four times the area for under half the damage.
+    ///   fields DIE rather than draining, because "destroys" is the written
+    ///     word and a half-emptied field is a slower version of harvesting it.
+    ///
+    /// Like ApplyAreaDamage it asks NO ownership question: it hits the firing
+    /// player's own units and its allies, and it destroys whoever's fields lie
+    /// under it including the launcher's own. That is deliberate and it is the
+    /// ADR-038 splash rule applied unchanged - a weapon that spared its owner's
+    /// ground would make area denial free.
+    /// </summary>
+    private void ApplySeismicCharge(Fix64 x, Fix64 y)
+    {
+        Fix64 innerSq = Fix64.FromInt(9);    // 3^2
+        Fix64 outerSq = Fix64.FromInt(36);   // 6^2
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var t = _entities[i];
+            if (!t.Alive) continue;
+            Fix64 d = Fix64.DistSq(t.X - x, t.Y - y);
+            if (d > outerSq) continue;
+            if (t.Kind == EntityKind.FerriteField)
+            {
+                // The economic-warfare half, and the reason this weapon exists.
+                // The ground is denied outright: a dead field does not regrow,
+                // because RegrowthSystem skips fields at zero amount.
+                t.FerriteAmount = 0;
+                t.Alive = false;
+                _events.Add(new GameEvent(GameEventType.Died, i, -1));
+                _entities[i] = t;
+                continue;
+            }
+            int dmg = DamageMatrix.Apply(SeismicDamage, Warhead.Omni, t.Armour);
+            if (d > innerSq) dmg /= 2;
+            t.Hp -= dmg;
+            if (t.Hp <= 0)
+            {
+                _events.Add(new GameEvent(GameEventType.Died, i, -1));
+                t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
+                if (IsStructure(t.Kind)) FootprintOnDeath(in t);   // ADR-025: a bridge BLOCKS instead
+            }
+            _entities[i] = t;
+        }
+    }
+
+    /// <summary>P7-5c: the seismic charge's base damage, named rather than
+    /// buried, so the one number a balance pass would reach for is findable.</summary>
+    public const int SeismicDamage = 350;
+
     private void ApplyAreaDamage(Fix64 x, Fix64 y, int baseDamage)
     {
         Fix64 innerSq = Fix64.FromFraction(9, 4); // 1.5^2

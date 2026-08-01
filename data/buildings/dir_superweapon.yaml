@@ -1,6 +1,18 @@
+# P7-5c (DR-04, ADR-044): the Directorate's half of GDD s8's superweapon pair,
+# "orbital cannon (huge single-point damage)". Not one number here changed when
+# the pair split: 900 Omni inside a 1.5-cell core already WAS huge single-point
+# damage. What changed is that the Sodality stopped sharing it.
+# NAME left as "Superweapon" on purpose. The sidebar label is derived from the
+# ID (StructureCatalogue.DisplayNameOf -> DisplayNameFromId), not from this key,
+# so renaming here alone would leave the button reading SUPERWEAPON while the
+# file claimed otherwise - a new mismatch of exactly the kind P7 keeps closing.
+# Renaming it properly means moving the id, which touches the sidebar's frozen
+# transcript and the model table, and is filed as tidy-up rather than smuggled
+# into a design row. Worth doing: with two superweapons in the game, one button
+# reading SUPERWEAPON and the other SEISMIC CHARGE is not readable at a glance.
 id: dir_superweapon
 name: Superweapon
-faction: common
+faction: directorate
 cost: 4000
 build_time_ticks: 600
 hp: 1200

@@ -1,0 +1,49 @@
+# P7-5c (DR-04, ADR-044): the Sodality's half of GDD s8's superweapon pair.
+#
+# GDD s8 line 70 writes both precisely:
+#   "One superweapon per faction, ~6 minute charge, global map ping and audio
+#    warning at launch: Directorate orbital cannon (huge single-point damage),
+#    Sodality seismic charge (wide, lower-damage area denial THAT ALSO DESTROYS
+#    RESOURCE FIELDS - economic warfare flavour)."
+#
+# Every number this file shares with dir_superweapon is shared ON PURPOSE. "One
+# superweapon per faction" on the same charge means the two are meant to be the
+# same DECISION with different consequences; a cheaper or faster one would make
+# the choice about price rather than about what it does.
+id: sod_seismic_charge
+name: Seismic Charge
+faction: sodality
+cost: 4000
+build_time_ticks: 600
+hp: 1200
+power_supply: 0
+power_draw: 150
+sight_range: 4
+footprint: 2
+weapon_ids: []
+prerequisites: [com_radar_uplink]
+build_tab: defence
+notes: >
+  Shares EntityKind.Superweapon with the orbital cannon, so charging, the ready
+  alert, the launch command and the five seconds of warning are the same
+  machinery and behave identically. ONLY THE IMPACT DIFFERS, and it branches on
+  the structure type.
+
+  Wide and lower-damage, per GDD s8: 350 base against the cannon's 900, over a
+  3-cell core and a 6-cell fringe against the cannon's 1.5 and 3. Four times the
+  area for under half the damage. The damage number is chosen against the
+  building table rather than in the abstract: 350 clears infantry, harvesters
+  and a power plant, and does NOT kill a factory or a Construction Yard. That
+  boundary IS the design - the orbital cannon ends a base, the seismic charge
+  denies ground.
+
+  It destroys ferrite fields within its full radius, which is the written
+  economic-warfare half and the only thing in the game that can do it since
+  P7-5a closed the explicit-attack hole. Fields DIE rather than draining,
+  because "destroys" is the GDD's word and a half-emptied field is just a
+  slower version of harvesting it. A dead field does not regrow.
+
+  It asks no ownership question, exactly as the cannon and the mine do not: it
+  hits the firing player's own units and allies, and it destroys whatever
+  fields lie under it including ground the launcher was mining. A weapon that
+  spared its owner's ground would make area denial free.
