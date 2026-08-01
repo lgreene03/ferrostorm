@@ -270,6 +270,92 @@ public static class DataLoader
     }
 
     public static WeaponData LoadWeaponFile(string path) => ParseWeapon(File.ReadAllText(path));
+
+    /// <summary>A skirmish-commander tuning row as authored in /data/ai,
+    /// validated against schema.ai.json. One record serves both families and
+    /// only the effect differs; see <see cref="AiTuningDef"/> for which family
+    /// owns which field.</summary>
+    public sealed record AiTuningData(
+        string Id, string Name, AiTuningKind Kind,
+        int ActEvery, int WaveSize,
+        int BeatNumerator, int BeatDenominator,
+        int HarvestersPerRefinery, int StartingCreditHandicap, string Notes);
+
+    /// <summary>The keys each family OWNS. Stated as data rather than as a run
+    /// of ContainsKey tests so that a key added to one family is automatically
+    /// forbidden in the other: a rule that named the keys one at a time would be
+    /// missed by whoever adds the next one, which is this codebase's recurring
+    /// defect shape.</summary>
+    private static readonly string[] PersonalityKeys = { "act_every_ticks", "wave_size" };
+    private static readonly string[] RungKeys =
+        { "beat_numerator", "beat_denominator", "harvesters_per_refinery", "starting_credit_handicap" };
+
+    /// <summary>
+    /// The same flat-YAML and integer-only primitives as ParseUnit and
+    /// ParseWeapon, run at match setup and never per tick. AI tuning ids carry
+    /// the `ai_` prefix rather than a faction prefix: a commander's taste and a
+    /// difficulty rung belong to no side.
+    ///
+    /// The `kind` discriminator decides which keys are REQUIRED and which are
+    /// REFUSED, so a personality can never carry a credit handicap and a rung
+    /// can never carry a wave size. That is DR-14's orthogonality enforced at
+    /// the file rather than merely described in it: the review that produced the
+    /// ladder found personality and difficulty conflated, and a schema that let
+    /// one file carry both would invite the conflation straight back.
+    /// </summary>
+    public static AiTuningData ParseAiTuning(string yamlText)
+    {
+        var m = ParseFlatYaml(yamlText);
+        string id = ReqStr(m, "id");
+        if (!id.StartsWith("ai_"))
+            throw new FormatException($"id '{id}' violates the ai_ prefix convention for AI tuning");
+
+        var kind = ReqStr(m, "kind") switch
+        {
+            "personality" => AiTuningKind.Personality,
+            "rung" => AiTuningKind.Rung,
+            var k => throw new FormatException($"unknown AI tuning kind '{k}'"),
+        };
+        bool isPersonality = kind == AiTuningKind.Personality;
+        foreach (string forbidden in isPersonality ? RungKeys : PersonalityKeys)
+            if (m.ContainsKey(forbidden))
+                throw new FormatException(
+                    $"a {(isPersonality ? "personality" : "rung")} row must not author '{forbidden}': "
+                    + "personality is a commander's taste and difficulty is its strength, and DR-14 keeps them orthogonal");
+
+        int actEvery = 0, waveSize = 0, numerator = 1, denominator = 1, harvesters = 1, handicap = 0;
+        if (isPersonality)
+        {
+            actEvery = ReqInt(m, "act_every_ticks");
+            if (actEvery < 1) throw new FormatException("act_every_ticks must be at least 1; the commander takes Tick modulo it");
+            waveSize = ReqInt(m, "wave_size");
+            if (waveSize < 1) throw new FormatException("wave_size must be at least 1");
+        }
+        else
+        {
+            numerator = ReqInt(m, "beat_numerator");
+            if (numerator < 1) throw new FormatException("beat_numerator must be at least 1");
+            denominator = ReqInt(m, "beat_denominator");
+            if (denominator < 1) throw new FormatException("beat_denominator must be at least 1; the commander divides by it");
+            harvesters = ReqInt(m, "harvesters_per_refinery");
+            if (harvesters < 1) throw new FormatException("harvesters_per_refinery must be at least 1");
+            handicap = ReqInt(m, "starting_credit_handicap");
+        }
+
+        return new AiTuningData(
+            Id: id,
+            Name: ReqStr(m, "name"),
+            Kind: kind,
+            ActEvery: actEvery,
+            WaveSize: waveSize,
+            BeatNumerator: numerator,
+            BeatDenominator: denominator,
+            HarvestersPerRefinery: harvesters,
+            StartingCreditHandicap: handicap,
+            Notes: m.TryGetValue("notes", out var n) ? n : "");
+    }
+
+    public static AiTuningData LoadAiTuningFile(string path) => ParseAiTuning(File.ReadAllText(path));
 }
 
 /// <summary>Bridges loaded /data unit definitions into the sim's producible catalogue (TICKET-P2-DATA-02).</summary>
@@ -453,6 +539,39 @@ public static class StructureCatalogue
 }
 
 /// <summary>
+/// Bridges /data/ai definitions into the sim's AI tuning table, in the shape
+/// UnitCatalogue and StructureCatalogue are for their kinds: the file names the
+/// thing, the compiled map names the number, and neither is free to drift alone.
+/// The tuning id is the value the catalogue checksum carries, so it stays code
+/// rather than data for the same reason a weapon id does.
+/// </summary>
+public static class AiCatalogue
+{
+    /// <summary>Tuning ids, resolved to the constants beside the compiled table
+    /// so the numbers are stated once. Throws on an unknown id rather than
+    /// defaulting, matching WeaponIdOf and StructureCatalogue.TypeIdOf.</summary>
+    public static int TuningIdOf(string id) => id switch
+    {
+        "ai_standard" => AiTuning.StandardId,
+        "ai_rusher" => AiTuning.RusherId,
+        "ai_turtle" => AiTuning.TurtleId,
+        "ai_easy" => AiTuning.EasyId,
+        "ai_normal" => AiTuning.NormalId,
+        "ai_hard" => AiTuning.HardId,
+        "ai_brutal" => AiTuning.BrutalId,
+        _ => throw new FormatException($"unknown AI tuning id '{id}'"),
+    };
+
+    /// <summary>Every field crosses: a tuning number that was parsed and then
+    /// dropped would be the P7-1 defect in a fourth place, and here it would be
+    /// worse than decoration - a file a player edits, a checksum that moves, and
+    /// a commander that plays the compiled numbers regardless.</summary>
+    public static AiTuningDef ToTuningDef(DataLoader.AiTuningData a)
+        => new(a.Kind, a.ActEvery, a.WaveSize, a.BeatNumerator, a.BeatDenominator,
+               a.HarvestersPerRefinery, a.StartingCreditHandicap);
+}
+
+/// <summary>
 /// ADR-006: register the whole /data catalogue into a world before tick 0.
 /// This is the runner's own load path (Program.cs, the gate's reference
 /// implementation) made callable, so the shipped client and the gate walk one
@@ -483,7 +602,7 @@ public static class CatalogueFiles
     /// be that same defect wearing a second coat, so there is exactly one.
     ///
     /// Array order is REGISTRATION order: units, structures, fields, weapons,
-    /// which is the order the per-kind call sites used before they collapsed
+    /// AI tuning, which is the order the per-kind call sites used before they collapsed
     /// into one call. The checksum walks ids in sorted order and so cannot see
     /// this, but the order still decides which failure a broken /data reports
     /// first, so it is stated here rather than left to chance.
@@ -494,13 +613,17 @@ public static class CatalogueFiles
         ("buildings", RegisterStructures),
         ("fields",    RegisterFields),
         ("weapons",   RegisterWeapons),
+        // Promoted from a null row the day the skirmish commander's tuning moved
+        // out of SkirmishAI.cs. It was listed as "reserved for authored AI
+        // tuning" and held nothing, which is exactly the state this table exists
+        // to make impossible for longer than one wave.
+        ("ai",        RegisterAiTuning),
         // Known, and deliberately NOT a catalogue kind. Listed rather than
         // silently skipped, so the guard can tell a directory that holds no
         // defs from one nobody has ever heard of.
         ("maps",      null),   // .fmap terrain, loaded per match by MapData
         ("missions",  null),   // campaign mission files, loaded by the mission runner
         ("campaign",  null),   // the campaign manifest and its briefings
-        ("ai",        null),   // reserved for authored AI tuning
     };
 
     /// <summary>
@@ -729,6 +852,57 @@ public static class CatalogueFiles
             if (!seen.Contains(id))
                 throw new FormatException(
                     $"{weaponsDir}: no weapon file provides compiled weapon id {id}. " +
+                    "The compiled table is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
+    }
+
+    /// <summary>
+    /// Register the authored skirmish-commander tuning from /data/ai into a
+    /// world before tick 0, on exactly the terms RegisterWeapons is on: a sorted
+    /// ordinal walk (a directory listing is not a source of truth), registration
+    /// through the AiCatalogue.TuningIdOf map the gate proves, a duplicate id
+    /// refused, and EVERY compiled id demanded, because a partial /data silently
+    /// mixing authored and compiled commanders is the two-catalogue ambiguity
+    /// ADR-006 exists to end.
+    ///
+    /// This kind carries a safety argument the others do not. The commander's
+    /// numbers were compiled, so two LAN peers agreed on them BY CONSTRUCTION;
+    /// authoring them creates a desync vector where peers with different files
+    /// issue different AI commands. World folds the registered table into
+    /// CatalogueChecksum, which the LAN hello, saves and replays already compare
+    /// and refuse a mismatch on, so the new vector is closed by the mechanism
+    /// that was already there rather than by trust.
+    /// </summary>
+    public static void RegisterAiTuning(World w, string aiDir)
+    {
+        if (!Directory.Exists(aiDir))
+            throw new IOException(
+                $"/data is missing: expected {aiDir}. " +
+                "The skirmish commander's tuning lives in /data (ADR-006) and a battle cannot start without it. " +
+                "Restore the data directory beside the game and try again.");
+
+        var seen = new HashSet<int>();
+        var files = Directory.GetFiles(aiDir, "*.yaml");
+        Array.Sort(files, StringComparer.Ordinal);
+        foreach (var f in files)
+        {
+            try
+            {
+                var a = DataLoader.LoadAiTuningFile(f);
+                int id = AiCatalogue.TuningIdOf(a.Id);
+                if (!seen.Add(id)) throw new FormatException($"AI tuning id {id} is claimed twice");
+                w.RegisterAiTuning(id, AiCatalogue.ToTuningDef(a));
+            }
+            catch (FormatException e)
+            {
+                throw new FormatException($"{f}: {e.Message}", e);
+            }
+        }
+        // Tuning ids are dense from 1 to the compiled bound; there is no id 0,
+        // because there is no such thing as an unspecified commander.
+        for (int id = 1; id <= AiTuning.MaxTuningId; id++)
+            if (!seen.Contains(id))
+                throw new FormatException(
+                    $"{aiDir}: no AI file provides compiled tuning id {id}. " +
                     "The compiled table is not a fallback (ADR-006), so the battle is refused rather than played on mixed numbers.");
     }
 }

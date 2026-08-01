@@ -1,0 +1,17 @@
+# TICKET-AI-03. The commander that goes early and goes often.
+# Same beat as Standard: a Rusher is not a better commander, only an impatient
+# one, and giving it a faster beat here would be the personality-and-difficulty
+# conflation DR-14 exists to undo. Strength belongs to the rung files.
+# wave_size 4 is the whole personality. A smaller wave stands ready sooner, so
+# the first attack lands while the defender is still building, and the 300-tick
+# spacing between waves then makes the pressure continuous rather than a single
+# push. The cost is paid honestly: four units lose the stand-up fight that six
+# would win, so this is a shape a player can beat by holding rather than a
+# strength they have to out-produce.
+# The garrison is half the wave size with a floor of two, so this commander
+# still keeps two fighters at home; it attacks with less, not with everything.
+id: ai_rusher
+name: Rusher
+kind: personality
+act_every_ticks: 15
+wave_size: 4

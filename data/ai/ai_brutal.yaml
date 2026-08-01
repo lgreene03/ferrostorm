@@ -1,0 +1,30 @@
+# DR-14 / doc 28. GDD line 76's top rung: "resource handicap, clearly labelled
+# as cheating". The label is a requirement, not a courtesy: wherever this rung
+# is offered to a player, the interface must say that it cheats, because a
+# hidden handicap is how a player learns to distrust every match they lose.
+# beat_numerator 2 over beat_denominator 3 makes Brutal think FASTEST: two
+# thirds of the personality's beat, which is 10 ticks against Standard's 15.
+# Two thirds is exactly why the beat is authored as a ratio - it cannot be
+# written as a whole multiplier, and CLAUDE.md forbids a floating-point type
+# anywhere in /sim, so a numerator and a denominator are the only honest way to
+# spell it. The arithmetic is integer and TRUNCATES: 15 * 2 / 3 is 10, and at a
+# personality beat of 1 the result would be 0, which the commander floors back
+# to 1 because a beat of zero would divide by zero on every tick.
+# harvesters_per_refinery 2 is inherited from Hard rather than raised again.
+# Brutal is Hard's macro on a faster beat plus one declared cheat, so each rung
+# adds one thing and a player can name what beat them.
+# starting_credit_handicap 5000 is that cheat, and it is applied by whatever
+# BUILDS THE MATCH and never by the commander itself. That is not squeamishness.
+# SkirmishAI holds no privileged access and mutates nothing, which is what makes
+# an AI match replayable at all: a replay re-runs the bare command stream with
+# NO AI attached, so a commander that granted itself credits would desync every
+# replay of its own match. A handicap that lives in setup is ordinary starting
+# state and stays replay-safe, and a resumed save is unaffected because the
+# saved treasury stands rather than being topped up on every load.
+id: ai_brutal
+name: Brutal
+kind: rung
+beat_numerator: 2
+beat_denominator: 3
+harvesters_per_refinery: 2
+starting_credit_handicap: 5000

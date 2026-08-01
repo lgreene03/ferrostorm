@@ -1,0 +1,14 @@
+# TICKET-AI-03. The commander that waits and then arrives all at once.
+# Same beat as Standard, for the same reason Rusher keeps it: patience is a
+# shape, not a strength, and the rung files own strength (DR-14).
+# wave_size 10 buys a bigger hammer with time. Ten units take far longer to
+# stand ready, so the early game is quiet and the player is free to expand; when
+# the wave does come it is large enough to break a base rather than trade with
+# it. The garrison rule turns the same number into a real defence too, since
+# half of ten is five fighters held at home, which is what makes this commander
+# hard to harass and slow to threaten.
+id: ai_turtle
+name: Turtle
+kind: personality
+act_every_ticks: 15
+wave_size: 10

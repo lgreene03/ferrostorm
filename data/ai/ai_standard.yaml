@@ -1,0 +1,20 @@
+# TICKET-AI-03. The default commander, and the one every scenario in the
+# harness plays against unless it asks for another.
+# A personality row sets the SHAPE of an opponent and nothing about its
+# strength: DR-14 keeps the two orthogonal, because the review that produced the
+# difficulty ladder found them conflated - the only knob a player could reach
+# varied wave size, which changes what an opponent looks like rather than how
+# good it is. So this file authors a beat and a wave size, and it is refused if
+# it tries to author a rung's mining or handicap.
+# act_every_ticks 15 is one decision per second at 15Hz. It is the beat that has
+# always shipped, and the rung then scales it: Normal's ratio is 1/1, which is
+# why this number is also the beat of every golden scenario.
+# wave_size 6 is the balance point the doctrine was written around - big enough
+# that a wave arrives as an army rather than a trickle, small enough that the
+# commander attacks before the match is decided. It is read twice: the wave goes
+# out at waveSize plus the garrison, and the garrison itself is half of it.
+id: ai_standard
+name: Standard
+kind: personality
+act_every_ticks: 15
+wave_size: 6

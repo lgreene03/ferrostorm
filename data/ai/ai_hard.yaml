@@ -1,0 +1,23 @@
+# DR-14 / doc 28. GDD line 76's third rung: "strong macro, honest information".
+# Hard and Normal SHARE A BEAT and differ only by macro, and that is the whole
+# point of the rung rather than an omission. A commander that both thought
+# faster and mined harder would be two changes wearing one label, and a player
+# beaten by it could not tell which had beaten them. Holding the beat at 1/1
+# makes Hard a legible step: it makes the same decisions at the same moments as
+# Normal and simply has more to spend when it makes them.
+# harvesters_per_refinery 2 is that macro, and it is the honest kind of strength
+# - more mining, not free money. A second harvester per refinery has to be
+# bought, built and kept alive, so the income it brings can be taken away by a
+# player who goes after it. Doubling the economy is a large lever, which is why
+# it is the ONLY thing this rung changes.
+# starting_credit_handicap 0: no cheat here. GDD line 76 allows one at Brutal
+# and nowhere else, and "honest information" holds too - Hard gets no vision the
+# commander has never had (doc 28 s5 states the pre-existing case openly and
+# DR-15 owns closing it).
+id: ai_hard
+name: Hard
+kind: rung
+beat_numerator: 1
+beat_denominator: 1
+harvesters_per_refinery: 2
+starting_credit_handicap: 0

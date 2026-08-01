@@ -23,6 +23,17 @@ namespace Ferrostorm.Sim;
 /// true, and the AI produces only refused infantry in perpetuity and never
 /// attacks. That is why the ladder, the routing and the per-producer queue
 /// guards below are not optional polish.
+///
+/// The TUNING is not in this file. Every number that describes the commander -
+/// its decision beat, its wave size (the "six" above), the beat ratio and the
+/// mining of each rung, and Brutal's declared handicap - is authored in /data/ai
+/// and registered on the World, per CLAUDE.md's rule that gameplay numbers live
+/// in /data. AiTuning holds the compiled reference copy those files must
+/// reproduce, and aituninggate proves both halves. The tuning rides
+/// World.CatalogueChecksum because it MUST: the commander's numbers were
+/// compiled, so two LAN peers agreed on them by construction, and authoring them
+/// would otherwise let peers holding different files issue different AI commands
+/// and desync a match in which every unit, building and gun still matched.
 /// </summary>
 /// <summary>DR-14 / doc 28: the difficulty ladder GDD line 76 promised, kept
 /// ORTHOGONAL to personality. Personality (Standard, Rusher, Turtle) is a
@@ -31,30 +42,36 @@ namespace Ferrostorm.Sim;
 /// wave size, which changes an opponent's shape rather than its strength.
 /// Difficulty owns the decision beat and the economy, which is the genre's
 /// honest ladder: a worse commander thinks more slowly and mines less, and only
-/// the top rung is allowed a handicap, declared rather than hidden.</summary>
+/// the top rung is allowed a handicap, declared rather than hidden.
+///
+/// The NUMBERS behind each rung are no longer here. They are authored in
+/// data/ai (ai_easy, ai_normal, ai_hard, ai_brutal), which is where the design
+/// reasoning for each now lives too, beside the values a designer can actually
+/// edit; AiTuning holds the compiled reference copy those files must reproduce.
+/// This enum is only the player-facing pick, and AiTuning.RungIdOf maps it to
+/// the row.</summary>
 public enum AiDifficulty
 {
-    /// <summary>GDD line 76 "no cheats, slow": a half-speed commander.</summary>
+    /// <summary>GDD line 76 "no cheats, slow". See data/ai/ai_easy.yaml.</summary>
     Easy = 0,
-    /// <summary>GDD line 76 "competent build orders": EXACTLY the commander
-    /// that has always shipped. Every value on this rung is the value the code
-    /// used before the ladder existed, which is what keeps the goldens
-    /// byte-identical - see doc 28 s4.</summary>
+    /// <summary>GDD line 76 "competent build orders", and the IDENTITY rung that
+    /// keeps the goldens byte-identical. See data/ai/ai_normal.yaml.</summary>
     Normal = 1,
-    /// <summary>GDD line 76 "strong macro, honest information": the same beat,
-    /// twice the mining. No handicap, and no information cheat BEYOND the one
-    /// the AI has always had (doc 28 s5 states this honestly; DR-15 owns it).</summary>
+    /// <summary>GDD line 76 "strong macro, honest information". See
+    /// data/ai/ai_hard.yaml.</summary>
     Hard = 2,
-    /// <summary>GDD line 76 "resource handicap, clearly labelled as cheating":
-    /// Hard's macro on a faster beat, plus a starting-credit handicap that
-    /// SETUP applies. The AI never grants itself anything (see
-    /// StartingCreditHandicap).</summary>
+    /// <summary>GDD line 76 "resource handicap, clearly labelled as cheating".
+    /// See data/ai/ai_brutal.yaml, and StartingCreditHandicap below for why the
+    /// AI never applies it to itself.</summary>
     Brutal = 3,
 }
 
 public sealed class SkirmishAI
 {
     private readonly int _player;
+    // The three resolved tuning numbers, composed once in the constructor from
+    // the personality and rung rows in data/ai. Nothing below re-reads the
+    // catalogue, so the commander holds tuning rather than a world.
     private readonly int _actEvery;   // decision beat; larger = slower commander (the ladder's honest knob)
     private readonly int _waveSize;   // units per attack wave (PERSONALITY, not difficulty - DR-14)
     private readonly int _harvestersPerRefinery;  // DR-14: the ladder's economy knob
@@ -66,28 +83,55 @@ public sealed class SkirmishAI
     private int _lastWaveTick = -10_000;
     private int _lastDefendTick = -10_000;
 
-    public SkirmishAI(int player, int actEvery = 15, int waveSize = 6,
-                      AiDifficulty difficulty = AiDifficulty.Normal)
+    /// <summary>The Standard personality at the given rung, from a world's
+    /// registered tuning or, with no world in hand, from the compiled reference.
+    /// The numbers themselves live in /data/ai; only the composition rule lives
+    /// here.</summary>
+    public SkirmishAI(int player, AiDifficulty difficulty = AiDifficulty.Normal, World? tuning = null)
+        : this(player, AiTuning.StandardId, difficulty, tuning) { }
+
+    /// <summary>
+    /// The one place a commander is composed from its two authored rows. The
+    /// personality supplies the shape (its beat and its wave size) and the rung
+    /// supplies the strength (how that beat is scaled and how hard it mines),
+    /// which is DR-14's orthogonality expressed as an operation rather than as a
+    /// comment.
+    ///
+    /// The tuning is READ from the world rather than from a static, because it
+    /// is catalogue data: it rides the checksum the LAN hello and every save and
+    /// replay compare, and it is frozen after tick 0. A null world means "no
+    /// /data in hand" and takes the compiled reference, exactly as a bare World
+    /// plays the compiled weapon table; the AI keeps no reference to the world
+    /// beyond this constructor, so it still holds no world state and no
+    /// privileged access.
+    /// </summary>
+    private SkirmishAI(int player, int personalityId, AiDifficulty difficulty, World? tuning)
     {
         _player = player;
-        _waveSize = waveSize;
-        // DR-14: the ladder scales the caller's beat rather than replacing it,
-        // so personality keeps whatever beat it asked for and difficulty says
-        // how fast that commander thinks. Normal multiplies by one, which is
+        var shape = Resolve(personalityId, tuning);
+        var rung = Resolve(AiTuning.RungIdOf(difficulty), tuning);
+        _waveSize = shape.WaveSize;
+        // DR-14: the ladder SCALES the personality's beat rather than replacing
+        // it, so personality keeps whatever beat it asked for and difficulty
+        // says how fast that commander thinks. Normal's ratio is 1/1, which is
         // why every existing caller - and therefore every golden - is unmoved.
+        // Integer arithmetic and integer truncation, both load-bearing: the
+        // ratio is authored as a numerator and a denominator so that Brutal's
+        // two-thirds is exact with no floating-point type anywhere in /sim, and
+        // 15 * 2 / 3 truncates to 10 exactly as the compiled expression did.
         // The floor matters at a beat of 1: a zero would make Tick % 0 throw.
-        int beat = difficulty switch
-        {
-            AiDifficulty.Easy => actEvery * 2,       // 30 at the default: half-speed, no cheats
-            AiDifficulty.Brutal => actEvery * 2 / 3, // 10 at the default: thinks fastest
-            _ => actEvery,                           // Normal and Hard share the shipped beat
-        };
+        int beat = shape.ActEvery * rung.BeatNumerator / rung.BeatDenominator;
         _actEvery = beat < 1 ? 1 : beat;
         // Income headroom is the ladder's other honest knob: a strong commander
         // runs a second harvester per refinery, which is macro rather than a
-        // gift. One per refinery is the rule that has always shipped.
-        _harvestersPerRefinery = difficulty is AiDifficulty.Hard or AiDifficulty.Brutal ? 2 : 1;
+        // gift.
+        _harvestersPerRefinery = rung.HarvestersPerRefinery;
     }
+
+    /// <summary>The tuning row for an id: the world's registered one where a
+    /// world is in hand, the compiled reference otherwise.</summary>
+    private static AiTuningDef Resolve(int tuningId, World? tuning)
+        => tuning is null ? AiTuning.Get(tuningId) : tuning.GetAiTuning(tuningId);
 
     /// <summary>DR-14b: the resolved decision beat, in ticks. Read-only and
     /// purely informational - nothing in Act consults it through this property,
@@ -108,27 +152,32 @@ public sealed class SkirmishAI
     /// command stream with NO AI attached (ReplayCheck), so an AI that granted
     /// itself credits would desync every replay of its own match. A handicap
     /// that lives in setup is ordinary starting state and stays replay-safe.
-    /// GDD line 76 requires it be labelled as cheating wherever it is offered.</summary>
-    public static long StartingCreditHandicap(AiDifficulty difficulty)
-        => difficulty == AiDifficulty.Brutal ? 5000 : 0;
+    /// GDD line 76 requires it be labelled as cheating wherever it is offered.
+    /// The number itself is authored in data/ai/ai_brutal.yaml, so a world in
+    /// hand is read in preference to the compiled reference.</summary>
+    public static long StartingCreditHandicap(AiDifficulty difficulty, World? tuning = null)
+        => Resolve(AiTuning.RungIdOf(difficulty), tuning).StartingCreditHandicap;
 
     // Personality presets (TICKET-AI-03): the knobs make the SHAPE of the
-    // opponent. Each now takes a rung as well, which is what lets a player pick
-    // taste and strength independently (DR-14b). The parameter DEFAULTS to
-    // Normal, so every caller written before the ladder - and therefore every
-    // golden scenario - builds the identical commander it always did.
-    public static SkirmishAI Standard(int player, AiDifficulty difficulty = AiDifficulty.Normal)
-        => new(player, difficulty: difficulty);
-    public static SkirmishAI Rusher(int player, AiDifficulty difficulty = AiDifficulty.Normal)
-        => new(player, actEvery: 15, waveSize: 4, difficulty: difficulty);
-    public static SkirmishAI Turtle(int player, AiDifficulty difficulty = AiDifficulty.Normal)
-        => new(player, actEvery: 15, waveSize: 10, difficulty: difficulty);
+    // opponent, and they are now authored in data/ai rather than spelled here.
+    // Each takes a rung as well, which is what lets a player pick taste and
+    // strength independently (DR-14b), and an optional world, which is what lets
+    // a real match play the AUTHORED numbers while the harness scenarios that
+    // build a bare World keep the compiled ones. Both parameters default, so
+    // every caller written before either existed builds the identical commander
+    // it always did.
+    public static SkirmishAI Standard(int player, AiDifficulty difficulty = AiDifficulty.Normal, World? tuning = null)
+        => new(player, AiTuning.StandardId, difficulty, tuning);
+    public static SkirmishAI Rusher(int player, AiDifficulty difficulty = AiDifficulty.Normal, World? tuning = null)
+        => new(player, AiTuning.RusherId, difficulty, tuning);
+    public static SkirmishAI Turtle(int player, AiDifficulty difficulty = AiDifficulty.Normal, World? tuning = null)
+        => new(player, AiTuning.TurtleId, difficulty, tuning);
 
     // Difficulty presets (DR-14): the ladder GDD line 76 named. Each keeps the
     // standard personality, so a player picks strength here and taste above.
-    public static SkirmishAI Easy(int player) => new(player, difficulty: AiDifficulty.Easy);
-    public static SkirmishAI Hard(int player) => new(player, difficulty: AiDifficulty.Hard);
-    public static SkirmishAI Brutal(int player) => new(player, difficulty: AiDifficulty.Brutal);
+    public static SkirmishAI Easy(int player, World? tuning = null) => new(player, AiDifficulty.Easy, tuning);
+    public static SkirmishAI Hard(int player, World? tuning = null) => new(player, AiDifficulty.Hard, tuning);
+    public static SkirmishAI Brutal(int player, World? tuning = null) => new(player, AiDifficulty.Brutal, tuning);
 
     public void Act(World w, List<Command> output)
     {

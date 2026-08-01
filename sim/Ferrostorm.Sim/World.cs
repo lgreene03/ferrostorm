@@ -887,9 +887,64 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// The live AI TUNING catalogue, the fourth leg of ADR-006. The skirmish
+    /// commander's numbers used to be compiled literals in SkirmishAI.cs, which
+    /// made two LAN peers agree on them by construction; moving them into
+    /// /data/ai creates a desync vector that nothing else in the game has, since
+    /// peers holding different files would issue different AI COMMANDS while
+    /// every def they compare stayed equal. That is why this table is registered
+    /// on the World and folded into <see cref="CatalogueChecksum"/> rather than
+    /// living in a process-global beside the commander: the LAN hello, saves and
+    /// replays already compare the checksum and refuse a mismatch before tick 0,
+    /// so the desync becomes a refusal.
+    ///
+    /// Seeded from the compiled reference table so a World built with no /data
+    /// behind it plays today's commander unchanged, which is what keeps every
+    /// harness that constructs a bare World green.
+    /// </summary>
+    private readonly Dictionary<int, AiTuningDef> _aiTuning = SeedAiTuning();
+    private static Dictionary<int, AiTuningDef> SeedAiTuning()
+    {
+        var d = new Dictionary<int, AiTuningDef>();
+        for (int id = 1; id <= AiTuning.MaxTuningId; id++) d[id] = AiTuning.Get(id);
+        return d;
+    }
+
+    /// <summary>The tuning a live match's commander is built from. Read this,
+    /// never AiTuning.Get, anywhere a world is in scope. An id outside the table
+    /// falls through to the compiled reference, which throws on an unknown one:
+    /// there is no such thing as an unspecified commander, so a quiet default
+    /// would be a beat of zero.</summary>
+    public AiTuningDef GetAiTuning(int tuningId)
+        => _aiTuning.TryGetValue(tuningId, out var d) ? d : AiTuning.Get(tuningId);
+
+    /// <summary>Match setup may overwrite the AI tuning table before tick 0,
+    /// mirroring RegisterUnitType, RegisterStructureType and RegisterWeaponType.
+    /// After tick 0 it is frozen: a mid-match change would be a silent replay
+    /// divergence. Two invariants are checked here rather than in the parser, so
+    /// that a code caller is held to them as tightly as a file is - the row must
+    /// belong to the same family as the compiled row it replaces, or a rung slot
+    /// would end up holding a personality with no beat ratio at all, and the
+    /// beat denominator must be at least 1, because the commander divides by
+    /// it.</summary>
+    public void RegisterAiTuning(int tuningId, AiTuningDef def)
+    {
+        if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
+        var reference = AiTuning.Get(tuningId);
+        if (def.Kind != reference.Kind)
+            throw new FormatException(
+                $"AI tuning id {tuningId} is a {reference.Kind} row and was offered a {def.Kind} one");
+        if (def.BeatDenominator < 1)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a beat denominator of {def.BeatDenominator}; the commander divides by it");
+        _aiTuning[tuningId] = def;
+    }
+
+    /// <summary>
     /// ADR-006 commitment 1: the catalogue checksum. FNV-1a in the sim's own
     /// StateHash idiom over the CANONICALISED registered defs, never over file
-    /// bytes: unit types first, then structure types, then weapon types, each
+    /// bytes: unit types first, then structure types, then weapon types, then
+    /// the AI tuning rows, each
     /// walked in ascending id (dictionary iteration order must never leak into
     /// an artefact), each def contributing every field in declaration order with
     /// the prerequisite list length-prefixed. Two worlds agreeing here are playing
@@ -944,6 +999,27 @@ public sealed partial class World
                 var d = _weaponTypes[id];
                 h.Add(id); h.Add(d.Range); h.Add(d.Damage); h.Add((int)d.Warhead);
                 h.Add(d.CooldownTicks); h.Add(d.MinRange); h.Add(d.SplashRadius); h.Add(d.AntiAir);
+            }
+            // The AI tuning joined the catalogue when its numbers moved into
+            // data/ai, and it is the section with the sharpest safety argument.
+            // Every other section describes something both peers can SEE going
+            // wrong; this one describes how the commander thinks, so peers
+            // holding different files would issue different AI commands while
+            // agreeing on every unit, building and gun in the game. Folded LAST
+            // and appended rather than interleaved, so the three older sections
+            // contribute exactly what they always did and the change to this
+            // value is one thing rather than four. It does change, by
+            // construction, which is the same pre-first-public-build trade the
+            // weapons wave and P7-2, P7-3, P7-4 and P7-11a each took.
+            var aiIds = new List<int>(_aiTuning.Keys);
+            aiIds.Sort();
+            h.Add(aiIds.Count);
+            foreach (int id in aiIds)
+            {
+                var d = _aiTuning[id];
+                h.Add(id); h.Add((int)d.Kind); h.Add(d.ActEvery); h.Add(d.WaveSize);
+                h.Add(d.BeatNumerator); h.Add(d.BeatDenominator);
+                h.Add(d.HarvestersPerRefinery); h.Add(d.StartingCreditHandicap);
             }
             return h.Value;
         }
