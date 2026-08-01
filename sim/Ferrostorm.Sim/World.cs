@@ -989,6 +989,17 @@ public sealed partial class World
         // Sentinel Scout was the only counter to cloak in the game and the
         // Sodality had none at all.
         bool Detector = false,
+        // P7-5e: this building's strike DESTROYS RESOURCE FIELDS, which GDD s8
+        // gives to the Sodality seismic charge alone as its economic-warfare
+        // identity.
+        //
+        // Authored rather than derived, and asked rather than named. P7-5c
+        // selected that effect with `StructType == SeismicChargeStructType`, a
+        // literal - the instance-not-property defect this phase has corrected
+        // about fifteen times, and that one was mine from one wave ago. It also
+        // left the AI no question it could ask, so a commander holding a
+        // field-destroying weapon aimed it at buildings.
+        bool DestroysFields = false,
         // Which build tab offers this building, authored in /data. The ONE
         // column on this def the sim never reads: it decides nothing about what
         // a command does, only about where a player finds the button. It is
@@ -1021,6 +1032,7 @@ public sealed partial class World
             // And Detector with it, so the same hole is not opened by the same
             // field arriving a second time.
             && Detector == other.Detector
+            && DestroysFields == other.DestroysFields
             // The tab joins the comparison even though it joins no checksum: it
             // is what makes the /data round-trip in selftest prove the authored
             // key against the compiled reference, which is the only thing that
@@ -1033,7 +1045,7 @@ public sealed partial class World
             var h = new HashCode();
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
-            h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector);
+            h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector); h.Add(DestroysFields);
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -1254,7 +1266,7 @@ public sealed partial class World
         // on that kind and all of it applies unchanged. Only the impact differs,
         // and the impact branches on StructType.
         22 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4,
-                                   Prereqs: new[] { 12 }, Faction: FactionSodality,
+                                   Prereqs: new[] { 12 }, Faction: FactionSodality, DestroysFields: true,
                                    Tab: BuildTab.Defence),
         _ => default,
     };
@@ -1512,6 +1524,11 @@ public sealed partial class World
                 // ADR-032 clause exactly, and detection is the clearest case of
                 // it yet: the disagreement would not even be about a number.
                 h.Add(d.Detector);
+                // P7-5e: whether this building's strike deletes ferrite fields.
+                // It decides what a superweapon DOES, so two peers disagreeing
+                // would watch the same launch take the map's economy apart on
+                // one machine and not the other.
+                h.Add(d.DestroysFields);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -5001,7 +5018,10 @@ public sealed partial class World
                     // warning are all shared, because GDD s8 gives both sides
                     // "one superweapon per faction" on the same terms; what
                     // arrives is the decision.
-                    if (e.StructType == SeismicChargeStructType) ApplySeismicCharge(e.StrikeX, e.StrikeY);
+                    // P7-5e: asked of the DEF, where P7-5c named the type id.
+                    // Same branch, and now the authored key decides it - which
+                    // is what lets the AI ask the same question when it aims.
+                    if (GetStructureType(e.StructType).DestroysFields) ApplySeismicCharge(e.StrikeX, e.StrikeY);
                     else ApplyAreaDamage(e.StrikeX, e.StrikeY, 900);
                     e = _entities[i]; // the strike may have killed the launcher itself
                 }

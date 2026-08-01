@@ -26,6 +26,7 @@ public static class DataLoader
         IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes,
         int MaxAlive = 0,          // P7-11c: 0 means unlimited, which is every building but the mine
         bool Detector = false,     // P7-5b: reveals cloak within sight_range, which only a unit could do before
+        bool DestroysFields = false, // P7-5e: this building's strike deletes ferrite fields (GDD s8's seismic charge)
         // Which build tab offers this building: "buildings", "defence" or
         // "none". REQUIRED by the schema on every file, so a new building
         // cannot arrive without an answer; "none" is the three map-placed
@@ -220,6 +221,9 @@ public static class DataLoader
             // `detector` key for the building catalogue. Absent means false,
             // which is every file written before the Watch Post.
             Detector: OptBool(m, "detector", false),
+            // P7-5e: absent means false, which is every building but the
+            // seismic charge.
+            DestroysFields: OptBool(m, "destroys_fields", false),
             BuildTab: buildTab,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
@@ -749,6 +753,11 @@ public static class StructureCatalogue
                // here would be a building advertising a counter to cloak that
                // it did not actually provide.
                s.Detector,
+               // P7-5e: and whether its strike deletes fields, which is now the
+               // question BOTH the impact site and the AI's aim ask - so a key
+               // parsed and dropped here would leave a superweapon that does not
+               // do what its file says and a commander that cannot tell.
+               s.DestroysFields,
                // ...and the tab, which is the only field on the def the sim
                // never reads. It crosses for the same reason all the same: a
                // key authored, validated and dropped is the P7-1 defect, and

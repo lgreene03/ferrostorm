@@ -8472,6 +8472,159 @@ int FactionPowerGate()
     return 0;
 }
 
+int SeismicAimGate()
+{
+    // P7-5e (ADR-046). Additive, the airgate pattern: a standalone mode and a
+    // Match battery stage, never a golden scenario.
+    //
+    // GDD s8 gives the seismic charge "area denial that ALSO DESTROYS RESOURCE
+    // FIELDS - economic warfare flavour". P7-5c built the effect and P7-5d made
+    // the commander build the weapon, and it went on aiming with the scan it
+    // uses for attack waves: hit the nearest enemy refinery. That throws away
+    // the only thing this weapon does that the orbital cannon cannot.
+    //
+    // Every stage asserts WHERE THE COMMAND POINTS rather than what died, which
+    // is the aim itself rather than a consequence of it.
+    const int Seismic = World.SeismicChargeStructType;
+    const int Cannon = World.OrbitalCannonStructType;
+
+    // One charged superweapon, one enemy base, whatever fields the caller lays.
+    // Returns the launch point, or null if the commander did not fire.
+    (Fix64 X, Fix64 Y)? Aim(ulong seed, int superType, Action<World> layFields)
+    {
+        var w = new World(seed, 96, 96, players: 2);
+        w.SetFaction(0, superType == Seismic ? World.FactionSodality : World.FactionDirectorate);
+        w.SpawnConstructionYard(0, 6, 46);
+        w.SpawnPowerPlant(0, 10, 46, supply: 5000,
+                          structType: World.PlantTypeForFaction(w.FactionOf(0)));
+        w.SpawnSuperweapon(0, 10, 42, chargeTicks: 0, structType: superType);
+        w.SpawnConstructionYard(1, 88, 46);
+        w.SpawnRefinery(1, 84, 46);
+        layFields(w);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        foreach (var c in cmds) if (c.Type == CommandType.LaunchSuper) return (c.X, c.Y);
+        return null;
+    }
+
+    // Fields for the main comparison: ONE fat isolated field on the enemy side,
+    // and THREE smaller ones clustered together also on the enemy side. The
+    // cluster is worth more in total, and only a blast-aware aim can see that.
+    void TwoOptions(World w)
+    {
+        w.SpawnFerriteField(Fix64.FromInt(70), Fix64.FromInt(20), 9000);   // fat, alone
+        w.SpawnFerriteField(Fix64.FromInt(70), Fix64.FromInt(70), 5000);   // cluster
+        w.SpawnFerriteField(Fix64.FromInt(73), Fix64.FromInt(72), 5000);
+        w.SpawnFerriteField(Fix64.FromInt(68), Fix64.FromInt(73), 5000);
+    }
+
+    // --- 1. A denial weapon aims at FERRITE; a damaging one aims at the base.
+    //        Both arms run the identical fixture, so the difference is the
+    //        weapon rather than the map.
+    {
+        var seis = Aim(3800, Seismic, TwoOptions);
+        var orb = Aim(3801, Cannon, TwoOptions);
+        if (seis == null) return Fail("seismic aim: the Sodality commander did not fire a charged superweapon at all");
+        if (orb == null) return Fail("seismic aim: the Directorate commander did not fire a charged superweapon at all");
+        // The enemy refinery sits at (84, 46). The orbital cannon must still go
+        // there - that is the behaviour every golden depends on.
+        if (Fix64.DistSq(orb.Value.X - Fix64.FromInt(85), orb.Value.Y - Fix64.FromInt(47)) > Fix64.FromInt(9))
+            return Fail($"seismic aim: the CONTROL failed - the orbital cannon must still aim at the enemy refinery "
+                        + $"and went to ({orb.Value.X}, {orb.Value.Y}), so this gate cannot tell a denial aim from "
+                        + "the ordinary one");
+        // And the seismic charge must NOT be at the refinery.
+        if (Fix64.DistSq(seis.Value.X - Fix64.FromInt(85), seis.Value.Y - Fix64.FromInt(47)) <= Fix64.FromInt(9))
+            return Fail("seismic aim: the seismic charge aimed at the enemy REFINERY - it destroys resource fields "
+                        + "and nothing else in the game does, so aiming it at a building throws that away");
+    }
+
+    // --- 2. THE CLUSTER RULE. The blast kills every field within 6 cells, so
+    //        three 5000 fields together (15000) are worth more than one 9000
+    //        alone. A single-richest-field aim would take the fat one, which is
+    //        why the fixture makes the wrong answer the tempting one.
+    {
+        var seis = Aim(3802, Seismic, TwoOptions);
+        if (seis == null) return Fail("seismic aim: no launch in the cluster fixture");
+        Fix64 dFat = Fix64.DistSq(seis.Value.X - Fix64.FromInt(70), seis.Value.Y - Fix64.FromInt(20));
+        Fix64 dCluster = Fix64.DistSq(seis.Value.X - Fix64.FromInt(70), seis.Value.Y - Fix64.FromInt(71));
+        if (dCluster >= dFat)
+            return Fail($"seismic aim: it took the single richest field (9000) over a cluster worth 15000 - the "
+                        + $"blast kills everything within 6 cells, so the aim must score the CLUSTER (landed at "
+                        + $"({seis.Value.X}, {seis.Value.Y}))");
+        Console.WriteLine($"  seismicaim: one 9000 field alone against three 5000 together - the charge went to "
+                          + $"({seis.Value.X}, {seis.Value.Y}), the cluster");
+    }
+
+    // --- 3. ONLY THEIR GROUND. The richest cluster on the map sits beside MY
+    //        base; the commander must not deny the patch its own harvesters
+    //        work. Fields are neutral and carry no owner, so proximity is the
+    //        only honest proxy and this stage is what holds it.
+    {
+        var seis = Aim(3803, Seismic, w =>
+        {
+            // Enormous, and mine: right beside my yard at (6, 46).
+            w.SpawnFerriteField(Fix64.FromInt(12), Fix64.FromInt(50), 30000);
+            w.SpawnFerriteField(Fix64.FromInt(14), Fix64.FromInt(52), 30000);
+            // Modest, and theirs.
+            w.SpawnFerriteField(Fix64.FromInt(78), Fix64.FromInt(50), 4000);
+        });
+        if (seis == null) return Fail("seismic aim: no launch in the own-ground fixture");
+        if (Fix64.DistSq(seis.Value.X - Fix64.FromInt(78), seis.Value.Y - Fix64.FromInt(50)) > Fix64.FromInt(36))
+            return Fail($"seismic aim: it must deny THEIR ground - a 60000-ferrite pair beside my own yard is the "
+                        + $"richest on the map and must not be chosen, and the aim landed at ({seis.Value.X}, "
+                        + $"{seis.Value.Y})");
+    }
+
+    // --- 4. AND IT STILL FIRES with no field worth hitting. A denial weapon
+    //        that banks a charged superweapon forever because the map has no
+    //        enemy ferrite is worse than one that falls back to the base.
+    {
+        var seis = Aim(3804, Seismic, _ => { });
+        if (seis == null)
+            return Fail("seismic aim: with no fields on the map at all the commander must fall back to the ordinary "
+                        + "refinery aim rather than banking a charged superweapon forever");
+    }
+
+    // --- 5. The AUTHORED KEY drives both the effect and the aim. The same
+    //        building registered with destroys_fields off must go back to
+    //        aiming at the refinery, which is the check that would have failed
+    //        no matter what the file said while the sim named the type id.
+    {
+        var w = new World(3805, 96, 96, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        var real = w.GetStructureType(Seismic);
+        w.RegisterStructureType(Seismic, real with { DestroysFields = false });
+        w.SpawnConstructionYard(0, 6, 46);
+        w.SpawnPowerPlant(0, 10, 46, supply: 5000, structType: World.SodalityGeneratorStructType);
+        w.SpawnSuperweapon(0, 10, 42, chargeTicks: 0, structType: Seismic);
+        w.SpawnConstructionYard(1, 88, 46);
+        w.SpawnRefinery(1, 84, 46);
+        TwoOptions(w);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        (Fix64 X, Fix64 Y)? aim = null;
+        foreach (var c in cmds) if (c.Type == CommandType.LaunchSuper) aim = (c.X, c.Y);
+        if (aim == null) return Fail("seismic aim: no launch in the registered-off fixture");
+        if (Fix64.DistSq(aim.Value.X - Fix64.FromInt(85), aim.Value.Y - Fix64.FromInt(47)) > Fix64.FromInt(9))
+            return Fail("seismic aim: with destroys_fields registered FALSE the commander must aim at the refinery "
+                        + "like any other superweapon - the aim is keyed on the type id rather than the def");
+    }
+
+    Console.WriteLine("seismicaimgate: what the weapon IS decides where it goes, asked of the authored def rather "
+                      + "than of the faction or the type id. A commander holding a field-destroying superweapon "
+                      + "hunts enemy ferrite where the orbital cannon still goes to the enemy refinery, both arms "
+                      + "run on the identical fixture so the difference is the weapon; it scores the CLUSTER rather "
+                      + "than the single richest field, because the blast kills everything within 6 cells and three "
+                      + "5000s together beat one 9000 alone; it will not deny its OWN ground, refusing a "
+                      + "60000-ferrite pair beside its yard for a 4000 field beside theirs; it still fires when the "
+                      + "map offers no enemy ferrite rather than banking a charged weapon forever; and registering "
+                      + "the same building with destroys_fields FALSE sends it back to the refinery, which is what "
+                      + "proves the authored key drives the aim");
+    return 0;
+}
+
 int AiFactionGate()
 {
     // P7-5d (ADR-045). Additive, the airgate pattern: a standalone mode and a
@@ -10259,6 +10412,9 @@ int Match(ulong seed)
     // shipped, instead of asking for type ids that stopped being its own.
     int aiFaction = AiFactionGate();
     if (aiFaction != 0) return aiFaction;
+    // P7-5e: and it aims the weapon at what the weapon is FOR.
+    int seismicAim = SeismicAimGate();
+    if (seismicAim != 0) return seismicAim;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -11839,6 +11995,7 @@ return args.Length == 0
         "sodalitydetectorgate" => SodalityDetectorGate(),
         "factionsuperweapongate" => FactionSuperweaponGate(),
         "aifactiongate" => AiFactionGate(),
+        "seismicaimgate" => SeismicAimGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
