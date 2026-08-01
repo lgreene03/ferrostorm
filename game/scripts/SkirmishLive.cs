@@ -244,6 +244,11 @@ public partial class SkirmishLive : Node3D
     /// than inspected because a toast is transient and a check that races it is
     /// a flaky check (the LaunchAlerts precedent).</summary>
     public int CaptureAlerts;
+    /// <summary>P7-7a: robbery alerts, counted separately from capture alerts
+    /// on purpose. The harness asserts that a robbery raises one of THESE and
+    /// none of those, which is the regression guard for the defect that a
+    /// robbery announced itself as a capture.</summary>
+    public int RobberyAlerts;
 
     /// <summary>DR-20: which of the three capture alerts a change of ownership
     /// earns, or none. Split out as a PURE decision because the case that most
@@ -254,6 +259,26 @@ public partial class SkirmishLive : Node3D
     /// as much as the rule. The DUP audit set this precedent by exporting pure
     /// methods for exactly this reason.</summary>
     public enum CaptureAlertKind { None, Gained, Lost, Witnessed }
+
+    /// <summary>P7-7a. Who, if anyone, is told about a robbery.</summary>
+    public enum RobberyAlertKind { None, Robbed, Seized }
+
+    /// <summary>P7-7a: the robbery decision, pure and separate from the capture
+    /// one so that it CANNOT be answered with a capture verb. That is the whole
+    /// defect: the Infiltrator raised Captured, so the victim was told
+    /// "STRUCTURE LOST TO CAPTURE" about a building they still owned.
+    ///
+    /// Both sides are told, and neither sentence mentions ownership. There is
+    /// no fog case: unlike a capture, a robbery is felt in the treasury, so
+    /// hiding it would leave the victim watching credits vanish with no cause
+    /// on screen, which is worse than a maphack is bad. A third party sees
+    /// nothing, because nothing visible happened to them.</summary>
+    public RobberyAlertKind RobberyAlertFor(int victim, int thief)
+    {
+        if (victim == LocalPlayerId) return RobberyAlertKind.Robbed;
+        if (thief == LocalPlayerId) return RobberyAlertKind.Seized;
+        return RobberyAlertKind.None;
+    }
 
     /// <summary>DR-20's rule, stated once. `visible` is whether the LOCAL seat
     /// can see the captured cell.</summary>
@@ -1766,6 +1791,39 @@ public partial class SkirmishLive : Node3D
                     case CaptureAlertKind.Witnessed:
                         CaptureAlerts++;
                         ShowToast("OUTPOST CAPTURED");        // seen, but not yours: no audio
+                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));
+                        break;
+                }
+            }
+
+            // P7-7a: the robbery alert. Deliberately NOT folded into the
+            // Captured arm above, which is what the defect was: an Infiltrator
+            // raised Captured, so its victim was told "STRUCTURE LOST TO
+            // CAPTURE" about a building they still owned.
+            //
+            // Being robbed is real news and gets a real alert - losing a fifth
+            // of the treasury is worth a klaxon - but the sentence has to be
+            // TRUE. The owner is read from the entity rather than from the
+            // cache, because a robbery moves no flag: whoever holds it now is
+            // whoever held it before.
+            if (ev.Type == GameEventType.Robbed && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var robbed = _world.Entities[ev.A];
+                var pos = new Vector2((float)(robbed.X.Raw / 4294967296.0), (float)(robbed.Y.Raw / 4294967296.0));
+                double now = Time.GetTicksMsec() / 1000.0;
+                switch (RobberyAlertFor(robbed.PlayerId, ev.B))
+                {
+                    case RobberyAlertKind.Robbed:
+                        RobberyAlerts++;
+                        _audio.Play("alert_attack", -4);          // the klaxon: a fifth of the treasury
+                        ShowToast($"CREDITS STOLEN: {ev.C}");
+                        _minimap.Ping(pos, new Color(0.85f, 0.25f, 0.2f));
+                        RecordAlert(pos, now);
+                        break;
+                    case RobberyAlertKind.Seized:
+                        RobberyAlerts++;
+                        _audio.Play("alert_harvester", -8);       // the soft cue: this one went well
+                        ShowToast($"CREDITS SEIZED: {ev.C}");
                         _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));
                         break;
                 }

@@ -326,6 +326,21 @@ public partial class VerifyRunner : Node
         Check(_game.CaptureAlertFor(me, me, true) == SkirmishLive.CaptureAlertKind.Gained,
               "re-taking a structure that was yours reads as a GAIN, not a loss");
 
+        // --- P7-7a: a robbery is not a capture, as far as the ALERT ----------
+        // The Infiltrator shipped in P7-7 raising GameEventType.Captured, which
+        // this client reads as an ownership change, so being robbed announced
+        // "STRUCTURE LOST TO CAPTURE" about a building the player still owned.
+        // Every sim-side stage of infiltratorgate passed throughout, because
+        // none of them looked at the event. Tested as the pure decision, the
+        // same way the four capture outcomes above are, and for the same
+        // reason: the case that matters is a NEGATIVE one.
+        Check(_game.RobberyAlertFor(me, foe) == SkirmishLive.RobberyAlertKind.Robbed,
+              "being robbed tells you so - and says CREDITS, not a structure you still own");
+        Check(_game.RobberyAlertFor(foe, me) == SkirmishLive.RobberyAlertKind.Seized,
+              "robbing someone confirms the haul to the thief");
+        Check(_game.RobberyAlertFor(foe, foe) == SkirmishLive.RobberyAlertKind.None,
+              "a robbery between two other commanders is not your alert");
+
         // --- The cursor never promises a verb the click refuses --------------
         // CursorFor's own header claims it "runs the exact picks IssueOrder
         // runs". The refinery precondition was missing, so with no refinery
