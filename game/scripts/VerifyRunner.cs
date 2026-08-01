@@ -1067,7 +1067,7 @@ public partial class VerifyRunner : Node
         // have built a two-seat world against the joiner's four-seat one, which is
         // two different worlds at tick 0 rather than a desync anyone could trace.
         Check(round.Seats == original.Seats,
-              $"the seat count survives the wire round trip (came back {round.Seats}, not the host's {original.Seats})");
+              $"the seat count survives the wire round trip (came back {round.Seats}, matching the host's {original.Seats})");
 
         // A host running a build the joiner cannot read must be told so in the
         // lobby. The alternative is building a world from a misread blob and
@@ -1137,6 +1137,63 @@ public partial class VerifyRunner : Node
 
             host.Cancel();
             join.Cancel();
+
+            // --- ADR-033: the same claim on a FOUR-seat map ------------------
+            // The stage above uses a two-start map, where the seat count is 2 on
+            // both sides whatever either believes, so it cannot see a peer that
+            // DISAGREES about how many seats exist. That is precisely what
+            // multi-seat LAN introduces, and it is not a desync at the first
+            // order: it is two peers that never shared tick 0.
+            var hosted4 = new MatchSetup
+            {
+                MapPath = "data/maps/skirmish-09.fmap",
+                AiPreset = 1,
+                StartCredits = 5000,
+                Seed = 31337UL,
+                Faction = 1,
+                OppFaction = 0,
+                Seats = 4,
+            };
+            var host4 = LanLobby.Host(hosted4, port: 0);
+            int waited4 = 0;
+            while (host4.RelayPortForTest <= 0 && host4.State == LanLobby.Phase.Connecting && waited4++ < 5000)
+                System.Threading.Thread.Sleep(1);
+            var join4 = LanLobby.Join("127.0.0.1", host4.RelayPortForTest);
+            waited4 = 0;
+            while ((host4.State == LanLobby.Phase.Connecting || join4.State == LanLobby.Phase.Connecting)
+                   && waited4++ < 5000)
+                System.Threading.Thread.Sleep(1);
+            Check(host4.State == LanLobby.Phase.Ready && join4.State == LanLobby.Phase.Ready,
+                  $"a four-seat map is no longer refused in LAN (host {host4.Status}, join {join4.Status})");
+            if (host4.State == LanLobby.Phase.Ready && join4.State == LanLobby.Phase.Ready)
+            {
+                Check(join4.Setup!.Seats == hosted4.Seats,
+                      $"the joiner took the host's SEAT COUNT ({join4.Setup!.Seats}), which the blob "
+                      + "did not carry until ADR-033 and which decoded as zero, meaning fill the map");
+                Check(host4.Client!.World.PlayerCount == 4 && join4.Client!.World.PlayerCount == 4,
+                      $"both peers built a FOUR-seat world (host {host4.Client!.World.PlayerCount}, "
+                      + $"join {join4.Client!.World.PlayerCount})");
+                Check(host4.Client!.World.ComputeStateHash() == join4.Client!.World.ComputeStateHash(),
+                      $"and the two four-seat worlds are identical before tick 0 "
+                      + $"(0x{host4.Client!.World.ComputeStateHash():X16})");
+            }
+            host4.Cancel();
+            join4.Cancel();
+
+            // The commanded-seat rule, asserted from the seat this harness
+            // actually drives. The old rule was "every seat that is not the
+            // local one", so read from SEAT 1 it would have returned seat 0 -
+            // the human on the other end of the socket - and handed Brutal's
+            // handicap to a person. Peer-independence is the property, and this
+            // is the seat where its absence would show.
+            var commanded = SkirmishLive.LanCommandedSeats(4);
+            Check(commanded.Count == 2 && commanded[0] == 2 && commanded[1] == 3,
+                  $"LAN commands seats 2 and 3 on a four-seat map, never a human seat "
+                  + $"(got [{string.Join(",", commanded)}] while sitting in seat {_game.LocalPlayerId})");
+            Check(!commanded.Contains(_game.LocalPlayerId),
+                  "...and never the seat this peer is sitting in");
+            Check(SkirmishLive.LanCommandedSeats(2).Count == 0,
+                  "a two-seat LAN match commands nothing, which is every match before ADR-033");
         }
         catch (System.Exception ex)
         {
