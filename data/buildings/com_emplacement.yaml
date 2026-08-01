@@ -20,3 +20,4 @@ sight_range: 5
 footprint: 2
 weapon_ids: [wpn_emplacement_gun]
 prerequisites: [com_power_plant]
+build_tab: defence

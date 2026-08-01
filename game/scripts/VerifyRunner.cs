@@ -923,6 +923,121 @@ public partial class VerifyRunner : Node
               $"...{sButtoned} of {sRegistered} registered structure types are buttoned and {sMapPlaced} are "
               + "map-placed or MCV-deployed, which accounts for all of them");
 
+        // --- ...and DERIVING those buttons changed none of them ---------------
+        // The two hand-kept BuildItem arrays are gone: the label now comes off
+        // the /data id through the catalogue's own derivation and the tab comes
+        // off the authored build_tab key. This is the inertness proof, and it is
+        // deliberately a FROZEN TRANSCRIPT of the two arrays as they last stood
+        // rather than anything recomputed - a check that derived its expectation
+        // the same way the code does would pass however wrong both were.
+        //
+        // Position is NOT asserted, and that is the one thing the change moves:
+        // the walk is in ascending type id (so both seats and both machines see
+        // one order), where the arrays were in rough tech order. Label, tab and
+        // icon are what a player reads, and all three are unchanged.
+        {
+            var wasListed = new (int Type, string Label, int Tab, bool Icon)[]
+            {
+                (1,  "POWER PLANT",    Sidebar.TabBuildings, true),
+                (3,  "REFINERY",       Sidebar.TabBuildings, true),
+                (11, "BARRACKS",       Sidebar.TabBuildings, false),  // no sprite cut yet
+                (2,  "FACTORY",        Sidebar.TabBuildings, true),
+                (8,  "SERVICE DEPOT",  Sidebar.TabBuildings, true),
+                (12, "RADAR UPLINK",   Sidebar.TabBuildings, false),  // no sprite cut yet
+                (5,  "TURRET",         Sidebar.TabDefence,   true),
+                (15, "EMPLACEMENT",    Sidebar.TabDefence,   true),   // wears the turret's
+                (16, "AIRFIELD",       Sidebar.TabDefence,   true),   // wears the factory's
+                (17, "BASTION",        Sidebar.TabDefence,   true),   // wears the turret's
+                (18, "SHROUD NEST",    Sidebar.TabDefence,   true),   // wears the veil's
+                (9,  "WALL",           Sidebar.TabDefence,   false),  // com_wall_straight is not cut
+                (7,  "VEIL PROJECTOR", Sidebar.TabDefence,   true),
+                (6,  "SUPERWEAPON",    Sidebar.TabDefence,   true),
+                (19, "MINE",           Sidebar.TabDefence,   false),  // wears the wall's, also not cut
+            };
+            string drift = "";
+            foreach (var (type, label, tab, icon) in wasListed)
+            {
+                // The button text carries cost and build time after the label
+                // (BD-02/ADR-006), so the label is its opening.
+                if (!sb.StructButtonText(type).StartsWith(label))
+                    drift += (drift.Length > 0 ? "; " : "") + $"type {type} reads \"{sb.StructButtonText(type)}\", wanted \"{label}\"";
+                else if (sb.TabOfStruct(type) != tab)
+                    drift += (drift.Length > 0 ? "; " : "") + $"{label} is in tab {sb.TabOfStruct(type)}, wanted {tab}";
+                else if (sb.StructButtonHasIcon(type) != icon)
+                    drift += (drift.Length > 0 ? "; " : "") + $"{label} icon {sb.StructButtonHasIcon(type)}, wanted {icon}";
+            }
+            Check(drift.Length == 0,
+                  $"all {wasListed.Length} structures the two hand-kept arrays listed still produce the IDENTICAL "
+                  + $"label, tab and icon now that both lists are derived ({(drift.Length > 0 ? drift : "no drift")})");
+            Check(sButtoned == wasListed.Length,
+                  $"...and the derivation added no button and dropped none: {sButtoned} buttons, {wasListed.Length} listed");
+        }
+
+        // --- One MatchSetup becomes one MatchConfig, and carries every field --
+        // LaunchNetBattle used to copy the lobby's setup by hand, five fields of
+        // ten, carrying neither Seats nor TeamMode. It routes through
+        // MatchConfig.ApplyFrom now, and this is the check that keeps the one
+        // remaining copy honest: a fully-populated setup goes in, CurrentSetup
+        // comes back, and the two are compared AS ENCODED BLOBS. The blob walks
+        // every field of MatchSetup and its version constant must be bumped
+        // whenever one is added, so a field that reaches the wire and not
+        // ApplyFrom fails here rather than in a LAN match.
+        //
+        // A SKIRMISH setup, because a mission's is deliberately not a round
+        // trip: CurrentSetup zeroes Seats and TeamMode for a mission, whose map
+        // declares its own sides. The LAN lobby only ever carries a skirmish.
+        {
+            var restore = MatchConfig.CurrentSetup();
+            string? beforeMission = MatchConfig.MissionPath, beforeMap = MatchConfig.MapPath;
+            var beforeStructs = MatchConfig.AllowedStructures;
+            var beforeUnits = MatchConfig.AllowedUnits;
+            try
+            {
+                // Every field set to something that is NOT the default, so a
+                // dropped one shows up as a difference rather than as a
+                // coincidence.
+                var probe = new MatchSetup
+                {
+                    MapPath = "data/maps/skirmish-09.fmap",
+                    MissionIndex = 0,
+                    AiPreset = 2,
+                    AiDifficulty = 3,
+                    StartCredits = 12345,
+                    Seed = 4242,
+                    Faction = 1,
+                    OppFaction = 0,
+                    Seats = 3,
+                    TeamMode = MatchSetup.TeamsEvenSides,
+                };
+                MatchConfig.ApplyFrom(probe);
+                // The two fields the hand-written copy dropped, named outright:
+                // a blob comparison alone would report "something differs".
+                Check(MatchConfig.Seats == 3,
+                      $"the seat count reaches MatchConfig from a setup ({MatchConfig.Seats}), which the LAN launch dropped");
+                Check(MatchConfig.TeamMode == MatchSetup.TeamsEvenSides,
+                      $"...and so does the team mode ({MatchConfig.TeamMode}), the other field it dropped");
+                var back = MatchConfig.CurrentSetup();
+                // The seed is the one MatchSetup field MatchConfig has no home
+                // for: it travels in the blob and the lobby's world is built
+                // from it, never from MatchConfig. Carried across by hand so the
+                // comparison is about the fields this copy is responsible for.
+                back.Seed = probe.Seed;
+                string a = System.Convert.ToBase64String(MatchSetupBlob.Encode(probe));
+                string b = System.Convert.ToBase64String(MatchSetupBlob.Encode(back));
+                Check(a == b,
+                      "a MatchSetup survives ApplyFrom and CurrentSetup byte-identical as a blob, so no field of it "
+                      + $"can be dropped by the one copy that remains{(a == b ? "" : $" (got {b}, wanted {a})")}");
+            }
+            finally
+            {
+                MatchConfig.ApplyFrom(restore);
+                MatchConfig.MissionPath = beforeMission;
+                MatchConfig.MapPath = beforeMap;
+                MatchConfig.AllowedStructures = beforeStructs;
+                MatchConfig.AllowedUnits = beforeUnits;
+            }
+        }
+
         RunLanChecks();
     }
 

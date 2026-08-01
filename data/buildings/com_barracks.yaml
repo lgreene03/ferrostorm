@@ -14,6 +14,7 @@ sight_range: 5
 footprint: 2
 weapon_ids: []
 prerequisites: [com_power_plant]
+build_tab: buildings
 notes: >
   Cheap and early, because that is what makes an infantry rush a real strategy
   rather than a factory afterthought. Produces every unit whose produced_at is

@@ -14,3 +14,7 @@ sight_range: 6
 footprint: 2
 weapon_ids: []
 prerequisites: [com_radar_uplink]
+# DEFENCE, where the tech buildings sit, even though it produces aircraft rather
+# than defending anything. This is the entry that makes the split editorial: no
+# other column on this file implies it.
+build_tab: defence

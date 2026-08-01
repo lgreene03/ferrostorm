@@ -707,6 +707,53 @@ the LAN scene discards its own build for the lobby's, so the blob is the only
 carrier that matters - but it is a trap for whoever next reads `_setup` in a LAN
 branch.
 
+## Three owed items, closed together
+
+All three were the same defect class this phase kept finding: **a rule that
+should be enforced is not, or a hand-maintained copy is lagging its source.**
+Bundled deliberately, because items like these are never the biggest row on the
+list and so never get done.
+
+**`SetFaction` had no tick-0 guard**, while `SetTeam` and the catalogue
+registrars all do. The faction is HASHED state, so a call after tick 0 would
+change the state hash mid-match: every replay of that match would diverge at the
+tick it happened, and in LAN the two peers would part company the instant one of
+them made the call. Nothing does today, which is why it cost nothing and why it
+was a trap rather than a bug. The battery stayed green after guarding it, which
+is the proof no path was relying on the freedom.
+
+**The sidebar's two STRUCTURE lists are derived now**, the last hand-maintained
+catalogue copy. Two facts made it possible: every structure label is EXACTLY the
+id derivation, as every unit label was; and the BUILDINGS/DEFENCE split is
+genuinely **not** derivable, being editorial - the Airfield sits in DEFENCE
+despite being a producer, and the wall, veil, superweapon and mine carry no
+weapon. So the split is AUTHORED as `build_tab` in each building's yaml, and the
+loader refuses a file whose tab disagrees with the sim's own queueability rule,
+which is the same equivalence `reachabilitygate` asserts from the other side.
+
+`build_tab` deliberately does NOT ride the catalogue checksum: the sim reads it
+nowhere, so two peers holding different tabs still accept the same commands and
+build the same army, which is the test ADR-032 sets.
+
+**One player-visible consequence, accepted rather than hidden**: buttons within a
+tab now sit in ascending type id, matching the unit list and its stated reason,
+where the arrays were in rough tech order. Label, tab and icon are unchanged and
+asserted so; POSITION is not, and DR-08's hotkey slots shift with it. Authoring
+an explicit order is the alternative and is scope creep for a game nobody has
+played.
+
+**Icons still cannot be derived**, and that is worth knowing rather than
+rediscovering: six structures deliberately wear another building's PNG while
+their own is owed to art-pipeline, and `com_wall_straight.png` does not exist at
+all. A bare `icon = id` would silently drop the four that render today. The
+placeholder map is explicit art debt and is deliberately not part of deciding
+which buttons EXIST, so a new building gets no icon rather than no button.
+
+**`LaunchNetBattle` copied the lobby setup field by field** and carried neither
+`Seats` nor `TeamMode`. There is one setup-to-config copy in the client now where
+there were two, so a new `MatchSetup` field cannot be forgotten there. Proved by
+deleting a field and watching the harness go red.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against

@@ -24,7 +24,13 @@ public static class DataLoader
         string Id, string Name, string Faction, int Cost, int BuildTimeTicks,
         int Hp, int PowerSupply, int PowerDraw, int SightRange, int Footprint,
         IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes,
-        int MaxAlive = 0);   // P7-11c: 0 means unlimited, which is every building but the mine
+        int MaxAlive = 0,          // P7-11c: 0 means unlimited, which is every building but the mine
+        // Which build tab offers this building: "buildings", "defence" or
+        // "none". REQUIRED by the schema on every file, so a new building
+        // cannot arrive without an answer; "none" is the three map-placed
+        // buildings and is checked against the sim's own queueability rule in
+        // StructureCatalogue.ToTypeDef rather than trusted.
+        string BuildTab = "none");
 
     public static Dictionary<string, string> ParseFlatYaml(string text)
     {
@@ -82,6 +88,22 @@ public static class DataLoader
             if (item.Length > 0) items.Add(item);
         }
         return items;
+    }
+
+    /// <summary>The player-facing name a /data id derives to: the faction prefix
+    /// cut, underscores to spaces, upper-cased. So com_flak_track reads FLAK
+    /// TRACK and sod_veil_projector reads VEIL PROJECTOR.
+    ///
+    /// ONE derivation for both catalogues. It served units first (see
+    /// UnitCatalogue.DisplayNameOf, and the seven unbuildable units whose
+    /// hand-written label table taught it), and the structure catalogue reads
+    /// it too: all fifteen labels the sidebar's two hand-kept building arrays
+    /// carried are EXACTLY what this produces, with zero mismatches, which is
+    /// what makes deriving those lists inert.</summary>
+    public static string DisplayNameFromId(string id)
+    {
+        int cut = id.IndexOf('_');
+        return (cut >= 0 ? id[(cut + 1)..] : id).Replace('_', ' ').ToUpperInvariant();
     }
 
     private static int ReqInt(Dictionary<string, string> m, string key)
@@ -167,6 +189,14 @@ public static class DataLoader
         int footprint = ReqInt(m, "footprint");
         if (footprint < 1) throw new FormatException("footprint must be at least 1 cell per side");
 
+        // Required, and validated here rather than defaulted, for the reason the
+        // key exists at all: a building whose tab could be omitted is a building
+        // that can arrive with no button, which is precisely what the two
+        // hand-kept sidebar arrays kept doing.
+        string buildTab = ReqStr(m, "build_tab");
+        if (buildTab is not ("buildings" or "defence" or "none"))
+            throw new FormatException($"unknown build_tab '{buildTab}'");
+
         return new StructureData(
             Id: id,
             Name: ReqStr(m, "name"),
@@ -185,6 +215,7 @@ public static class DataLoader
             // unlimited, so every file written before the mine is unchanged and
             // the enforcement is a no-op for it.
             MaxAlive: m.TryGetValue("max_alive", out _) ? ReqInt(m, "max_alive") : 0,
+            BuildTab: buildTab,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
 
@@ -487,13 +518,15 @@ public static class UnitCatalogue
     ///
     /// Verified inert when it replaced the sidebar's table: all thirteen
     /// hand-written labels are EXACTLY what this produces, with zero
-    /// mismatches.</summary>
-    public static string DisplayNameOf(int typeId)
-    {
-        string id = IdOf(typeId);
-        int cut = id.IndexOf('_');
-        return (cut >= 0 ? id[(cut + 1)..] : id).Replace('_', ' ').ToUpperInvariant();
-    }
+    /// mismatches.
+    ///
+    /// The derivation itself now lives in DataLoader.DisplayNameFromId, shared
+    /// with the structure catalogue, which had the same defect one namespace
+    /// over: the sidebar's two BUILDING arrays were hand-kept as well, and the
+    /// mine had to be added to one of them by hand. A third copy of a
+    /// four-line string transform would have been the same mistake in the
+    /// small.</summary>
+    public static string DisplayNameOf(int typeId) => DataLoader.DisplayNameFromId(IdOf(typeId));
 
     public static string IdOf(int typeId)
         => typeId > 0 && typeId < Ids.Length
@@ -526,31 +559,70 @@ public static class UnitCatalogue
 /// </summary>
 public static class StructureCatalogue
 {
-    /// <summary>Structure type ids as ratified in ADR-005 (9 is the wall; 10 is the deferred gate and has no file; new types number from 11 upward per doc 23 s4.1). Throws on an unknown id rather than defaulting, matching WeaponIdOf.</summary>
-    public static int TypeIdOf(string id) => id switch
+    /// <summary>
+    /// Structure type ids as ratified in ADR-005 (9 is the wall; 10 is the
+    /// deferred gate and has no file; new types number from 11 upward per doc 23
+    /// s4.1). Indexed BY type id, with an empty string where a number is not a
+    /// structure.
+    ///
+    /// ONE table read in BOTH directions, the shape UnitCatalogue.Ids already
+    /// has and for the identical reason. It used to be a switch expression,
+    /// which can only be read forwards, and so nothing could ask what a
+    /// BUILDING is called - reachabilitygate's own comment records the gap
+    /// ("/data has no id-to-name map for buildings the way UnitCatalogue.IdOf is
+    /// one for units") and named its buildings by EntityKind instead, while the
+    /// sidebar kept two hand-written arrays of labels that fell behind the
+    /// catalogue exactly as the unit array had.
+    /// </summary>
+    private static readonly string[] Ids =
     {
-        "com_power_plant" => 1,
-        "com_factory" => 2,
-        "com_refinery" => 3,
-        "com_construction_yard" => 4,
-        "dir_turret" => 5,
-        "dir_superweapon" => 6,
-        "sod_veil_projector" => 7,
-        "com_service_depot" => 8,
-        "com_wall" => 9,
-        // P7-2. NOT 10: that is GateStructType, reserved by ADR-005 for the
-        // deferred wall gates, so the free id is past the old ceiling.
-        "com_emplacement" => 15,
-        "com_airfield" => 16,         // ADR-028
-        "dir_bastion" => 17,          // P7-2b: the Directorate's defence
-        "sod_shroud_nest" => 18,      // P7-2b: the Sodality's
-        "com_barracks" => 11,
-        "com_radar_uplink" => 12,
-        "com_outpost" => 13,   // ADR-021 (P6 Wave C4): map-placed, never built
-        "com_bridge" => 14,    // ADR-025 (P6 Wave C6a): map-placed, never built
-        "com_mine" => 19,      // P7-11c: the hidden charge, built and placed like any other building
-        _ => throw new FormatException($"unknown structure id '{id}'"),
+        "",                       // index 0: no structure type
+        "com_power_plant",        // 1
+        "com_factory",            // 2
+        "com_refinery",           // 3
+        "com_construction_yard",  // 4
+        "dir_turret",             // 5
+        "dir_superweapon",        // 6
+        "sod_veil_projector",     // 7
+        "com_service_depot",      // 8
+        "com_wall",               // 9
+        // 10 is GateStructType, reserved by ADR-005 clause 6 for the deferred
+        // wall gates: no def, no file and no name. The hole is why this table is
+        // indexed rather than dense, and why P7-2 numbered the Emplacement from
+        // 15 rather than taking the gap.
+        "",                       // 10
+        "com_barracks",           // 11
+        "com_radar_uplink",       // 12
+        "com_outpost",            // 13: ADR-021 (P6 Wave C4), map-placed, never built
+        "com_bridge",             // 14: ADR-025 (P6 Wave C6a), map-placed, never built
+        "com_emplacement",        // 15: P7-2
+        "com_airfield",           // 16: ADR-028
+        "dir_bastion",            // 17: P7-2b, the Directorate's defence
+        "sod_shroud_nest",        // 18: P7-2b, the Sodality's
+        "com_mine",               // 19: P7-11c, built and placed like any other building
     };
+
+    /// <summary>The number for a name. Throws on an unknown id rather than
+    /// defaulting, matching WeaponIdOf and UnitCatalogue.TypeIdOf.</summary>
+    public static int TypeIdOf(string id)
+    {
+        for (int t = 1; t < Ids.Length; t++) if (Ids[t].Length > 0 && Ids[t] == id) return t;
+        throw new FormatException($"unknown structure id '{id}'");
+    }
+
+    /// <summary>The name for a number, the same table read the other way.
+    /// Throws on a type the table does not name - including the reserved gate -
+    /// for UnitCatalogue.IdOf's reason: a blank name would reach a player as a
+    /// blank button.</summary>
+    public static string IdOf(int typeId)
+        => typeId > 0 && typeId < Ids.Length && Ids[typeId].Length > 0
+            ? Ids[typeId]
+            : throw new FormatException($"unknown structure type {typeId}");
+
+    /// <summary>The player-facing name for a structure type, derived from its
+    /// /data id by the one derivation the unit catalogue uses. The build
+    /// sidebar's two hand-kept label arrays are what this replaces.</summary>
+    public static string DisplayNameOf(int typeId) => DataLoader.DisplayNameFromId(IdOf(typeId));
 
     /// <summary>The EntityKind each structure type spawns as. Kind is a save-format value (World writes (byte)e.Kind), so like the type id it is code, not data.</summary>
     public static EntityKind KindOf(string id) => TypeIdOf(id) switch
@@ -593,7 +665,36 @@ public static class StructureCatalogue
     /// tickets land, which keeps this wave hash-neutral while ending the era
     /// of the loader silently discarding authored data.</summary>
     public static World.StructureTypeDef ToTypeDef(DataLoader.StructureData s)
-        => new(s.Cost, KindOf(s.Id), s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
+    {
+        var kind = KindOf(s.Id);
+        var tab = s.BuildTab switch
+        {
+            "buildings" => BuildTab.Buildings,
+            "defence" => BuildTab.Defence,
+            "none" => BuildTab.None,
+            var t => throw new FormatException($"unknown build_tab '{t}' on '{s.Id}'"),
+        };
+        // THE TAB AND THE SIM MUST AGREE ABOUT WHO CAN HAVE THIS BUILDING, and
+        // the agreement is checked rather than restated. "No tab" is a second
+        // way of saying "no player may order it", and the first way is the sim's
+        // own refusal in BuildStructure - BuildTicks <= 0 - with the Wall kind as
+        // its single exception, because a barrier is bought through the placement
+        // path instead. reachabilitygate holds the same equivalence from the
+        // other side, naming the three map-placed kinds and failing if /data ever
+        // makes one buildable. Left unchecked, "which buildings are offered"
+        // would become a second list free to drift from "which buildings a
+        // player can order", and a button that orders nothing is worse than an
+        // absent one.
+        bool queueable = s.BuildTimeTicks > 0 || kind == EntityKind.Wall;
+        if (queueable && tab == BuildTab.None)
+            throw new FormatException(
+                $"'{s.Id}' authors build_tab: none and yet a Construction Yard will queue it, so it would be "
+                + "buildable with no button anywhere. Give it a tab, or take away its build time.");
+        if (!queueable && tab != BuildTab.None)
+            throw new FormatException(
+                $"'{s.Id}' authors build_tab: {s.BuildTab} and has no build time, so no Construction Yard will "
+                + "ever queue it and the button would order nothing. Map-placed buildings carry build_tab: none.");
+        return new(s.Cost, kind, s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
                PrereqIds(s.Prerequisites),
@@ -610,7 +711,13 @@ public static class StructureCatalogue
                // dropped would be this project's most-repeated defect in a new
                // place, and a loud one: the file would advertise a limit the
                // sim never applied.
-               s.MaxAlive);
+               s.MaxAlive,
+               // ...and the tab, which is the only field on the def the sim
+               // never reads. It crosses for the same reason all the same: a
+               // key authored, validated and dropped is the P7-1 defect, and
+               // here it would leave the sidebar guessing again.
+               tab);
+    }
 }
 
 /// <summary>

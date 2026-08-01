@@ -14,6 +14,11 @@ sight_range: 0
 footprint: 1
 weapon_ids: []
 prerequisites: []
+# DEFENCE, and it is the one buildable file with build_time_ticks 0: the Wall
+# kind is the sim's own exception to "no build time means no player may have it",
+# because the placement path buys a segment outright. The loader's tab check
+# knows that exception, so this pairing is legal and only this one is.
+build_tab: defence
 notes: >
   Empty prerequisites because it is never queued at a yard either (ADR-005
   clause 3, ADR-009 clause 3): the placement path charges for it directly and

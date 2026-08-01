@@ -3,7 +3,7 @@
   "title": "Structure definition",
   "description": "TICKET-P5-BD-06. Mirrors schema.unit.json's shape for placeable structures. CLAUDE.md forbids hand-editing stats in code, so these files are the catalogue and World's compiled defaults exist only to be proved equal to them by the selftest round-trip.",
   "type": "object",
-  "required": ["id", "name", "faction", "cost", "build_time_ticks", "hp", "power_supply", "power_draw", "sight_range", "footprint"],
+  "required": ["id", "name", "faction", "cost", "build_time_ticks", "hp", "power_supply", "power_draw", "sight_range", "footprint", "build_tab"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
@@ -28,6 +28,10 @@
     "max_alive": {
       "type": "integer", "minimum": 0, "default": 0,
       "description": "P7-11c. The per-player cap on LIVING buildings of this type. 0 means unlimited, which is every building but the mine, so an absent key changes nothing. Enforced where the order is queued (BuildStructure) and where it is placed (PlaceStructure), and folded into World.CatalogueChecksum because it decides whether a command is accepted."
+    },
+    "build_tab": {
+      "enum": ["buildings", "defence", "none"],
+      "description": "Which tab of the build sidebar offers this building. AUTHORED because the split is editorial and nothing on the def implies it: the Airfield is a producer that sits under DEFENCE, and the wall, veil, superweapon and mine carry no weapon. 'none' is the three map-placed buildings (the MCV-deployed yard, the outpost, the bridge) and the loader refuses any file whose answer disagrees with the sim's own queueability rule, so this cannot become a second list of what a player may build. REQUIRED, so a new building cannot arrive with no answer and therefore no button, which is how the sidebar's two hand-kept arrays fell behind the catalogue. Presentation only: the sim reads it nowhere and it is deliberately outside World.CatalogueChecksum."
     },
     "notes": { "type": "string", "description": "Design intent and GDD traceback." }
   }

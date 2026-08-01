@@ -400,15 +400,13 @@ public partial class MainMenu : Control
     /// </summary>
     private void LaunchNetBattle(LanLobby lobby)
     {
-        var s = lobby.Setup!;
-        MatchConfig.MissionPath = null;
-        MatchConfig.AllowedStructures = null;
-        MatchConfig.AllowedUnits = null;
-        MatchConfig.MapPath = GameFiles.Abs(s.MapPath);
-        MatchConfig.AiPreset = s.AiPreset;
-        MatchConfig.StartCredits = s.StartCredits;
-        MatchConfig.Faction = s.Faction;
-        MatchConfig.OppositionFaction = s.OppFaction;
+        // WHOLESALE, through the one setup-to-config copy, rather than the five
+        // hand-picked fields that used to stand here: those had fallen behind
+        // MatchSetup and carried neither Seats nor TeamMode. See ApplyFrom for
+        // why that was harmless and why it was still worth ending.
+        MatchConfig.ApplyFrom(lobby.Setup!);
+        // Neither describes a LAN match, and both are consumed-once flags whose
+        // stale value would silently turn this scene change into something else.
         MatchConfig.LoadPath = null;
         MatchConfig.ReplayPath = null;
 
@@ -676,9 +674,35 @@ public static class MatchConfig
     /// The campaign allow-lists are re-derived from the manifest rather than
     /// stored in the save: they are content, not state, and a save written
     /// before a manifest edit should honour the edit.</summary>
-    public static void ApplyFrom(MatchMeta meta)
+    public static void ApplyFrom(MatchMeta meta) => ApplyFrom(meta.Setup);
+
+    /// <summary>
+    /// THE ONE PLACE A MatchSetup BECOMES A MatchConfig. Every caller with a
+    /// setup in hand routes through here, and the reason is that the LAN launch
+    /// used to do it again, by hand, field by field - and it had fallen behind
+    /// its source, copying five of the ten fields and neither Seats nor
+    /// TeamMode. That was the third hand-maintained copy of something the
+    /// project already had one authority for, found lagging in a single phase.
+    ///
+    /// It was harmless where it stood, which is exactly why it survived: the LAN
+    /// scene builds a world from MatchConfig and then throws it away for the
+    /// one the LOBBY built from the decoded setup blob, so a field missing here
+    /// changed nothing a player could see. Do not read that as permission to
+    /// leave a field out of the BLOB, which is a different question with a much
+    /// worse answer - a field the world builder reads and the blob omits means
+    /// the two peers never shared a tick 0.
+    ///
+    /// This is still assignment by field rather than one statement, because
+    /// MatchConfig is a set of loose statics that a dozen call sites read
+    /// directly and MatchSetup is not one of them. What stops a new field being
+    /// forgotten is that there is now exactly ONE copy to update and a check that
+    /// fails when it is not: the harness pushes a fully-populated setup through
+    /// here, reads CurrentSetup back and compares the two as encoded BLOBS, so
+    /// any field that reaches the wire and not this method fails the client
+    /// harness.
+    /// </summary>
+    public static void ApplyFrom(MatchSetup s)
     {
-        var s = meta.Setup;
         AiPreset = s.AiPreset;
         AiDifficulty = s.AiDifficulty;
         Seats = s.Seats;   // a resumed save keeps the opposition it was played against

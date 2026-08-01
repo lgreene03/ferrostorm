@@ -38,81 +38,77 @@ public partial class Sidebar : PanelContainer
     /// says and what the treasury pays, from one source.</summary>
     public record BuildItem(string Label, int TypeId, string Icon);
 
-    /// <summary>ADR-009 clause 6 / doc 23 s4.3: the BUILDINGS tab, in rough
-    /// tech order. The barracks sits between the refinery and the factory,
-    /// which is both its cost order and the order the AI's ladder builds
-    /// them in.</summary>
-    private static readonly BuildItem[] Structures =
+    /// <summary>
+    /// One structure button, DERIVED from a registered type id, exactly as
+    /// UnitItem below derives a unit's. There are no Structures and Defences
+    /// tables any more: there were two, hand-kept here, and they were the last
+    /// hand-maintained copy of the catalogue in this file. The mine had to be
+    /// added to one of them BY HAND in the wave that shipped it, and the comment
+    /// beside it said so - which is the same rule keyed on an INSTANCE (a list of
+    /// ids) where it should key on a PROPERTY (what the catalogue registers) that
+    /// had already left seven units unbuildable.
+    ///
+    /// The label comes off the /data id through the one derivation the unit
+    /// labels use (StructureCatalogue.DisplayNameOf): the faction prefix cut,
+    /// underscores to spaces, upper-cased. That reproduces all fifteen labels the
+    /// two tables carried, exactly and with no exceptions - com_power_plant gives
+    /// POWER PLANT, sod_veil_projector gives VEIL PROJECTOR - which is what makes
+    /// deriving the lists inert for everything that already had a button and
+    /// additive for everything that did not.
+    ///
+    /// WHICH TAB is NOT derived, because it is not derivable: the Airfield is a
+    /// producer filed under DEFENCE, and the wall, veil, superweapon and mine
+    /// carry no weapon, so nothing on the def implies the split. It is authored
+    /// per building in /data (build_tab) and read here off the live catalogue,
+    /// which is the same discipline every other number on this panel follows.
+    ///
+    /// The icon name is the id, the convention every icon in ui/icons follows and
+    /// the one the units already use; MakeButton's Exists guard tolerates a
+    /// sprite that has not been cut yet. The exceptions are in PlaceholderIcon
+    /// below and are art debt rather than identity.
+    /// </summary>
+    private static BuildItem StructItem(int typeId)
     {
-        new("POWER PLANT", 1, "com_power_plant"),
-        new("REFINERY", 3, "com_refinery"),
-        // ADR-009 clause 5: struct type 11, buildable at last. No bespoke
-        // icon PNG is cut yet and MakeButton's Exists guard tolerates that,
-        // flipping on its own when the sprite lands (owed to art-pipeline).
-        new("BARRACKS", 11, "com_barracks"),
-        new("FACTORY", 2, "com_factory"),
-        new("SERVICE DEPOT", 8, "com_service_depot"),
-        // ADR-008 clause 4: the Radar Uplink becomes reachable. Common
-        // faction (the com_ prefix and the data file agree; the sim gates
-        // only the veil projector), so no Init-time faction clause. The icon
-        // PNG is not cut yet; MakeButton's Exists guard tolerates that and
-        // flips on its own when the sprite lands.
-        new("RADAR UPLINK", 12, "com_radar_uplink"),
+        string id = StructureCatalogue.IdOf(typeId);
+        return new BuildItem(DataLoader.DisplayNameFromId(id), typeId, PlaceholderIcon(id));
+    }
+
+    /// <summary>Buildings still wearing another building's art, and the only
+    /// reason this is a list rather than a rule: the bespoke PNG has not been cut
+    /// (all six are owed to art-pipeline, the ADR-019 interim precedent). Keyed
+    /// by /data id so a renumbering cannot re-point one, and deliberately NOT
+    /// part of the decision about which buttons exist - a building missing from
+    /// here gets no icon, which MakeButton already tolerates, rather than no
+    /// button. Each entry disappears the day its own sprite lands.</summary>
+    private static string PlaceholderIcon(string id) => id switch
+    {
+        // The anti-infantry hardpoint and the Directorate's defence both wear
+        // the turret's model for now.
+        "com_emplacement" => "dir_turret",
+        "dir_bastion" => "dir_turret",
+        // The Sodality's nest wears the veil's.
+        "sod_shroud_nest" => "sod_veil_projector",
+        // ADR-028's airfield wears the factory's.
+        "com_airfield" => "com_factory",
+        // The barrier segment, and the mine after it: a low slab that reads as
+        // something laid on the ground.
+        "com_wall" => "com_wall_straight",
+        "com_mine" => "com_wall_straight",
+        _ => id,
     };
 
-    /// <summary>ADR-009 clause 6 / doc 23 s4.3: the DEFENCE tab. These queue
-    /// at the same Construction Yard as the BUILDINGS tab - the split is what
-    /// the player is looking FOR, not which building makes it - so both tabs
-    /// read the yard's queue and both are disabled by a full ready slot.</summary>
-    private static readonly BuildItem[] Defences =
+    /// <summary>Which page a building's authored tab names, or null for a
+    /// building that carries no button at all. BuildTab.None is the three
+    /// map-placed types (the MCV-deployed yard, the outpost, the bridge) and it
+    /// is not a second list of them: the loader refuses any /data file whose tab
+    /// disagrees with the sim's own queueability rule, which is the same
+    /// equivalence reachabilitygate holds from the other side.</summary>
+    private VBoxContainer? PageFor(BuildTab tab) => tab switch
     {
-        new("TURRET", 5, "dir_turret"),
-        // P7-2: the anti-infantry hardpoint. Listed next to the turret because
-        // the two ARE the choice - the turret answers armour, this answers
-        // infantry, and a player should see them together. It wears the
-        // turret's model for now; a bespoke one is owed to art-pipeline, the
-        // same interim the repair vehicle took (ADR-019).
-        new("EMPLACEMENT", 15, "dir_turret"),
-        // ADR-028: the Airfield. Listed under defences because that is where the
-        // tech buildings sit; it produces aircraft rather than defending.
-        new("AIRFIELD", 16, "com_factory"),
-        // P7-2b: each side's own defence. Both are listed; the faction gate
-        // hides whichever is not yours, which is the mechanism P7-1 made real -
-        // FixedGatesAllow asks the sim, and the sim now reads /data.
-        new("BASTION", 17, "dir_turret"),
-        new("SHROUD NEST", 18, "sod_veil_projector"),
-        // TICKET-P5-DEF-08 clause 9. ADR-005 clause 3: a barrier has no ready
-        // slot and no build time, so it is never queued at the yard - the button
-        // enters placement directly and the treasury is charged per segment as
-        // it lands.
-        new("WALL", BarrierType, "com_wall_straight"),
-        // TICKET-P5-PROD-01: the Sodality's signature building, fully
-        // implemented in the sim since P2 and never buildable by a person.
-        // The button is gated on faction in Init - absent for the
-        // Directorate, exactly as the sim itself refuses the command
-        // (World.cs BuildStructure's faction check, which stays authoritative).
-        new("VEIL PROJECTOR", World.VeilStructType, "sod_veil_projector"),
-        new("SUPERWEAPON", 6, "dir_superweapon"),
-        // P7-11c: the Mine. Listed here BY HAND, and the fact that it has to be
-        // is worth stating: the UNIT list on this panel is derived from the
-        // catalogue (see UnitItem, and the seven unbuildable units that taught
-        // it), but the two STRUCTURE tables above are still hand-kept, so a new
-        // building does NOT get a button automatically. VerifyRunner's
-        // "every registered STRUCTURE carries a button" check is what catches
-        // the omission, and it is the only thing that would.
-        // It wears the wall segment's icon for now, a low slab that reads as
-        // something laid on the ground; a bespoke one is owed to art-pipeline,
-        // the ADR-019 interim precedent.
-        new("MINE", World.MineStructType, "com_wall_straight"),
+        BuildTab.Buildings => _tabPages[TabBuildings],
+        BuildTab.Defence => _tabPages[TabDefence],
+        _ => null,
     };
-    /// <summary>ADR-005 reserves struct type 9 for the wall segment (10 is the
-    /// deferred gate). The TABLE may name it, because a table of buttons is a
-    /// list of specific things - but nothing else here tests against it: the two
-    /// behavioural questions below ask the CATALOGUE whether a type is a
-    /// barrier, so ADR-005 clause 6's gate (type 10, also a Wall kind) is
-    /// classified correctly on the day it lands instead of queueing at a yard
-    /// and waiting for a ready slot a barrier never fills.</summary>
-    private const int BarrierType = 9;
 
     /// <summary>Is this struct type a barrier? From the live catalogue's Kind,
     /// which is what SkirmishLive.IsBarrier already asks and what the sim's own
@@ -305,8 +301,19 @@ public partial class Sidebar : PanelContainer
             _tabEmptyNote[t] = note;
         }
 
-        foreach (var it in Structures) AddStructButton(it, _tabPages[TabBuildings]);
-        foreach (var it in Defences) AddStructButton(it, _tabPages[TabDefence]);
+        // The structure list IS the catalogue, walked in ascending type id for
+        // the reason the unit walk below sorts: the panel must read the same at
+        // every seat and on every machine, or the grid hotkeys mean different
+        // things at each end of a LAN match. Ascending id is not the old tables'
+        // rough tech order, so the buttons within each tab sit in a different
+        // sequence than before; every label, every tab and every icon is
+        // unchanged, which is what the harness asserts.
+        foreach (int typeId in _game.LiveWorld.StructureTypeIds())
+        {
+            var page = PageFor(_structDef(typeId).Tab);
+            if (page == null) continue;
+            AddStructButton(StructItem(typeId), page);
+        }
 
         // The unit list IS the catalogue, walked in ascending type id so the
         // panel reads the same at every seat and on every machine (World's
@@ -721,11 +728,15 @@ public partial class Sidebar : PanelContainer
         }
     }
 
+    /// <summary>The name on the PLACE prompt. From the catalogue's own
+    /// derivation rather than from a scan of the two tables that used to stand
+    /// here, so a building the panel offers can never be the one this cannot
+    /// name. The fallback covers only the ready slot's empty value 0, which
+    /// IdOf refuses by design rather than returning a blank for.</summary>
     private static string NameOf(int structType)
     {
-        foreach (var it in Structures) if (it.TypeId == structType) return it.Label;
-        foreach (var it in Defences) if (it.TypeId == structType) return it.Label;
-        return "STRUCTURE";
+        try { return StructureCatalogue.DisplayNameOf(structType); }
+        catch (System.FormatException) { return "STRUCTURE"; }
     }
 
     // ---- Verification surface (TICKET-P5-BD-01), following the SkirmishLive

@@ -14,6 +14,7 @@ sight_range: 10
 footprint: 2
 weapon_ids: []
 prerequisites: [com_factory]
+build_tab: buildings
 notes: >
   The eye of the base: losing power or losing this building blanks the
   minimap (ADR-008), and the tech tree above it (superweapon now, airfield
