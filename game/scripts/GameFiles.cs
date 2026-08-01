@@ -168,6 +168,26 @@ public sealed class MatchSetup
     /// Optional in the sidecar for the same reason ai_difficulty is: absent
     /// means the old behaviour, so no format version and no migration.</summary>
     public int Seats;
+    /// <summary>P7-8h: how the seats are DIVIDED, which is GDD s9's "up to 4v4"
+    /// expressed as one field rather than as a per-seat picker no menu has room
+    /// for. <see cref="TeamsFreeForAll"/> is every seat on its own team, which is
+    /// exactly what the sim already does when nothing calls SetTeam, so it is
+    /// today's behaviour by construction rather than by resemblance.
+    /// <see cref="TeamsEvenSides"/> puts the even seats on one side and the odd
+    /// seats on the other, so a four-start map is 2v2 and a two-start map is the
+    /// 1v1 it always was.
+    ///
+    /// Optional in the sidecar for the same reason ai_difficulty and seats are:
+    /// absent means zero means free-for-all, which is what every match written
+    /// before this field was, so no format version and no migration.</summary>
+    public int TeamMode;
+
+    /// <summary>Every seat fights alone. The sim's own default, and the value a
+    /// sidecar that has never heard of teams decodes to.</summary>
+    public const int TeamsFreeForAll = 0;
+    /// <summary>Seat p fights for team p % 2: seats 0 and 2 against seats 1 and
+    /// 3.</summary>
+    public const int TeamsEvenSides = 1;
 
     public string MapName => Path.GetFileNameWithoutExtension(MapPath);
     public bool IsMission => MissionIndex > 0;
@@ -224,6 +244,7 @@ public sealed class MatchMeta
             w.WriteNumber("faction", Setup.Faction);
             w.WriteNumber("opp_faction", Setup.OppFaction);
             w.WriteNumber("seats", Setup.Seats);
+            w.WriteNumber("team_mode", Setup.TeamMode);
             if (FinalHash.Length > 0) w.WriteString("final_hash", FinalHash);
             w.WriteEndObject();
         }
@@ -262,6 +283,11 @@ public sealed class MatchMeta
                     // exactly what those matches did, so they resume against
                     // the same opposition rather than a different one.
                     Seats = Num(r, "seats"),
+                    // Absent in every sidecar written before the team mode
+                    // existed. Zero is FREE FOR ALL, which is what those
+                    // matches were, so they resume as the free-for-all they
+                    // were played as rather than as somebody's alliance.
+                    TeamMode = Num(r, "team_mode"),
                 },
                 Tick = Num(r, "tick"),
                 Credits = Num(r, "credits"),

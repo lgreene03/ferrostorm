@@ -36,7 +36,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
 | P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash; all 10 committed maps re-generate BYTE-IDENTICAL, which is the inertness proof | **DONE** - `mirror2` orbit group; skirmish-09 "Kilnmoor Quarters" 160x120, four starts, 9.15% density; multiseatgate stage 7 |
 | P7-8d | The lobby seats what the map declares: N commanders, one per non-local seat | D2 | - | goldens NEUTRAL, measured; NO sidecar or wire format change, because the seat count is DERIVED from the map rather than stored | **DONE** - `SeatsFor(map)`; client harness 133 -> 138 checks |
-| P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | - (authorised 2026-08-01; design recorded reversibly in ADR-038) | goldens NEUTRAL, measured; catalogue checksum UNMOVED; save format v11 | **SIM DONE** - ADR-038; teamgate (8 stages). No lobby can express a team yet, so it is reachable only from a gate |
+| P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | - (authorised 2026-08-01; design recorded reversibly in ADR-038) | goldens NEUTRAL, measured; catalogue checksum UNMOVED; save format v11 | **DONE** - ADR-038 (sim) and ADR-039 (lobby); teamgate 8 stages, client harness 174 -> 189 checks |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | ~~and onto self-declared setup, retiring `switch (setup.MissionIndex)`~~ **DONE** (ADR-034). Still owed: bring missions 01 to 03 under the GENERATOR, which is content rather than a defect | D1 | - | ONE golden regenerated (`mission`), measured; `mission03` was predicted to move and did not, for a reason worth reading | **PART DONE** - campaigngate proves every mission's setup comes from its own file |
 | P7-10 | Wall tiers and gates | B7 | C6b: Luke must override ADR-005 clause 6 | MOVES | pending |
@@ -669,6 +669,43 @@ Two findings banked: **`DowngradeSave` is a third edit site for a save-format
 bump** and it fails in the battery rather than at the change; and **`SetFaction`
 does not actually refuse after tick 0** despite being the obvious model for
 `SetTeam` - a bare array write with no guard.
+
+## The lobby can express a team, and that closed a gap I had recorded
+
+Taken immediately after teams rather than moving on, because teams reachable only
+from a gate is precisely the "exists in the sim, unreachable in the game" pattern
+this phase spent five waves eliminating. Shipping it and moving on would have
+created a sixth instance.
+
+**A team MODE, not per-seat assignment**: `FREE FOR ALL` (every seat its own team,
+today's behaviour exactly, and it calls `SetTeam` not at all - which is the
+mechanism for hash neutrality rather than a resemblance to it) and `EVEN SIDES`
+(`SetTeam(p, p % 2)`). On a two-start map the two are **measurably** identical,
+both hashing `0x0E3B3689A8833245`, and that is now a harness check rather than a
+paragraph. On skirmish-09 it is 2v2, which is GDD s9's promise with one field and
+no per-seat UI.
+
+The sidecar takes it optionally, so every sidecar written before this loads as
+free-for-all, which is what those matches were. **The LAN blob had to bump to v4**,
+and the asymmetry is the same one ADR-038 recorded for saves: both peers must
+agree before tick 0 or they build different worlds. Pleasant consequence worth
+knowing: the relay seats peers by arrival, so on a four-seat map the two humans
+take seats 0 and 1, land on opposite sides, and each gets a commander ally.
+
+**And it closed the coverage gap ADR-038 recorded honestly.** That ADR admitted
+the client's team-victory banner was not harness-covered, because `SetTeam` is
+refused after tick 0 and a mid-run call hung the Verify scene. With a team mode in
+`MatchSetup` a **teamed world can be built from the start**, so the harness now
+drives a second real scene and asserts the winner's TEAMMATE reads VICTORY, with
+an enemy control proving the pair discriminates. Proved to bite: reverting the
+comparison gives `my TEAMMATE being named the winner reads as VICTORY at seat 1
+("DEFEAT")`.
+
+**One trap banked**: `LaunchNetBattle` copies the lobby's setup into `MatchConfig`
+field by field and copies neither `Seats` nor `TeamMode`. Harmless today because
+the LAN scene discards its own build for the lobby's, so the blob is the only
+carrier that matters - but it is a trap for whoever next reads `_setup` in a LAN
+branch.
 
 ## What this phase does NOT do
 

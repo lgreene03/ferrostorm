@@ -31,6 +31,7 @@ public partial class MainMenu : Control
     private OptionButton _diffPick = null!;   // DR-14b: doc 28's ladder
     private OptionButton _creditPick = null!;
     private OptionButton _oppCountPick = null!;   // GDD s9: "1-7 opponents"
+    private OptionButton _teamPick = null!;       // GDD s9: "up to 4v4"
     private readonly List<string> _maps = new();
 
     public override void _Ready()
@@ -50,7 +51,8 @@ public partial class MainMenu : Control
             // TICKET-P5-SAVE-01 grew the menu by two rows; the box grew with it.
             // TICKET-P5-SET-01 added LAN and SETTINGS, so it grew again.
             // TICKET-P6-FACTION-01 added the FACTION row: one more growth.
-            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -308, OffsetBottom = 308,
+            // P7-8h added the TEAMS row, so it grows by that row's height again.
+            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -329, OffsetBottom = 329,
         };
         var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
         style.SetBorderWidthAll(1);
@@ -103,6 +105,17 @@ public partial class MainMenu : Control
         _oppCountPick = Row(v, "OPPONENTS");
         _mapPick.ItemSelected += _ => RefreshOpponentCounts();
         RefreshOpponentCounts();
+        // P7-8h: GDD s9's other seating promise, "up to 4v4". A MODE rather than
+        // a seat-by-seat assignment, because two items express every division
+        // the shipped maps can hold and a per-seat control would be a row per
+        // opponent for one map's benefit. Indices ARE the MatchSetup constants,
+        // exactly as the faction picker's are World's, so nothing translates.
+        // FREE FOR ALL is preselected: it is what every match before this picker
+        // was played as.
+        _teamPick = Row(v, "TEAMS");
+        _teamPick.AddItem("FREE FOR ALL");
+        _teamPick.AddItem("EVEN SIDES");
+        _teamPick.Select(MatchSetup.TeamsFreeForAll);
         _aiPick = Row(v, "OPPOSITION");
         _aiPick.AddItem("STANDARD"); _aiPick.AddItem("RUSHER"); _aiPick.AddItem("TURTLE");
         // DR-14b / doc 28: strength, on its own axis from the taste above.
@@ -329,6 +342,7 @@ public partial class MainMenu : Control
         // it, so a stale selection after a theatre change cannot ask for more
         // than the map seats.
         MatchConfig.Seats = _oppCountPick.Selected + 2;
+        MatchConfig.TeamMode = _teamPick.Selected;   // P7-8h, and it rides the blob
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         MatchConfig.Faction = _factionPick.Selected;
         MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
@@ -573,6 +587,10 @@ public partial class MainMenu : Control
         // it, so a stale selection after a theatre change cannot ask for more
         // than the map seats.
         MatchConfig.Seats = _oppCountPick.Selected + 2;
+        // P7-8h: the division of those seats. On a two-start map both modes are
+        // the same match, which is honest rather than a gap: the control says
+        // what it does and the map decides how much it can mean.
+        MatchConfig.TeamMode = _teamPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         // TICKET-P6-FACTION-01: the chosen side, and the opponent takes the
         // other one (doc 24). Selected is the faction constant by construction.
@@ -600,6 +618,10 @@ public static class MatchConfig
     /// <summary>Seats INCLUDING the local player. Zero means fill the map,
     /// which is what every path but the skirmish menu leaves it at.</summary>
     public static int Seats;
+    /// <summary>P7-8h: MatchSetup.TeamsFreeForAll or TeamsEvenSides. Zero on
+    /// every path but the skirmish and LAN menus, which is the free-for-all a
+    /// scene-direct launch and every mission mean.</summary>
+    public static int TeamMode;
     public static long StartCredits = 8000;
     // TICKET-P6-FACTION-01: the sides. Defaults are the legacy pairing (both
     // Directorate), which is what a scene-direct launch and every pre-P6
@@ -640,6 +662,12 @@ public static class MatchConfig
             // map" - the campaign, a resumed save and a replay all carry their
             // own answer or want the map's.
             Seats = MissionPath != null ? 0 : Seats,
+            // P7-8h, and zeroed for a mission on the same grounds: a mission's
+            // map declares its own sides and BuildStartingWorld's mission branch
+            // never reads this, so a value left standing by an earlier skirmish
+            // would only be written into the mission's sidecar as if it meant
+            // something.
+            TeamMode = MissionPath != null ? MatchSetup.TeamsFreeForAll : TeamMode,
         };
         return s;
     }
@@ -654,6 +682,7 @@ public static class MatchConfig
         AiPreset = s.AiPreset;
         AiDifficulty = s.AiDifficulty;
         Seats = s.Seats;   // a resumed save keeps the opposition it was played against
+        TeamMode = s.TeamMode;   // ...and the sides it was played on
         StartCredits = s.StartCredits;
         MissionIndex = s.MissionIndex;
         // TICKET-P6-FACTION-01: restore the recorded sides. A pre-P6 sidecar
