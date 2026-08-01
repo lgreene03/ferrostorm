@@ -275,8 +275,25 @@ run a commander building an economy. The other twenty are byte-identical.
 The third harvester is still owed and its cause is now identified rather than
 guessed: **the same GDD section says a refinery "includes one free harvester" and
 the sim has never implemented it**, so the designed three is two free plus one
-bought. That is a row of its own, and a much wider one, because it changes the
-economy for players exactly as much as for the AI.
+bought.
+
+**That row was then built, measured and REFUSED** (P7-7b, ADR-048), and the
+refusal is worth more than the feature would have been. The commander did reach
+GDD s4's 2 refineries / 3 harvesters. It then banked **38,823 credits** with the
+match still running, left its opponent at nothing with no victory declared, and
+**stopped being able to clear mission-01's camp at all** where ADR-047 had left it
+winning at tick 4946.
+
+The cause is not the free harvester. The army rung stands aside "while the yard
+still wants a structure it cannot yet afford - infrastructure before army,
+always", and **that rule has no termination condition.** Two economy rows in a
+row lengthened the build ladder, so the commander spends longer and longer
+building and a richer economy makes it *less* able to fight rather than more.
+
+**So the next row is the commander's SPENDING, not its income**, and the free
+harvester ships once income becomes army. Until then GDD s4's economy stays
+two-thirds implemented on purpose, with the reason recorded rather than
+suspected.
 
 ## Tier D: content volume
 
