@@ -11898,7 +11898,22 @@ int CampaignSave()
     // state, load both, resume - the winner, the messages, and the final
     // hash must all match the uninterrupted run.
     const ulong seed = 2026;
-    const int half = 1800, full = 4500; // horizon covers scripted victory under garrison-era AI doctrine
+    // P7-7a raised the horizon from 4500, and the reason is worth stating rather
+    // than absorbing. The old comment said the horizon "covers scripted victory
+    // under garrison-era AI doctrine", which was honest about being tied to how
+    // the commander played - and the commander changed. With two refineries per
+    // base it spends 2000 credits on the economy before its army, and mission-01
+    // is a camp-clearing sprint: MEASURED, scripted victory moved from tick 3688
+    // to 4946, about 34 per cent later.
+    //
+    // The mission still WINS, which is the question that mattered. This is a
+    // test driver taking longer, not the campaign getting harder - the human
+    // plays this seat in the real thing. But the slowdown is a real consequence
+    // of the row and it is recorded in ADR-047: a deeper economy is slower to
+    // first blood, and whether that trade is right for a rush personality is a
+    // balance question for the playtest rather than something to hide by
+    // widening a number.
+    const int half = 1800, full = 7000;
     string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/missions/mission-01.fmap"));
     var map = MapData.Load(path);
 

@@ -120,6 +120,39 @@ green battery as "no hashes moved" would have been exactly the silence-as-succes
 failure the operating rules warn about. The four movers were found by running
 `golden` explicitly and diffing.
 
+## What CI caught that the local battery did not
+
+The first push went red on both platforms, on `campaignsave`, and the failure was
+worth more than the fix.
+
+**A deeper economy is slower to first blood.** Mission-01 is a camp-clearing
+sprint, and the commander now spends 2000 credits on a second refinery before its
+army. Measured: **scripted victory moved from tick 3688 to 4946, about 34 per
+cent later.** `campaignsave` ran a 4500-tick horizon whose own comment said it
+"covers scripted victory under garrison-era AI doctrine" - honest about being
+tied to how the commander plays, and the commander changed.
+
+The mission still **wins**, which is the question that mattered, and this fixture
+drives the seat a human plays in the real campaign, so it is a test driver taking
+longer rather than the campaign getting harder. The horizon is raised to 7000 with
+the measurement recorded at the site. **Whether a rush personality should invest
+in a second refinery at all is a genuine balance question, and it belongs to the
+playtest rather than to a number quietly widened to make a gate green.**
+
+**And the process lesson, which is the larger one.** CI runs eleven sim steps;
+`dotnet run` with no arguments runs one of them. `golden`, `campaignsave`,
+`saveload`, `replay`, `spectate`, `lanchaos` and the balance gate are all
+separate modes. This wave was pushed after a green local battery and an explicit
+`golden` check, and `campaignsave` was still missed - so "the battery is green"
+was never the same claim as "CI will pass", and this row is the one that made the
+difference visible. Every CI mode is now run locally before a push.
+
+One observation from the balance gate, recorded rather than acted on: it reports
+**"faction war: Directorate 0 - 6 Sodality"** with a PASS verdict, its own note
+saying it is "blocked on human playtesting only". Six faction rows have landed
+since that tool last had a human look at it. It is a reporting line rather than a
+gate, and it is exactly the sort of thing a playtest exists to judge.
+
 ## The gate that was measuring itself
 
 Worth recording in full, because it is a failure mode this project has not hit
