@@ -341,6 +341,34 @@ public partial class VerifyRunner : Node
         Check(_game.RobberyAlertFor(foe, foe) == SkirmishLive.RobberyAlertKind.None,
               "a robbery between two other commanders is not your alert");
 
+        // --- P7-8d: the MAP decides how many seats a skirmish is played with --
+        // Derived rather than stored, which is what keeps it out of the sidecar:
+        // a save or replay written before multi-seat existed rebuilds the same
+        // world with no format version and no migration.
+        {
+            var twoStart = MapData.Load(GameFiles.Abs("data/maps/skirmish-01.fmap"));
+            var fourStart = MapData.Load(GameFiles.Abs("data/maps/skirmish-09.fmap"));
+            Check(SkirmishLive.SeatsFor(twoStart) == 2,
+                  "a two-start map still seats exactly two, so no existing match changes");
+            Check(SkirmishLive.SeatsFor(fourStart) == 4,
+                  "skirmish-09 seats four, which is the whole point of it");
+
+            // The world the menu would actually build, not a constructed one.
+            var setup = MatchConfig.CurrentSetup();
+            setup.MapPath = "data/maps/skirmish-09.fmap";
+            setup.MissionIndex = 0;
+            var w4 = SkirmishLive.BuildStartingWorld(setup, fourStart, out _);
+            Check(w4.PlayerCount == 4, "the built world has four seats");
+            int seated = 0;
+            for (int i = 0; i < w4.EntityCount; i++)
+                if (w4.Entities[i].Alive && w4.Entities[i].Kind == EntityKind.ConstructionYard) seated++;
+            Check(seated == 4, $"all four seats get a construction yard (saw {seated})");
+            // The alternating rule: not three of a kind.
+            bool mixed = false;
+            for (int p = 1; p < 4; p++) if (w4.FactionOf(p) != w4.FactionOf(1)) mixed = true;
+            Check(mixed, "the opponents do not all fly the same colours");
+        }
+
         // --- The cursor never promises a verb the click refuses --------------
         // CursorFor's own header claims it "runs the exact picks IssueOrder
         // runs". The refinery precondition was missing, so with no refinery

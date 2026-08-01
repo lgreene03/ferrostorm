@@ -35,6 +35,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-8 | ~~More than two player seats~~ - **SPLIT, 2026-08-01.** GDD s9 makes TWO promises of very different sizes and one row cannot hold both | D2 | - | - | **SPLIT**, see "What P7-8 turned out to be" |
 | P7-8a | The engine becomes N-player, free-for-all: GDD s9's "skirmish vs AI, 1-7 opponents" | D2 | - (written unhedged as a mode spec, unlike the "(sample)" roster lines - so it is a promise to keep, not a design to invent) | goldens NEUTRAL, measured, and asserted IN the gate rather than left to the golden file | **DONE** - ADR-031; multiseatgate (7 stages); client harness 128 -> 130 checks |
 | P7-8b | Maps that can HOST more than two: the mapgen symmetry group, and the first multi-start map | D2 | - | no hash; all 10 committed maps re-generate BYTE-IDENTICAL, which is the inertness proof | **DONE** - `mirror2` orbit group; skirmish-09 "Kilnmoor Quarters" 160x120, four starts, 9.15% density; multiseatgate stage 7 |
+| P7-8d | The lobby seats what the map declares: N commanders, one per non-local seat | D2 | - | goldens NEUTRAL, measured; NO sidecar or wire format change, because the seat count is DERIVED from the map rather than stored | **DONE** - `SeatsFor(map)`; client harness 133 -> 138 checks |
 | P7-8c | Teams and alliances: GDD s9's "custom lobbies up to 4v4" | D2 | **PRODUCER.** Not a sub-task of P7-8 but a second project of comparable size | MOVES | **NOT TAKEN** - there is no team field, no alliance table and no `AreAllied` predicate anywhere in the sim; hostility is decided everywhere by "not me and not neutral". It touches targeting, splash friendly-fire, detection and fog sharing, victory and the AI, and it has NO code to build on |
 | P7-9 | Campaign missions 4 to 6 | D1 | ~~Q012/Q016~~ - both ANSWERED and closed under the standing directive | goldens NEUTRAL and checksum UNMOVED, measured (unusual for P7: `MissionRunner` state has always been outside the world hash) | **DONE** - ADR-029; campaigngate (5 stages) |
 | P7-9a | Bring missions 01 to 03 under the generator, and onto self-declared setup, retiring `switch (setup.MissionIndex)` in SkirmishLive.cs | D1 | - | MOVES (two goldens: entity spawn order changes) | pending - **created by P7-9, not inherited.** Missions 04 to 06 declare their own yard and credits in the fmap; 01 and 03 still get theirs from a per-mission case in C#. Two mechanisms is the duplication this phase keeps finding, and the only reason it was left is that fixing it moves goldens for no behavioural gain |
@@ -226,6 +227,43 @@ closest pair faces across the SHORT axis. skirmish-09 passes an explicit
 `min_separation` with its reasoning. Making the default aware of the seat count
 is the right fix and would change what the floor means for two-start maps, so it
 is a wave of its own.
+
+## What P7-8d turned out to be
+
+The obvious shape was to grow `MatchSetup` per-seat fields and version both
+codecs that carry it, the save sidecar and the LAN blob. That is a compatibility
+break and a migration, and it turned out to be unnecessary.
+
+**The seat count does not need to be stored, because it is derivable from an
+input the sidecar already names.** `SeatsFor(map)` reads the map's start count,
+so a save or a replay written before multi-seat existed rebuilds the identical
+world with no format version and no migration. Every map but skirmish-09
+declares two starts, so every existing match is unchanged by construction.
+
+The ceiling of 8 in that function is not a taste call: `Entity.DetectedMask` is
+a byte, so a ninth seat shifts out of it and that player's detectors would
+silently stop revealing stealth. ADR-031 recorded that ceiling; this enforces it,
+which turns a silent wrong answer into a map that seats eight.
+
+**One defect this created and caught before it shipped.** LAN seats exactly two
+humans and builds its relay with `playerCount: 2`, but the world's seat count
+now comes from the map. A LAN match on skirmish-09 would have seated two humans
+and left two bases with NO controller: they would never act, and VictorySystem
+would refuse to end the match until somebody walked over and razed them. A match
+that cannot finish. It is refused loudly in `Lan.BuildFrom` now, and lifting the
+refusal needs LAN seat negotiation, which is its own piece of work.
+
+**And one the harness caught.** The opponent-faction rule was written as
+"alternate between the player's pick and the opponent's pick", which reads
+sensibly and is wrong: both default to the same faction, so all three opponents
+came out identical. Alternating between the two FACTIONS holds whatever the two
+menu picks happen to be.
+
+Still not done, and deliberately: there is **no opponent-count control in the
+menu**. The map decides, and every seat it declares is filled. A picker that let
+a player seat fewer than the map declares is menu work with no new capability
+behind it, and GDD s9's "1-7 opponents" is bounded by content rather than by
+this: no map declares more than four starts.
 
 ## What this phase does NOT do
 
