@@ -29,6 +29,10 @@
       "type": "integer", "minimum": 0, "default": 0,
       "description": "P7-11c. The per-player cap on LIVING buildings of this type. 0 means unlimited, which is every building but the mine, so an absent key changes nothing. Enforced where the order is queued (BuildStructure) and where it is placed (PlaceStructure), and folded into World.CatalogueChecksum because it decides whether a command is accepted."
     },
+    "detector": {
+      "type": "boolean", "default": false,
+      "description": "P7-5b. Whether this building reveals cloaked hostiles within sight_range, which for a detector IS the detection radius (the sim carries no separate detection range). False on every building but the Sodality Watch Post, so an absent key changes nothing. Folded into World.CatalogueChecksum because it decides what a player can SEE and therefore what its units may target: two peers disagreeing would resolve the same firefight differently while every stat matched."
+    },
     "build_tab": {
       "enum": ["buildings", "defence", "none"],
       "description": "Which tab of the build sidebar offers this building. AUTHORED because the split is editorial and nothing on the def implies it: the Airfield is a producer that sits under DEFENCE, and the wall, veil, superweapon and mine carry no weapon. 'none' is the three map-placed buildings (the MCV-deployed yard, the outpost, the bridge) and the loader refuses any file whose answer disagrees with the sim's own queueability rule, so this cannot become a second list of what a player may build. REQUIRED, so a new building cannot arrive with no answer and therefore no button, which is how the sidebar's two hand-kept arrays fell behind the catalogue. Presentation only: the sim reads it nowhere and it is deliberately outside World.CatalogueChecksum."

@@ -46,6 +46,14 @@ public partial class ModelLibrary : Node
         // a scanning antenna for free. The bespoke model is owed to
         // art-pipeline (raised in the wave's delivery notes).
         { 13, "sod_veil_projector" },
+        // 21 = WatchPost (P7-5b, ADR-043), the Sodality's detector. The veil
+        // projector again, and for the same reason it stands in for the radar
+        // above rather than for want of imagination: its `dish` child already
+        // spins under ScanRig, which is exactly what a sensor post should look
+        // like. It is a 1x1 building wearing a 2x2 model until art lands, which
+        // is visible and wrong rather than invisibly wrong. Bespoke model and
+        // sidebar icon owed to art-pipeline.
+        { 21, "sod_veil_projector" },
         // 17 = Outpost (ADR-021, P6 Wave C4). No com_outpost.glb exists yet; it
         // takes the refinery as its interim, an industrial silhouette that reads
         // as an income building. DressStructure already declines the team strip

@@ -25,6 +25,7 @@ public static class DataLoader
         int Hp, int PowerSupply, int PowerDraw, int SightRange, int Footprint,
         IReadOnlyList<string> WeaponIds, IReadOnlyList<string> Prerequisites, string Notes,
         int MaxAlive = 0,          // P7-11c: 0 means unlimited, which is every building but the mine
+        bool Detector = false,     // P7-5b: reveals cloak within sight_range, which only a unit could do before
         // Which build tab offers this building: "buildings", "defence" or
         // "none". REQUIRED by the schema on every file, so a new building
         // cannot arrive without an answer; "none" is the three map-placed
@@ -215,6 +216,10 @@ public static class DataLoader
             // unlimited, so every file written before the mine is unchanged and
             // the enforcement is a no-op for it.
             MaxAlive: m.TryGetValue("max_alive", out _) ? ReqInt(m, "max_alive") : 0,
+            // P7-5b: whether this building reveals cloak, the unit loader's own
+            // `detector` key for the building catalogue. Absent means false,
+            // which is every file written before the Watch Post.
+            Detector: OptBool(m, "detector", false),
             BuildTab: buildTab,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
@@ -607,6 +612,7 @@ public static class StructureCatalogue
         // FactionCommon and mismatch in the opposite direction, so a rename is
         // a tidy-up of its own rather than part of a design wave.
         "sod_generator",          // 20: the Sodality's decentralised power
+        "sod_watch_post",         // 21: P7-5b, the Sodality's answer to cloak
     };
 
     /// <summary>The number for a name. Throws on an unknown id rather than
@@ -657,6 +663,10 @@ public static class StructureCatalogue
         // Sharing the kind is what makes it satisfy the five prerequisites that
         // name type 1, now that HasPrereqs asks for a capability.
         20 => EntityKind.PowerPlant,
+        // P7-5b: its OWN kind rather than a shared one. The placement switch is
+        // keyed on Kind, and P7-5a is the wave that paid for learning what a
+        // shared Kind costs there.
+        21 => EntityKind.WatchPost,
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 
@@ -728,6 +738,11 @@ public static class StructureCatalogue
                // place, and a loud one: the file would advertise a limit the
                // sim never applied.
                s.MaxAlive,
+               // P7-5b: and the detector flag, for the same reason again. This
+               // one decides what a player can SEE, so a key parsed and dropped
+               // here would be a building advertising a counter to cloak that
+               // it did not actually provide.
+               s.Detector,
                // ...and the tab, which is the only field on the def the sim
                // never reads. It crosses for the same reason all the same: a
                // key authored, validated and dropped is the P7-1 defect, and
