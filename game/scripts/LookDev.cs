@@ -111,6 +111,18 @@ public partial class LookDev : Node
     /// </summary>
     private const int SettleFrames = 240;
 
+    /// <summary>--lookdev-fast: the software-raster profile (2026-07-27). On
+    /// llvmpipe in the capture container the full profile costs minutes per
+    /// FRAME and a camera takes hours, so fast mode trades convergence
+    /// guarantees for tractability: MSAA off, render scale 0.75, settle 60,
+    /// the CAM-B timing block skipped (frame times on a software rasteriser
+    /// measure nothing about the game). Byte-identity between runs is NOT
+    /// promised in fast mode - the fog may still be drifting at 60 - so it is
+    /// for LOOKING at before/after pairs, both sides captured in the SAME
+    /// mode, never for the byte-compare acceptance runs.</summary>
+    private bool _fast;
+    private int EffectiveSettle => _fast ? 60 : SettleFrames;
+
     /// <summary>Frames timed at CAM-B for the frame-time number doc 25 s5
     /// requires. Measured as the wall-clock period between rendered frames
     /// with V-Sync forced off, which is the real cost, not a CPU-side monitor
@@ -173,6 +185,7 @@ public partial class LookDev : Node
             else if (a == "--lookdev-fog0") _fogZero = true;
             else if (a == "--lookdev-noshroud") _noShroud = true;
             else if (a == "--lookdev-hud") _keepHud = true;
+            else if (a == "--lookdev-fast") _fast = true;
         }
 
         if (args.Contains("--lookdev-make-save")) { MakeReferenceSave(); return; }
@@ -308,8 +321,8 @@ public partial class LookDev : Node
         // _Ready) has already applied the player's MSAA and render scale by
         // now; this puts them back.
         var vp = GetViewport();
-        vp.Msaa3D = Viewport.Msaa.Msaa4X;      // project.godot msaa_3d=2
-        vp.Scaling3DScale = 1.0f;
+        vp.Msaa3D = _fast ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa4X;
+        vp.Scaling3DScale = _fast ? 0.75f : 1.0f;
         // V-Sync off or the frame-time number is a measurement of the monitor.
         DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
         Engine.MaxFps = 0;
@@ -393,7 +406,16 @@ public partial class LookDev : Node
         // and came back as a dozen pixels differing by 1/255 about one run in
         // six. Rendered frames are still what the settle loops count, because
         // fog convergence is a render-side property.
-        for (int i = 0; i < WarmupFrames; i++) await NextProcessFrame();
+        for (int i = 0; i < WarmupFrames; i++)
+        {
+            await NextProcessFrame();
+            // Heartbeat (2026-07-27): on a software rasteriser a frame can
+            // cost tens of seconds, and a silent multi-hour run is
+            // indistinguishable from a hung one. Progress lines make
+            // stuck-versus-working decidable from the log in seconds, and the
+            // container watchdog kills a run whose log stops growing.
+            if (i % 30 == 0) GD.Print($"LookDev: warmup frame {i}/{WarmupFrames}");
+        }
 
         // Everything that moves is now frozen: tweens, particles, the water UV
         // scroll and the camera's own smoothing all run off the scene tree's
@@ -415,14 +437,18 @@ public partial class LookDev : Node
         // and never by more than 3/255, always along an edge with a dust mote
         // over it; CAM-B and CAM-C, captured later, never varied at all. That
         // asymmetry is what identified the cause.
-        for (int i = 0; i < 30; i++) await NextFrame();
+        for (int i = 0; i < 30; i++)
+        {
+            await NextFrame();
+            if (i % 15 == 0) GD.Print($"LookDev: quiesce frame {i}/30");
+        }
 
         var lines = new List<string>
         {
             $"tag={_tag}",
             $"fog_zero={_fogZero} no_shroud={_noShroud} hud_visible={_keepHud}",
             $"viewport={vp.GetVisibleRect().Size.X}x{vp.GetVisibleRect().Size.Y} msaa=4x scale=1.0",
-            $"warmup_frames={WarmupFrames} settle_frames={SettleFrames}",
+            $"warmup_frames={WarmupFrames} settle_frames={EffectiveSettle} fast={_fast}",
         };
 
         foreach (var (name, x, groundZ, y) in Cameras)
@@ -459,14 +485,18 @@ public partial class LookDev : Node
             if (cam.Attributes is CameraAttributesPractical at)
                 at.DofBlurFarDistance = cam.Position.Y * 2.2f + 12f;
 
-            for (int i = 0; i < SettleFrames; i++) await NextFrame();
+            for (int i = 0; i < EffectiveSettle; i++)
+            {
+                await NextFrame();
+                if (i % 30 == 0) GD.Print($"LookDev: {name} settle frame {i}/{EffectiveSettle}");
+            }
 
             var img = GetViewport().GetTexture().GetImage();
             string path = Path.Combine(_outDir, $"{_tag}-{name}.png");
             img.SavePng(path);
             GD.Print($"LookDev: {path} (frame {Engine.GetFramesDrawn()})");
 
-            if (name == "camB")
+            if (name == "camB" && !_fast)
             {
                 // Frame time, at the worst-case camera, with a full base in
                 // view. doc 25 s5: the project has never had this number.

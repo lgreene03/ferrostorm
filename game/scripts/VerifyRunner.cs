@@ -367,6 +367,35 @@ public partial class VerifyRunner : Node
             bool mixed = false;
             for (int p = 1; p < 4; p++) if (w4.FactionOf(p) != w4.FactionOf(1)) mixed = true;
             Check(mixed, "the opponents do not all fly the same colours");
+
+            // GDD s9 asks for "1-7 opponents", which is a CHOICE. P7-8d filled
+            // every seat the map declared, so a duel on a four-start map was
+            // unreachable. The MAP remains the ceiling and always wins, so a
+            // corrupt sidecar cannot ask for a seat the map cannot place.
+            setup.Seats = 2;
+            Check(SkirmishLive.SeatsFor(fourStart, setup) == 2,
+                  "a player may ask for a DUEL on a four-start map");
+            setup.Seats = 3;
+            Check(SkirmishLive.SeatsFor(fourStart, setup) == 3,
+                  "...or for three seats, leaving the fourth start unused");
+            setup.Seats = 9;
+            Check(SkirmishLive.SeatsFor(fourStart, setup) == 4,
+                  "a setup asking for more seats than the map declares is CLAMPED, not refused");
+            setup.Seats = 4;
+            Check(SkirmishLive.SeatsFor(twoStart, setup) == 2,
+                  "and the two-start map is still two, whatever the sidecar says");
+            setup.Seats = 0;
+            Check(SkirmishLive.SeatsFor(fourStart, setup) == 4,
+                  "zero seats means fill the map, which is what every pre-P7-8e sidecar carries");
+
+            // The choice has to reach the WORLD, not just the helper.
+            setup.Seats = 2;
+            var duel = SkirmishLive.BuildStartingWorld(setup, fourStart, out _);
+            Check(duel.PlayerCount == 2, "a two-seat setup on a four-start map builds a two-seat world");
+            int yards = 0;
+            for (int i = 0; i < duel.EntityCount; i++)
+                if (duel.Entities[i].Alive && duel.Entities[i].Kind == EntityKind.ConstructionYard) yards++;
+            Check(yards == 2, $"...and places exactly two construction yards (saw {yards})");
         }
 
         // --- The cursor never promises a verb the click refuses --------------

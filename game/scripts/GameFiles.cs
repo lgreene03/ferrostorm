@@ -159,6 +159,15 @@ public sealed class MatchSetup
     // A fresh menu skirmish gives the opponent the other side (doc 24).
     public int Faction;               // player 0: 0 Directorate, 1 Sodality
     public int OppFaction;            // player 1
+    /// <summary>How many seats this skirmish is played with, INCLUDING the
+    /// local player. Zero means "as many as the map declares", which is what
+    /// every match written before this field meant and what the menu offers by
+    /// default. P7-8d derived the count from the map alone; GDD s9 asks for
+    /// "1-7 opponents", which is a CHOICE, so it has to be carried.
+    ///
+    /// Optional in the sidecar for the same reason ai_difficulty is: absent
+    /// means the old behaviour, so no format version and no migration.</summary>
+    public int Seats;
 
     public string MapName => Path.GetFileNameWithoutExtension(MapPath);
     public bool IsMission => MissionIndex > 0;
@@ -214,6 +223,7 @@ public sealed class MatchMeta
             // sidecar, exactly as every other setup field already does.
             w.WriteNumber("faction", Setup.Faction);
             w.WriteNumber("opp_faction", Setup.OppFaction);
+            w.WriteNumber("seats", Setup.Seats);
             if (FinalHash.Length > 0) w.WriteString("final_hash", FinalHash);
             w.WriteEndObject();
         }
@@ -247,6 +257,11 @@ public sealed class MatchMeta
                     // both-Directorate pairing those matches actually played.
                     Faction = Num(r, "faction"),
                     OppFaction = Num(r, "opp_faction"),
+                    // Absent in every sidecar written before the opponent
+                    // count existed. Zero means "fill the map", which is
+                    // exactly what those matches did, so they resume against
+                    // the same opposition rather than a different one.
+                    Seats = Num(r, "seats"),
                 },
                 Tick = Num(r, "tick"),
                 Credits = Num(r, "credits"),

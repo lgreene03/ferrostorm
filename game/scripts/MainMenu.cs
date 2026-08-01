@@ -30,6 +30,7 @@ public partial class MainMenu : Control
     private OptionButton _aiPick = null!;
     private OptionButton _diffPick = null!;   // DR-14b: doc 28's ladder
     private OptionButton _creditPick = null!;
+    private OptionButton _oppCountPick = null!;   // GDD s9: "1-7 opponents"
     private readonly List<string> _maps = new();
 
     public override void _Ready()
@@ -92,6 +93,16 @@ public partial class MainMenu : Control
             _maps.Add(f);
             _mapPick.AddItem(System.IO.Path.GetFileNameWithoutExtension(f).ToUpperInvariant());
         }
+        // GDD s9 promises "skirmish vs AI, 1-7 opponents". The RANGE comes from
+        // the selected map, because a count the map cannot seat is not an
+        // option, it is a crash waiting for a player to find it: every map but
+        // skirmish-09 declares two starts, so most of the pool offers exactly
+        // one opponent and the control is correctly fixed rather than specially
+        // cased. Repopulated whenever the theatre changes, and defaulted to the
+        // maximum, which is what P7-8d did unconditionally.
+        _oppCountPick = Row(v, "OPPONENTS");
+        _mapPick.ItemSelected += _ => RefreshOpponentCounts();
+        RefreshOpponentCounts();
         _aiPick = Row(v, "OPPOSITION");
         _aiPick.AddItem("STANDARD"); _aiPick.AddItem("RUSHER"); _aiPick.AddItem("TURTLE");
         // DR-14b / doc 28: strength, on its own axis from the taste above.
@@ -313,6 +324,11 @@ public partial class MainMenu : Control
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
+        // Selected index 0 is one opponent, so seats is that plus the local
+        // player plus one. The map is still the ceiling and SeatsFor clamps to
+        // it, so a stale selection after a theatre change cannot ask for more
+        // than the map seats.
+        MatchConfig.Seats = _oppCountPick.Selected + 2;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         MatchConfig.Faction = _factionPick.Selected;
         MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
@@ -492,6 +508,42 @@ public partial class MainMenu : Control
     private VBoxContainer OverlayBox(Control overlay, string heading, int halfW = 240, int halfH = 220)
         => UplinkUi.OverlayBox(overlay, heading, halfW, halfH);
 
+    /// <summary>How many seats a map file declares, read from its `start`
+    /// lines. Deliberately a line count rather than a MapData.Load: this runs
+    /// on every theatre change and the menu has no use for the grid. Two on
+    /// anything malformed, which is what every map but skirmish-09 declares
+    /// anyway, so a bad file gives a duel rather than an exception in the
+    /// menu.</summary>
+    private static int StartsIn(string mapPath)
+    {
+        try
+        {
+            int n = 0;
+            foreach (string line in System.IO.File.ReadLines(mapPath))
+            {
+                if (line.StartsWith("start ", System.StringComparison.Ordinal)) n++;
+                if (line.StartsWith("grid:", System.StringComparison.Ordinal)) break;
+            }
+            return n < 2 ? 2 : n;
+        }
+        catch { return 2; }
+    }
+
+    /// <summary>Rebuild the opponent-count options for the selected theatre.
+    /// The map's seat count is the ceiling and the choice runs from one
+    /// opponent up to it, defaulting to a full house.</summary>
+    private void RefreshOpponentCounts()
+    {
+        _oppCountPick.Clear();
+        int seats = _maps.Count > 0 ? System.Math.Min(StartsIn(_maps[_mapPick.Selected]), 8) : 2;
+        for (int opponents = 1; opponents < seats; opponents++)
+            _oppCountPick.AddItem(opponents == 1 ? "1 OPPONENT" : $"{opponents} OPPONENTS");
+        _oppCountPick.Select(_oppCountPick.ItemCount - 1);
+        // A single option is not a special case: it is what a two-start map
+        // honestly offers, and the control says so rather than being hidden.
+        _oppCountPick.Disabled = _oppCountPick.ItemCount <= 1;
+    }
+
     private static OptionButton Row(VBoxContainer parent, string label)
     {
         var h = new HBoxContainer();
@@ -516,6 +568,11 @@ public partial class MainMenu : Control
         MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
+        // Selected index 0 is one opponent, so seats is that plus the local
+        // player plus one. The map is still the ceiling and SeatsFor clamps to
+        // it, so a stale selection after a theatre change cannot ask for more
+        // than the map seats.
+        MatchConfig.Seats = _oppCountPick.Selected + 2;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         // TICKET-P6-FACTION-01: the chosen side, and the opponent takes the
         // other one (doc 24). Selected is the faction constant by construction.
@@ -540,6 +597,9 @@ public static class MatchConfig
     /// offscreen) and any path that never touches the picker get the opponent
     /// the game has always shipped.</summary>
     public static int AiDifficulty = 1;
+    /// <summary>Seats INCLUDING the local player. Zero means fill the map,
+    /// which is what every path but the skirmish menu leaves it at.</summary>
+    public static int Seats;
     public static long StartCredits = 8000;
     // TICKET-P6-FACTION-01: the sides. Defaults are the legacy pairing (both
     // Directorate), which is what a scene-direct launch and every pre-P6
@@ -576,6 +636,10 @@ public static class MatchConfig
             StartCredits = StartCredits,
             Faction = Faction,
             OppFaction = OppositionFaction,
+            // Zero on every path but the skirmish menu, which means "fill the
+            // map" - the campaign, a resumed save and a replay all carry their
+            // own answer or want the map's.
+            Seats = MissionPath != null ? 0 : Seats,
         };
         return s;
     }
@@ -589,6 +653,7 @@ public static class MatchConfig
         var s = meta.Setup;
         AiPreset = s.AiPreset;
         AiDifficulty = s.AiDifficulty;
+        Seats = s.Seats;   // a resumed save keeps the opposition it was played against
         StartCredits = s.StartCredits;
         MissionIndex = s.MissionIndex;
         // TICKET-P6-FACTION-01: restore the recorded sides. A pre-P6 sidecar
