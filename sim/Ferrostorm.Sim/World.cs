@@ -513,6 +513,48 @@ public sealed partial class World
         });
     }
 
+    /// <summary>
+    /// P7-7d: the harvester GDD s4 says a refinery comes with.
+    ///
+    /// > **Refinery:** 2,000 credits, **includes one free harvester**.
+    ///
+    /// Never implemented until now. ADR-048 refused this once and was WRONG
+    /// about why, which ADR-049 records: the failures blamed on it were caused
+    /// by a derived extra harvester shipped alongside, not by the GDD clause.
+    /// On its own it makes the commander FASTER, not slower.
+    ///
+    /// CALLED FROM THE PURCHASE PATH ONLY, not from SpawnRefinery, and that is
+    /// the design decision rather than a convenience.
+    ///
+    /// The GDD sentence is a PRICE-LIST line: it says what two thousand credits
+    /// buys, so the harvester belongs to the transaction and not to the
+    /// building. A refinery a map hands you at start, or a scenario spawns to
+    /// satisfy a prerequisite, cost nobody anything and comes with nothing.
+    ///
+    /// Rejected: putting it in SpawnRefinery. It reads as the tidier place and
+    /// is wrong twice over. It would give a free unit to 29 call sites, most of
+    /// them fixtures that spawn a refinery only as a prerequisite and several of
+    /// which count units; and it would hand a harvester to every map-placed
+    /// refinery, which is a balance change to every map in the game smuggled in
+    /// under a clause about a purchase.
+    ///
+    /// A consequence that reads correctly either way: an ENGINEER-CAPTURED
+    /// refinery brings no harvester, because a capture is not a purchase. You
+    /// took a building, not a delivery.
+    /// </summary>
+    private void SpawnFreeHarvester(int player, int ax, int ay)
+    {
+        // Beside the refinery, one cell clear of its footprint on each axis, and
+        // clamped so a refinery placed against the map edge still delivers. A
+        // FIXED offset rather than a search for open ground: harvesters do not
+        // block cells and units may overlap, so there is nothing to search for,
+        // and a search would be a scan whose answer could depend on entity order.
+        var def = GetStructureType(3);
+        Fix64 x = Fix64.Clamp(Fix64.FromInt(ax + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
+        Fix64 y = Fix64.Clamp(Fix64.FromInt(ay + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
+        SpawnHarvester(player, x, y);
+    }
+
     public int SpawnRefinery(int player, int ax, int ay)
     {
         var def = GetStructureType(3);
@@ -2700,7 +2742,14 @@ public sealed partial class World
                     // ordered.
                     case EntityKind.PowerPlant: SpawnPowerPlant(c.PlayerId, ax, ay, structType: c.AuxId); break;
                     case EntityKind.Factory: SpawnFactory(c.PlayerId, ax, ay); break;
-                    case EntityKind.Refinery: SpawnRefinery(c.PlayerId, ax, ay); break;
+                    // P7-7d: GDD s4's price-list line, finally implemented -
+                    // "Refinery: 2,000 credits, INCLUDES ONE FREE HARVESTER".
+                    // Here rather than in SpawnRefinery, because this is the
+                    // site where a refinery is BOUGHT. See SpawnFreeHarvester.
+                    case EntityKind.Refinery:
+                        SpawnRefinery(c.PlayerId, ax, ay);
+                        SpawnFreeHarvester(c.PlayerId, ax, ay);
+                        break;
                     case EntityKind.ConstructionYard: SpawnConstructionYard(c.PlayerId, ax, ay); break;
                     case EntityKind.Turret: SpawnTurret(c.PlayerId, ax, ay); break;
                     case EntityKind.Emplacement:

@@ -946,7 +946,19 @@ ulong ScenarioExpansion(ulong seed, Action<int, ulong>? cp = null, Action<string
                             + $"{SkirmishAI.RefineriesPerBase}-per-base rule ({cap})");
     if (world.Entities[farField].FerriteAmount >= 12000)
         throw new Exception("expansion: the far field was never mined");
-    if (working < 1) throw new Exception("expansion: no harvester working at the end");
+    // P7-7d: "a harvester is working" is only a claim about the AI while there
+    // is anything left to work. This fixture lays 14,500 ferrite across two
+    // fields and runs 7000 ticks, and a faster economy MINES THE MAP OUT - at
+    // which point every harvester is correctly idle and the old assertion
+    // reported the economy succeeding as the economy failing. The far field
+    // being drawn down is asserted separately above, so the economy's work is
+    // already proved; this now says what it means.
+    int ferriteLeft = 0;
+    foreach (var e in world.Entities)
+        if (e.Alive && e.Kind == EntityKind.FerriteField) ferriteLeft += e.FerriteAmount;
+    if (working < 1 && ferriteLeft > 0)
+        throw new Exception($"expansion: no harvester working at the end while {ferriteLeft} ferrite is still on "
+                            + "the map - the commander stopped mining with ore left to mine");
     report?.Invoke($"expansion: AI bought an MCV, founded a second base at the rich field, added its refinery, and mined it down to {world.Entities[farField].FerriteAmount} (economy migrated)");
     return world.ComputeStateHash();
 }
@@ -4597,18 +4609,29 @@ int EconomyProbe()
     var cmds = new List<Command>();
     Console.WriteLine("economyprobe: GDD s4 says a player FLOATS at 2 refineries / 3 harvesters. Measuring whether "
                       + "the treasury runs away, which is the only thing a ceiling would fix.");
-    Console.WriteLine("   tick   credits0   credits1   refineries0   harvesters0   match");
+    Console.WriteLine("   tick   credits0   credits1   refineries0   harvesters0   army0   army1   match");
     for (int t = 1; t <= 9000; t++)
     {
         cmds.Clear();
         a0.Act(w, cmds); a1.Act(w, cmds);
         w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
         if (t % 1500 != 0) continue;
-        int refineries = 0, harvesters = 0;
+        // P7-7c ADDED THE ARMY COLUMNS. ADR-048 measured a seat banking 38,823
+        // credits in a running match and could not say whether that commander
+        // had a huge army it could not use or no army at all - which are
+        // opposite defects with opposite fixes. Income without army is the
+        // question this probe now answers directly.
+        int refineries = 0, harvesters = 0, army0 = 0, army1 = 0;
         for (int i = 0; i < w.EntityCount; i++)
         {
             var e = w.Entities[i];
-            if (!e.Alive || e.PlayerId != 0) continue;
+            if (!e.Alive) continue;
+            if (e.Kind == EntityKind.Unit)
+            {
+                if (e.PlayerId == 0) army0++;
+                else if (e.PlayerId == 1) army1++;
+            }
+            if (e.PlayerId != 0) continue;
             if (e.Kind == EntityKind.Refinery) refineries++;
             if (e.Kind == EntityKind.Harvester) harvesters++;
         }
@@ -4626,7 +4649,8 @@ int EconomyProbe()
         // would have reopened a settled ADR for the wrong reason, and no way to
         // tell them apart without this field.
         string state = w.Winner >= 0 ? $"seat {w.Winner} won" : "running";
-        Console.WriteLine($"  {t,5}   {w.Credits(0),8}   {w.Credits(1),8}   {refineries,11}   {harvesters,11}   {state}");
+        Console.WriteLine($"  {t,5}   {w.Credits(0),8}   {w.Credits(1),8}   {refineries,11}   {harvesters,11}   "
+                          + $"{army0,5}   {army1,5}   {state}");
     }
     Console.WriteLine("economyprobe: read the credit columns, AND THE LAST ONE. A treasury that oscillates around a "
                       + "working balance while the match is RUNNING is the GDD's float and needs no ceiling; one that "
@@ -8513,6 +8537,98 @@ int FactionPowerGate()
     return 0;
 }
 
+int FreeHarvesterGate()
+{
+    // P7-7d (ADR-049). GDD s4 carries a price-list line the sim never had:
+    //
+    //   "Refinery: 2,000 credits, INCLUDES ONE FREE HARVESTER."
+    //
+    // The numbers here come from the GDD, never from the code that implements
+    // it, because a gate that shares a constant with what it tests follows the
+    // implementation wherever it goes (ADR-047 learned that the hard way).
+    const int Refinery = 3;
+
+    int CountKind(World w, int player, EntityKind kind)
+    {
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && e.Kind == kind) n++;
+        }
+        return n;
+    }
+
+    // --- 1. A BOUGHT refinery delivers a harvester.
+    {
+        var w = new World(4000, 64, 64, players: 2);
+        int cy = w.SpawnConstructionYard(0, 20, 20);
+        w.SpawnPowerPlant(0, 16, 20, supply: 5000);
+        w.GrantCredits(0, 100000);
+        var rd = w.GetStructureType(Refinery);
+        int before = CountKind(w, 0, EntityKind.Harvester);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, Refinery) });
+        for (int t = 0; t < rd.BuildTicks * 4 + 400 && w.Entities[cy].ReadyStructure != Refinery; t++) w.Step(default);
+        if (w.Entities[cy].ReadyStructure != Refinery)
+            return Fail("free harvester: the yard never finished a refinery, so this gate cannot ask its question");
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                   Map.CellCentre(25), Map.CellCentre(20), Refinery) });
+        int after = CountKind(w, 0, EntityKind.Harvester);
+        if (after != before + 1)
+            return Fail($"free harvester: buying a refinery must deliver exactly ONE harvester (had {before}, now "
+                        + $"{after}) - GDD s4 prices the pair together and the sim has never honoured it");
+    }
+
+    // --- 2. A SPAWNED refinery delivers NOTHING, which is the design decision
+    //        rather than an omission. GDD s4's sentence prices a PURCHASE; a
+    //        map-placed or scenario-spawned refinery cost nobody anything.
+    //        Without this the row would be a balance change to every map in the
+    //        game, smuggled in under a clause about two thousand credits.
+    {
+        var w = new World(4001, 64, 64, players: 2);
+        int before = CountKind(w, 0, EntityKind.Harvester);
+        w.SpawnRefinery(0, 20, 20);
+        if (CountKind(w, 0, EntityKind.Harvester) != before)
+            return Fail("free harvester: a SPAWNED refinery must deliver nothing - it was not bought, and putting "
+                        + "the delivery in SpawnRefinery would hand a free unit to every map and every fixture");
+    }
+
+    // --- 3. And a CAPTURED refinery delivers nothing either, for the same
+    //        reason stated as a behaviour: an engineer takes a building, not a
+    //        delivery. Asserted because it is the case a reader will wonder
+    //        about, and because it falls out of clause 2 rather than being
+    //        arranged separately.
+    {
+        var w = new World(4002, 64, 64, players: 2);
+        int victim = w.SpawnRefinery(1, 20, 20);
+        var ed = w.GetUnitType(World.EngineerUnitType);
+        int eng = w.SpawnUnit(0, Fix64.FromInt(18), Fix64.FromInt(21), ed.Speed, ed.Hp, ed.Armour, ed.WeaponId,
+                              veterancy: false, unitType: World.EngineerUnitType);
+        int before = CountKind(w, 0, EntityKind.Harvester);
+        // ATTACK, not Move, which is the idiom the capture scenario uses and the
+        // only one that works: a refinery's 2x2 footprint BLOCKS its own cells,
+        // so a Move ordered at the building is unreachable and the engineer
+        // stalls outside it forever. An Attack order makes it pursue to weapon
+        // range, and contact does the rest.
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Attack, eng, Fix64.Zero, Fix64.Zero, victim) });
+        for (int t = 0; t < 400 && w.Entities[victim].PlayerId != 0; t++) w.Step(default);
+        if (w.Entities[victim].PlayerId != 0)
+            return Fail("free harvester: the engineer never captured the refinery, so stage 3 proves nothing");
+        if (CountKind(w, 0, EntityKind.Harvester) != before)
+            return Fail("free harvester: a CAPTURED refinery must deliver nothing - a capture is not a purchase");
+    }
+
+    Console.WriteLine("freeharvestergate: GDD s4 prices a refinery and a harvester together - \"2,000 credits, "
+                      + "includes one free harvester\" - and the sim had never honoured it, which is why the "
+                      + "commander reached two harvesters where s4 writes three. Buying one now delivers exactly "
+                      + "one harvester; SPAWNING one delivers nothing, because the GDD sentence prices a PURCHASE "
+                      + "and putting the delivery in SpawnRefinery would hand a free unit to every map-placed "
+                      + "refinery and to 29 fixtures that spawn one only as a prerequisite; and CAPTURING one "
+                      + "delivers nothing either, which reads correctly - an engineer takes a building, not a "
+                      + "delivery");
+    return 0;
+}
+
 int EconomyFloatGate()
 {
     // P7-7a (ADR-047). Additive, the airgate pattern: a standalone mode and a
@@ -10554,6 +10670,10 @@ int Match(ulong seed)
     // of it, which is the row ADR-041's refusal pointed at.
     int economyFloat = EconomyFloatGate();
     if (economyFloat != 0) return economyFloat;
+    // P7-7d: and a refinery finally comes with the harvester GDD s4 prices into
+    // it, which is what carries the commander to s4's stated 3.
+    int freeHarvester = FreeHarvesterGate();
+    if (freeHarvester != 0) return freeHarvester;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -12151,6 +12271,7 @@ return args.Length == 0
         "aifactiongate" => AiFactionGate(),
         "seismicaimgate" => SeismicAimGate(),
         "economyfloatgate" => EconomyFloatGate(),
+        "freeharvestergate" => FreeHarvesterGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
