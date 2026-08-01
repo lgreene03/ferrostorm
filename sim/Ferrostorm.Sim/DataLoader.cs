@@ -586,11 +586,11 @@ public static class StructureCatalogue
         "sod_veil_projector",     // 7
         "com_service_depot",      // 8
         "com_wall",               // 9
-        // 10 is GateStructType, reserved by ADR-005 clause 6 for the deferred
-        // wall gates: no def, no file and no name. The hole is why this table is
-        // indexed rather than dense, and why P7-2 numbered the Emplacement from
-        // 15 rather than taking the gap.
-        "",                       // 10
+        // 10: the Gate (P7-10), filling the hole ADR-005 clause 6 reserved. The
+        // reservation is why this table is indexed rather than dense, and why
+        // P7-2 numbered the Emplacement from 15 rather than taking the gap; the
+        // indexing stays, because index 0 is still not a structure.
+        "com_gate",               // 10
         "com_barracks",           // 11
         "com_radar_uplink",       // 12
         "com_outpost",            // 13: ADR-021 (P6 Wave C4), map-placed, never built
@@ -636,6 +636,7 @@ public static class StructureCatalogue
         7 => EntityKind.VeilProjector,
         8 => EntityKind.ServiceDepot,
         9 => EntityKind.Wall,
+        10 => EntityKind.Gate,          // P7-10
         15 => EntityKind.Emplacement,   // P7-2
         16 => EntityKind.Airfield,      // ADR-028
         17 => EntityKind.Bastion,       // P7-2b
@@ -677,15 +678,19 @@ public static class StructureCatalogue
         // THE TAB AND THE SIM MUST AGREE ABOUT WHO CAN HAVE THIS BUILDING, and
         // the agreement is checked rather than restated. "No tab" is a second
         // way of saying "no player may order it", and the first way is the sim's
-        // own refusal in BuildStructure - BuildTicks <= 0 - with the Wall kind as
-        // its single exception, because a barrier is bought through the placement
-        // path instead. reachabilitygate holds the same equivalence from the
+        // own refusal in BuildStructure - BuildTicks <= 0 - with the BARRIER
+        // kinds as its exception, because a barrier is bought through the
+        // placement path instead. reachabilitygate holds the same equivalence from the
         // other side, naming the three map-placed kinds and failing if /data ever
         // makes one buildable. Left unchecked, "which buildings are offered"
         // would become a second list free to drift from "which buildings a
         // player can order", and a button that orders nothing is worse than an
         // absent one.
-        bool queueable = s.BuildTimeTicks > 0 || kind == EntityKind.Wall;
+        //
+        // P7-10: the exception is BARRIER-shaped, not wall-shaped, and it is
+        // asked of World.IsBarrier so that the second barrier could not arrive
+        // and be told its own /data file was illegal.
+        bool queueable = s.BuildTimeTicks > 0 || World.IsBarrier(kind);
         if (queueable && tab == BuildTab.None)
             throw new FormatException(
                 $"'{s.Id}' authors build_tab: none and yet a Construction Yard will queue it, so it would be "
@@ -931,11 +936,11 @@ public static class CatalogueFiles
                 throw new FormatException($"{f}: {e.Message}", e);
             }
         }
-        // Bounded by the catalogue's own constant, the gate skipped explicitly:
-        // type 10 is ADR-005's reservation, with no def and no file.
+        // Bounded by the catalogue's own constant. P7-10 removed the explicit
+        // skip of type 10 that used to sit here: ADR-005's reservation had no def
+        // and no file, and the gate now has both.
         for (int t = 1; t <= World.MaxStructType; t++)
         {
-            if (t == World.GateStructType) continue;
             if (!seenStructs.Contains(t))
                 throw new FormatException(
                     $"{buildingsDir}: no building file provides compiled structure type {t}. " +

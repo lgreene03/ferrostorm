@@ -94,6 +94,9 @@ public partial class Sidebar : PanelContainer
         // something laid on the ground.
         "com_wall" => "com_wall_straight",
         "com_mine" => "com_wall_straight",
+        // P7-10's gate wears the wall's slab too, which is honest enough for a
+        // segment of wall that moves. Its own sprite is owed to art-pipeline.
+        "com_gate" => "com_wall_straight",
         _ => id,
     };
 
@@ -111,9 +114,13 @@ public partial class Sidebar : PanelContainer
     };
 
     /// <summary>Is this struct type a barrier? From the live catalogue's Kind,
-    /// which is what SkirmishLive.IsBarrier already asks and what the sim's own
-    /// IsBarrier tests.</summary>
-    private bool IsBarrierType(int structType) => _structDef(structType).Kind == EntityKind.Wall;
+    /// which is what SkirmishLive.IsBarrier already asks - and P7-10 made both of
+    /// them ask World.IsBarrier itself rather than each writing
+    /// `Kind == EntityKind.Wall` again. The gate is the second barrier and this
+    /// was one of the four places that would have missed it, silently: a gate
+    /// button on the queueing branch would send a BuildStructure the sim refuses
+    /// for having no build time, so the button would exist and do nothing.</summary>
+    private bool IsBarrierType(int structType) => World.IsBarrier(_structDef(structType).Kind);
 
     /// <summary>
     /// One unit button, DERIVED from a registered type id rather than authored

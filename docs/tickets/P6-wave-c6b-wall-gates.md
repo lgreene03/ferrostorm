@@ -3,7 +3,24 @@
 Labels: persona:p2, gdd:s5, phase:6, owner:architect + sim-engineer,
 gdd:ADR-005-clause-6
 
-Status: DEFERRED, and deliberately not merely "pending". Split out of C6 by
+Status: **CLOSED 2026-08-01 by P7-10, and NOT by the override this ticket asked
+for.** Everything below still describes the situation accurately and is left
+standing, because the argument it makes is the one that had to be worked around
+rather than beaten. What it did not consider is a gate with a SINGLE GLOBAL
+open/closed state, which needs neither per-player flow fields nor an incremental
+repair: an open gate is passable to everybody and a closed one is solid to
+everybody, and the one global grid says exactly that. ADR-005 clause 6 is
+therefore not overturned, and its own revisit precondition is still unmet; see
+the P7-10 amendment appended to ADR-005 for the distinction and for what was
+traded away (an enemy can follow you through). The two paragraphs below on the
+"global auto-open approximation" are the closest anybody came to it, and both of
+their objections were answered rather than dismissed: the cache-clear thrash by a
+45-tick hysteresis, measured; and the tailgating exploit by accepting it as the
+design and asserting it in `wallgategate` so it cannot be quietly removed. The
+goldens were predicted here to be a live regeneration risk and were measured
+byte-identical.
+
+Was: DEFERRED, and deliberately not merely "pending". Split out of C6 by
 ADR-025, which took the bridges half and left this one where ADR-005 put it.
 
 ## Why this is not simply the next wave

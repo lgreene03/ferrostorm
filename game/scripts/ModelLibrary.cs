@@ -66,6 +66,14 @@ public partial class ModelLibrary : Node
         // or for a player whose detector has found it - the sim's stealth rules
         // decide that, not this table.
         { 19, "com_wall_straight" },
+        // 20 = Gate (P7-10). It is a barrier, but it is NOT one of the six
+        // neighbour-mask wall meshes below: those are chosen by which sides a
+        // wall run continues on, and a gate is a fixed piece in that run rather
+        // than a continuation of it. The straight segment is the interim, which
+        // reads as a shut gate; no com_gate.glb exists yet and one that shows the
+        // OPEN state is owed to art-pipeline, since World.IsGateOpen is the read
+        // that would drive it.
+        { 20, "com_wall_straight" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit

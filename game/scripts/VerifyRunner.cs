@@ -969,8 +969,21 @@ public partial class VerifyRunner : Node
             Check(drift.Length == 0,
                   $"all {wasListed.Length} structures the two hand-kept arrays listed still produce the IDENTICAL "
                   + $"label, tab and icon now that both lists are derived ({(drift.Length > 0 ? drift : "no drift")})");
-            Check(sButtoned == wasListed.Length,
-                  $"...and the derivation added no button and dropped none: {sButtoned} buttons, {wasListed.Length} listed");
+            // The transcript is FROZEN, and buildings keep arriving, so this
+            // stopped being an equality against its length the moment one did.
+            // It is the transcript PLUS whatever has been registered since,
+            // NAMED here rather than left as a number nobody can check: the
+            // point of the check is that a new button cannot appear by accident,
+            // and a name is what makes the difference reviewable. The live
+            // guarantee is the stronger check above (every registered type is
+            // buttoned or map-placed); this one is the history.
+            var addedSince = new[]
+            {
+                "com_gate",   // P7-10: struct type 10, ADR-005's reservation filled
+            };
+            Check(sButtoned == wasListed.Length + addedSince.Length,
+                  $"...and the derivation dropped none of the {wasListed.Length} it transcribed, adding only the "
+                  + $"{addedSince.Length} registered since ({string.Join(", ", addedSince)}): {sButtoned} buttons");
         }
 
         // --- One MatchSetup becomes one MatchConfig, and carries every field --

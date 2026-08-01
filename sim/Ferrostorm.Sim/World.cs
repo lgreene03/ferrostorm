@@ -48,8 +48,12 @@ public readonly struct Command
 // Emplacement and Bastion are reservations only (doc 23 s4.1), taken because
 // reserving is free and a later collision with a saved byte is silent and
 // fatal. Outpost (17) graduated under ADR-021 and Bridge (18) under ADR-025.
+// Gate (20) graduated under P7-10, the second barrier ADR-005 reserved STRUCT
+// type 10 for. The kind number is appended at the end of this enum rather than
+// borrowed from that reservation, because the two numbering spaces are
+// different and ADR-005 line 76 records that confusing them is silent and fatal.
 // APPEND ONLY: the byte is written into saves.
-public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19 }
+public enum EntityKind : byte { Unit = 0, Harvester = 1, Refinery = 2, FerriteField = 3, PowerPlant = 4, Factory = 5, ConstructionYard = 6, Turret = 7, Superweapon = 8, VeilProjector = 9, ServiceDepot = 10, Wall = 11, Barracks = 12, RadarUplink = 13, Airfield = 14, Emplacement = 15, Bastion = 16, Outpost = 17, Bridge = 18, Mine = 19, Gate = 20 }
 public enum HarvestState : byte { Idle = 0, ToField = 1, Loading = 2, ToRefinery = 3, Unloading = 4 }
 
 /// <summary>
@@ -1086,7 +1090,30 @@ public sealed partial class World
         // means no player may have it" (the placement path buys it outright).
         9 => new StructureTypeDef(100, EntityKind.Wall, 0, Hp: 500, SightCells: 0, Footprint: 1,
                                   Tab: BuildTab.Defence),
-        // 10 is the gate: RESERVED by ADR-005 clause 6, deliberately no def.
+        // P7-10: the Gate, and struct type 10 is the number ADR-005 reserved for
+        // it, so nothing is renumbered to make room. See the ADR's P7-10
+        // amendment for why clause 6's blocker does not reach this design: the
+        // deferral is scoped to a gate that is passable to its OWNER and solid
+        // to the enemy at the same moment, which is what would need a per-player
+        // flow field. This gate has ONE GLOBAL state, so an open gate is passable
+        // to everybody and a closed one is solid to everybody, and the single
+        // global passability grid says exactly that with no new machinery.
+        //
+        // Everything else here follows the wall, because a gate IS a barrier:
+        // Footprint 1, BuildTicks 0 (bought upfront as the segment lands, no
+        // ready slot, the ADR-005 clause 3 model), SightCells 0 so a run of them
+        // stays out of the fog pass, DEFENCE for the wall's reason, and no
+        // prerequisites because a barrier is never queued at a yard and so never
+        // reaches the tree check.
+        //
+        // The two numbers that are NOT the wall's are Luke's and are recorded as
+        // his: cost 200, twice a wall segment, because a gate is the one place in
+        // a perimeter that lets your own army through and it should not be the
+        // cheap way to build a wall; and Hp 500, which IS the wall's, so a
+        // besieger breaches the gate and the wall beside it at the same rate and
+        // the gate is not a soft spot to aim at.
+        10 => new StructureTypeDef(200, EntityKind.Gate, 0, Hp: 500, SightCells: 0, Footprint: 1,
+                                   Tab: BuildTab.Defence),
         // Barracks (TICKET-P5-PROD-03, numbers from doc 23 s4.3): cheap and
         // early, because that is what makes an infantry rush a real strategy
         // rather than a factory afterthought. Struct type 11 is the barracks;
@@ -1151,25 +1178,24 @@ public sealed partial class World
     /// every loop that enumerates the catalogue. EntityKind reservations above
     /// it (airfield, emplacement, bastion) have numbers but no defs and no
     /// /data files, so they must stay OUTSIDE this bound until implemented
-    /// (the outpost graduated to struct type 13 under ADR-021). Enumerating
-    /// loops must also skip GateStructType: the gate
-    /// is inside the bound but has no def and no file (ADR-005 clause 6).
+    /// (the outpost graduated to struct type 13 under ADR-021).
+    ///
+    /// P7-10 removed the exception this paragraph used to carry. Every
+    /// enumerating loop had to skip GateStructType by hand, because 10 was
+    /// inside the bound with no def and no file; the gate now HAS both, so the
+    /// range is dense again and each of those skips is gone rather than kept as
+    /// a no-op waiting to be wrong.
     /// </summary>
-    // P7-2 raised this from 14 to 15 for the Emplacement. Note that 10 is NOT
-    // free despite the gap in the id map: it is GateStructType, reserved by
-    // ADR-005 for the deferred wall gates, and SeedStructureTypes skips it.
-    // Taking it would have silently collided with C6b the day it lands.
+    // P7-2 raised this from 14 to 15 for the Emplacement.
     public const int MaxStructType = 19;   // P7-11c raised it for the Mine
 
     private readonly Dictionary<int, StructureTypeDef> _structTypes = SeedStructureTypes();
     private static Dictionary<int, StructureTypeDef> SeedStructureTypes()
     {
         var d = new Dictionary<int, StructureTypeDef>();
-        for (int t = 1; t <= MaxStructType; t++)
-        {
-            if (t == GateStructType) continue; // reserved: no def to seed (ADR-005)
-            d[t] = DefaultStructureType(t);
-        }
+        // P7-10: dense again. This loop used to skip GateStructType, which had no
+        // def to seed while ADR-005 clause 6 held; the gate has one now.
+        for (int t = 1; t <= MaxStructType; t++) d[t] = DefaultStructureType(t);
         return d;
     }
 
@@ -1190,8 +1216,9 @@ public sealed partial class World
     /// to skip GateStructType itself - a bound and an exception restated at each
     /// site, which is the hand-kept-list shape that left seven units with no
     /// sidebar button. Asking the registry makes a registered type a member by
-    /// construction and leaves the reserved gate, which has no def to seed, out
-    /// by construction.
+    /// construction, which is how P7-10's gate acquired its sidebar button, its
+    /// reachabilitygate order and its client-harness check without any of the
+    /// three being told about it.
     /// </summary>
     public IReadOnlyList<int> StructureTypeIds()
     {
@@ -1403,7 +1430,10 @@ public sealed partial class World
     /// <summary>The default footprint: every structure type except a barrier is 2x2.</summary>
     public const int FootprintSize = 2;
 
-    /// <summary>ADR-005 clause 6: type 10 is the gate, reserved and deferred. It has no def and no file, so its 1x1 footprint cannot be read from the catalogue and is stated here instead of being silently lost.</summary>
+    /// <summary>ADR-005 reserved type 10 for the gate and P7-10 filled it. Named
+    /// for the reason the producer ids below are named: a bare 10 in a comparison
+    /// is a number nobody can check on sight. The 1x1 footprint that used to be
+    /// stated here now comes off the def like every other type's.</summary>
     public const int GateStructType = 10;
 
     /// <summary>The two unit producers as STRUCT type ids (ADR-009): the
@@ -1421,7 +1451,9 @@ public sealed partial class World
     /// <summary>Cells per side of a structure type's square footprint (ADR-005), read from the def. Barriers are 1x1; everything else, including an unknown type (Footprint 0 on the default def), takes the 2x2 default that the placement path has always assumed.</summary>
     public int FootprintOf(int structType)
     {
-        if (structType == GateStructType) return 1;
+        // P7-10 removed a special case for GateStructType here. It existed only
+        // because the reserved type had no def to read a footprint off; it has
+        // one now (footprint 1, the wall's), so the catalogue answers.
         int f = GetStructureType(structType).Footprint;
         return f > 0 ? f : FootprintSize;
     }
@@ -1445,8 +1477,35 @@ public sealed partial class World
     public const int CyBuildRadius = 7;
     /// <summary>A barrier anchors only other barriers, and only this far (ADR-005 clause 4): a wall crawls outward two cells and 100 credits at a step, but never carries a factory with it.</summary>
     public const int BarrierBuildRadius = 2;
-    /// <summary>Per-player barrier cap (ADR-005 clause 5). Derived from the TDD s6 ratified budget of 200 structures (03-technical-design-document.md:59): 2 x 80 + ~32 real buildings = ~192, inside budget. A performance guarantee, not a design flourish.</summary>
+    /// <summary>Per-player barrier cap (ADR-005 clause 5). Derived from the TDD s6 ratified budget of 200 structures (03-technical-design-document.md:59): 2 x 80 + ~32 real buildings = ~192, inside budget. A performance guarantee, not a design flourish. P7-10's gates count against it with the walls, because they are barriers by the same predicate and the budget the cap protects does not care which of the two is standing.</summary>
     public const int MaxBarriersPerPlayer = 80;
+
+    /// <summary>
+    /// P7-10: how close an ALLY of the gate's owner must come for it to open,
+    /// SQUARED, so the per-tick scan never takes a square root. Three cells,
+    /// Luke's number, and it is the reach of a gatehouse rather than of a
+    /// sentry: two cells would have a tank's nose in the doorway before the
+    /// gate moved, and a longer reach would open a perimeter to a scout that
+    /// merely drove past it.
+    /// </summary>
+    public static readonly Fix64 GateOpenRadiusSq = Fix64.FromInt(9);
+
+    /// <summary>
+    /// P7-10: how long a gate stays open after the last ally left its radius,
+    /// in ticks. 45 is three seconds at 15 Hz, and it is Luke's number.
+    ///
+    /// THIS IS LOAD-BEARING RATHER THAN POLISH, and the reason is the one
+    /// ADR-005 clause 6 was written about. Every toggle calls the only flow
+    /// invalidation this sim has, FlowFieldCache.Clear, which throws away EVERY
+    /// cached field on the map; a gate that flickered as an army milled about
+    /// would rebuild every route in the game several times a second. The delay
+    /// is what turns "units are near" from a per-tick reading into an interval,
+    /// and it bounds the toggle rate at one close per 45 ticks per gate no
+    /// matter what the units do. Three seconds is also long enough for a column
+    /// to follow the unit that opened it, which is what makes it read as a gate
+    /// rather than as a trapdoor.
+    /// </summary>
+    public const int GateHysteresisTicks = 45;
 
     /// <summary>P7-11c: the Mine's structure type id, named for the reason the
     /// three above it are - a bare 19 in a comparison is a number nobody can
@@ -1810,6 +1869,30 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// P7-10: a gate segment. The wall's spawner in every respect but one - it
+    /// sets the fast-path flag that GateSystem's scan is gated on.
+    ///
+    /// It lands CLOSED, which is why it calls BlockFootprint exactly as the wall
+    /// does. A gate that appeared open would be a hole in the perimeter for the
+    /// first 45 ticks of its life, and worse, the map bit and the open-state
+    /// collection would disagree at birth.
+    /// </summary>
+    public int SpawnGate(int player, int ax, int ay)
+    {
+        var def = GetStructureType(GateStructType);
+        BlockFootprint(ax, ay, def.Footprint);
+        Fix64 x = FootprintCentre(ax, def.Footprint), y = FootprintCentre(ay, def.Footprint);
+        _gatesInPlay = true;
+        return Add(new Entity
+        {
+            Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Gate,
+            X = x, Y = y, TargetX = x, TargetY = y, StructType = GateStructType,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, WeaponId = def.WeaponId, ExplicitTarget = -1,
+            Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
+        });
+    }
+
+    /// <summary>
     /// ADR-025: a destroyable bridge deck cell. Map-placed and NEUTRAL
     /// (PlayerId -1, the ferrite-field and outpost convention).
     ///
@@ -2019,6 +2102,11 @@ public sealed partial class World
         // single branch when no mine has ever been placed, which is every
         // golden scenario, and that is what keeps their hashes byte-identical.
         MineSystem();
+        // P7-10: gates read the tick's settled positions for the mine's reason,
+        // so they sit beside it. A single branch when no gate has ever been
+        // placed, which is every golden scenario, and that is what keeps their
+        // hashes byte-identical.
+        GateSystem();
         // P7-3: a destroyed carrier takes its hold with it. Walked by ENTITY
         // INDEX rather than over the dictionary's keys, because dictionary
         // iteration order is a determinism hazard and this runs every tick on
@@ -2046,6 +2134,19 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
                 if (_disabledUntil.TryGetValue(i, out int until) && (until <= Tick || !_entities[i].Alive))
                     _disabledUntil.Remove(i);
+        }
+        // P7-10: a DESTROYED gate leaves the open-state collection here, walked
+        // by entity index for the reason the two sweeps above are. It is the only
+        // way an entry can outlive its meaning - GateSystem itself removes the
+        // entry as it shuts the gate - and it has to be swept, because "present"
+        // is exactly what the hash fold and the save block record. There is
+        // deliberately no unblock here: FootprintOnDeath has already run for the
+        // dead gate and left its cell passable, which is what a demolished gate
+        // should leave behind whichever state it died in.
+        if (_gateOpenUntil.Count > 0)
+        {
+            for (int i = 0; i < _entities.Count; i++)
+                if (!_entities[i].Alive && _gateOpenUntil.ContainsKey(i)) _gateOpenUntil.Remove(i);
         }
         CaptureSystem();
         CombatSystem();
@@ -2425,6 +2526,7 @@ public sealed partial class World
                     case EntityKind.VeilProjector: SpawnVeilProjector(c.PlayerId, ax, ay); break;
                     case EntityKind.ServiceDepot: SpawnServiceDepot(c.PlayerId, ax, ay); break;
                     case EntityKind.Wall: SpawnWall(c.PlayerId, ax, ay); break;
+                    case EntityKind.Gate: SpawnGate(c.PlayerId, ax, ay); break;                // P7-10
                     case EntityKind.Barracks: SpawnBarracks(c.PlayerId, ax, ay); break;
                     case EntityKind.RadarUplink: SpawnRadarUplink(c.PlayerId, ax, ay); break;
                     case EntityKind.Mine: SpawnMine(c.PlayerId, ax, ay); break;               // P7-11c
@@ -2745,22 +2847,29 @@ public sealed partial class World
              // counted by every scan that says "a building". Left out of this
              // enumeration it would be a thing the sim does not recognise at
              // all, which the Emplacement's entry above records the cost of.
-             or EntityKind.Mine;
+             or EntityKind.Mine
+             // P7-10: the Gate, on the Mine's argument. It must be a structure
+             // to be placeable, sellable, repairable, damageable and blocking,
+             // and every one of those is inherited by being in this list.
+             or EntityKind.Gate;
 
     /// <summary>
     /// A barrier is a structure for blocking, selling, repairing and damage, and
     /// is excluded from the victory test, engineer capture and combat
     /// auto-acquisition (ADR-005 clause 2).
     ///
-    /// This used to promise "DEF-09 appends 'or EntityKind.Gate'", which was an
-    /// ORPHANED forward reference: TICKET-P5-DEF-09 is the client box-select and
-    /// mass-sell ticket and it shipped long ago without touching this, so the
-    /// append was owed by no ticket and pointed a reader at the wrong one. The
-    /// gate is still deferred by ADR-005 clause 6 with its revisit precondition
-    /// unmet (see docs/tickets/P6-wave-c6b-wall-gates.md), and when it lands it
-    /// is that ticket that appends here.
+    /// P7-10 added the gate, which is what this predicate spent three waves
+    /// waiting for, and made it PUBLIC in the same breath. Four places outside
+    /// the sim ask exactly this question and each had written it as
+    /// `Kind == EntityKind.Wall`: the sidebar deciding whether a button enters
+    /// placement or queues at a yard, the client's placement path, /data's own
+    /// queueability check in StructureCatalogue.ToTypeDef, and
+    /// reachabilitygate's twin of it. A rule that names one kind is missed by
+    /// whoever adds the next one, and here the miss would have been silent - a
+    /// gate button that queued an order BuildStructure refuses, so the button
+    /// would exist and do nothing.
     /// </summary>
-    private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
+    public static bool IsBarrier(EntityKind k) => k is EntityKind.Wall or EntityKind.Gate;
 
     /// <summary>
     /// ADR-009 clause 1: the producer notion. Factory, Construction Yard,
@@ -3017,10 +3126,24 @@ public sealed partial class World
                 int cx = ax + dx, cy = ay + dy;
                 if (!Map.InBounds(cx, cy) || Map.IsBlocked(cx, cy)) return false;
             }
+        // P7-10 removed a wholesale `IsStructure(o.Kind) continue` from this
+        // loop, whose comment read "structure cells are already blocked". That
+        // was true of every structure until the Mine, and the gate makes it
+        // false a second time and dangerously so.
+        //
+        // Dropping the skip is INERT for everything that does block: the loop
+        // above has already refused any candidate footprint overlapping a blocked
+        // cell, so a blocking structure can never reach this test with an
+        // overlap. What it now catches is the structure that does NOT block its
+        // ground - an OPEN gate, and the mine before it - whose cell would
+        // otherwise read as free ground. Left in, a player could open their own
+        // gate by standing beside it, drop a wall segment on top of it, and then
+        // watch the gate's next opening UNBLOCK the wall's cell: units walking
+        // through a wall, from a legal sequence of ordinary commands.
         for (int i = 0; i < _entities.Count; i++)
         {
             var o = _entities[i];
-            if (!o.Alive || IsStructure(o.Kind)) continue; // structure cells are already blocked
+            if (!o.Alive) continue;
             int ocx = Map.CellOf(o.X), ocy = Map.CellOf(o.Y);
             if (ocx >= ax && ocx < ax + size && ocy >= ay && ocy < ay + size) return false;
         }
@@ -3419,6 +3542,130 @@ public sealed partial class World
         {
             var m = _entities[triggered[k]];
             ApplyAreaDamage(m.X, m.Y, MineDamage);
+        }
+    }
+
+    /// <summary>
+    /// Has this world ever held a gate? The gate on GateSystem's scan, and the
+    /// reason all 24 goldens stay byte-identical: no golden scenario, save or
+    /// replay places one, so the flag is never set and the system costs a single
+    /// branch per tick. The mine's `_minesInPlay` is the precedent, down to the
+    /// argument for each of its properties.
+    ///
+    /// Deliberately NOT hashed and NOT serialized: with no living gate the scan
+    /// writes no entity, touches no map cell, clears no flow field and raises no
+    /// event, so a world that resumes with this false is in the identical state
+    /// to one that resumes with it true. The deserializer sets it from the
+    /// entities it reads rather than relying on that equivalence.
+    ///
+    /// Monotone on purpose, the mine's reason exactly: a player who built one
+    /// gate will build another, and a flag that flickered would be one more
+    /// thing to keep true.
+    /// </summary>
+    private bool _gatesInPlay;
+
+    /// <summary>
+    /// P7-10: for each OPEN gate, the earliest tick it may close. An absent entry
+    /// means the gate is shut, which is the state it is born in.
+    ///
+    /// A pruned side collection rather than an Entity field, for the reason
+    /// `_lanes`, `_cargo` and `_disabledUntil` are: an absent entry contributes
+    /// nothing to the FNV accumulator, so a world with no gate in it hashes
+    /// byte-identically to one compiled before gates existed and all 24 goldens
+    /// stand. What makes the guard SOUND rather than merely convenient is that
+    /// the entry is removed on exactly the two events that end the openness - the
+    /// gate closes, or the gate dies - so "no entry" provably means "no state
+    /// that could gate behaviour".
+    /// </summary>
+    private readonly Dictionary<int, int> _gateOpenUntil = new();
+
+    /// <summary>Is this entity an OPEN gate? The public read behind the
+    /// collection, so the client can draw a raised gate without keeping its own
+    /// copy of a rule the sim owns.</summary>
+    public bool IsGateOpen(int entityId) => _gateOpenUntil.ContainsKey(entityId);
+
+    /// <summary>
+    /// P7-10: the gate opens for its own side and shuts again behind them.
+    ///
+    /// ONE GLOBAL STATE, and that is the whole design rather than a limitation
+    /// worked around. ADR-005 clause 6 deferred gates because "a gate that is
+    /// passable to its owner and solid to the enemy" needs either per-player flow
+    /// fields or an incremental flow repair, and neither exists. That blocker is
+    /// scoped to SIMULTANEOUS per-player passability and it is entirely right
+    /// about it. A gate with a single open/closed state needs neither mechanism:
+    /// an open gate is passable to EVERYBODY and a closed one is solid to
+    /// everybody, which is exactly what the one global grid already expresses.
+    ///
+    /// SO AN ENEMY CAN WALK THROUGH AN OPEN GATE, and that is chosen rather than
+    /// missed. It is the honest consequence of a global state and it is a real
+    /// mechanic: you follow somebody in. Nothing here tries to prevent it, and
+    /// the gate that proves this wave asserts it as a REQUIREMENT (stage 5) so
+    /// that a later wave cannot quietly "fix" it into the per-player rule the
+    /// ADR refused.
+    ///
+    /// Read the tick's SETTLED positions, after movement and separation, for
+    /// MineSystem's reason: a proximity question answered mid-movement depends on
+    /// where in the tick it was asked.
+    ///
+    /// THE HYSTERESIS IS THE EXPENSIVE PART OF THE DESIGN. Toggling calls
+    /// BlockFootprint or UnblockFootprint, whose only invalidation is
+    /// FlowFieldCache.Clear - every cached field on the map, thrown away. See
+    /// GateHysteresisTicks for why a delay rather than a per-tick reading, and
+    /// note the shape here: the deadline is REFRESHED on every tick an ally is
+    /// near, so the close is 45 ticks after the last one left rather than 45
+    /// ticks after the first one arrived.
+    ///
+    /// A gate does not close on somebody standing in the doorway, whoever they
+    /// belong to. The rule is not politeness: a unit inside a blocked cell is
+    /// unreachable by the flow field (Dijkstra never relaxes a blocked cell), so
+    /// it would sit there stuck with no way to order it out. An enemy parked in
+    /// the gateway therefore holds it open, which is the tailgating trade above
+    /// stated once more in its most literal form.
+    /// </summary>
+    private void GateSystem()
+    {
+        if (!_gatesInPlay) return;
+
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var g = _entities[i];
+            if (!g.Alive || g.Kind != EntityKind.Gate) continue;
+            int ax = AnchorOf(g.X, g.StructType), ay = AnchorOf(g.Y, g.StructType);
+            int size = FootprintOf(g.StructType);
+
+            bool allyNear = false, occupied = false;
+            for (int j = 0; j < _entities.Count; j++)
+            {
+                var t = _entities[j];
+                if (!t.Alive) continue;
+                // Ground units and harvesters only, and the two exclusions are
+                // the mine's own. A structure is not somebody arriving at a gate;
+                // an AIRCRAFT is not on the ground at all (ADR-028 clause 2), so
+                // it neither opens a gate nor keeps one from closing, exactly as
+                // it neither treads on a mine nor blocks a cell.
+                if (t.Kind is not (EntityKind.Unit or EntityKind.Harvester)) continue;
+                if (IsAirborne(in t)) continue;
+                int tcx = Map.CellOf(t.X), tcy = Map.CellOf(t.Y);
+                if (tcx >= ax && tcx < ax + size && tcy >= ay && tcy < ay + size) occupied = true;
+                // IsAlliedTo, not IsOwnedBy: a gate that shut in the face of the
+                // ally you spent a lobby setting up would make an alliance
+                // something you have to route around (P7-8c).
+                if (!IsAlliedTo(in t, g.PlayerId)) continue;
+                if (Fix64.DistSq(t.X - g.X, t.Y - g.Y) > GateOpenRadiusSq) continue;
+                allyNear = true;
+            }
+
+            bool open = _gateOpenUntil.TryGetValue(g.Id, out int until);
+            if (allyNear)
+            {
+                if (!open) UnblockFootprint(ax, ay, size);
+                _gateOpenUntil[g.Id] = Tick + GateHysteresisTicks;
+            }
+            else if (open && Tick >= until && !occupied)
+            {
+                _gateOpenUntil.Remove(g.Id);
+                BlockFootprint(ax, ay, size);
+            }
         }
     }
 
@@ -4948,6 +5195,16 @@ public sealed partial class World
             // h.Add here would move all 24 goldens for a feature no golden
             // scenario uses.
             if (_disabledUntil.TryGetValue(e.Id, out int until)) h.Add(until);
+            // P7-10: an OPEN gate's close deadline, folded on exactly the terms
+            // above and for exactly their reason. It decides when a cell of the
+            // passability grid flips, which decides where every unit on the map
+            // walks, so it is state a desync could hide in and must be hashed;
+            // the entry is removed the tick the gate shuts or dies, so no entry
+            // provably means no openness, and a world with no gate in it hashes
+            // byte-identically to one compiled before gates existed. Guarded,
+            // never unconditional: a bare h.Add here would move all 24 goldens
+            // for a feature no golden scenario uses.
+            if (_gateOpenUntil.TryGetValue(e.Id, out int openUntil)) h.Add(openUntil);
         }
         if (_orderQueues.Count > 0)
         {
