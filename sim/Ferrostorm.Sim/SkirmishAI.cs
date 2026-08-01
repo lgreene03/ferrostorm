@@ -75,6 +75,17 @@ public sealed class SkirmishAI
     private readonly int _actEvery;   // decision beat; larger = slower commander (the ladder's honest knob)
     private readonly int _waveSize;   // units per attack wave (PERSONALITY, not difficulty - DR-14)
     private readonly int _harvestersPerRefinery;  // DR-14: the ladder's economy knob
+
+    /// <summary>
+    /// P7-7a: how many refineries a commander runs per base, from GDD s4's
+    /// stated equilibrium ("a player floats at 2 refineries / 3 harvesters on
+    /// one base"). A compiled constant rather than a /data rung knob, and that
+    /// is deliberate: it is the GAME's designed economy, the same for every
+    /// difficulty, and the ladder's knobs are what make one commander better
+    /// than another. Turning this into a rung value would make "plays the
+    /// economy the game is designed around" a difficulty setting.
+    /// </summary>
+    public const int RefineriesPerBase = 2;
     private int _produced;
     /// <summary>DR-10: the Fire Sale fires ONCE. AI-internal state, like every
     /// field here: never hashed, never saved - the AI is sim-adjacent and its
@@ -406,7 +417,15 @@ public sealed class SkirmishAI
                    // before it rebuys anything else.
                    : harvesters == 0 ? 0
                    : supply < draw + 40 ? plant
-                   : refineryCount < cyCount ? 3 // one refinery per base (TICKET-AI-03)
+                   // P7-7a: TWO refineries per base, not one. GDD s4 states the
+                   // designed equilibrium outright - "a player FLOATS AT 2
+                   // REFINERIES / 3 HARVESTERS on one base" - and TICKET-AI-03's
+                   // one-per-base rule has held the commander at half of it
+                   // since the ladder existed. ADR-041 measured the consequence
+                   // and drew the right conclusion from it: the economy is
+                   // UNDERSIZED, not overflowing, which is why a credit ceiling
+                   // was refused. This is the row that refusal pointed at.
+                   : refineryCount < cyCount * RefineriesPerBase ? 3
                    : !hasTurret ? 5
                    // P7-5d: EYES. The Directorate's unit cycle below has built a
                    // Sentinel Scout every sixth unit since TICKET-P3-FAC-04,

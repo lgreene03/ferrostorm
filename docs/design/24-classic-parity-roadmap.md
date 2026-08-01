@@ -260,6 +260,24 @@ is special, but it can ask whether its superweapon destroys fields. An authored
 `destroys_fields:` key now answers that for both the impact site and the aim,
 which is what a `/data` key driving the runtime is supposed to look like.
 
+**And the commander's economy doubled, 2026-08-01** (P7-7a, ADR-047). GDD s4
+states the designed equilibrium outright - "a player floats at 2 refineries / 3
+harvesters on one base" - and TICKET-AI-03 had capped the AI at one refinery per
+base since the ladder existed. ADR-041 measured that consequence while refusing a
+credit ceiling and named it correctly: the economy was **undersized, not
+overflowing**. The treasury went from touching **0, 2, 19 and 1** across a
+9000-tick match to floating between **1300 and 4000**.
+
+**This is the first row in sixteen to move a golden hash**, and four moved:
+`skirmish`, `expansion`, `aisuper` and `mission`, which are exactly the four that
+run a commander building an economy. The other twenty are byte-identical.
+
+The third harvester is still owed and its cause is now identified rather than
+guessed: **the same GDD section says a refinery "includes one free harvester" and
+the sim has never implemented it**, so the designed three is two free plus one
+bought. That is a row of its own, and a much wider one, because it changes the
+economy for players exactly as much as for the AI.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
