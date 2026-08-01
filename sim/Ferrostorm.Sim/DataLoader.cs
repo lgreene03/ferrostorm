@@ -613,6 +613,7 @@ public static class StructureCatalogue
         // a tidy-up of its own rather than part of a design wave.
         "sod_generator",          // 20: the Sodality's decentralised power
         "sod_watch_post",         // 21: P7-5b, the Sodality's answer to cloak
+        "sod_seismic_charge",     // 22: P7-5c, the Sodality's superweapon
     };
 
     /// <summary>The number for a name. Throws on an unknown id rather than
@@ -667,6 +668,11 @@ public static class StructureCatalogue
         // keyed on Kind, and P7-5a is the wave that paid for learning what a
         // shared Kind costs there.
         21 => EntityKind.WatchPost,
+        // P7-5c: it SHARES the Superweapon kind with the orbital cannon on
+        // purpose - charge, launch and the warning are all keyed on that kind
+        // and all of it applies. Only the impact differs, and that branches on
+        // StructType.
+        22 => EntityKind.Superweapon,
         _ => throw new FormatException($"no EntityKind for structure id '{id}'"),
     };
 

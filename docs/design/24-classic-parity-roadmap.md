@@ -209,8 +209,32 @@ field" - a unit only the Directorate can build.** A common tool with a
 faction-locked counter is a defect rather than a missing feature, and the file
 asserting otherwise was wrong for half the players.
 
-DR-04 remains open, and Q017's sequencing question is answered by having taken
-its own first candidate.
+**Closed 2026-08-01** (P7-5c, ADR-044): DR-04 shipped, so the two sides no longer
+fire the same superweapon on the same timer. The pair is identical in cost, build
+time, power draw and charge and differs **only** in effect, which is what GDD s8's
+"one superweapon per faction" asks for: the Directorate's orbital cannon is
+unchanged, and the Sodality's seismic charge is wide, softer and **destroys the
+resource fields under it**. Measured on one factory at ground zero, the cannon
+deals 720 and the charge 280.
+
+**All three of DR-02, DR-03 and DR-04 are now delivered**, so the asymmetry
+pillar doc 27 called the least delivered of the GDD's five has the two sides
+differing in their power grid, their answer to cloak and their superweapon. All
+three landed with the 24 goldens byte-identical.
+
+Two things this row FILED rather than fixed, both stated plainly because they are
+the honest state of it. **The sim charges its superweapon 3.6 times faster than
+GDD s8's "~6 minute"** (1500 ticks against 5400); that is refused under charter
+A11 as a balance change needing co-sign, with its reversal conditions recorded.
+And **a Sodality commander can no longer queue a superweapon at all**, because the
+AI ladder names struct type 6 by number and that is now a Directorate building.
+
+That last one generalises, and it is the largest thing standing between this
+phase and a game worth playing: **the AI builds none of the faction identity any
+of these rows shipped.** Its ladder yields seven common types and has never
+reached a faction building, so the Bastion, the Shroud Nest, the Veil Projector,
+the generator, the Watch Post and both superweapons are unreachable for it. It
+matters most for the Watch Post, because that one is a counter.
 
 ## Tier D: content volume
 
