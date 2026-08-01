@@ -1,0 +1,12 @@
+# The main gun of the Directorate's Cannon Tank, and the reference point every
+# other armour number is read against.
+# DR-17: this shipped as wpn_test_cannon, a prototype name that outlived the
+# prototype and reached a catalogue the player's save file names. The rename
+# left the numbers alone deliberately - it was a naming wave - and any change to
+# the values below is DR-12's, which needs a Balance co-sign under charter A11.
+id: wpn_tank_cannon
+name: "Tank Cannon"
+range: 400
+damage: 30
+warhead: anti_armour
+cooldown_ticks: 15

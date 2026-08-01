@@ -164,12 +164,36 @@ file authors that the schema forbids is either a typo the loader is silently
 ignoring or a schema that has fallen behind. Both branches were proved to bite
 by breaking them.
 
-**And a second gap it surfaced: `data/weapons/` is EMPTY.** Every weapon number
-in the game lives compiled in `Combat.cs`, which contradicts "all gameplay
-numbers live in /data" as plainly as the unenforced schema did. Authoring them
-moves the catalogue checksum, so it is its own wave; the gate asserts the
-current truth and will fail the day someone adds a weapon yaml with no schema to
-validate it against.
+**And a second gap it surfaced: `data/weapons/` was EMPTY.** Every weapon number
+in the game lived compiled in `Combat.cs`, which contradicted "all gameplay
+numbers live in /data" as plainly as the unenforced schema did. **CLOSED
+2026-08-01**: nine authored files, `data/schema.weapon.json`, and a fourth
+directory in schemagate's walk (36 definitions and 540 keys became 45 and 597).
+
+The part that mattered was not authoring the files. It was making them **drive
+the runtime**. Writing the yaml while leaving `Combat.Weapons.Get(id)`
+authoritative would have reproduced P7-1's defect exactly - authored data that
+is parsed, validated and then dropped while the sim uses a hardcoded rule - and
+it would have looked complete. `World` now holds a registered weapon table, the
+runtime call sites read it, and weapons are folded into the catalogue checksum.
+
+`weapondatagate` makes that mechanical rather than promised. Its second stage
+registers a ten-cell gun where the compiled table says five, and asserts a
+TURRET dealt damage at seven cells: a mobile shooter would have walked into
+compiled range and passed the stage for the wrong reason, which is the kind of
+false pass that has cost this project several waves. Measured 840 damage against
+the control's 0, and proved to bite by reverting one call site.
+
+Goldens byte-identical, because the transcription is exact and stage 1 asserts
+it field by field. The catalogue checksum moved from `0x374FDD8212234CB2` to
+`0x73326A3FF8AEA4D1`, which is expected: a new catalogue section changes it by
+construction, on the same pre-first-public-build argument as P7-2/3/4 and P7-11a.
+
+**Left as the obvious next candidate:** `CatalogueFiles.Register*` is a per-kind
+opt-in, so `RegisterWeapons` had to be added beside all nine `RegisterFields`
+sites plus the client's. That is a fourth parallel registration line and the next
+`/data` kind faces the same fan-out. Not refactored here, because widening a
+wave to fix the thing the wave just revealed is how a wave stops landing.
 
 ## What P7-8 turned out to be
 

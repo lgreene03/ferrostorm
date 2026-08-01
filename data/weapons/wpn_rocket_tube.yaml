@@ -1,0 +1,12 @@
+# The infantry answer to armour, carried by the Rocket Squad and by the
+# Sodality's Phantom Tank. Hits harder than the tank cannon and cycles a third
+# slower, so a rocket squad trades well against a tank and badly against the
+# infantry escorting it.
+# DR-17: shipped as wpn_test_rocket. Numbers untouched by the rename; a change
+# needs a Balance co-sign under charter A11.
+id: wpn_rocket_tube
+name: "Rocket Tube"
+range: 400
+damage: 40
+warhead: anti_armour
+cooldown_ticks: 20

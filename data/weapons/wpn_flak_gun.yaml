@@ -1,0 +1,16 @@
+# ADR-028 clause 4: the ONLY anti-air weapon in the game, and the reason the air
+# layer was allowed to land at all. An air layer without an answer is not a
+# feature, it is a dominant strategy.
+# anti_air is an equality in BOTH directions (clause 3): no other weapon can
+# reach an aircraft, and this one cannot shoot the ground. It is ground-blind by
+# nothing more than that rule, because the Flak Track carries no second weapon,
+# and that is what keeps it a counter rather than a general-purpose escort.
+# The reach is the longest in the catalogue after the howitzer's, which is what
+# lets a mobile answer cover an army on the move rather than only a base.
+id: wpn_flak_gun
+name: "Flak Gun"
+range: 600
+damage: 40
+warhead: anti_armour
+cooldown_ticks: 10
+anti_air: true

@@ -46,38 +46,51 @@ public readonly struct WeaponDef
     }
 }
 
+/// <summary>
+/// The COMPILED REFERENCE weapon table. Since the /data weapons wave these nine
+/// defs are no longer the runtime's source: every number here is authored in
+/// data/weapons/*.yaml against data/schema.weapon.json, the loader registers
+/// them into the world before tick 0, and a live match reads
+/// World.GetWeaponType. What survives here is the reference a /data file must
+/// reproduce exactly, which WeaponDataGate proves field by field.
+///
+/// The design reasoning that used to live in the comments below moved into the
+/// files with the numbers, because a note explaining why the howitzer has a
+/// dead zone belongs beside the dead zone a designer can edit. Read
+/// data/weapons/ for it.
+/// </summary>
 public static class Weapons
 {
-    public static readonly WeaponDef None = new(Fix64.Zero, 0, Warhead.Omni, int.MaxValue);
-    // DR-17: the tank gun, the infantry rifle and the rocket tube. They were
-    // TestCannon, TestRifle and TestRocket until the design review pointed out
-    // that the prototype's names had reached the shipped catalogue. Numbers
-    // untouched by the rename: this is a naming wave, and any change to these
-    // values is DR-12's, which needs a Balance co-sign.
-    public static readonly WeaponDef TankCannon = new(Fix64.FromInt(4), 30, Warhead.AntiArmour, 15);
-    public static readonly WeaponDef ServiceRifle = new(Fix64.FromInt(3), 12, Warhead.AntiInfantry, 8);
-    public static readonly WeaponDef RocketTube = new(Fix64.FromInt(4), 40, Warhead.AntiArmour, 20);
-    public static readonly WeaponDef TurretGun = new(Fix64.FromInt(5), 35, Warhead.AntiArmour, 12);
-    // Howitzer: enormous reach, a 3-cell dead zone, slow, and splash that
-    // does not care whose uniform you wear (TICKET-P2-SIM-14).
-    public static readonly WeaponDef Howitzer = new(Fix64.FromInt(9), 60, Warhead.AntiBuilding, 45,
-        minRange: Fix64.FromInt(3), splashRadius: Fix64.FromFraction(3, 2));
-    // Bulwark cannon: the Directorate's argument-ender. Heavy single-target.
-    public static readonly WeaponDef BulwarkCannon = new(Fix64.FromInt(5), 50, Warhead.AntiArmour, 18);
-    // Vanguard autocannon (TICKET-P4-SLICE-01): a fast-cycling anti-infantry
-    // gun - the per-cost edge over massed rifles that justifies the car.
-    public static readonly WeaponDef VanguardGun = new(Fix64.FromInt(3), 18, Warhead.AntiInfantry, 6);
-    // P7-2: the Emplacement's gun. Range 4 deliberately OUT-RANGES the service
-    // rifle's 3, because a defence that must be walked into by the thing it
-    // counters is not a counter. Anti-infantry warhead, so armour walks through
-    // it and the rock-paper-scissors is real rather than a damage number.
-    public static readonly WeaponDef EmplacementGun = new(Fix64.FromInt(4), 22, Warhead.AntiInfantry, 7);
-    // ADR-028 clause 4: the ONLY AntiAir weapon in the game, and the reason the
-    // air layer is allowed to land. Ground-blind by omission of nothing - it
-    // simply never engages a target that is not airborne, because the flak
-    // track carries no second weapon.
-    public static readonly WeaponDef FlakGun = new(Fix64.FromInt(6), 40, Warhead.AntiArmour, 10, antiAir: true);
+    /// <summary>The highest compiled weapon id, and therefore the bound for
+    /// every loop that enumerates the table (World's seed, the /data loader's
+    /// completeness check). Ids are dense from 1; 0 is None and is not a
+    /// weapon.</summary>
+    public const int MaxWeaponId = 9;
 
+    public static readonly WeaponDef None = new(Fix64.Zero, 0, Warhead.Omni, int.MaxValue);
+    // Each def below is the reference copy of one file in data/weapons, named in
+    // the trailing comment. The design reasoning that used to sit here (DR-17's
+    // rename of the prototype names, the howitzer's dead zone, the emplacement
+    // gun out-ranging the service rifle, the flak gun being the only anti-air
+    // weapon in the game) now lives in those files, beside the numbers a
+    // designer can actually edit. Ranges are Fix64 cells here and integer
+    // hundredths of a cell in the files, the speed convention.
+    public static readonly WeaponDef TankCannon = new(Fix64.FromInt(4), 30, Warhead.AntiArmour, 15);          // wpn_tank_cannon
+    public static readonly WeaponDef ServiceRifle = new(Fix64.FromInt(3), 12, Warhead.AntiInfantry, 8);       // wpn_service_rifle
+    public static readonly WeaponDef RocketTube = new(Fix64.FromInt(4), 40, Warhead.AntiArmour, 20);          // wpn_rocket_tube
+    public static readonly WeaponDef TurretGun = new(Fix64.FromInt(5), 35, Warhead.AntiArmour, 12);           // wpn_turret_gun
+    public static readonly WeaponDef Howitzer = new(Fix64.FromInt(9), 60, Warhead.AntiBuilding, 45,           // wpn_howitzer
+        minRange: Fix64.FromInt(3), splashRadius: Fix64.FromFraction(3, 2));
+    public static readonly WeaponDef BulwarkCannon = new(Fix64.FromInt(5), 50, Warhead.AntiArmour, 18);       // wpn_bulwark_cannon
+    public static readonly WeaponDef VanguardGun = new(Fix64.FromInt(3), 18, Warhead.AntiInfantry, 6);        // wpn_vanguard_autocannon
+    public static readonly WeaponDef EmplacementGun = new(Fix64.FromInt(4), 22, Warhead.AntiInfantry, 7);     // wpn_emplacement_gun
+    public static readonly WeaponDef FlakGun = new(Fix64.FromInt(6), 40, Warhead.AntiArmour, 10, antiAir: true); // wpn_flak_gun
+
+    /// <summary>The compiled reference table: the values a /data/weapons file
+    /// must reproduce exactly. Static so that callers with no World (the
+    /// balance tools, the client's own harnesses) can still read a weapon; a
+    /// live match must read World.GetWeaponType instead, which honours
+    /// RegisterWeaponType and is therefore what /data actually drives.</summary>
     public static WeaponDef Get(int id) => id switch
     {
         1 => TankCannon,

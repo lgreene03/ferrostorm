@@ -1,0 +1,15 @@
+# P7-2. The Emplacement's gun, and since P7-2b the Sodality Shroud Nest's too.
+# Range 400 deliberately OUT-RANGES the service rifle's 300, because a defence
+# that must be walked into by the thing it counters is not a counter. That one
+# cell is the whole point of the building, so the two files move together or not
+# at all.
+# Anti-infantry warhead, so armour walks straight through it. That is intended:
+# it makes the rock-paper-scissors real rather than a damage number, and it is
+# why the Emplacement is a choice against the turret rather than an upgrade over
+# it.
+id: wpn_emplacement_gun
+name: "Emplacement Gun"
+range: 400
+damage: 22
+warhead: anti_infantry
+cooldown_ticks: 7
