@@ -311,6 +311,30 @@ a wave: ADR-048 shipped two changes together, measured the pair, and blamed the
 written one. Two changes in a wave is one change too many when either could
 explain the result.
 
+**And the economy rows then exposed something older** (P7-8, ADR-050). The
+tracker carried a filed row saying the commander clustered its Sodality
+generators where a single plant would have gone. Measured, that was wrong in the
+opposite direction: the generators were **strung in a chain from the yard to the
+map corner**, twelve of them, because `TryFindPlacement` walked the entity list
+backwards and anchored each new building on the most recently built one. A base
+did not cluster, it **walked**.
+
+Walking the list forwards anchors on the Construction Yard instead. Measured, the
+furthest structure from a yard went from **31 cells to 5** for the Sodality and
+from **11 to 4** for the Directorate - so the drift was always there, and DR-02
+multiplied it two and a half times by having one side build twelve power
+buildings where the other builds five.
+
+The trade is recorded rather than hidden: a compact base takes **9 of 12** power
+buildings inside one seismic blast against 5 of 12 before. ADR-042's claim was
+about losing a SINGLE building and is untouched; whether the Sodality should
+deliberately spread against area weapons is a balance question filed for the
+playtest.
+
+This one is worth remembering for what it says about coverage: **the defect was
+invisible for the whole project until an economy row made one side build twelve
+power buildings instead of one.** Nothing had ever asked what shape a base was.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the

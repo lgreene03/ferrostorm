@@ -8537,6 +8537,92 @@ int FactionPowerGate()
     return 0;
 }
 
+int BaseShapeGate()
+{
+    // P7-8 (ADR-050). A commander's base must be a BASE - a cluster around its
+    // Construction Yard - and not a trail of buildings walking off the map.
+    //
+    // There is no GDD line about base shape, so the bound below is a design
+    // default and ADR-050 records it with its alternatives. What is NOT invented
+    // is its SOURCE: it is two Construction Yard build radii, the game's own
+    // rule for how far a building may sit from what anchors it. "A base is about
+    // two yard-radii across" is a claim a reader can check against
+    // World.CyBuildRadius; a bare number would be one nobody could.
+    int maxFromYard = World.CyBuildRadius * 2;
+
+    // A commander with a REAL power curve, which is what makes this measurable:
+    // given a 2000-supply plant the ladder never builds another and there is no
+    // trail to see. The Sodality is the sharp case because DR-02 has it build
+    // 40-supply generators, so it puts up two and a half times as many power
+    // buildings as the Directorate and any drift is multiplied.
+    (int Count, int Worst, int Yx, int Yy) Settle(ulong seed, int faction)
+    {
+        var w = new World(seed, 96, 64, players: 2);
+        w.SetFaction(0, faction);
+        w.GrantCredits(0, 40000);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 12, 30, structType: World.PlantTypeForFaction(faction));
+        w.SpawnRefinery(0, 12, 26);
+        w.SpawnFactory(0, 8, 34);
+        int harv = w.SpawnHarvester(0, Fix64.FromInt(14), Fix64.FromInt(34));
+        int field = w.SpawnFerriteField(Fix64.FromInt(22), Fix64.FromInt(30), 400000);
+        w.SpawnConstructionYard(1, 86, 30);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+        for (int t = 0; t < 9000; t++)
+        {
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        // The worst structure is the one furthest from ANY of this commander's
+        // yards, so founding a second base legitimately is not counted as drift.
+        int count = 0, worst = 0, yx = 0, yy = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var s = w.Entities[i];
+            if (!s.Alive || s.PlayerId != 0 || !World.IsStructure(s.Kind)) continue;
+            count++;
+            int best = int.MaxValue;
+            for (int j = 0; j < w.Entities.Count; j++)
+            {
+                var y = w.Entities[j];
+                if (!y.Alive || y.PlayerId != 0 || y.Kind != EntityKind.ConstructionYard) continue;
+                int dx = Map.CellOf(s.X) - Map.CellOf(y.X), dy = Map.CellOf(s.Y) - Map.CellOf(y.Y);
+                int cheb = Math.Max(Math.Abs(dx), Math.Abs(dy));
+                if (cheb < best) { best = cheb; yx = Map.CellOf(y.X); yy = Map.CellOf(y.Y); }
+            }
+            if (best != int.MaxValue && best > worst) worst = best;
+        }
+        return (count, worst, yx, yy);
+    }
+
+    foreach (int faction in new[] { World.FactionDirectorate, World.FactionSodality })
+    {
+        var s = Settle(4100 + (ulong)faction, faction);
+        string side = faction == World.FactionDirectorate ? "Directorate" : "Sodality";
+        if (s.Count < 6)
+            return Fail($"base shape: the {side} commander built only {s.Count} structures, so this fixture is not "
+                        + "exercising base growth and proves nothing");
+        if (s.Worst > maxFromYard)
+            return Fail($"base shape: the {side} commander has a structure {s.Worst} cells from its nearest "
+                        + $"Construction Yard, against a bound of {maxFromYard} (two CyBuildRadius). Its base is a "
+                        + "TRAIL rather than a base - placement is anchoring on the newest building, so each one "
+                        + "rings off the last and the base walks across the map");
+        Console.WriteLine($"  baseshape: {side} settled {s.Count} structures, furthest {s.Worst} cells from a yard "
+                          + $"(bound {maxFromYard})");
+    }
+
+    Console.WriteLine("baseshapegate: a commander's base stays a CLUSTER around its Construction Yard rather than a "
+                      + "trail walking off the map. Placement anchors on the OLDEST eligible structure - in practice "
+                      + "the yard - so buildings ring outward from the base; anchoring on the newest made each one "
+                      + "ring off the last, and a Sodality commander, which DR-02 has building two and a half times "
+                      + "as many power buildings as the Directorate, strung twelve generators from its yard to the "
+                      + "map corner. The bound is two CyBuildRadius rather than a bare number, so it can be checked "
+                      + "against the game's own rule for how far a building may sit from what anchors it");
+    return 0;
+}
+
 int FreeHarvesterGate()
 {
     // P7-7d (ADR-049). GDD s4 carries a price-list line the sim never had:
@@ -10674,6 +10760,10 @@ int Match(ulong seed)
     // it, which is what carries the commander to s4's stated 3.
     int freeHarvester = FreeHarvesterGate();
     if (freeHarvester != 0) return freeHarvester;
+    // P7-8: and the base it builds with all that income is a base rather than a
+    // trail of buildings walking off the map.
+    int baseShape = BaseShapeGate();
+    if (baseShape != 0) return baseShape;
     // P7-8c: an alliance is a team id per seat, defaulting to the seat's own, so
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
@@ -12272,6 +12362,7 @@ return args.Length == 0
         "seismicaimgate" => SeismicAimGate(),
         "economyfloatgate" => EconomyFloatGate(),
         "freeharvestergate" => FreeHarvesterGate(),
+        "baseshapegate" => BaseShapeGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
