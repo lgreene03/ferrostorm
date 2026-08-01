@@ -166,15 +166,26 @@ ulong ScenarioEconomy(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     }
     long credits = world.Credits(0);
     // ADR-012 (Wave B6): the two 2000-unit fields still deliver their full
-    // 4000, plus exactly 14 that regrew while they were alive and below cap
-    // before exhaustion (1 unit per 75 ticks; f1's two harvesters strip it
-    // faster and it collects fewer ticks than the single-harvester f2, summing
-    // to 14). Seed-independent: the harvest of these fixed fields is
-    // deterministic across every seed, so this stays an exact assertion the way
-    // the pre-regrowth 4000 was, not a band. A stripped field would deliver its
-    // spawn amount and no more; the surplus IS regrowth, proven in RegrowthGate.
-    if (credits != 4014)
-        throw new Exception($"economy: expected 4000 delivered plus 14 regrown (ADR-012), got {credits}");
+    // 4000, plus the units that regrew while they were alive and below cap
+    // before exhaustion (1 unit per 75 ticks). Seed-independent: the harvest of
+    // these fixed fields is deterministic across every seed, so this stays an
+    // exact assertion the way the pre-regrowth 4000 was, not a band. A stripped
+    // field would deliver its spawn amount and no more; the surplus IS
+    // regrowth, proven in RegrowthGate.
+    //
+    // The regrown figure was 14 and is 13, and the delivered 4000 is unchanged:
+    // measured at the end of this run, both fields are DEAD with 0 remaining,
+    // so everything spawned still reaches the refinery. What moved is when.
+    // ADR-036 gave the harvester the speed its own /data file authors, 0.18
+    // rather than the hardcoded 0.20 it had used since before the catalogue
+    // existed, so it arrives fractionally later, each field spends a slightly
+    // different span below cap, and the regrowth accrual lands one unit short.
+    // One unit of ferrite, and it is the whole visible cost of eleven per cent
+    // of harvester speed being wrong in every measurement this project ever
+    // took.
+    if (credits != 4013)
+        throw new Exception($"economy: expected 4000 delivered plus 13 regrown (ADR-012, at the authored "
+                            + $"harvester speed of ADR-036), got {credits}");
 
     // Flee phase (TICKET-P2-SIM-08): a rifle camps a fresh field; a harvester
     // sent in must abandon loading under fire and run its part-load home.
@@ -4776,19 +4787,31 @@ int MultiSeatGate()
     //        hash at placement and after 600 quiet ticks. If the generalisation
     //        had shifted a spawn order, a cell centre or the mirroring of the
     //        opening force by so much as one unit, these would move.
-    const ulong PlacedOnMain = 0x944F9440A28B59FBUL;
-    const ulong Tick600OnMain = 0x6DB7E79AAD62EFADUL;
+    // RE-PINNED by ADR-036, and the re-pin is the honest move rather than a
+    // chore. These are absolute hashes, so ANY deliberate sim change moves
+    // them and this check then reports it in P7-8a's name. It did exactly that
+    // when the harvester started reading its own /data speed: skirmish-01's
+    // opening hand carries a harvester, the placement hash moved, and the
+    // message blamed a generalisation that had not changed. The values are
+    // re-measured and the message no longer names a cause it cannot know.
+    //
+    // What this pair still catches, and why it is kept: an ACCIDENTAL change to
+    // two-player placement, which is the thing P7-8a risked and which no golden
+    // covers, because skirmish-01 placement is not itself a golden scenario.
+    const ulong PlacedPinned = 0x9D3E3D666AE5E693UL;
+    const ulong Tick600Pinned = 0xAF41FAAB56DE8325UL;
     {
         var w = BuildSkirmishWorld(4105);
         ulong placed = w.ComputeStateHash();
-        if (placed != PlacedOnMain)
-            return Fail($"multiseat: two-player placement on skirmish-01 hashes 0x{placed:X16}, "
-                        + $"but on main it hashed 0x{PlacedOnMain:X16} - the generalisation changed 2-player behaviour");
+        if (placed != PlacedPinned)
+            return Fail($"multiseat: two-player placement on skirmish-01 hashes 0x{placed:X16}, against the "
+                        + $"pinned 0x{PlacedPinned:X16}. If you did not deliberately change placement, spawn "
+                        + "order or the opening force, this is a regression; if you did, re-pin it and say so.");
         for (int t = 0; t < 600; t++) w.Step(default);
         ulong played = w.ComputeStateHash();
-        if (played != Tick600OnMain)
+        if (played != Tick600Pinned)
             return Fail($"multiseat: 600 ticks on from that placement hashes 0x{played:X16}, "
-                        + $"but on main it hashed 0x{Tick600OnMain:X16}");
+                        + $"but on main it hashed 0x{Tick600Pinned:X16}");
     }
 
     // --- 6. A FOUR-SEAT WORLD SURVIVES SAVE AND LOAD. The format has always
@@ -4953,8 +4976,8 @@ int MultiSeatGate()
                       + $"seat 0 only when the third falls, announcing each of the {elimTotal} eliminations exactly "
                       + $"once over 480 ticks; four commanders all issue orders and the match replays to the same "
                       + $"hash 0x{aiHash:X16}; the four-seat world round-trips through {saveBytes} bytes of save "
-                      + $"unchanged; and a two-player skirmish-01 still hashes 0x{PlacedOnMain:X16} at placement and "
-                      + $"0x{Tick600OnMain:X16} 600 ticks on, the values measured on main before the change. "
+                      + $"unchanged; and a two-player skirmish-01 still hashes 0x{PlacedPinned:X16} at placement and "
+                      + $"0x{Tick600Pinned:X16} 600 ticks on, the pinned values re-measured at ADR-036. "
                       + $"On the shipped four-start map skirmish-09 (Kilnmoor Quarters, mirror2) all four seats are "
                       + $"seated with a yard and a four-strong hand, {quarterOutposts} outposts stand as whole "
                       + $"four-seat orbits, 600 ticks of four commanders produce {quarterEntities} entities and "
@@ -5043,6 +5066,50 @@ int AiTargetGate()
                           + "happened to spawn first, and kept doing it. No golden distinguishes the two rules, "
                           + "which is why this moved no hash and why nothing else was going to catch it");
     }
+    return 0;
+}
+
+int HarvesterDataGate()
+{
+    // ADR-036. World.SpawnHarvester is the oldest spawner in the file and it
+    // predated the catalogue: it hardcoded hit points, armour, sight and speed
+    // and never stamped a UnitType. Three of those four happened to MATCH the
+    // authored def, which is exactly why it survived - a mostly-correct copy is
+    // harder to notice than a wrong one. The speed did not match, and every
+    // harvester in the game moved at 0.20 where com_harvester.yaml says 0.18.
+    {
+        var w = new World(9101, 64, 64, players: 2);
+        int h = w.SpawnHarvester(0, Fix64.FromInt(10), Fix64.FromInt(10));
+        var def = w.GetUnitType(World.HarvesterUnitType);
+        var e = w.Entities[h];
+        if (e.UnitType != World.HarvesterUnitType)
+            return Fail($"harvester: a spawned harvester must carry its unit type, got {e.UnitType}. With 0 "
+                        + "its authored def cannot be read back off the entity, which blinds AtMaxAlive, "
+                        + "IsAirborne and the client's name and model lookups.");
+        if (e.Speed != def.Speed)
+            return Fail($"harvester: speed {e.Speed} does not match the authored {def.Speed}. This is the "
+                        + "divergence ADR-036 fixed: the hardcoded 1/5 was 0.20 against /data's 0.18, so "
+                        + "every economy measurement this project took was taken against a number nobody wrote.");
+        if (e.Hp != def.Hp || e.MaxHp != def.Hp || e.Armour != def.Armour
+            || e.Sight != Fix64.FromInt(def.SightCells))
+            return Fail("harvester: hit points, armour or sight do not match the authored def");
+        // The REGISTERED def must win, not the compiled one: that is the whole
+        // difference between data driving the runtime and data mirroring it.
+        var w2 = new World(9102, 64, 64, players: 2);
+        var poisoned = w2.GetUnitType(World.HarvesterUnitType) with { Hp = 1234 };
+        w2.RegisterUnitType(World.HarvesterUnitType, poisoned);
+        int h2 = w2.SpawnHarvester(0, Fix64.FromInt(10), Fix64.FromInt(10));
+        if (w2.Entities[h2].Hp != 1234)
+            return Fail($"harvester: a REGISTERED def must drive the spawn, got {w2.Entities[h2].Hp} not 1234. "
+                        + "Reading the compiled table instead would make data/units/com_harvester.yaml "
+                        + "decoration rather than data, which is the P7-1 defect.");
+    }
+    Console.WriteLine("harvesterdatagate: a spawned harvester carries its unit type and takes its hit points, "
+                      + "armour, sight and SPEED from the catalogue, and a registered def overrides the compiled "
+                      + "one - so data/units/com_harvester.yaml drives the oldest spawner in the sim rather than "
+                      + "being shadowed by it. The speed it had used since before the catalogue existed was 0.20 "
+                      + "against the authored 0.18, which is eleven per cent, in every economy number ever "
+                      + "measured here");
     return 0;
 }
 
@@ -7912,6 +7979,9 @@ int Match(ulong seed)
     // The commander aims at the nearest enemy economy, not the earliest-spawned.
     int aitarget = AiTargetGate();
     if (aitarget != 0) return aitarget;
+    // The oldest spawner in the sim reads the catalogue like every other.
+    int harvdata = HarvesterDataGate();
+    if (harvdata != 0) return harvdata;
     // And the weapon numbers in /data are the ones the sim actually fires.
     int weaponData = WeaponDataGate();
     if (weaponData != 0) return weaponData;
@@ -8706,12 +8776,18 @@ int LanAiSeatsGate()
 
     // --- 3. THE CONTROL, AND THE NO-REGRESSION BAR. With no commanders attached
     //        the two clients must still agree, and on the hash the identical
-    //        scenario produced BEFORE any of this existed. NoAiBeforeTheChange was
+    //        scenario produced BEFORE any of this existed. NoAiPinned was
     //        measured by running this very stage against the unmodified lockstep
     //        client, so it is a before-and-after measurement rather than an
     //        inference from a green run: every shipped LAN match today attaches no
     //        commanders, and `lan`, `lanpoll` and `lanchaos` are all that path.
-    const ulong NoAiBeforeTheChange = 0x96898875D89FCD82UL;
+    // RE-PINNED by ADR-036, for the same reason multiseatgate's pair was: this
+    // is an absolute hash, so ANY deliberate sim change moves it and the check
+    // then reports it in the AI-seats change's name. The harvester reading its
+    // own /data speed moved it, because test-4seat's opening hand carries one.
+    // What it still catches is the thing worth catching: the no-commanders path
+    // silently ceasing to be a pass-through.
+    const ulong NoAiPinned = 0x468099A1430B53FDUL;
     ulong controlHash;
     {
         var run = PlayLan(8101, ControlTicks, None);
@@ -8720,10 +8796,10 @@ int LanAiSeatsGate()
         if (run.Hashes[0] != run.Hashes[1])
             return Fail($"lanaiseats control: two clients with no commanders ended on 0x{run.Hashes[0]:X16} "
                         + $"and 0x{run.Hashes[1]:X16}");
-        if (run.Hashes[0] != NoAiBeforeTheChange)
+        if (run.Hashes[0] != NoAiPinned)
             return Fail($"lanaiseats control: {ControlTicks} ticks with no commanders hashes 0x{run.Hashes[0]:X16}, "
                         + $"but before the AI seats existed the identical scenario hashed "
-                        + $"0x{NoAiBeforeTheChange:X16} - the empty case is no longer a pass-through");
+                        + $"0x{NoAiPinned:X16} - the empty case is no longer a pass-through");
         controlHash = run.Hashes[0];
         for (int seat = HumanSeats; seat < Seats; seat++)
             if (run.SeatGrowth[0][seat] != 0)
@@ -9405,6 +9481,7 @@ return args.Length == 0
         "herogate" => HeroGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
+        "harvesterdatagate" => HarvesterDataGate(),
         "aitargetgate" => AiTargetGate(),
         "weapondatagate" => WeaponDataGate(),
         "aituninggate" => AiTuningGate(),

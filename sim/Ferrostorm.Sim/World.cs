@@ -369,14 +369,42 @@ public sealed partial class World
             Stealth = stealth, Detector = detector, VetEnabled = veterancy, UnitType = unitType,
         });
 
+    /// <summary>The harvester, read from the catalogue like every other unit.
+    ///
+    /// This is the OLDEST spawner in the file and it predates the catalogue
+    /// entirely: it hardcoded hit points, armour, sight and speed, and it never
+    /// stamped a UnitType at all. Two consequences, and the second is the one
+    /// that had been costing something the whole time.
+    ///
+    /// With no UnitType, every harvester in the game stood as type 0, so its
+    /// authored def could not be read back off the entity. `AtMaxAlive`,
+    /// `IsAirborne` and the client's name and model lookups were all blind to
+    /// it, and one runner check had already been written around the gap rather
+    /// than against it.
+    ///
+    /// And the hardcoded speed DIVERGED. `Fix64.FromFraction(1, 5)` is 0.20;
+    /// `com_harvester.yaml` authors `speed: 18`, which is 0.18. Every harvester
+    /// in the game moved eleven per cent faster than the file that is supposed
+    /// to define it, so every economy measurement this project has ever taken
+    /// was taken against a number nobody wrote down. That is P7-1's defect -
+    /// authored data that does not drive the runtime - in the place it has sat
+    /// longest.
+    ///
+    /// The other three values happened to match, which is exactly why this
+    /// survived: a mostly-correct copy is harder to notice than a wrong one.
+    /// </summary>
     public int SpawnHarvester(int player, Fix64 x, Fix64 y)
-        => Add(new Entity
+    {
+        var def = GetUnitType(HarvesterUnitType);
+        return Add(new Entity
         {
             Id = _entities.Count, Alive = true, PlayerId = player, Kind = EntityKind.Harvester,
-            X = x, Y = y, TargetX = x, TargetY = y, Speed = Fix64.FromFraction(1, 5),
-            Hp = 700, MaxHp = 700, Armour = ArmourClass.Heavy, WeaponId = 0, ExplicitTarget = -1,
-            Sight = Fix64.FromInt(5), FieldId = -1, RefineryId = -1,
+            X = x, Y = y, TargetX = x, TargetY = y, Speed = def.Speed,
+            Hp = def.Hp, MaxHp = def.Hp, Armour = def.Armour, WeaponId = def.WeaponId,
+            ExplicitTarget = -1, Sight = Fix64.FromInt(def.SightCells),
+            FieldId = -1, RefineryId = -1, UnitType = HarvesterUnitType,
         });
+    }
 
     public int SpawnRefinery(int player, int ax, int ay)
     {
@@ -1179,6 +1207,10 @@ public sealed partial class World
     /// RepairVehicleType is: so everything that means "the MCV" tests the same
     /// number rather than a 7 that has to be recognised on sight.</summary>
     public const int McvUnitType = 7;
+    /// <summary>Named for the same reason McvUnitType is: SpawnHarvester now
+    /// reads its def, and a bare 4 in that lookup is a number nobody can check
+    /// on sight.</summary>
+    public const int HarvesterUnitType = 4;
     public const int EngineerUnitType = 11;
     /// <summary>P7-7: GDD s7's Infiltrator, the Sodality's economy-denial tool.</summary>
     public const int InfiltratorUnitType = 17;
