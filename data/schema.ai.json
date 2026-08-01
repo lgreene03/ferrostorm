@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skirmish AI tuning definition",
+  "description": "DR-14 / doc 28. The skirmish commander's tuning, in the same shape and spirit as schema.weapon.json: CLAUDE.md forbids hand-editing stats in code, so these files are the runtime source and the AiTuning class exists only to be proved equal to them by aituninggate. The numbers here DRIVE the runtime - CatalogueFiles.RegisterAiTuning registers them into the world before tick 0 and SkirmishAI composes a commander from World.GetAiTuning - so editing a value in one of these files changes the game. This kind carries a safety argument the others do not: the commander's numbers used to be compiled, so two LAN peers agreed on them by construction, and the table is therefore folded into World.CatalogueChecksum, which the LAN hello, saves and replays already compare and refuse a mismatch on. The tuning id is the sim's wire identity and stays a compiled map (AiCatalogue.TuningIdOf); the file names the thing, the map names the number.",
+  "type": "object",
+  "required": ["id", "name", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^ai_[a-z0-9_]+$",
+      "description": "AI tuning rows take the ai_ prefix rather than a faction prefix: a commander's taste and a difficulty rung belong to no side." },
+    "name": { "type": "string", "description": "Player-facing name, shown in the skirmish setup menu. British spelling. Must pass legal sweep." },
+    "kind": { "enum": ["personality", "rung"],
+      "description": "Which family this row belongs to, and therefore which keys it must author and which it is refused for authoring. DR-14 keeps personality and difficulty ORTHOGONAL - personality is a commander's taste in wave size, difficulty is how good it is - because the review that produced the ladder found the two conflated. A personality row authors act_every_ticks and wave_size; a rung row authors beat_numerator, beat_denominator, harvesters_per_refinery and starting_credit_handicap. The loader refuses either family's keys in the other's file, so the orthogonality is enforced rather than merely described. Per-family required keys cannot be expressed here, since the gate that reads this schema applies one required list per directory, so the loader carries that half and reports a missing key with the file name and its own line number." },
+    "act_every_ticks": { "type": "integer", "minimum": 1,
+      "description": "PERSONALITY ONLY. The commander's decision beat in sim ticks at 15Hz: it acts on ticks divisible by this and is silent between them. 15 is one decision per second and is the beat that has always shipped. The rung then scales it, so this is the number a difficulty is applied to rather than the final beat. Must be at least 1; the commander takes Tick modulo it." },
+    "wave_size": { "type": "integer", "minimum": 1,
+      "description": "PERSONALITY ONLY. Fighting units that must stand ready before an attack wave goes out, and the number that makes the shape of the opponent. Read twice: the wave leaves at wave_size plus the garrison, and the garrison itself is half of this with a floor of 2, so a smaller wave also means a smaller home guard. Set by Balance under A11." },
+    "beat_numerator": { "type": "integer", "minimum": 1,
+      "description": "RUNG ONLY. Numerator of the ratio the rung scales the personality's beat by. A RATIO rather than a multiplier because Brutal needs two thirds exactly and CLAUDE.md forbids any floating-point type anywhere in /sim; the commander computes act_every_ticks * beat_numerator / beat_denominator in integer arithmetic and floors the result at 1. A larger ratio is a SLOWER commander, since the beat is a gap between decisions." },
+    "beat_denominator": { "type": "integer", "minimum": 1,
+      "description": "RUNG ONLY. Denominator of the same ratio. The division TRUNCATES, which is deliberate and load-bearing: 15 * 2 / 3 is 10. Must be at least 1; the commander divides by it." },
+    "harvesters_per_refinery": { "type": "integer", "minimum": 1,
+      "description": "RUNG ONLY. How many harvesters the commander keeps working per refinery it owns, and the ladder's honest strength knob: more mining, not free money, and income a player can go after and take away. 1 is the rule that has always shipped. Set by Balance under A11." },
+    "starting_credit_handicap": { "type": "integer", "minimum": 0,
+      "description": "RUNG ONLY. Credits granted to the AI seat at match setup, and the one declared cheat GDD line 76 permits, allowed at the top rung and nowhere else. It is applied by whatever BUILDS the match and never by the commander: SkirmishAI mutates nothing, and a replay re-runs the bare command stream with no AI attached, so a commander that granted itself credits would desync every replay of its own match. Any value above 0 must be labelled as cheating wherever the rung is offered to a player." },
+    "notes": { "type": "string", "description": "Design intent and GDD/ADR traceback." }
+  }
+}

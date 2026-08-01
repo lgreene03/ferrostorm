@@ -578,9 +578,13 @@ public partial class SkirmishLive : Node3D
                 // where the seat is 0 and the AI's 1 happen to be opposite.
                 // Found by the headless harness the first time anything drove
                 // the scene from seat 1.
-                        1 => SkirmishAI.Rusher(seat, rung),
-                        2 => SkirmishAI.Turtle(seat, rung),
-                        _ => SkirmishAI.Standard(seat, rung),
+                // The world is passed so the commander is built from the tuning
+                // in data/ai rather than from the compiled reference. Without
+                // it the files would be authored, validated, checksummed and
+                // then never read, which is the P7-1 defect exactly.
+                        1 => SkirmishAI.Rusher(seat, rung, _world),
+                        2 => SkirmishAI.Turtle(seat, rung, _world),
+                        _ => SkirmishAI.Standard(seat, rung, _world),
                     });
                 }
                 // Brutal's handicap, applied HERE by setup rather than by the
@@ -593,7 +597,7 @@ public partial class SkirmishLive : Node3D
                 // line invisible outside Brutal. A resumed save is unaffected:
                 // ResumeFromSave replaces this world entirely, so the saved
                 // treasury stands rather than being topped up on every load.
-                long handicap = SkirmishAI.StartingCreditHandicap(rung);
+                long handicap = SkirmishAI.StartingCreditHandicap(rung, _world);
                 if (handicap > 0)
                     for (int seat = 0; seat < _world.PlayerCount; seat++)
                         if (seat != LocalPlayerId) _world.GrantCredits(seat, handicap);

@@ -1,0 +1,20 @@
+# DR-14 / doc 28. GDD line 76's second rung: "competent build orders".
+# THE IDENTITY RUNG, and the reason a whole difficulty ladder was added without
+# moving a single golden hash. Every number here is the value the commander used
+# before the ladder existed: the beat ratio is 1/1, so the personality's own
+# act_every_ticks passes through untouched, and the mining and the handicap are
+# the shipped ones. difficultygate pins this as a measured claim by playing a
+# full match at Normal and at the pre-ladder default and comparing state hashes,
+# so a future edit that quietly changes this file fails there and not six months
+# later in a hash nobody can explain.
+# Edit these four numbers and you are not tuning Normal, you are moving the
+# baseline every other rung is defined against and every golden was recorded
+# against. That is an ADR and an Architect sign-off (CLAUDE.md), not a balance
+# tweak.
+id: ai_normal
+name: Normal
+kind: rung
+beat_numerator: 1
+beat_denominator: 1
+harvesters_per_refinery: 1
+starting_credit_handicap: 0

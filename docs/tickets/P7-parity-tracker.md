@@ -354,6 +354,37 @@ seat is not an option, it is a crash waiting for a player to find it. On a
 two-start map that leaves exactly one option, which is correct rather than a
 special case, and the control says so instead of hiding.
 
+## /data finally holds what the project says it holds
+
+Four consecutive waves, each one surfaced by the last, and worth reading as one
+thing because the shape repeats: **a claim that was true when written and
+quietly false since.**
+
+1. `schemagate` found the schemas were never validated by anything at all, and
+   `schema.unit.json` had been four waves behind the loader on the `air` key.
+2. Which surfaced that `data/weapons/` was EMPTY, every weapon number compiled.
+3. Which surfaced that `RegisterAll` did not register all, and had not since
+   fields were added.
+4. Which surfaced that `data/ai/` was empty too (ADR-032).
+
+`/data` now holds every gameplay number the project claims it does: units,
+structures, fields, weapons and the AI's tuning. `schemagate` walks five
+schemas, 52 definitions and 640 keys.
+
+**The lesson that generalises, and it is the one the whole session keeps
+producing:** every one of these was a rule keyed on an instance rather than a
+property, or a sentence that documented an intention rather than a mechanism.
+None was found by reading a ticket. Each was found by trying to use the thing
+end to end and noticing the claim did not hold.
+
+**And one genuinely new rule, from ADR-032 clause 2**, because the next authored
+kind will face it: moving a number from code into `/data` moves it from "agreed
+by construction" to "agreed only if checked". The AI's numbers being compiled
+was an unwritten safety property - two LAN peers agreed on them because they
+could not disagree. Anything that can differ between peers and change the
+command stream must be in the catalogue checksum. The gate proves the fold is
+real by moving the checksum on one unit of wave size.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against

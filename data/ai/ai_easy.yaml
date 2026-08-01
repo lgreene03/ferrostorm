@@ -1,0 +1,27 @@
+# DR-14 / doc 28. GDD line 76's first rung: "no cheats, slow".
+# A rung row owns how GOOD a commander is and never what shape it takes: the
+# beat ratio, the mining, and (at the top rung only) a declared handicap. It is
+# refused if it tries to author a wave size, because that is the personality's
+# and conflating the two is the defect the ladder was written to undo.
+# THE BEAT IS A RATIO, not a multiplier, and that is not decoration: the ladder
+# needs Brutal's two thirds exactly, and CLAUDE.md forbids any floating-point
+# type anywhere in /sim. A numerator and a denominator keep the arithmetic
+# integer and the truncation visible - the commander computes
+# act_every_ticks * beat_numerator / beat_denominator and floors the result at 1.
+# beat_numerator 2 over beat_denominator 1 makes Easy think at HALF SPEED: 30
+# ticks between decisions against Standard's 15. That is the honest way to be a
+# worse opponent. It reacts late to a harassed harvester, it re-queues its base
+# ladder slowly, and its waves assemble at half the rate; a player wins by
+# moving faster than it does, which is a skill the game is actually about.
+# harvesters_per_refinery 1 and starting_credit_handicap 0: Easy is granted
+# NOTHING. GDD line 76 promises "no cheats" on this rung and the promise is kept
+# by giving it the same economy the shipped commander always had and then
+# slowing its hands. A rung that mined less would be tempting and wrong: it
+# would make the early game a walkover rather than a slower fight.
+id: ai_easy
+name: Easy
+kind: rung
+beat_numerator: 2
+beat_denominator: 1
+harvesters_per_refinery: 1
+starting_credit_handicap: 0

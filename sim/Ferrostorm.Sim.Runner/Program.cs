@@ -31,6 +31,7 @@ using Ferrostorm.Sim;
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
+//   aituninggate       - the seven data/ai files reproduce the compiled commander exactly, the sim plays what they say, and a changed AI number moves the catalogue checksum (the LAN desync guard)
 //   catalogueloadgate  - ONE RegisterAll(world, /data) call loads every kind, an unrecognised /data directory is refused by name, and a bare World still plays the compiled numbers
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
@@ -5015,6 +5016,7 @@ int SchemaGate()
                  ("data/buildings", "data/schema.structure.json"),
                  ("data/fields", "data/schema.field.json"),
                  ("data/weapons", "data/schema.weapon.json"),
+                 ("data/ai", "data/schema.ai.json"),
              })
     {
         string schemaPath = Root(schema);
@@ -5048,14 +5050,24 @@ int SchemaGate()
     // day a weapon yaml appeared there would be a schema for it, and that day
     // has arrived: data/weapons now holds all nine definitions and
     // data/schema.weapon.json validates them in the loop above, on the same
-    // terms as the other three directories. The guard has nothing left to guard.
+    // terms as the other four directories. The guard has nothing left to guard,
+    // and data/ai - which was the last empty directory in the tree - joined the
+    // loop the same way rather than earning a second special case.
+    //
+    // data/ai is the one directory whose schema cannot carry the whole rule:
+    // the required list above is applied per DIRECTORY, and an AI tuning file's
+    // required keys depend on whether it is a personality or a rung. So the
+    // schema requires only what every row shares (id, name, kind) and
+    // DataLoader.ParseAiTuning demands the rest, refusing either family's keys
+    // in the other's file. additionalProperties:false is still enforced here for
+    // all five, which is what catches the typo.
 
-    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the four "
+    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the five "
                       + "schemas, and every key is one the schema allows. This is the enforcement CLAUDE.md's "
                       + "\"validated against /data/schema.unit.json\" always claimed and nothing performed: the "
                       + "schemas say additionalProperties:false and nothing read them, so schema.unit.json had "
-                      + "already fallen four waves behind the loader on the 'air' key. data/weapons is the "
-                      + "newest of the four and was empty until its numbers moved out of Combat.cs");
+                      + "already fallen four waves behind the loader on the 'air' key. data/ai is the newest of "
+                      + "the five and was empty until the skirmish commander's tuning moved out of SkirmishAI.cs");
     return 0;
 }
 
@@ -5188,6 +5200,236 @@ int WeaponDataGate()
     return 0;
 }
 
+int AiTuningGate()
+{
+    // The AI tuning wave. Additive, the weapondatagate pattern: a standalone
+    // mode and a Match battery stage, never a golden scenario, so the golden
+    // list stays 24.
+    //
+    // Three things are under test and the third is the reason the wave exists.
+    //
+    // TRANSCRIPTION (stage 1): seven files now carry numbers that used to be
+    // compiled literals in SkirmishAI.cs, and a single mistyped digit would
+    // change what the commander does and move a golden hash, which is a
+    // replay-compatibility break.
+    //
+    // DRIVING THE RUNTIME (stage 2): authoring the files while leaving the
+    // compiled table authoritative would produce a directory full of convincing
+    // YAML the game never read, which is the P7-1 defect. Stage 1 would pass
+    // happily in that world, because the files WOULD equal the compiled table;
+    // they would just be scenery.
+    //
+    // THE DESYNC GUARD (stage 3), which is what makes this wave different from
+    // the weapons one. The commander's numbers were compiled, so two LAN peers
+    // agreed on them BY CONSTRUCTION. Authoring them creates a vector nothing
+    // else in the game has: peers holding different data/ai files would issue
+    // different AI COMMANDS while agreeing on every unit, building and gun they
+    // compare. Folding the table into World.CatalogueChecksum is what turns that
+    // desync into a refusal before tick 0, and this stage is the proof it is
+    // real rather than asserted.
+    string aiDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/ai"));
+    if (!Directory.Exists(aiDir))
+        return Fail($"aituning: {aiDir} is missing, so the commander's numbers have nowhere to live");
+
+    // --- 1. Every authored personality and rung reproduces the compiled
+    //        reference exactly, field by field. This is the check that protects
+    //        the 24 goldens: the commander behaves identically only because its
+    //        numbers are identical.
+    var loaded = new World(4300);
+    try { CatalogueFiles.RegisterAiTuning(loaded, aiDir); }
+    catch (Exception e) { return Fail($"aituning: /data/ai would not load: {e.Message}"); }
+
+    for (int id = 1; id <= AiTuning.MaxTuningId; id++)
+    {
+        var got = loaded.GetAiTuning(id);
+        var want = AiTuning.Get(id);
+        string Drift(string field, object a, object b)
+            => $"aituning: tuning {id} authored {field} {a} but the compiled reference says {b}. "
+               + "Transcription is what keeps the goldens still, so fix the file rather than the hashes.";
+        if (got.Kind != want.Kind) return Fail(Drift("kind", got.Kind, want.Kind));
+        if (got.ActEvery != want.ActEvery) return Fail(Drift("act_every_ticks", got.ActEvery, want.ActEvery));
+        if (got.WaveSize != want.WaveSize) return Fail(Drift("wave_size", got.WaveSize, want.WaveSize));
+        if (got.BeatNumerator != want.BeatNumerator) return Fail(Drift("beat_numerator", got.BeatNumerator, want.BeatNumerator));
+        if (got.BeatDenominator != want.BeatDenominator) return Fail(Drift("beat_denominator", got.BeatDenominator, want.BeatDenominator));
+        if (got.HarvestersPerRefinery != want.HarvestersPerRefinery)
+            return Fail(Drift("harvesters_per_refinery", got.HarvestersPerRefinery, want.HarvestersPerRefinery));
+        if (got.StartingCreditHandicap != want.StartingCreditHandicap)
+            return Fail(Drift("starting_credit_handicap", got.StartingCreditHandicap, want.StartingCreditHandicap));
+    }
+
+    // --- 2. The runtime reads the REGISTERED table, not the compiled one.
+    //
+    //        2a, the wave size, POISONED first in the style catalogueloadgate
+    //        uses. The authored numbers reproduce the compiled ones exactly by
+    //        design, so reading one against the other could never tell a
+    //        registered row from an unregistered one; a poisoned world can. Six
+    //        fighters stand ready against a distant enemy yard and no hostile
+    //        unit is anywhere near, so the only attack-move orders a commander
+    //        can issue are the wave itself. A Rusher wants wave_size plus its
+    //        two-strong garrison, which six satisfies; poisoned to 40 it wants
+    //        46 and stays home.
+    int WaveOrders(ulong seed, bool poison, bool registerFromData)
+    {
+        var w = new World(seed, 96, 96, players: 2);
+        if (poison) w.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { WaveSize = 40 });
+        if (registerFromData) CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.SpawnConstructionYard(0, 40, 40);
+        w.SpawnConstructionYard(1, 5, 5);      // the wave's target, far from home
+        for (int i = 0; i < 6; i++)
+            w.SpawnUnit(0, Fix64.FromInt(42 + i), Fix64.FromInt(44), Fix64.FromFraction(1, 4),
+                        100, ArmourClass.Light, weaponId: 0, unitType: 2);
+        var ai = SkirmishAI.Rusher(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        int orders = 0;
+        foreach (var c in cmds) if (c.Type == CommandType.AttackMove) orders++;
+        return orders;
+    }
+    int stockWave = WaveOrders(4301, poison: false, registerFromData: false);
+    int poisonedWave = WaveOrders(4301, poison: true, registerFromData: false);
+    int revivedWave = WaveOrders(4301, poison: true, registerFromData: true);
+    if (stockWave <= 0)
+        return Fail("aituning control: a Rusher with six fighters ready must send a wave at the enemy yard, and it "
+                    + "sent none - the fixture proves nothing about wave_size if it never attacks at all");
+    if (poisonedWave != 0)
+        return Fail($"aituning: a Rusher whose wave_size was REGISTERED at 40 must keep its six fighters home, and it "
+                    + $"sent {poisonedWave} of them. SkirmishAI is still reading the compiled table, so data/ai is "
+                    + "decoration rather than data - the P7-1 defect exactly");
+    if (revivedWave != stockWave)
+        return Fail($"aituning: registering data/ai over the poisoned world must restore the authored wave "
+                    + $"({revivedWave} orders against the stock {stockWave}) - the AI kind did not register");
+
+    //        2b, the decision beat, which DecisionBeat exposes directly. A rung
+    //        is registered with a ratio no /data file carries, so a pass cannot
+    //        be explained by the authored table happening to agree.
+    var beatWorld = new World(4302);
+    CatalogueFiles.RegisterAiTuning(beatWorld, aiDir);
+    int authoredEasyBeat = SkirmishAI.Standard(0, AiDifficulty.Easy, beatWorld).DecisionBeat;
+    var slowWorld = new World(4303);
+    slowWorld.RegisterAiTuning(AiTuning.EasyId, AiTuning.Easy with { BeatNumerator = 5 });
+    int drivenEasyBeat = SkirmishAI.Standard(0, AiDifficulty.Easy, slowWorld).DecisionBeat;
+    if (authoredEasyBeat != 30)
+        return Fail($"aituning: the authored Easy rung must think every 30 ticks, and it thinks every {authoredEasyBeat}");
+    if (drivenEasyBeat != 75)
+        return Fail($"aituning: an Easy rung REGISTERED at a five-fold beat ratio must think every 75 ticks "
+                    + $"(15 * 5 / 1), and it thinks every {drivenEasyBeat} - the commander is reading the compiled "
+                    + "ratio rather than the registered one");
+    // And the economy knob travels the same way: a rung registered with four
+    // harvesters per refinery must buy a fourth, where the authored Hard stops
+    // at two. Measured as a purchase, not read off the def.
+    bool BuysAThirdHarvester(int harvestersPerRefinery)
+    {
+        var w = new World(4304, 64, 64, players: 2);
+        w.RegisterAiTuning(AiTuning.HardId, AiTuning.Hard with { HarvestersPerRefinery = harvestersPerRefinery });
+        w.SpawnConstructionYard(1, 8, 8);
+        w.SpawnConstructionYard(0, 40, 30);
+        w.SpawnPowerPlant(0, 44, 30);
+        w.SpawnRefinery(0, 36, 30);
+        w.SpawnFactory(0, 40, 34);
+        w.SpawnHarvester(0, Fix64.FromInt(37), Fix64.FromInt(32));
+        w.SpawnHarvester(0, Fix64.FromInt(38), Fix64.FromInt(32));   // two already mining
+        w.GrantCredits(0, 4000);
+        var ai = new SkirmishAI(0, AiDifficulty.Hard, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        foreach (var c in cmds)
+            if (c.Type == CommandType.Produce && c.AuxId == 4) return true;   // unit type 4 is the harvester
+        return false;
+    }
+    if (BuysAThirdHarvester(2))
+        return Fail("aituning control: the authored Hard rung runs two harvesters per refinery and must not buy a third");
+    if (!BuysAThirdHarvester(4))
+        return Fail("aituning: a Hard rung REGISTERED at four harvesters per refinery must buy a third, and it bought "
+                    + "none - the commander is reading the compiled economy knob rather than the registered one");
+
+    // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
+    //        and an unchanged one leaves it still. Without this, two peers could
+    //        hold different data/ai, pass the hello, and drift apart on the AI's
+    //        own orders while every def they compared matched.
+    ulong stock1 = new World(4305).CatalogueChecksum;
+    ulong stock2 = new World(4306).CatalogueChecksum;
+    if (stock1 != stock2)
+        return Fail("aituning: two compiled catalogues must still produce one checksum");
+    var fromData = new World(4307);
+    CatalogueFiles.RegisterAiTuning(fromData, aiDir);
+    if (fromData.CatalogueChecksum != stock1)
+        return Fail($"aituning: /data/ai registers to 0x{fromData.CatalogueChecksum:X16} against the compiled "
+                    + $"0x{stock1:X16} - the files and the reference table have drifted");
+    var bumpedWave = new World(4308);
+    bumpedWave.RegisterAiTuning(AiTuning.TurtleId, AiTuning.Turtle with { WaveSize = AiTuning.Turtle.WaveSize + 1 });
+    if (bumpedWave.CatalogueChecksum == stock1)
+        return Fail("aituning: a one-unit change to a personality's wave size must change the catalogue checksum, "
+                    + "or two peers can play different commanders and call it agreement");
+    var bumpedRung = new World(4309);
+    bumpedRung.RegisterAiTuning(AiTuning.BrutalId, AiTuning.Brutal with { StartingCreditHandicap = 5001 });
+    if (bumpedRung.CatalogueChecksum == stock1)
+        return Fail("aituning: a one-credit change to Brutal's declared handicap must change the catalogue checksum");
+
+    // --- 4. Registration after tick 0 is refused, matching units, structures
+    //        and weapons. A commander re-tuned mid-match is a silent replay
+    //        divergence rather than a balance change.
+    {
+        var w = new World(4310, 64, 64, players: 2);
+        w.Step(default);
+        bool refused = false;
+        try { w.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard); }
+        catch (InvalidOperationException) { refused = true; }
+        if (!refused)
+            return Fail("aituning: registering AI tuning after tick 0 must be refused, as it is for units, structures and weapons");
+    }
+
+    // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
+    //        thirds is the value that could not be written as a whole
+    //        multiplier, and the integer division TRUNCATES: at the authored
+    //        beat of 15 it is 10, not 10-and-a-bit. The floor is the other half:
+    //        a personality beat of 1 halved is 0, and a beat of 0 would make
+    //        Tick % 0 throw on the first decision.
+    int brutalBeat = SkirmishAI.Standard(0, AiDifficulty.Brutal, beatWorld).DecisionBeat;
+    if (brutalBeat != 10)
+        return Fail($"aituning: Brutal's 2/3 ratio must truncate to 10 at the authored beat of 15, and it gave {brutalBeat}");
+    if (SkirmishAI.Standard(0, AiDifficulty.Normal, beatWorld).DecisionBeat != 15
+        || SkirmishAI.Standard(0, AiDifficulty.Hard, beatWorld).DecisionBeat != 15)
+        return Fail("aituning: Normal and Hard must share the authored beat of 15 and differ only by macro");
+    {
+        var w = new World(4311);
+        w.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard with { ActEvery = 1 });
+        w.RegisterAiTuning(AiTuning.EasyId, AiTuning.Easy with { BeatNumerator = 1, BeatDenominator = 2 });
+        int floored = SkirmishAI.Standard(0, AiDifficulty.Easy, w).DecisionBeat;
+        if (floored != 1)
+            return Fail($"aituning: a beat of 1 scaled by 1/2 truncates to 0 and must be floored to 1, and it gave {floored}");
+        // The floor must not be a blanket clamp: a beat that computes above 1 is
+        // left alone, or the check above would read the same for a commander
+        // that always thinks every tick.
+        var w2 = new World(4312);
+        w2.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard with { ActEvery = 4 });
+        w2.RegisterAiTuning(AiTuning.EasyId, AiTuning.Easy with { BeatNumerator = 1, BeatDenominator = 2 });
+        int unfloored = SkirmishAI.Standard(0, AiDifficulty.Easy, w2).DecisionBeat;
+        if (unfloored != 2)
+            return Fail($"aituning control: a beat of 4 scaled by 1/2 must be 2 rather than clamped, and it gave {unfloored}");
+    }
+
+    // --- 6. Brutal's handicap still reaches SETUP and never the commander, and
+    //        it comes from the file. The AI mutating nothing is what makes an
+    //        AI match replayable at all.
+    if (SkirmishAI.StartingCreditHandicap(AiDifficulty.Brutal, beatWorld) != 5000)
+        return Fail("aituning: Brutal's declared handicap must be the authored 5000 starting credits");
+    foreach (var d in new[] { AiDifficulty.Easy, AiDifficulty.Normal, AiDifficulty.Hard })
+        if (SkirmishAI.StartingCreditHandicap(d, beatWorld) != 0)
+            return Fail($"aituning: {d} must carry NO handicap (GDD line 76 allows one only at Brutal)");
+
+    Console.WriteLine($"aituninggate: all {AiTuning.MaxTuningId} data/ai files reproduce the compiled reference field for "
+                      + "field, which is why the goldens do not move; a Rusher whose wave_size was REGISTERED at 40 kept "
+                      + $"its six fighters home where the stock commander sent {stockWave}, and registering data/ai over "
+                      + $"that poison sent {revivedWave} again; an Easy rung REGISTERED at a five-fold ratio thinks every "
+                      + $"{drivenEasyBeat} ticks against the authored {authoredEasyBeat}, and a Hard rung registered at "
+                      + "four harvesters per refinery buys a third where the authored two does not; Brutal's 2/3 still "
+                      + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
+                      + "registration after tick 0 is refused; and the catalogue checksum sits at "
+                      + $"0x{stock1:X16} from both sources and moves on one unit of wave size or one credit of Brutal's "
+                      + "handicap, which is what stops two LAN peers playing different commanders and calling it agreement");
+    return 0;
+}
+
 int CatalogueLoadGate()
 {
     // The single /data entry point. Additive, the weapondatagate pattern: a
@@ -5208,7 +5450,7 @@ int CatalogueLoadGate()
     if (!Directory.Exists(dataRoot))
         return Fail($"catalogueload: {dataRoot} is missing, so there is no catalogue to load");
 
-    // --- 1. ONE call registers all four kinds. Each kind is POISONED first with
+    // --- 1. ONE call registers every kind. Each kind is POISONED first with
     //        a value that is neither the compiled one nor the authored one, so a
     //        kind the single call fails to touch keeps its poison and is caught
     //        here. The poison is what makes the assertion mean anything: the
@@ -5354,6 +5596,12 @@ int CatalogueLoadGate()
     CatalogueFiles.RegisterUnitsAndStructures(viaKinds, Path.Combine(dataRoot, "units"), Path.Combine(dataRoot, "buildings"));
     CatalogueFiles.RegisterFields(viaKinds, Path.Combine(dataRoot, "fields"));
     CatalogueFiles.RegisterWeapons(viaKinds, Path.Combine(dataRoot, "weapons"));
+    // The AI tuning belongs in this sequence too, and leaving it out would have
+    // made the comparison below pass for the wrong reason: the authored numbers
+    // equal the compiled seeds, so a MISSING kind still checksums correctly.
+    // The point of this stage is that the single call and the explicit sequence
+    // agree, which requires the sequence to actually be the whole catalogue.
+    CatalogueFiles.RegisterAiTuning(viaKinds, Path.Combine(dataRoot, "ai"));
     if (viaAll.CatalogueChecksum != viaKinds.CatalogueChecksum)
         return Fail($"catalogueload: one call registers to 0x{viaAll.CatalogueChecksum:X16} but the per-kind sequence "
                     + $"gives 0x{viaKinds.CatalogueChecksum:X16} - the collapse changed what gets registered");
@@ -5361,7 +5609,7 @@ int CatalogueLoadGate()
         return Fail($"catalogueload: /data registers to 0x{viaAll.CatalogueChecksum:X16} against the compiled "
                     + $"0x{new World(9009).CatalogueChecksum:X16} - the two sources have drifted");
 
-    Console.WriteLine($"catalogueloadgate: one CatalogueFiles.RegisterAll(world, /data) call registered all four kinds over a "
+    Console.WriteLine($"catalogueloadgate: one CatalogueFiles.RegisterAll(world, /data) call registered all five kinds over a "
                       + $"poisoned world - dir_cannon_tank back to {wantUnit.Cost} credits, com_power_plant to {wantStruct.Cost}, "
                       + $"wpn_tank_cannon to {wantWeapon.Damage} damage, and a field with regrowth poisoned to zero recovered "
                       + $"{wantRegrown} ferrite over {window} ticks at the authored rate; a /data carrying an unrecognised "
@@ -7123,6 +7371,10 @@ int Match(ulong seed)
     // And the weapon numbers in /data are the ones the sim actually fires.
     int weaponData = WeaponDataGate();
     if (weaponData != 0) return weaponData;
+    // The commander's own numbers are /data too, and they are the ones that ride
+    // the checksum to keep two LAN peers on one AI.
+    int aiTuning = AiTuningGate();
+    if (aiTuning != 0) return aiTuning;
     // And ONE call loads the whole catalogue, with an unknown /data kind refused
     // rather than silently ignored.
     int catLoad = CatalogueLoadGate();
@@ -7985,6 +8237,7 @@ return args.Length == 0
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "weapondatagate" => WeaponDataGate(),
+        "aituninggate" => AiTuningGate(),
         "catalogueloadgate" => CatalogueLoadGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
