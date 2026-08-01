@@ -924,10 +924,26 @@ ulong ScenarioExpansion(ulong seed, Action<int, ulong>? cp = null, Action<string
     // TICKET-AI-03's rule written into an assertion - so the scenario enforced
     // the very cap this row removes. Expressed against the constant rather than
     // as a literal, so the two cannot drift apart again.
-    int wantRefineries = cys * SkirmishAI.RefineriesPerBase;
-    if (refineries != wantRefineries)
-        throw new Exception($"expansion: expected {SkirmishAI.RefineriesPerBase} refineries per base across {cys} "
-                            + $"bases ({wantRefineries}), got {refineries}");
+    // LOOSENED TO A RANGE, and the reason is a finding rather than a
+    // convenience. P7-7a wrote this as an exact equality, which demands the
+    // ladder FINISH inside this scenario's horizon - so any change that makes
+    // the commander reach its second base at a different moment breaks it while
+    // the scenario is actually succeeding. The free-harvester experiment (see
+    // docs/tickets, P7-7b, filed rather than shipped) hit exactly that: 3
+    // refineries of an eventual 4, still building, reported as a failure.
+    //
+    // What this scenario actually claims is in its own report line - "founded a
+    // second base at the rich field, added its refinery" - so the assertion is
+    // that claim. More than one base's worth exist (so the second base really
+    // did get one), and never more than the rule allows. An exact count was
+    // asserting the commander's SPEED, which this scenario does not test.
+    int cap = cys * SkirmishAI.RefineriesPerBase;
+    if (refineries <= SkirmishAI.RefineriesPerBase)
+        throw new Exception($"expansion: the second base never got a refinery - {refineries} is what ONE base runs, "
+                            + $"so the economy did not migrate");
+    if (refineries > cap)
+        throw new Exception($"expansion: {refineries} refineries across {cys} bases exceeds the "
+                            + $"{SkirmishAI.RefineriesPerBase}-per-base rule ({cap})");
     if (world.Entities[farField].FerriteAmount >= 12000)
         throw new Exception("expansion: the far field was never mined");
     if (working < 1) throw new Exception("expansion: no harvester working at the end");
@@ -4581,7 +4597,7 @@ int EconomyProbe()
     var cmds = new List<Command>();
     Console.WriteLine("economyprobe: GDD s4 says a player FLOATS at 2 refineries / 3 harvesters. Measuring whether "
                       + "the treasury runs away, which is the only thing a ceiling would fix.");
-    Console.WriteLine("   tick   credits0   credits1   refineries0   harvesters0");
+    Console.WriteLine("   tick   credits0   credits1   refineries0   harvesters0   match");
     for (int t = 1; t <= 9000; t++)
     {
         cmds.Clear();
@@ -4596,11 +4612,28 @@ int EconomyProbe()
             if (e.Kind == EntityKind.Refinery) refineries++;
             if (e.Kind == EntityKind.Harvester) harvesters++;
         }
-        Console.WriteLine($"  {t,5}   {w.Credits(0),8}   {w.Credits(1),8}   {refineries,11}   {harvesters,11}");
+        // THE LAST COLUMN, added because reading this table without it produced
+        // a confident wrong answer within about a minute.
+        //
+        // The free-harvester experiment (P7-7b, filed rather than shipped) made
+        // seat 1's treasury climb to 38823 while seat 0's economy fell to
+        // nothing. That reads instantly as a runaway stockpile, which is
+        // ADR-041's own stated condition for reconsidering a silo - and the
+        // first guess was that the match had simply ENDED, a finished game being
+        // misread. This column was added to confirm that guess and REFUTED it:
+        // the match was still RUNNING, with one seat economically dead and the
+        // other unable to spend. Two quite different conclusions, one of which
+        // would have reopened a settled ADR for the wrong reason, and no way to
+        // tell them apart without this field.
+        string state = w.Winner >= 0 ? $"seat {w.Winner} won" : "running";
+        Console.WriteLine($"  {t,5}   {w.Credits(0),8}   {w.Credits(1),8}   {refineries,11}   {harvesters,11}   {state}");
     }
-    Console.WriteLine("economyprobe: read the credit columns. A treasury that oscillates around a working balance is "
-                      + "the GDD's float and needs no ceiling; one that climbs monotonically to a large number is a "
-                      + "stockpile, and a stockpile is what a silo exists to make a decision about.");
+    Console.WriteLine("economyprobe: read the credit columns, AND THE LAST ONE. A treasury that oscillates around a "
+                      + "working balance while the match is RUNNING is the GDD's float and needs no ceiling; one that "
+                      + "climbs monotonically to a large number is a stockpile, and a stockpile is what a silo exists "
+                      + "to make a decision about. Credits banked after a winner is named are neither - that is a "
+                      + "finished game, and reading it as banking is how a silo gets built for a problem that does "
+                      + "not exist.");
     return 0;
 }
 
