@@ -29,6 +29,7 @@ using Ferrostorm.Sim;
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
+//   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
 //   airgate            - ADR-028: ground weapons cannot touch an aircraft, the flak track can, and it crosses sealed terrain
@@ -4960,6 +4961,116 @@ int MultiSeatGate()
     return 0;
 }
 
+int SchemaGate()
+{
+    // CLAUDE.md: "All gameplay numbers live in /data as YAML validated against
+    // /data/schema.unit.json (and sibling schemas as created)." The first half
+    // was true and the second half was not: the schemas declare
+    // "additionalProperties": false and NOTHING ANYWHERE ENFORCED IT. There is
+    // no JSON-schema validator in the tree - the loader is a hand-written YAML
+    // subset reader - so the schemas were documentation, and documentation
+    // drifts.
+    //
+    // It had already drifted. schema.unit.json omitted `air`, which
+    // com_strike_flyer.yaml has authored and DataLoader has read since ADR-028.
+    // Under the schema as written that file is INVALID, and nothing noticed for
+    // four waves. This gate is the enforcement the sentence always claimed.
+    //
+    // Deliberately checks the DATA against the SCHEMA rather than trying to
+    // prove the loader and the schema agree statically. A key the loader reads
+    // but no file authors is harmless; a key a file authors that the schema
+    // forbids is either a typo the loader is silently ignoring or a schema that
+    // has fallen behind, and both are worth failing a build over.
+    string Root(string rel) => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", rel));
+
+    (HashSet<string> Props, List<string> Required) ReadSchema(string path)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var props = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in doc.RootElement.GetProperty("properties").EnumerateObject())
+            props.Add(p.Name);
+        var required = new List<string>();
+        if (doc.RootElement.TryGetProperty("required", out var req))
+            foreach (var r in req.EnumerateArray()) required.Add(r.GetString()!);
+        return (props, required);
+    }
+
+    // The authored files are the strict flat YAML subset DataLoader documents,
+    // so a top-level key is a line starting at column 0 with `name:`. Block
+    // list items are indented and comments start with '#', so neither is
+    // mistaken for a key.
+    static List<string> TopLevelKeys(string path)
+    {
+        var keys = new List<string>();
+        foreach (string raw in File.ReadAllLines(path))
+        {
+            if (raw.Length == 0 || raw[0] == '#' || char.IsWhiteSpace(raw[0])) continue;
+            int colon = raw.IndexOf(':');
+            if (colon <= 0) continue;
+            keys.Add(raw[..colon].Trim());
+        }
+        return keys;
+    }
+
+    int files = 0, keysChecked = 0;
+    foreach (var (dir, schema) in new[]
+             {
+                 ("data/units", "data/schema.unit.json"),
+                 ("data/buildings", "data/schema.structure.json"),
+                 ("data/fields", "data/schema.field.json"),
+             })
+    {
+        string schemaPath = Root(schema);
+        if (!File.Exists(schemaPath)) return Fail($"schema: {schema} is missing");
+        var (props, required) = ReadSchema(schemaPath);
+        string dirPath = Root(dir);
+        var yamls = Directory.GetFiles(dirPath, "*.yaml");
+        Array.Sort(yamls, StringComparer.Ordinal);   // deterministic report order
+        if (yamls.Length == 0) return Fail($"schema: {dir} holds no definitions at all");
+        foreach (string f in yamls)
+        {
+            files++;
+            var keys = TopLevelKeys(f);
+            string shortName = Path.GetFileName(f);
+            foreach (string k in keys)
+            {
+                keysChecked++;
+                if (!props.Contains(k))
+                    return Fail($"schema: {dir}/{shortName} authors '{k}', which {schema} does not allow. "
+                                + "The schema says additionalProperties:false, so this is either a typo the "
+                                + "loader is silently ignoring or a schema that has fallen behind the loader.");
+            }
+            foreach (string r in required)
+                if (!keys.Contains(r))
+                    return Fail($"schema: {dir}/{shortName} is missing required key '{r}' per {schema}");
+        }
+    }
+
+    // data/weapons exists and is EMPTY: every weapon number lives compiled in
+    // Combat.cs. That contradicts CLAUDE.md's "all gameplay numbers live in
+    // /data" as plainly as the unenforced schema did, and it is a bigger job
+    // than this gate (authoring them moves the catalogue checksum). Asserted as
+    // the CURRENT truth rather than left silent, so that the day someone adds a
+    // weapon yaml this fails and asks for a schema to validate it against.
+    {
+        string weapons = Root("data/weapons");
+        if (Directory.Exists(weapons))
+        {
+            var files2 = Directory.GetFiles(weapons, "*.yaml");
+            if (files2.Length > 0 && !File.Exists(Root("data/schema.weapon.json")))
+                return Fail($"schema: data/weapons holds {files2.Length} definition(s) and there is no "
+                            + "data/schema.weapon.json to validate them against. Add the schema with the files.");
+        }
+    }
+
+    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the three "
+                      + "schemas, and every key is one the schema allows. This is the enforcement CLAUDE.md's "
+                      + "\"validated against /data/schema.unit.json\" always claimed and nothing performed: the "
+                      + "schemas say additionalProperties:false and nothing read them, so schema.unit.json had "
+                      + "already fallen four waves behind the loader on the 'air' key");
+    return 0;
+}
+
 int InfiltratorGate()
 {
     // P7-7. Additive, the factiondefencegate pattern: a standalone mode and a
@@ -6713,6 +6824,9 @@ int Match(ulong seed)
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
     if (campaign != 0) return campaign;
+    // The authored data actually matches the schemas that claim to govern it.
+    int schema = SchemaGate();
+    if (schema != 0) return schema;
     // Q002 / C7a: and the non-blocking lockstep poll gate.
     int lanpoll = LanPoll();
     if (lanpoll != 0) return lanpoll;
@@ -7569,6 +7683,7 @@ return args.Length == 0
         "multiseatgate" => MultiSeatGate(),
         "saboteurgate" => SaboteurGate(),
         "campaigngate" => CampaignGate(),
+        "schemagate" => SchemaGate(),
         "sizeprobe" => SizeProbe(),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
