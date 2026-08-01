@@ -802,23 +802,25 @@ public partial class SkirmishLive : Node3D
     {
         if (setup.IsMission)
         {
-            // Campaign mission: the map places both sides' forces and the
-            // triggers script the enemy - no skirmish AI. Per-mission setup
-            // mirrors the runner's gated scenarios. The catalogue registrar
-            // rides the configure hook so mission-placed forces spawn off
-            // /data values, not compiled ones (ADR-006).
-            var m = map.BuildWorld(setup.Seed, players: 2, out tags, RegisterCatalogue);
-            switch (setup.MissionIndex)
-            {
-                case 1:
-                    m.GrantCredits(0, 5000);
-                    m.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
-                    break;
-                case 3:
-                    m.GrantCredits(0, 4000);
-                    break;
-            }
-            return m;
+            // Campaign mission: the map places both sides' forces, declares the
+            // player's yard and opening treasury, and the triggers script the
+            // enemy - no skirmish AI. The catalogue registrar rides the
+            // configure hook so mission-placed forces spawn off /data values,
+            // not compiled ones (ADR-006).
+            //
+            // P7-9a: there is NO per-mission case here any more. This was a
+            // `switch (setup.MissionIndex)` granting credits and spawning a
+            // yard for missions 1 and 3, which is a rule keyed on WHICH mission
+            // this is rather than on what the mission says. Every new mission
+            // needed an edit here and a matching one in the gate, and a mission
+            // whose author forgot was silently a mission with no base. Missions
+            // 04 to 06 never used it; 01 and 03 now declare the same things in
+            // their own files, which the format has always been able to express
+            // (a `structure 0 4` line and an `elapsed 0 -> grant` trigger).
+            //
+            // A mission is now entirely what its file says, which is what makes
+            // adding one a data change.
+            return map.BuildWorld(setup.Seed, players: 2, out tags, RegisterCatalogue);
         }
         int seats = SeatsFor(map, setup);
         var w = map.BuildWorld(setup.Seed, players: seats, out tags, RegisterCatalogue);

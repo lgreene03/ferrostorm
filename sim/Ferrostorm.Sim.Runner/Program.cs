@@ -1215,11 +1215,13 @@ ulong ScenarioMission(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     var world = map.BuildWorld(seed, players: 2, out var tags);
     if (!tags.TryGetValue("camp", out var camp) || camp.Count != 3)
         throw new Exception($"mission: expected 3 tagged camp entities, got {(tags.TryGetValue("camp", out var c) ? c.Count : 0)}");
-    // Mission economics: bootstrap (plant 300 + refinery 2000 + factory 2000
-    // + harvester 1400 = 5700) must be affordable from start + the timed
-    // grant, or the strike force is the only wave that will ever exist.
-    world.GrantCredits(0, 5000);
-    world.SpawnConstructionYard(0, map.Starts[0].Cx, map.Starts[0].Cy);
+    // P7-9a: the yard and the opening 5000 are NOT set up here any more. The
+    // mission file declares both, so this scenario and the client now build
+    // the same world from the same source instead of two copies of one rule
+    // that had to be kept in step by hand. Mission economics unchanged:
+    // bootstrap (plant 300 + refinery 2000 + factory 2000 + harvester 1400 =
+    // 5700) is still affordable from the opening grant plus the timed one, or
+    // the strike force would be the only wave that ever existed.
     var mission = new MissionRunner(map, tags);
     var ai = SkirmishAI.Rusher(0); // small aggressive waves suit a strike mission
     var cmds = new List<Command>();
@@ -1381,7 +1383,7 @@ ulong ScenarioMission03(ulong seed, Action<int, ulong>? cp = null, Action<string
     string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/missions/mission-03.fmap"));
     var map = MapData.Load(path);
     var world = map.BuildWorld(seed, players: 2, out var tags);
-    world.GrantCredits(0, 4000);
+    // P7-9a: the opening 4000 is declared in the mission file now, not here.
     var mission = new MissionRunner(map, tags);
     var ai = SkirmishAI.Turtle(0);
     var cmds = new List<Command>();
@@ -6109,6 +6111,51 @@ int CampaignGate()
         if (missions != 6) return Fail($"campaign: expected 6 missions in the manifest, found {missions}");
         Console.WriteLine($"campaigngate: manifest lists {missions} missions and {ids} buildable ids, "
                           + "every one of which loads and resolves in the catalogue");
+    }
+
+    // -- Stage 1b: EVERY mission's setup comes from its own file ----------
+    // P7-9a. Missions 01 and 03 were set up by `switch (setup.MissionIndex)`
+    // in the client and by two hand-copied lines in this runner, while 04 to
+    // 06 declared their own. Two mechanisms for one thing, kept in step by
+    // hand. Asserted here as a property of the DATA rather than by grepping
+    // for the switch, because the switch could come back under another name
+    // and this check would still hold it: every mission that needs a
+    // construction yard declares one, and every mission that needs an opening
+    // treasury declares that too.
+    {
+        int declaredYards = 0, declaredGrants = 0;
+        foreach (string raw in File.ReadAllLines(Root("data/campaign/campaign.txt")))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            string file = line.Split('|', StringSplitOptions.TrimEntries)[0];
+            var m = MapData.Load(Root(file));
+            var w = m.BuildWorld(4242, players: 2, out _);
+            bool hasYard = false;
+            for (int i = 0; i < w.EntityCount; i++)
+                if (w.Entities[i].Alive && w.Entities[i].PlayerId == 0
+                    && w.Entities[i].Kind == EntityKind.ConstructionYard) hasYard = true;
+            if (hasYard) declaredYards++;
+            // An opening grant is an `elapsed 0` trigger, which fires on the
+            // mission's first Tick. Read from the parsed triggers rather than
+            // from the file text, so a mission expressing it another way still
+            // counts and this does not become a grep for one spelling.
+            foreach (var t in m.Triggers)
+                if (t.When.Length >= 2 && t.When[0] == "elapsed" && t.When[1] == "0"
+                    && t.Do.Length >= 3 && t.Do[0] == "grant") declaredGrants++;
+        }
+        // Missions 01, 04, 05 and 06 hand the player a yard; 02 is the commando
+        // raid with nothing buildable and 03 declares a whole base instead.
+        if (declaredYards != 4)
+            return Fail($"campaign: expected 4 missions to declare a construction yard, saw {declaredYards}. "
+                        + "A mission that needs a base and does not declare one used to get it from a "
+                        + "per-mission case in the client, which is exactly what P7-9a removed.");
+        if (declaredGrants < 5)
+            return Fail($"campaign: expected at least 5 missions to declare an opening grant, saw "
+                        + $"{declaredGrants}");
+        Console.WriteLine($"campaigngate: every mission's opening setup comes from its own FILE - "
+                          + $"{declaredYards} declare a construction yard and {declaredGrants} an opening "
+                          + "treasury, and no per-mission case in the client or this runner supplies either");
     }
 
     // -- Stage 2: mission 04 is won by ARRIVING, not by killing ------------
