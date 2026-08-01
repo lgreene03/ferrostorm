@@ -424,20 +424,30 @@ public sealed partial class World
     /// </summary>
     public readonly record struct UnitTypeDef(int Cost, int BuildTicks, int Hp, ArmourClass Armour, int WeaponId, Fix64 Speed,
         EntityKind Kind = EntityKind.Unit, bool Stealth = false, bool Detector = false, bool Veterancy = true, int SightCells = 5,
-        int Faction = FactionCommon, int[]? Prereqs = null, int ProducedAt = 2, bool Air = false)
+        int Faction = FactionCommon, int[]? Prereqs = null, int ProducedAt = 2, bool Air = false,
+        int MaxAlive = 0)
     {
         public bool Equals(UnitTypeDef other)
             => Cost == other.Cost && BuildTicks == other.BuildTicks && Hp == other.Hp
             && Armour == other.Armour && WeaponId == other.WeaponId && Speed == other.Speed
             && Kind == other.Kind && Stealth == other.Stealth && Detector == other.Detector
             && Veterancy == other.Veterancy && SightCells == other.SightCells && Faction == other.Faction
-            && ProducedAt == other.ProducedAt && PrereqsEqual(Prereqs, other.Prereqs);
+            && ProducedAt == other.ProducedAt && MaxAlive == other.MaxAlive
+            // Air was missing from this comparison and from the checksum fold
+            // below, from ADR-028 until now. Both omissions were silent and the
+            // second was the dangerous one: a drifting `air:` key was invisible
+            // to the /data round-trip selftest AND to the LAN desync guard, so
+            // two peers could disagree about which units FLY while every unit,
+            // building and gun still matched. That is precisely the failure
+            // ADR-032 clause 2 names, in a field that predates the rule.
+            && Air == other.Air
+            && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
             var h = new HashCode();
             h.Add(Cost); h.Add(BuildTicks); h.Add(Hp); h.Add(Armour); h.Add(WeaponId); h.Add(Speed);
             h.Add(Kind); h.Add(Stealth); h.Add(Detector); h.Add(Veterancy); h.Add(SightCells);
-            h.Add(Faction); h.Add(ProducedAt);
+            h.Add(Faction); h.Add(ProducedAt); h.Add(MaxAlive); h.Add(Air);
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -512,6 +522,15 @@ public sealed partial class World
         // than to rob it. Cheaper and frailer than the thief because a brown-out
         // is a window rather than a payday.
         { 18, new UnitTypeDef(600, 140, 80, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 5, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11) }, // sod_saboteur
+        // P7-11b: GDD s7's two heroes. ONE unit authored twice, differing by
+        // faction and by Stealth alone - the P7-2b Bastion / Shroud Nest
+        // precedent - so the two lines below are deliberately identical
+        // everywhere else and must be edited together. MaxAlive 1 is the GDD's
+        // own "one at a time", and it is the only non-zero MaxAlive in the
+        // catalogue, which is why the cap enforcement is inert for every other
+        // unit and the goldens do not move.
+        { 19, new UnitTypeDef(1500, 300, 200, ArmourClass.None, 10, Fix64.FromFraction(1, 5), Veterancy: false, SightCells: 6, Faction: FactionDirectorate, Prereqs: new[] { 12 }, ProducedAt: 11, MaxAlive: 1) }, // dir_commando
+        { 20, new UnitTypeDef(1500, 300, 200, ArmourClass.None, 10, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 6, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11, MaxAlive: 1) }, // sod_shadow_commando
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
     public void RegisterUnitType(int typeId, UnitTypeDef def)
@@ -967,6 +986,21 @@ public sealed partial class World
                 h.Add(id); h.Add(d.Cost); h.Add(d.BuildTicks); h.Add(d.Hp); h.Add((int)d.Armour);
                 h.Add(d.WeaponId); h.Add(d.Speed); h.Add((int)d.Kind); h.Add(d.Stealth); h.Add(d.Detector);
                 h.Add(d.Veterancy); h.Add(d.SightCells); h.Add(d.Faction); h.Add(d.ProducedAt);
+                // P7-11b: the build cap rides the checksum for the reason every
+                // other column does. It decides whether a Produce command is
+                // ACCEPTED, so two peers holding different caps would build
+                // different armies from the same command stream while agreeing
+                // on every stat in the game, which is a desync that no other
+                // comparison in the protocol could see.
+                h.Add(d.MaxAlive);
+                // And Air, which has been missing from this fold since ADR-028
+                // shipped it. Same argument, worse case: two peers disagreeing
+                // about which units FLY would disagree about what can even be
+                // SHOT, because ADR-028 clause 3 makes engagement an equality
+                // between a weapon's anti-air flag and its target's airborne
+                // one. Every stat would match and the protocol would see
+                // nothing. Found while adding MaxAlive beside it.
+                h.Add(d.Air);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -1102,6 +1136,54 @@ public sealed partial class World
     /// in the effect, which is why both are named here rather than recognised on
     /// sight in CaptureSystem.</summary>
     public const int SaboteurUnitType = 18;
+    /// <summary>P7-11b: GDD s7's two heroes, lines 62 and 64. Named for the
+    /// reason the three above are - they are recognised by ContactEffectOf, not
+    /// on sight - and named as a PAIR because they are one unit authored twice.
+    /// The Directorate's walks in the open and the Sodality's is cloaked (GDD
+    /// line 30's doctrine), and that is the only difference between them.</summary>
+    public const int CommandoUnitType = 19;
+    public const int ShadowCommandoUnitType = 20;
+
+    /// <summary>
+    /// P7-11b: what a unit DOES when it reaches the enemy structure it was
+    /// ordered onto. This replaced a chain of `unitType == X` booleans in
+    /// CaptureSystem, which its own comment had already called the eighth
+    /// enumeration of the phase and which the hero would have made a fourth and
+    /// fifth entry in. The shared shape - the walk, the reach test, the target
+    /// validity rule - is now written once against this notion, and only the
+    /// effect branches.
+    ///
+    /// Behaviour-identical for the three units that existed before it: the
+    /// boolean chain it replaces tested exactly these three ids and every other
+    /// unit type, including 0, falls through to None as it always did.
+    /// </summary>
+    private enum ContactEffect { None, Capture, Theft, Sabotage, Demolition }
+
+    private static ContactEffect ContactEffectOf(int unitType) => unitType switch
+    {
+        EngineerUnitType => ContactEffect.Capture,
+        InfiltratorUnitType => ContactEffect.Theft,
+        SaboteurUnitType => ContactEffect.Sabotage,
+        CommandoUnitType or ShadowCommandoUnitType => ContactEffect.Demolition,
+        _ => ContactEffect.None,
+    };
+
+    /// <summary>
+    /// P7-11b: how much of a building a hero takes away in one go. Applied
+    /// through the ordinary damage path, so this is a BASE figure that the
+    /// warhead matrix and the target's armour class then rule on, and a death
+    /// here produces rubble and a Died event exactly as a shell would.
+    ///
+    /// 1000 against an anti-building warhead is 1000 against a structure. It is
+    /// chosen to sit between the two halves of the catalogue rather than to be a
+    /// round number: the power plant (150), the barracks (800) and the veil
+    /// projector (900) are gone in one visit, while the Bastion (1600), the
+    /// factory (1500) and the refinery (2000) are badly hurt and still standing.
+    /// A hero that deleted a Construction Yard on contact would end games on one
+    /// unseen walk; one that could not kill a power plant would be a rifle
+    /// squad with a price tag.
+    /// </summary>
+    public const int DemolitionDamage = 1000;
 
     /// <summary>ADR-021 (P6 Wave C4): what a captured Outpost pays its owner,
     /// once per second (the pre-increment tick's positive multiples of
@@ -2145,6 +2227,15 @@ public sealed partial class World
                 if (e.StructType != pdef.ProducedAt) break;
                 // ADR-009 clause 2: and you must own what it is built behind.
                 if (!HasPrereqs(c.PlayerId, pdef.Prereqs)) break;
+                // P7-11b: and you may not order one you already have your
+                // allowance of. The FIRST of two enforcement points, and both are
+                // needed: this one alone would let a player order two heroes
+                // while owning none, since the count is of living units and none
+                // is fewer than one. `break` rather than `return`, matching every
+                // other refusal in this case, so the writeback epilogue still
+                // runs. Inert unless the def carries a cap, which is two units in
+                // the whole catalogue.
+                if (AtMaxAlive(c.PlayerId, c.AuxId)) break;
                 // Pay-as-you-build (GDD s5): credits drain as progress accrues,
                 // and progress halts while the treasury cannot cover the next
                 // slice - so queueing needs no upfront affordability check.
@@ -2285,6 +2376,39 @@ public sealed partial class World
     /// question over state the client can already see, so exporting it moves no
     /// hash and hands the client no lever.
     /// </summary>
+    /// <summary>
+    /// P7-11b: does this player already own as many LIVING units of this type as
+    /// the catalogue allows? GDD s7 line 62's "one at a time" is the only
+    /// instance today, but it is built as a general per-type cap rather than a
+    /// rule about the hero, because the sim had no per-unit-type build limit at
+    /// all (the only per-player limit anywhere was MaxBarriersPerPlayer) and a
+    /// hero-shaped one would have to be rewritten by whoever wants the second.
+    ///
+    /// A cap of 0 means UNLIMITED and returns false before anything is counted.
+    /// That is what every unit but the two heroes carries, so both call sites are
+    /// a single dictionary read and a compare for the entire existing catalogue,
+    /// which is why all 24 goldens stand byte-identical.
+    ///
+    /// PUBLIC so the sidebar can ask the same question the sim gates on, exactly
+    /// as HasPrereqs is public: a lit button whose order the sim then silently
+    /// drops is the worst failure mode a build panel has.
+    ///
+    /// An entity-index scan, deterministic by construction, and the count stops
+    /// at the cap rather than totalling the army.
+    /// </summary>
+    public bool AtMaxAlive(int player, int unitType)
+    {
+        int cap = GetUnitType(unitType).MaxAlive;
+        if (cap <= 0) return false;
+        int alive = 0;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var o = _entities[i];
+            if (o.Alive && o.PlayerId == player && o.UnitType == unitType && ++alive >= cap) return true;
+        }
+        return false;
+    }
+
     public bool HasPrereqs(int player, int[]? ids)
     {
         if (ids == null) return true;
@@ -2643,39 +2767,71 @@ public sealed partial class World
     /// blueprints). The signature 90s-RTS personality mechanic - and the seed of
     /// the Reclaimers' salvage identity when the third faction arrives.
     /// </summary>
+    /// <summary>
+    /// Is this a structure that a contact unit may act on? Named as its own
+    /// predicate by P7-11b because TWO systems now need the same answer: this is
+    /// the rule CaptureSystem has always applied inline, and CombatSystem asks
+    /// it too, so that an ARMED contact unit walking in to demolish a building
+    /// does not halt at weapon range and shoot it instead.
+    ///
+    /// ADR-005 clause 2: engineers do not capture fences.
+    /// ADR-025: a bridge is excluded explicitly. It is neutral, so it would
+    /// otherwise pass the only ownership test this guard has (PlayerId != mine)
+    /// exactly as a neutral outpost does, and an engineer walking into a river
+    /// crossing to "capture" it is nonsense. You fell a bridge with an explicit
+    /// Attack instead - and by the same token a hero ordered at a bridge shoots
+    /// it, because this predicate says no and CombatSystem's skip does not fire.
+    /// </summary>
+    private static bool CanBeActedOn(in Entity actor, in Entity t)
+        => t.Alive && IsStructure(t.Kind) && !IsBarrier(t.Kind)
+           && t.Kind != EntityKind.Bridge && t.PlayerId != actor.PlayerId;
+
     private void CaptureSystem()
     {
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
-            // P7-7 generalised this from `UnitType != 11`. THREE unit types now
+            // P7-7 generalised this from `UnitType != 11`. FOUR unit types now
             // ACT ON CONTACT with an enemy structure - the engineer captures it,
-            // the infiltrator robs it and (P7-11a) the saboteur switches it off
-            // - and the walk, the reach test and the consumed-by-the-act rule
-            // are identical for all three. Adding literal types here would have
-            // been the eighth enumeration this phase; the shared shape is named
-            // once and the EFFECT branches at the point where they actually
-            // differ, which is why P7-11a added one branch below and not one
-            // line of pursuit, reach or consumption logic of its own.
-            bool isEngineer = e.UnitType == EngineerUnitType, isInfiltrator = e.UnitType == InfiltratorUnitType;
-            bool isSaboteur = e.UnitType == SaboteurUnitType;
-            if (!e.Alive || (!isEngineer && !isInfiltrator && !isSaboteur) || e.ExplicitTarget < 0) continue;
+            // the infiltrator robs it, (P7-11a) the saboteur switches it off and
+            // (P7-11b) the hero demolishes it - and the walk, the reach test and
+            // the target-validity rule are identical for all four. Adding
+            // literal types here would have been the eighth enumeration this
+            // phase; the shared shape is named once and the EFFECT branches at
+            // the point where they actually differ, which is why P7-11a added
+            // one branch below and not one line of pursuit or reach logic of its
+            // own, and why P7-11b turned the boolean chain that stood here into
+            // ContactEffectOf rather than adding a fourth and a fifth id to it.
+            //
+            // Note what is NO LONGER shared as of P7-11b: consumption. The first
+            // three are consumed by the act and the hero is not, so the writes
+            // that end a contact unit's life sit inside each effect rather than
+            // after the branch. A consumed hero would be an expensive engineer.
+            var effect = ContactEffectOf(e.UnitType);
+            if (!e.Alive || effect == ContactEffect.None || e.ExplicitTarget < 0) continue;
             if (!ValidId(e.ExplicitTarget)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             var t = _entities[e.ExplicitTarget];
-            // ADR-005 clause 2: engineers do not capture fences.
-            // ADR-025: a bridge is excluded here explicitly. It is neutral, so
-            // it would otherwise pass the only ownership test this guard has
-            // (PlayerId != mine) exactly as a neutral outpost does, and an
-            // engineer walking into a river crossing to "capture" it is
-            // nonsense. You fell a bridge with an explicit Attack instead.
-            if (!t.Alive || !IsStructure(t.Kind) || IsBarrier(t.Kind)
-                || t.Kind == EntityKind.Bridge || t.PlayerId == e.PlayerId)
-            { e.ExplicitTarget = -1; _entities[i] = e; continue; }
+            if (!CanBeActedOn(in e, in t)) { e.ExplicitTarget = -1; _entities[i] = e; continue; }
             Fix64 d = Fix64.DistSq(t.X - e.X, t.Y - e.Y);
             if (d <= Fix64.FromFraction(49, 16)) // within 1.75 cells of the footprint centre: through the door
             {
                 int touched = e.ExplicitTarget;
-                if (isInfiltrator)
+                // A NEUTRAL target has no treasury to rob. CanBeActedOn admits
+                // one deliberately - capturing a neutral Outpost is ADR-021's
+                // whole feature - and the theft branch then indexed
+                // _credits[-1], which is an index-out-of-range crash reachable
+                // by ordering an Infiltrator onto an outpost. Latent since
+                // P7-7, found while adding the fourth effect. Refused rather
+                // than clamped: there is nothing to take, so taking nothing and
+                // walking away is the honest behaviour, and the actor is not
+                // consumed for a theft that did not happen.
+                if (effect == ContactEffect.Theft && t.PlayerId < 0)
+                {
+                    e.ExplicitTarget = -1;
+                    _entities[i] = e;
+                    continue;
+                }
+                if (effect == ContactEffect.Theft)
                 {
                     // P7-7: the theft. A SHARE of the victim's treasury rather
                     // than a flat sum, because the Sodality's written identity
@@ -2702,7 +2858,7 @@ public sealed partial class World
                     // was busy erasing it at the only point the player can see.
                     _events.Add(new GameEvent(GameEventType.Robbed, touched, e.PlayerId, C: (int)taken));
                 }
-                else if (isSaboteur)
+                else if (effect == ContactEffect.Sabotage)
                 {
                     // P7-11a: the sabotage. A tick STAMP for the building's
                     // return, and a second saboteur EXTENDS rather than
@@ -2719,6 +2875,40 @@ public sealed partial class World
                     // tempo tool GDD s7 names.
                     e.Alive = false; e.Moving = false; e.ExplicitTarget = -1;
                     _events.Add(new GameEvent(GameEventType.Sabotaged, touched, e.PlayerId, C: until));
+                }
+                else if (effect == ContactEffect.Demolition)
+                {
+                    // P7-11b: the demolition. Large FIXED DAMAGE through the
+                    // ordinary path rather than deletion, which is the whole
+                    // design of the ability: armour class rules on it, the
+                    // repair vehicle can answer it, a death leaves rubble and
+                    // raises Died like any other death, and a tough building
+                    // survives one visit. A hero that removed a building
+                    // outright would make hit points meaningless for the one
+                    // unit they matter most against.
+                    //
+                    // The shape is ApplyAreaDamage's, aimed at one entity: the
+                    // matrix, then the hit points, then the death rules. No kill
+                    // credit is awarded, matching the superweapon - and matching
+                    // this unit's own veterancy_enabled false, so there is
+                    // nothing to award it to.
+                    t.Hp -= DamageMatrix.Apply(DemolitionDamage, Warhead.AntiBuilding, t.Armour);
+                    if (t.Hp <= 0)
+                    {
+                        _events.Add(new GameEvent(GameEventType.Died, touched, -1));
+                        t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
+                        FootprintOnDeath(in t);   // ADR-025: a bridge BLOCKS instead, and cannot be demolished anyway
+                    }
+                    _entities[touched] = t;
+                    // The hero LIVES. It is the one contact unit the act does not
+                    // consume, and that is what makes it a piece a player keeps
+                    // rather than an expensive engineer. Clearing the target is
+                    // the pacing limit in place of a cooldown: demolishing again
+                    // means being ordered again, so a hero parked in a base does
+                    // not chew through it unattended. It halts where it planted
+                    // the charge rather than walking on into the footprint it
+                    // was pursuing, which is now rubble.
+                    e.Moving = false; e.ExplicitTarget = -1;
                 }
                 else
                 {
@@ -2845,6 +3035,23 @@ public sealed partial class World
                     || !AtLeast75(combatSupply[e.PlayerId], combatDraw[e.PlayerId])))
             { _entities[i] = e; continue; }
             if (e.Cooldown > 0) { e.Cooldown--; _entities[i] = e; continue; }
+
+            // P7-11b: a unit walking in to ACT ON a building does not stop to
+            // shoot it. The hero is the first ARMED contact unit in the game and
+            // the collision is total without this: CaptureSystem sets the pursuit
+            // each tick and the explicit-target branch below answers with "in
+            // range: hold and fire", so a hero ordered onto a power plant would
+            // halt four cells short and plink at it with an anti-infantry rifle
+            // forever, never reaching the 1.75 cells its ability needs.
+            //
+            // Provably inert for everything that existed before: the three older
+            // contact units carry weapon 0 and never reach this line, and this
+            // clause asks CaptureSystem's OWN target predicate rather than a
+            // second copy of it, so a hero ordered at a unit, a wall, a bridge or
+            // its own side's building shoots exactly as any other unit would.
+            if (ContactEffectOf(e.UnitType) != ContactEffect.None && e.ExplicitTarget >= 0
+                && ValidId(e.ExplicitTarget) && CanBeActedOn(in e, _entities[e.ExplicitTarget]))
+            { _entities[i] = e; continue; }
 
             // The world's table, never Weapons.Get: this is the line that makes
             // data/weapons drive the game rather than describe it.
@@ -3649,6 +3856,19 @@ public sealed partial class World
                     _entities[i] = e;
                     continue;
                 }
+                // P7-11b: the SECOND enforcement point, and the one that makes
+                // the cap true rather than merely advertised. A player who
+                // queued two heroes while owning none passed the Produce check
+                // twice, so the completion is where the second one is stopped.
+                //
+                // It HOLDS rather than cancels, reusing the blocked-spawn-cell
+                // case immediately below: full progress, fully paid, queue head
+                // not popped, so owed is exactly zero every held tick, the
+                // credits are not lost, and the unit walks out the moment the
+                // standing one dies. Cancelling here would charge a player 1500
+                // credits for a unit they never received, and dropping the head
+                // silently would be SPAWN-D2 all over again.
+                if (AtMaxAlive(p, queuedType)) { _entities[i] = e; continue; }
                 // Spawn-cell occupancy (SPAWN-04): terrain AND standing
                 // entities, via ValidPlacement's own predicate (CellOccupied).
                 int scx = Map.CellOf(e.X), scy = Map.CellOf(e.Y);

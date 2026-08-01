@@ -16,7 +16,8 @@ public static class DataLoader
         int Hp, ArmourClass Armour, Fix64 Speed, string Role,
         IReadOnlyList<string> WeaponIds, int SightRange, bool Stealth, bool Detector,
         IReadOnlyList<string> Prerequisites, string ProducedAt, bool VeterancyEnabled, string Notes,
-        bool Air = false);   // ADR-028
+        bool Air = false,      // ADR-028
+        int MaxAlive = 0);     // P7-11b: 0 means unlimited, which is every unit but the two heroes
 
     /// <summary>TICKET-P5-BD-06: a placeable structure as authored in /data/buildings, validated against schema.structure.json.</summary>
     public sealed record StructureData(
@@ -134,6 +135,10 @@ public static class DataLoader
             // overloaded to mean EntityKind.Harvester - so it is its own key.
             ProducedAt: ReqStr(m, "produced_at"),
             VeterancyEnabled: OptBool(m, "veterancy_enabled", true),
+            // P7-11b: the per-player cap on LIVING units of this type. Absent
+            // means 0 and 0 means unlimited, so every file written before the
+            // heroes is unchanged and the enforcement is a no-op for it.
+            MaxAlive: m.TryGetValue("max_alive", out _) ? ReqInt(m, "max_alive") : 0,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
 
@@ -393,6 +398,7 @@ public static class UnitCatalogue
         "wpn_vanguard_autocannon" => 7,
         "wpn_emplacement_gun" => 8,   // P7-2
         "wpn_flak_gun" => 9,          // ADR-028: the only AntiAir weapon in the game
+        "wpn_commando_rifle" => 10,   // P7-11b: carried by both heroes, which are one unit with one property changed
         _ => throw new FormatException($"unknown weapon id '{name}'"),
     };
 
@@ -430,6 +436,11 @@ public static class UnitCatalogue
         "com_flak_track" => 16,       // ADR-028 clause 4: the answer
         "sod_infiltrator" => 17,      // P7-7: GDD s7's "Infiltrator (steals intel/credits)"
         "sod_saboteur" => 18,         // P7-11a: GDD s7's "Saboteur (disables buildings)"
+        // P7-11b: GDD s7's two heroes, lines 62 and 64. Adjacent ids because
+        // they are one unit authored twice, differing by faction and by stealth
+        // alone - the P7-2b Bastion / Shroud Nest precedent.
+        "dir_commando" => 19,
+        "sod_shadow_commando" => 20,
         _ => throw new FormatException($"unknown unit id '{id}'"),
     };
 
@@ -446,7 +457,8 @@ public static class UnitCatalogue
                // on values that already round-trip; nothing branches on them yet.
                StructureCatalogue.PrereqIds(u.Prerequisites),
                StructureCatalogue.TypeIdOf(u.ProducedAt),
-               u.Air);   // ADR-028
+               u.Air,          // ADR-028
+               u.MaxAlive);    // P7-11b
 }
 
 /// <summary>

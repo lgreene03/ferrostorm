@@ -30,6 +30,7 @@ using Ferrostorm.Sim;
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   lanaiseatsgate     - P7-8f: a LAN match on a four-seat map - the seats no peer holds are played by commanders both peers generate locally, to identical hashes, and a divergent commander is CAUGHT
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
+//   herogate           - P7-11b: the hero DAMAGES a building rather than deleting it and survives doing so, "one at a time" is enforced where a unit is queued and where it completes, and an uncapped unit is untouched
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
@@ -5823,10 +5824,36 @@ int InfiltratorGate()
             return Fail("infiltrator: the robbed building must still fly the victim's flag");
     }
 
+    // A NEUTRAL outpost has no treasury. CanBeActedOn admits one deliberately,
+    // because capturing a neutral outpost is ADR-021's whole feature, and the
+    // theft branch then indexed _credits[-1]. An index-out-of-range reachable
+    // by right-clicking an outpost with an Infiltrator, latent since P7-7 and
+    // found while adding the hero as a fourth effect on the same shape.
+    {
+        var w = new World(3306, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int post = w.SpawnOutpost(-1, 30, 20);
+        var d = w.GetUnitType(World.InfiltratorUnitType);
+        int spy = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp,
+                              d.Armour, 0, veterancy: false, unitType: World.InfiltratorUnitType);
+        long before = w.Credits(0);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, post) };
+        // Throwing here IS the failure: the assertions below never run.
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (!w.Entities[spy].Alive)
+            return Fail("infiltrator: a theft against a NEUTRAL took nothing, so it must not consume the actor");
+        if (w.Credits(0) != before)
+            return Fail($"infiltrator: robbing a neutral minted {w.Credits(0) - before} credits from nowhere");
+        if (w.Entities[post].PlayerId != -1)
+            return Fail("infiltrator: a neutral outpost must stay neutral - the Infiltrator does not capture");
+    }
+
     Console.WriteLine("infiltratorgate: the Infiltrator steals a share of the victim's treasury and the credits MOVE "
                       + "rather than appear; the building stays the victim's and unharmed, so it is a robbery and not "
                       + "a second capture; the haul scales with the target's wealth, which is economy denial rather "
-                      + "than a bounty; the theft raises Robbed carrying the haul and raises NO Captured event, so the "
+                      + "than a bounty; a theft against a NEUTRAL outpost takes nothing, mints nothing and does not "
+                      + "consume the actor, where it used to index _credits[-1] and throw; the theft raises Robbed carrying the haul and raises NO Captured event, so the "
                       + "distinction survives as far as the alert the player actually sees; and the engineer's capture "
                       + "is untouched by the generalisation");
     return 0;
@@ -6054,6 +6081,347 @@ int SaboteurGate()
                       + $"{World.SabotageDurationTicks} ticks against a control that kills the same target in {liveKill}, and "
                       + $"shoots again afterwards; the engineer's capture and the infiltrator's theft are untouched by "
                       + $"the third effect; and a v10 save resumes DARK and lapses on the same tick it would have");
+    return 0;
+}
+
+int HeroGate()
+{
+    // P7-11b. Additive, the infiltratorgate pattern it is modelled on: a
+    // standalone mode and a Match battery stage, never a golden scenario, so the
+    // golden list stays 24 and the hashes stay byte-identical.
+    //
+    // Two claims are under test and only one of them is the ability.
+    //
+    // The ability is that a hero DEMOLISHES rather than deletes, and survives
+    // doing it. Every stage below asserts a measured hit point total, a credit
+    // balance or a head count rather than the branch that produced it, because a
+    // gate that asserted "the demolition branch ran" would pass over a
+    // demolition that took nothing off.
+    //
+    // The claim that matters more is max_alive. It is the first per-unit-type
+    // build cap in the sim and it runs on EVERY Produce command and EVERY
+    // production completion in the game, so stage 5 is not a formality: it is
+    // what stands between this wave and 24 moved golden hashes.
+    const int Hero = World.CommandoUnitType, Shadow = World.ShadowCommandoUnitType,
+              Infil = World.InfiltratorUnitType, Sab = World.SaboteurUnitType,
+              Engineer = World.EngineerUnitType, RifleSquad = 2;
+    const int BastionType = 17;
+
+    // A contact unit of any type, standing on the centre of an enemy building,
+    // ordered onto it. The three older contact units and the hero take exactly
+    // the same fixture, which is the point: the contrast in what happens next is
+    // then about the EFFECT and not about the setup.
+    (World W, int Actor, int Target) Setup(ulong seed, int unitType, string targetKind)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);   // admits every unit type this gate spawns
+        int target = targetKind switch
+        {
+            "refinery" => w.SpawnRefinery(1, 30, 20),
+            "bastion" => w.SpawnFactionDefence(1, BastionType, 30, 20),
+            _ => w.SpawnPowerPlant(1, 30, 20),
+        };
+        w.GrantCredits(1, 5000);
+        var d = w.GetUnitType(unitType);
+        int actor = w.SpawnUnit(0, Fix64.FromInt(31), Fix64.FromInt(21), d.Speed, d.Hp, d.Armour,
+                                d.WeaponId, d.SightCells, d.Stealth, d.Detector, veterancy: false, unitType: unitType);
+        return (w, actor, target);
+    }
+
+    void Order(World w, int actor, int target)
+    {
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, actor, Fix64.Zero, Fix64.Zero, target) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+    }
+
+    int plantHp0 = 0, bastionHp0 = 0, bastionHp1 = 0;
+
+    // --- 1. It demolishes. The building is DESTROYED, and the credits and the
+    //        flag are untouched: this is neither the engineer's capture nor the
+    //        Infiltrator's theft wearing a bigger price tag.
+    {
+        var (w, hero, plant) = Setup(3500, Hero, "plant");
+        plantHp0 = w.Entities[plant].Hp;
+        long mine = w.Credits(0), theirs = w.Credits(1);
+        Order(w, hero, plant);
+        if (w.Entities[plant].Alive)
+            return Fail($"hero: a power plant of {plantHp0} hit points must not survive a demolition "
+                        + $"(it stands on {w.Entities[plant].Hp})");
+        if (w.Entities[plant].PlayerId != 1)
+            return Fail("hero: the demolished building must still fly the victim's flag - a hero that took "
+                        + "ownership would be an engineer that also does damage");
+        if (w.Credits(0) != mine || w.Credits(1) != theirs)
+            return Fail($"hero: demolition must move no credits (attacker {mine} to {w.Credits(0)}, "
+                        + $"victim {theirs} to {w.Credits(1)})");
+        int died = 0, captured = 0;
+        foreach (var ev in w.Events)
+        {
+            if (ev.Type == GameEventType.Died && ev.A == plant) died++;
+            if (ev.Type == GameEventType.Captured) captured++;
+        }
+        if (died != 1)
+            return Fail($"hero: a demolished building must die through the ordinary path and raise one Died event, saw {died}");
+        if (captured != 0)
+            return Fail("hero: demolition must raise NO Captured event - the client reads Captured as an ownership "
+                        + "change and would announce a building lost to a capture that never happened");
+    }
+
+    // --- 2. It is DAMAGE, not deletion. The same hero against the toughest
+    //        building in the catalogue leaves it standing and hurt, which is what
+    //        keeps hit points, armour class and the repair vehicle meaningful
+    //        against the one unit they would matter most against.
+    {
+        var (w, hero, bastion) = Setup(3501, Hero, "bastion");
+        bastionHp0 = w.Entities[bastion].Hp;
+        // HoldFire so the figure below is the CHARGE and nothing else. The hero
+        // is armed, and on the tick it demolishes it has no standing order left
+        // (the ability clears it), so an Aggressive hero also puts a rifle round
+        // into whatever it is standing next to - correct behaviour, and eleven
+        // points of noise across the one number this stage exists to measure.
+        var quiet = new List<Command> { new(w.Tick, 0, CommandType.SetStance, hero, Fix64.Zero, Fix64.Zero, (int)Stance.HoldFire) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(quiet));
+        Order(w, hero, bastion);
+        bastionHp1 = w.Entities[bastion].Hp;
+        if (!w.Entities[bastion].Alive)
+            return Fail($"hero: a Bastion of {bastionHp0} hit points must SURVIVE one demolition, or the ability is "
+                        + "deletion with extra steps and no building in the game can be built to withstand it");
+        if (bastionHp1 >= bastionHp0)
+            return Fail($"hero: the Bastion must be damaged ({bastionHp0} to {bastionHp1})");
+        if (bastionHp0 - bastionHp1 != World.DemolitionDamage)
+            return Fail($"hero: an anti-building charge on a structure must land its full {World.DemolitionDamage}, "
+                        + $"and it took {bastionHp0 - bastionHp1}");
+    }
+
+    // --- 3. The hero SURVIVES its own act and the other three do not. Asserted
+    //        as one stage on purpose: the contrast IS the claim, and four
+    //        separate stages would each pass while the difference between them
+    //        quietly disappeared.
+    {
+        var (wEng, eng, engPlant) = Setup(3502, Engineer, "plant");
+        var (wSpy, spy, spyVault) = Setup(3503, Infil, "refinery");
+        var (wSab, sab, sabPlant) = Setup(3504, Sab, "plant");
+        var (wHero, hero, heroPlant) = Setup(3505, Hero, "plant");
+        Order(wEng, eng, engPlant);
+        Order(wSpy, spy, spyVault);
+        Order(wSab, sab, sabPlant);
+        Order(wHero, hero, heroPlant);
+        if (wEng.Entities[eng].Alive) return Fail("hero: capture must still consume the engineer");
+        if (wSpy.Entities[spy].Alive) return Fail("hero: the theft must still consume the Infiltrator");
+        if (wSab.Entities[sab].Alive) return Fail("hero: the sabotage must still consume the Saboteur");
+        if (!wHero.Entities[hero].Alive)
+            return Fail("hero: the demolition must NOT consume the hero. A consumed hero is an expensive engineer, "
+                        + "and surviving is what makes it a unit worth protecting across a match");
+        if (wHero.Entities[hero].ExplicitTarget >= 0)
+            return Fail("hero: the surviving hero must have its order cleared, or it demolishes unattended - that "
+                        + "cleared target is the pacing limit this ability has in place of a cooldown");
+    }
+
+    // A barracks that can build a hero: the uplink is the prerequisite and the
+    // plant is what keeps the line running at full rate.
+    (World W, int Barracks) Line(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        int barracks = w.SpawnBarracks(0, 20, 20);
+        w.SpawnRadarUplink(0, 24, 20);
+        w.SpawnPowerPlant(0, 28, 20, supply: 500);
+        w.GrantCredits(0, 40000);
+        return (w, barracks);
+    }
+
+    int AliveOfType(World w, int player, int unitType)
+    {
+        int n = 0;
+        foreach (var e in w.Entities)
+            if (e.Alive && e.PlayerId == player && e.UnitType == unitType) n++;
+        return n;
+    }
+
+    int heldTicks = 0;
+
+    // --- 4a. A player who owns a living hero cannot ORDER a second. The rifle
+    //         squad in the same breath is the control: without it this stage
+    //         reads identically to a barracks that has stopped accepting orders
+    //         at all.
+    {
+        var (w, barracks) = Line(3506);
+        var d = w.GetUnitType(Hero);
+        w.SpawnUnit(0, Fix64.FromInt(30), Fix64.FromInt(30), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                    d.SightCells, d.Stealth, d.Detector, veterancy: false, unitType: Hero);
+        var cmds = new List<Command>
+        {
+            new(w.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, Hero),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (w.QueueLength(barracks) != 0)
+            return Fail($"hero: a Produce order for a second hero must be refused where it is QUEUED "
+                        + $"(the queue holds {w.QueueLength(barracks)})");
+        var control = new List<Command>
+        {
+            new(w.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, RifleSquad),
+        };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(control));
+        if (w.QueueLength(barracks) != 1)
+            return Fail("hero control: the same barracks must still accept a rifle squad, or the stage above "
+                        + "proves only that the fixture is broken");
+    }
+
+    // --- 4b. And the cap is real rather than advertised. Two heroes are ordered
+    //         while NONE is alive, so both pass the queue check, and the second
+    //         is stopped where production completes. Then the standing hero dies
+    //         and the held one walks out, which is the half that stops "one at a
+    //         time" being a permanent lockout after the first casualty.
+    {
+        var (w, barracks) = Line(3507);
+        var cmds = new List<Command>
+        {
+            new(w.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, Hero),
+            new(w.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, Hero),
+        };
+        // A weapon that kills a 200-hit-point hero in one shot, registered before
+        // tick 0 as the catalogue rules require. The weapondatagate precedent: a
+        // value no /data file carries, so nothing about this stage can be
+        // explained by the stock table.
+        w.RegisterWeaponType(11, new WeaponDef(Fix64.FromInt(12), 500, Warhead.Omni, 5));
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (w.QueueLength(barracks) != 2)
+            return Fail($"hero: with NO hero alive both orders must queue, and the queue holds {w.QueueLength(barracks)}. "
+                        + "This is exactly why the cap needs a second enforcement point");
+        int firstAt = -1;
+        for (int t = 0; t < 1200; t++)
+        {
+            w.Step(default);
+            if (firstAt < 0 && AliveOfType(w, 0, Hero) == 1) firstAt = w.Tick;
+        }
+        if (firstAt < 0) return Fail("hero: the first hero never finished building at all");
+        if (AliveOfType(w, 0, Hero) != 1)
+            return Fail($"hero: the second hero must be HELD at completion while the first lives, and "
+                        + $"{AliveOfType(w, 0, Hero)} are standing");
+        if (w.QueueLength(barracks) != 1)
+            return Fail($"hero: the held unit must keep its place in the queue rather than being cancelled "
+                        + $"(the queue holds {w.QueueLength(barracks)})");
+        heldTicks = w.Tick - firstAt;
+        long beforeDeath = w.Credits(0);
+        int hero = -1;
+        for (int i = 0; i < w.Entities.Count; i++)
+            if (w.Entities[i].Alive && w.Entities[i].UnitType == Hero) hero = i;
+        int killer = w.SpawnUnit(1, w.Entities[hero].X, w.Entities[hero].Y + Fix64.FromInt(8),
+                                 Fix64.Zero, 4000, ArmourClass.Heavy, weaponId: 11);
+        var shoot = new List<Command> { new(w.Tick, 1, CommandType.Attack, killer, Fix64.Zero, Fix64.Zero, hero) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(shoot));
+        if (w.Entities[hero].Alive) return Fail("hero: the fixture failed to kill the standing hero");
+        if (AliveOfType(w, 0, Hero) != 1)
+            return Fail($"hero: the held hero must be released the moment the standing one dies, and "
+                        + $"{AliveOfType(w, 0, Hero)} are standing. A cap that never frees is a permanent lockout");
+        if (w.Credits(0) != beforeDeath)
+            return Fail($"hero: a held unit is fully paid, so no further credit may be taken when it is released "
+                        + $"({beforeDeath} to {w.Credits(0)})");
+    }
+
+    // --- 5. And max_alive 0 is a COMPLETE no-op. This is the stage that stands
+    //        between this wave and 24 moved golden hashes: every unit in the game
+    //        but the two heroes carries no cap, and the enforcement must not
+    //        cost them a single changed decision.
+    int squads = 0;
+    {
+        var (w, barracks) = Line(3508);
+        const int Want = 6;
+        var cmds = new List<Command>();
+        for (int n = 0; n < Want; n++)
+            cmds.Add(new Command(w.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, RifleSquad));
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (w.QueueLength(barracks) != Want)
+            return Fail($"hero: an uncapped unit must queue without limit, and {w.QueueLength(barracks)} of {Want} were accepted");
+        for (int t = 0; t < 1200; t++) w.Step(default);
+        squads = AliveOfType(w, 0, RifleSquad);
+        if (squads != Want)
+            return Fail($"hero: an uncapped unit must be producible over and over, and {squads} of {Want} arrived. "
+                        + "If this stage fails the cap is not the no-op it must be, and every golden hash in "
+                        + "sim/golden-hashes.txt has moved with it");
+    }
+
+    // A hero of the given type, standing in the open with an enemy gun five cells
+    // away: outside its own four-cell reach, so it never fires unless something
+    // is put in front of it, and inside the gun's, so being SEEN is the only
+    // thing that decides whether it is hit.
+    int DamageTakenAtFiveCells(int unitType, bool giveItSomethingToShoot)
+    {
+        var w = new World(3509, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        var d = w.GetUnitType(unitType);
+        int hero = w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), Fix64.Zero, d.Hp, d.Armour,
+                               d.WeaponId, d.SightCells, d.Stealth, d.Detector, veterancy: false, unitType: unitType);
+        w.SpawnUnit(1, Fix64.FromInt(25), Fix64.FromInt(20), Fix64.Zero, 4000, ArmourClass.Heavy, weaponId: 4);
+        if (giveItSomethingToShoot)
+            w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(20), Fix64.Zero, 4000, ArmourClass.Heavy, weaponId: 0);
+        int hp0 = w.Entities[hero].Hp;
+        for (int t = 0; t < 60; t++) w.Step(default);
+        return hp0 - w.Entities[hero].Hp;
+    }
+
+    int openHit = 0, cloakedHit = 0, revealedHit = 0;
+
+    // --- 6. The pair differs by ONE property and it is the one GDD line 30 gives
+    //        the Sodality. Measured as damage taken rather than read off the
+    //        Stealth flag: a flag that was set and honoured nowhere would pass an
+    //        assertion on itself.
+    {
+        openHit = DamageTakenAtFiveCells(Hero, false);
+        cloakedHit = DamageTakenAtFiveCells(Shadow, false);
+        revealedHit = DamageTakenAtFiveCells(Shadow, true);
+        if (openHit <= 0)
+            return Fail("hero control: the Directorate hero walks in the open, so a gun five cells away must hit it. "
+                        + "Without this the cloak stage below proves only that the fixture never fired");
+        if (cloakedHit != 0)
+            return Fail($"hero: the Sodality hero is cloaked and must not be targetable at all, yet it took {cloakedHit}");
+        if (revealedHit <= 0)
+            return Fail("hero: a cloaked hero that FIRES must decloak and become targetable, inheriting the existing "
+                        + "rule rather than needing a new one, and it took no damage at all");
+    }
+
+    // --- 7. The three older effects are UNCHANGED by the fourth. Every wave that
+    //        added an effect to this shared shape carried this check, and P7-11b
+    //        needs it more than they did: it did not add a branch beside the
+    //        others, it replaced the boolean chain that selected between them.
+    {
+        var (wEng, eng, engPlant) = Setup(3510, Engineer, "plant");
+        Order(wEng, eng, engPlant);
+        if (wEng.Entities[engPlant].PlayerId != 0)
+            return Fail("hero: the engineer's capture must still change the building's owner");
+        if (!wEng.Entities[engPlant].Alive || wEng.Entities[engPlant].Hp != wEng.Entities[engPlant].MaxHp)
+            return Fail("hero: a captured building must arrive intact - capture is not demolition");
+
+        var (wSpy, spy, spyVault) = Setup(3511, Infil, "refinery");
+        long theirs = wSpy.Credits(1), mine = wSpy.Credits(0);
+        int vaultHp = wSpy.Entities[spyVault].Hp;
+        Order(wSpy, spy, spyVault);
+        long taken = wSpy.Credits(0) - mine;
+        if (taken <= 0 || theirs - wSpy.Credits(1) != taken)
+            return Fail($"hero: the Infiltrator's theft must still MOVE credits (victim lost {theirs - wSpy.Credits(1)}, "
+                        + $"thief gained {taken})");
+        if (wSpy.Entities[spyVault].Hp != vaultHp)
+            return Fail("hero: the robbed building must still be unharmed - the thief has not become a demolition charge");
+
+        var (wSab, sab, sabPlant) = Setup(3512, Sab, "plant");
+        int sabHp = wSab.Entities[sabPlant].Hp;
+        Order(wSab, sab, sabPlant);
+        if (!wSab.IsDisabled(sabPlant))
+            return Fail("hero: the Saboteur must still switch the building off");
+        if (!wSab.Entities[sabPlant].Alive || wSab.Entities[sabPlant].Hp != sabHp)
+            return Fail("hero: a sabotaged building must still be unharmed and standing");
+    }
+
+    Console.WriteLine($"herogate: the hero demolishes rather than captures - a {plantHp0}-hit-point power plant is "
+                      + $"destroyed with no credit moving and no Captured event, while a {bastionHp0}-hit-point Bastion "
+                      + $"is left standing on {bastionHp1}, so the {World.DemolitionDamage} lands through the ordinary "
+                      + $"damage path and hit points still decide who dies; the hero SURVIVES its own act where the "
+                      + $"engineer, the Infiltrator and the Saboteur are all consumed by theirs, and its order is "
+                      + $"cleared so demolishing again means being ordered again; \"one at a time\" is built rather "
+                      + $"than glossed - a second hero is refused where it is QUEUED while one lives, and a second "
+                      + $"ordered while none lives is held at full progress for {heldTicks} ticks and released, fully "
+                      + $"paid, on the tick the standing one dies; a unit with no cap still produced {squads} of 6, "
+                      + $"which is the assertion that keeps all 24 goldens still; and the pair differs by one "
+                      + $"property - the Directorate hero took {openHit} standing in the open, the Sodality one took "
+                      + $"{cloakedHit} cloaked and {revealedHit} once it had fired and decloaked");
     return 0;
 }
 
@@ -7492,6 +7860,10 @@ int Match(ulong seed)
     // P7-11a: the Saboteur switches a building off rather than taking it.
     int sab = SaboteurGate();
     if (sab != 0) return sab;
+    // P7-11b: the hero damages a building rather than deleting it, survives the
+    // act, and is the first unit in the game a player may own only one of.
+    int hero = HeroGate();
+    if (hero != 0) return hero;
     // P7-9: six missions the game can open, and the two things missions 04 to
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
@@ -8614,6 +8986,7 @@ return args.Length == 0
         "multiseatgate" => MultiSeatGate(),
         "lanaiseatsgate" => LanAiSeatsGate(),
         "saboteurgate" => SaboteurGate(),
+        "herogate" => HeroGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "aitargetgate" => AiTargetGate(),

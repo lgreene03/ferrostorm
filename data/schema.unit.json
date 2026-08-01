@@ -25,6 +25,8 @@
     "produced_at": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$",
       "description": "Structure id of the building that produces this unit. The producer IS a prerequisite; do not repeat it in the prerequisites list." },
     "veterancy_enabled": { "type": "boolean", "default": true },
+    "max_alive": { "type": "integer", "minimum": 0, "default": 0,
+      "description": "P7-11b: how many LIVING units of this type one player may own at once. 0 means unlimited, which is what every unit written before the heroes means, so the enforcement is a complete no-op for them and the golden hashes do not move. A cap is checked where the unit is QUEUED and again where production COMPLETES: the queue check alone would let a player order two while owning none, and the completion check alone would let the sidebar accept an order the sim then refuses. A capped unit whose completion is blocked HOLDS at full progress, fully paid, exactly as one whose spawn cells are all occupied does, so the credits are never lost and the unit arrives the moment the standing one dies." },
     "notes": { "type": "string", "description": "Design intent, counter relationships (GDD s6-7 traceback)" }
   }
 }

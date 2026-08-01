@@ -1,0 +1,38 @@
+# P7-11b. Written doctrine, not invention: GDD s7 line 62 names a "Commando
+# (hero, one at a time)" in the Directorate's roster. The line gives the unit,
+# the faction and the build cap; the ability, the stats and the tier are
+# judgement calls and are recorded as such in the ADR.
+# Doc 24 B4 recorded the gap it fills - every unit in the game was a member of
+# an army, and nothing was a piece a player would learn the name of, protect
+# across a whole match and mourn.
+# The ability is DEMOLITION ON CONTACT: it walks into an enemy building and
+# takes a great deal of it away in one go, through the ordinary damage path, so
+# armour class, the repair vehicle and a tough building all still matter. A
+# power plant dies where a Bastion is merely hurt.
+# Unlike the engineer, the Infiltrator and the Saboteur, the act does NOT
+# consume it. A consumed hero is an expensive engineer; surviving is what makes
+# it a unit you keep.
+# 200 hit points is tough for infantry and is still armour_class none, so the
+# right answer to it - massed anti-infantry fire, a tank that catches it in the
+# open - works exactly as it works on a rifle squad.
+# veterancy_enabled false on purpose: a rank-3 unit self-heals (GDD line 54) and
+# a self-healing hero that also demolishes buildings snowballs. The hero is
+# already the top of the ladder.
+id: dir_commando
+name: Commando
+faction: directorate
+tier: 3
+cost: 1500
+build_time_ticks: 300
+hp: 200
+armour_class: none
+speed: 20
+role: assault
+weapon_ids: [wpn_commando_rifle]
+sight_range: 6
+stealth: false
+detector: false
+produced_at: com_barracks
+prerequisites: [com_radar_uplink]
+veterancy_enabled: false
+max_alive: 1
