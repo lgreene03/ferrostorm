@@ -525,6 +525,40 @@ would break the one property that panel guarantees. Fixing `IsProducer` is a sim
 change touching the four sites that predicate's comment names, including a
 queue-hash fold, so it is its own wave and it is next.
 
+## Reachability, proved systematically rather than row by row
+
+Three defects this phase were one shape: something existed in the sim and no
+player could reach it. Seven units had no button; the Strike Flyer had no
+producer at all; a robbery announced itself as a capture. **All three passed
+every gate, because the gates CONSTRUCTED the outcome instead of asking for it.**
+`airgate` spawned its flyers with `SpawnUnit` and was green for months over an
+aircraft nobody could build.
+
+`reachabilitygate` is the systemic guard. It orders **every** registered unit
+with a real `Produce` command at a producer the ordering player has BUILT, and
+every buildable structure with `BuildStructure` then `PlaceStructure`, from one
+spawned Construction Yard per player and nothing else. **20 of 20 units and 14 of
+14 buildable structures.** The three excluded types are checked BOTH ways: named
+here with a reason, and confirmed to have no build time in `/data`, so a fourth
+map-placed building has to be documented rather than absorbed.
+
+It found nothing further unreachable, which is the answer to "is there more of
+this" and is worth as much as a finding would have been.
+
+**The tech tree closes in three rounds from a bare yard with no authored build
+order**, which is a stronger statement about the tree than the gate set out to
+make.
+
+**And it found a different defect of the same family.** `World.SpawnHarvester`
+predates the catalogue and ignores it: it never sets `UnitType`, so every
+harvester in the game stands as type 0 and its authored def cannot be read back
+off the entity - `AtMaxAlive`, `IsAirborne` and the client's name and model
+lookups are all blind to it. It also hardcodes hp, armour, sight and speed, and
+**the speed diverges: 1/5 in code against `speed: 18` in `com_harvester.yaml`, so
+every harvester moves at 0.20 where the data says 0.18.** P7-1's defect exactly,
+in the oldest spawner in the file. Fixing it moves every golden with a harvester
+in it, so it is its own wave and it is next.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against

@@ -892,6 +892,37 @@ public partial class VerifyRunner : Node
             }
         }
 
+        // --- ...and every STRUCTURE the catalogue registers, too --------------
+        // The unit half above is what caught seven unbuildable units. The
+        // building half was checked BY HAND at the time and found complete,
+        // which is precisely how the unit gap survived two waves: a list that
+        // agrees with the catalogue today agrees with it only until the next
+        // building lands. So it is a check.
+        //
+        // Three types are legitimately absent, and each for a recorded decision
+        // rather than an oversight. Keyed by KIND, not by type id, so a
+        // renumbering cannot silently widen the exemption, and stated here in
+        // the same shape as reachabilitygate's own exclusion list.
+        int sRegistered = 0, sButtoned = 0, sMapPlaced = 0;
+        string sMissing = "";
+        foreach (int t in _game.LiveWorld.StructureTypeIds())
+        {
+            sRegistered++;
+            var kind = _game.LiveWorld.GetStructureType(t).Kind;
+            bool exempt = kind is EntityKind.ConstructionYard   // MCV-deployed: it is what an MCV becomes
+                               or EntityKind.Outpost            // ADR-021: map-placed and captured, never built
+                               or EntityKind.Bridge;            // ADR-025: map-placed terrain, never built
+            if (sb.StructButtonText(t).Length > 0) sButtoned++;
+            else if (exempt) sMapPlaced++;
+            else sMissing += (sMissing.Length > 0 ? ", " : "") + $"type {t} ({kind})";
+        }
+        Check(sMissing.Length == 0,
+              "every registered STRUCTURE carries a BUILDINGS or DEFENCE button, or is one of the three map-placed "
+              + $"exceptions (missing: {(sMissing.Length > 0 ? sMissing : "none")})");
+        Check(sButtoned + sMapPlaced == sRegistered,
+              $"...{sButtoned} of {sRegistered} registered structure types are buttoned and {sMapPlaced} are "
+              + "map-placed or MCV-deployed, which accounts for all of them");
+
         RunLanChecks();
     }
 

@@ -889,6 +889,30 @@ public sealed partial class World
     /// <summary>The live catalogue. Unknown types return default, whose Cost 0 is what every command handler already tests to refuse them.</summary>
     public StructureTypeDef GetStructureType(int typeId) => _structTypes.TryGetValue(typeId, out var d) ? d : default;
 
+    /// <summary>
+    /// Every structure type id this world has registered, ASCENDING: the twin of
+    /// <see cref="UnitTypeIds"/>, down to the fresh list and the sort. A read,
+    /// and only a read, so a caller may keep the list and the catalogue is never
+    /// handed a mutable view of itself.
+    ///
+    /// Sorted for the reason UnitTypeIds sorts: dictionary iteration order must
+    /// never leak into anything a player or a peer can see.
+    ///
+    /// It exists because nothing could ASK what the BUILDING catalogue holds.
+    /// Every caller that wanted the set walked 1 to MaxStructType and remembered
+    /// to skip GateStructType itself - a bound and an exception restated at each
+    /// site, which is the hand-kept-list shape that left seven units with no
+    /// sidebar button. Asking the registry makes a registered type a member by
+    /// construction and leaves the reserved gate, which has no def to seed, out
+    /// by construction.
+    /// </summary>
+    public IReadOnlyList<int> StructureTypeIds()
+    {
+        var ids = new List<int>(_structTypes.Keys);
+        ids.Sort();
+        return ids;
+    }
+
     /// <summary>Match setup may overwrite or extend the catalogue before tick 0, mirroring RegisterUnitType. After tick 0 the catalogue is frozen: a mid-match change would be a silent replay divergence.</summary>
     public void RegisterStructureType(int typeId, StructureTypeDef def)
     {
