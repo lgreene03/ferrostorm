@@ -247,6 +247,12 @@ public enum GameEventType : byte
     // whole distinction this unit exists to make is sabotage against capture,
     // and it has to survive as far as the alert.
     Sabotaged = 12,
+    // P7-7a: A structure, B the thief's player, C the credits taken. The
+    // Infiltrator raised Captured for this from P7-7 until now, and the comment
+    // above was written describing that as a thing to avoid while it was
+    // already happening. It is the same argument: a robbery is not an
+    // ownership change, and the building's flag never moves.
+    Robbed = 13,
 }
 public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default, int C = -1);
 
@@ -2557,7 +2563,14 @@ public sealed partial class World
                     // robbery, not a capture, and conflating them would give the
                     // Sodality a second engineer instead of a different tool.
                     e.Alive = false; e.Moving = false; e.ExplicitTarget = -1;
-                    _events.Add(new GameEvent(GameEventType.Captured, touched, e.PlayerId, C: (int)taken));
+                    // P7-7a: Robbed, not Captured. This line said Captured from
+                    // P7-7 until now, and the client reads Captured as an
+                    // ownership change, so robbing a building told its owner
+                    // "STRUCTURE LOST TO CAPTURE" about a building they still
+                    // held, klaxon and all. The comment two paragraphs up
+                    // asserted the robbery/capture distinction while this line
+                    // was busy erasing it at the only point the player can see.
+                    _events.Add(new GameEvent(GameEventType.Robbed, touched, e.PlayerId, C: (int)taken));
                 }
                 else if (isSaboteur)
                 {

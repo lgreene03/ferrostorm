@@ -5049,10 +5049,40 @@ int InfiltratorGate()
             return Fail("infiltrator: capture must still consume the engineer");
     }
 
+    // P7-7a. The distinction between a robbery and a capture was asserted here
+    // from P7-7 in every way EXCEPT the one the player can perceive: the theft
+    // raised GameEventType.Captured, and the client reads Captured as an
+    // ownership change, so the victim was told "STRUCTURE LOST TO CAPTURE"
+    // about a building they still owned. Every other stage of this gate passed
+    // throughout, because none of them looked at the event. This one does.
+    {
+        var (w, spy, vault) = Setup(3305);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Attack, spy, Fix64.Zero, Fix64.Zero, vault) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        for (int t = 0; t < 120 && w.Entities[spy].Alive; t++) w.Step(default);
+        int robbed = 0, captured = 0, stolen = -1;
+        foreach (var ev in w.Events)
+        {
+            if (ev.Type == GameEventType.Robbed && ev.A == vault) { robbed++; stolen = ev.C; }
+            if (ev.Type == GameEventType.Captured) captured++;
+        }
+        if (robbed != 1)
+            return Fail($"infiltrator: a theft must raise exactly one Robbed event, saw {robbed}");
+        if (captured != 0)
+            return Fail("infiltrator: a theft must raise NO Captured event - the client reads Captured as an "
+                        + "ownership change and would announce a building lost that never changed hands");
+        if (stolen <= 0)
+            return Fail($"infiltrator: the Robbed event must carry the haul, got {stolen}");
+        if (w.Entities[vault].PlayerId != 1)
+            return Fail("infiltrator: the robbed building must still fly the victim's flag");
+    }
+
     Console.WriteLine("infiltratorgate: the Infiltrator steals a share of the victim's treasury and the credits MOVE "
                       + "rather than appear; the building stays the victim's and unharmed, so it is a robbery and not "
                       + "a second capture; the haul scales with the target's wealth, which is economy denial rather "
-                      + "than a bounty; and the engineer's capture is untouched by the generalisation");
+                      + "than a bounty; the theft raises Robbed carrying the haul and raises NO Captured event, so the "
+                      + "distinction survives as far as the alert the player actually sees; and the engineer's capture "
+                      + "is untouched by the generalisation");
     return 0;
 }
 
