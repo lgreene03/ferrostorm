@@ -42,6 +42,7 @@ using Ferrostorm.Sim;
 //   transportgate      - P7-3: the Carrier loads infantry only, unloads them intact, and takes its cargo down with it
 //   emplacementgate    - P7-2: the Emplacement beats infantry and LOSES to armour, so defence is a choice; and it obeys the power gate
 //   factiongate        - P7-1: a building's side comes from /data; common admits both, a declared side is obeyed
+//   reachabilitygate   - EVERY registered unit and every buildable structure is ORDERED through Produce/BuildStructure and appears; the gates that missed three defects this phase constructed the outcome instead of asking for it
 //   basingate          - skirmish-07 played 20,000 ticks (~22 simulated minutes): the commanders expand and fight rather than stall
 //   sizeprobe          - doc 26 s5: ms/tick and flow-field build cost against map area (not a gate; nothing asserts)
 //   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
@@ -7929,6 +7930,12 @@ int Match(ulong seed)
     // peers generate locally, with the divergence detector proven to bite.
     int lanAiSeats = LanAiSeatsGate();
     if (lanAiSeats != 0) return lanAiSeats;
+    // And the guard over the whole catalogue: everything the game registers can
+    // actually be ORDERED by somebody. It rides the battery last because it is
+    // the broadest and the slowest, and because a failure in it is a statement
+    // about the catalogue rather than about any one feature above.
+    int reach = ReachabilityGate();
+    if (reach != 0) return reach;
     return 0;
 }
 
@@ -8149,6 +8156,377 @@ int LanChaos(int games, int delayMs, int jitterMs, int stallPerMille, int stallM
                           $"hash 0x{results[0]:X16} identical, no desync ({sw.Elapsed.TotalSeconds:F1}s wall)");
     }
     Console.WriteLine($"lanchaos: {games} games under adverse conditions, zero desyncs");
+    return 0;
+}
+
+int ReachabilityGate()
+{
+    // CAN A PLAYER ACTUALLY HAVE THIS? Additive, the infiltratorgate pattern:
+    // a standalone mode plus a Match battery stage, never a golden scenario, so
+    // the golden list stays 24.
+    //
+    // Three defects this phase were one shape - something existed in the sim and
+    // no player could reach it. Seven units had no sidebar button because the
+    // panel kept a hand-written list. The Strike Flyer had no producer at all,
+    // because World.IsProducer omitted the Airfield, so Produce refused it in
+    // every mode from the day the air layer shipped. The Infiltrator announced a
+    // robbery as a capture. Every gate in the project was green over all three,
+    // and the reason is the same in each case: THE GATES CONSTRUCTED THE OUTCOME
+    // INSTEAD OF ASKING FOR IT. `airgate` stood its flyers up with SpawnUnit and
+    // never issued a Produce, so it proved everything about how an aircraft
+    // behaves and nothing about whether anybody can own one.
+    //
+    // So this gate spawns exactly TWO things, one Construction Yard per player,
+    // which is the one structure a player really does receive rather than order
+    // (it is MCV-deployed). Everything else in it - every building and every
+    // unit - is obtained by issuing the command a click becomes, stepping the
+    // world, and counting what appeared. Nothing is derived from a list: the
+    // unit set comes from World.UnitTypeIds, the building set from
+    // World.StructureTypeIds, and each thing's producer, prerequisites and
+    // faction come from its own def, so a type added tomorrow enrols itself.
+    const int Dir = World.FactionDirectorate, Sod = World.FactionSodality;
+
+    List<Command> One(Command c) => new() { c };
+    void Step(World w, List<Command>? cmds = null) =>
+        w.Step(cmds is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+    // A structure is NAMED by its kind, which is what a reader recognises and
+    // what survives a renumbering; /data has no id-to-name map for buildings the
+    // way UnitCatalogue.IdOf is one for units.
+    string StructName(World w, int t) => $"structure type {t} ({w.GetStructureType(t).Kind})";
+
+    int CountStructures(World w, int player, int structType)
+    {
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && World.IsStructure(e.Kind) && e.StructType == structType) n++;
+        }
+        return n;
+    }
+    int FindStructure(World w, int player, int structType)
+    {
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && World.IsStructure(e.Kind) && e.StructType == structType) return i;
+        }
+        return -1;
+    }
+    // What counts as "one of these appeared". A produced unit normally carries
+    // its own type and that is the identity used.
+    //
+    // THE HARVESTER DOES NOT, and the finding is recorded here rather than
+    // worked around in silence: SpawnHarvester never sets UnitType, so a
+    // factory-built harvester stands in the world as type 0 and its authored def
+    // cannot be read back off it - the per-type build cap, the airborne test and
+    // the client's name and model lookups all key on UnitType. The same spawner
+    // hardcodes hp, armour, sight and a SPEED of 1/5 where com_harvester.yaml
+    // authors 18/100, which is this project's most-repeated defect (authored data
+    // that does not drive the runtime) in the one unit whose spawner predates the
+    // catalogue. Correcting it moves every golden that harvests, so it is not
+    // this gate's to fix; the gate matches on the def's KIND where the type is
+    // missing, and says why.
+    bool Matches(in Entity e, int unitType, in World.UnitTypeDef def)
+        => e.UnitType == unitType || (e.UnitType == 0 && def.Kind != EntityKind.Unit && e.Kind == def.Kind);
+    int CountUnits(World w, int player, int unitType)
+    {
+        var def = w.GetUnitType(unitType);
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && !World.IsStructure(e.Kind) && Matches(in e, unitType, in def)) n++;
+        }
+        return n;
+    }
+
+    // Where the next building may legally go. Searched over the neighbourhood
+    // the adjacency rule could ever admit - the bounding box of what this player
+    // already owns, grown by the largest build radius - because a whole-map scan
+    // gives the same answer far more slowly. A -1 here means the FIXTURE ran out
+    // of room, and it is reported as such rather than as an unbuildable game.
+    (int Ax, int Ay) FreeAnchor(World w, int player, int structType)
+    {
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.PlayerId != player || !World.IsStructure(e.Kind)) continue;
+            int ex = w.AnchorOf(e.X, e.StructType), ey = w.AnchorOf(e.Y, e.StructType);
+            if (ex < minX) minX = ex;
+            if (ey < minY) minY = ey;
+            if (ex > maxX) maxX = ex;
+            if (ey > maxY) maxY = ey;
+        }
+        if (minX == int.MaxValue) return (-1, -1);
+        int r = World.CyBuildRadius;
+        for (int ay = Math.Max(0, minY - r); ay <= maxY + r; ay++)
+            for (int ax = Math.Max(0, minX - r); ax <= maxX + r; ax++)
+                if (w.ValidPlacement(player, ax, ay, structType)) return (ax, ay);
+        return (-1, -1);
+    }
+
+    // ORDER ONE BUILDING, exactly as the sidebar does: queue it at the yard,
+    // wait for the ready slot, then place it. Returns null on success and the
+    // reason it never appeared otherwise.
+    //
+    // A barrier takes the OTHER real player path rather than an exemption: ADR-005
+    // clause 3 gives it no build time and no ready slot, so the button enters
+    // placement directly and the treasury is charged as the segment lands. Both
+    // paths end in a PlaceStructure command and a count of what stands.
+    string? OrderStructure(World w, int player, int cy, int structType)
+    {
+        var def = w.GetStructureType(structType);
+        int before = CountStructures(w, player, structType);
+        if (def.Kind != EntityKind.Wall)
+        {
+            Step(w, One(new Command(w.Tick, player, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, structType)));
+            // Four times the authored build time plus slack: a browned-out base
+            // halves the production rate, and the fixture must not read a slow
+            // base as an unbuildable one.
+            int budget = def.BuildTicks * 4 + 400;
+            for (int t = 0; t < budget && w.Entities[cy].ReadyStructure != structType; t++) Step(w);
+            if (w.Entities[cy].ReadyStructure != structType)
+                return $"the Construction Yard never finished it in {budget} ticks "
+                       + $"(queue {w.QueueLength(cy)}, ready slot {w.Entities[cy].ReadyStructure}, credits {w.Credits(player)})";
+        }
+        var (ax, ay) = FreeAnchor(w, player, structType);
+        if (ax < 0) return "the fixture found no legal placement cell beside the base - out of room, not unbuildable";
+        Step(w, One(new Command(w.Tick, player, CommandType.PlaceStructure, cy,
+                                Map.CellCentre(ax), Map.CellCentre(ay), structType)));
+        if (CountStructures(w, player, structType) != before + 1)
+            return $"the placement at ({ax}, {ay}) was refused";
+        return null;
+    }
+
+    // ORDER ONE UNIT: a Produce command at a producer this player owns, then
+    // count. Never SpawnUnit, which is the whole point of the gate. The count is
+    // scoped to the ordering player, so "one more than before" is the ownership
+    // assertion as well as the existence one.
+    string? OrderUnit(World w, int player, int unitType)
+    {
+        var def = w.GetUnitType(unitType);
+        int producer = FindStructure(w, player, def.ProducedAt);
+        if (producer < 0)
+            return $"this player owns no {StructName(w, def.ProducedAt)}, which is the producer its /data names";
+        int before = CountUnits(w, player, unitType);
+        Step(w, One(new Command(w.Tick, player, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType)));
+        int budget = def.BuildTicks * 4 + 600;
+        for (int t = 0; t < budget && CountUnits(w, player, unitType) == before; t++) Step(w);
+        if (CountUnits(w, player, unitType) != before + 1)
+            return $"ordered at {StructName(w, def.ProducedAt)} and nothing appeared in {budget} ticks "
+                   + $"(queue {w.QueueLength(producer)}, credits {w.Credits(player)})";
+        return null;
+    }
+
+    // THE ONLY EXCLUSIONS, keyed by KIND rather than by type id so a renumbering
+    // cannot silently widen them, and each carrying the decision that excludes it.
+    // Both directions are checked below: every kind named here must really be
+    // unqueueable in /data, and every unqueueable registered type must be named
+    // here, so a fourth map-placed building fails this gate on the day it lands
+    // instead of joining the list quietly.
+    var mapPlaced = new Dictionary<EntityKind, string>
+    {
+        { EntityKind.ConstructionYard, "MCV-deployed, never queued: it is what an MCV becomes" },
+        { EntityKind.Outpost, "ADR-021: map-placed and CAPTURED, never built" },
+        { EntityKind.Bridge, "ADR-025: map-placed terrain that can be felled, never built" },
+    };
+
+    var world = new World(4400, 128, 128, players: 2);
+    world.SetFaction(0, Dir);
+    world.SetFaction(1, Sod);
+    // A treasury that cannot be the reason anything fails: this gate asks
+    // whether a thing is REACHABLE, and being broke is a different question that
+    // prodgate already owns.
+    world.GrantCredits(0, 10_000_000);
+    world.GrantCredits(1, 10_000_000);
+    // The two spawns, and the only two. Far apart, so neither base's guns can
+    // reach the other and no measurement here is really a measurement of combat.
+    int cy0 = world.SpawnConstructionYard(0, 12, 12);
+    int cy1 = world.SpawnConstructionYard(1, 100, 100);
+    var yard = new[] { cy0, cy1 };
+    var faction = new[] { Dir, Sod };
+
+    // --- 1. The exclusion list agrees with /data, in both directions ---------
+    var registeredStructs = world.StructureTypeIds();
+    var buildableStructs = new List<int>();
+    foreach (int t in registeredStructs)
+    {
+        var def = world.GetStructureType(t);
+        bool excluded = mapPlaced.ContainsKey(def.Kind);
+        // The sim's OWN refusal, BuildStructure's `bd.BuildTicks <= 0`, is what
+        // actually keeps these out of a queue. A barrier shares that zero and is
+        // buildable anyway, by the placement path, so it is the one type where
+        // "no build time" does not mean "no player may have it".
+        bool queueable = def.BuildTicks > 0 || def.Kind == EntityKind.Wall;
+        if (excluded && queueable)
+            return Fail($"reachability: {StructName(world, t)} is excluded as \"{mapPlaced[def.Kind]}\" and yet /data "
+                        + "makes it perfectly buildable - the exclusion list has outlived its reason");
+        if (!excluded && !queueable)
+            return Fail($"reachability: {StructName(world, t)} has no build time, so no Construction Yard will ever "
+                        + "queue it, and nothing in this gate says why. If it is map-placed, name it in the "
+                        + "exclusion list with the decision that placed it there; if it is meant to be built, "
+                        + "this is the defect");
+        if (!excluded) buildableStructs.Add(t);
+    }
+    foreach (var (kind, why) in mapPlaced)
+    {
+        bool present = false;
+        foreach (int t in registeredStructs) if (world.GetStructureType(t).Kind == kind) { present = true; break; }
+        if (!present)
+            return Fail($"reachability: the exclusion list still names {kind} (\"{why}\") and the catalogue no longer "
+                        + "registers it - a stale exemption is how something unreachable hides");
+    }
+
+    // --- 2. EVERY buildable structure is ORDERED, by a player of a side that is
+    //        allowed it, and it appears. Repeated rounds rather than an authored
+    //        build order: each round builds whatever's prerequisites now stand,
+    //        so the tech tree's own shape decides the sequence and anything left
+    //        over at the fixpoint is a genuine finding rather than a bad script.
+    var pending = new List<(int Type, int Player)>();
+    foreach (int t in buildableStructs)
+        for (int p = 0; p < 2; p++)
+            if (world.StructureAllowedForFaction(t, faction[p])) pending.Add((t, p));
+    if (pending.Count == 0) return Fail("reachability: the catalogue offers no buildable structure at all");
+
+    int structOrders = 0, powerTopUps = 0;
+    // The power plant is found by its KIND, not by the id 1: a browned-out base
+    // builds at half rate, and the fixture keeps supply ahead of draw so that a
+    // slow gate can never be mistaken for a broken one.
+    int plantType = -1;
+    foreach (int t in registeredStructs) if (world.GetStructureType(t).Kind == EntityKind.PowerPlant) { plantType = t; break; }
+    if (plantType < 0) return Fail("reachability: no registered structure supplies power, so nothing here can be kept lit");
+
+    bool progress = true;
+    while (pending.Count > 0 && progress)
+    {
+        progress = false;
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var (t, p) = pending[i];
+            var def = world.GetStructureType(t);
+            if (!world.HasPrereqs(p, def.Prereqs)) continue;
+            if (t != plantType)
+            {
+                var (supply, draw) = world.PowerOf(p);
+                if (supply < draw + def.PowerDraw)
+                {
+                    if (OrderStructure(world, p, yard[p], plantType) is { } pw)
+                        return Fail($"reachability: player {p} could not build a power plant to light the base ({pw})");
+                    powerTopUps++;
+                }
+            }
+            if (OrderStructure(world, p, yard[p], t) is { } why)
+                return Fail($"reachability: player {p} ({(faction[p] == Dir ? "Directorate" : "Sodality")}) could not "
+                            + $"build {StructName(world, t)}: {why}. A building nobody can order is a building no "
+                            + "player can have, whatever the sim does with one that is spawned");
+            structOrders++;
+            pending.RemoveAt(i--);
+            progress = true;
+        }
+    }
+    if (pending.Count > 0)
+    {
+        var (t, p) = pending[0];
+        var def = world.GetStructureType(t);
+        string missing = "";
+        if (def.Prereqs != null)
+            foreach (int r in def.Prereqs)
+                if (!world.HasPrereqs(p, new[] { r })) missing += (missing.Length > 0 ? ", " : "") + StructName(world, r);
+        return Fail($"reachability: {pending.Count} structure orders never became possible, the first being "
+                    + $"{StructName(world, t)} for player {p}, which waits on {(missing.Length > 0 ? missing : "nothing this gate can name")} "
+                    + "- its prerequisite is itself unbuildable, so the branch of the tech tree below it is dead");
+    }
+
+    // --- 3. EVERY registered unit is ORDERED at a producer this player owns,
+    //        by a player of the side its def declares, and it appears.
+    // A rally first, at each producer, for the reason a real player sets one:
+    // units that stop two cells from the mouth eventually fill the spawn ring,
+    // and a held production line looks exactly like an unbuildable unit.
+    var rally = new[] { (X: 12, Y: 60), (X: 100, Y: 60) };
+    for (int i = 0; i < world.Entities.Count; i++)
+    {
+        var e = world.Entities[i];
+        if (!e.Alive || e.PlayerId < 0 || e.PlayerId > 1) continue;
+        if (e.Kind is not (EntityKind.Factory or EntityKind.Barracks or EntityKind.Airfield)) continue;
+        Step(world, One(new Command(world.Tick, e.PlayerId, CommandType.SetRally, i,
+                                    Map.CellCentre(rally[e.PlayerId].X), Map.CellCentre(rally[e.PlayerId].Y), 0)));
+    }
+
+    var registeredUnits = world.UnitTypeIds();
+    int unitOrders = 0;
+    foreach (int t in registeredUnits)
+    {
+        var def = world.GetUnitType(t);
+        // The faction column decides WHO orders it, read from the def rather
+        // than from any knowledge of which side owns what.
+        int p = def.Faction == World.FactionCommon ? 0 : (faction[0] == def.Faction ? 0 : 1);
+        if (def.Faction != World.FactionCommon && faction[p] != def.Faction)
+            return Fail($"reachability: {UnitCatalogue.IdOf(t)} declares faction {def.Faction}, which no seat in this "
+                        + "fixture plays - a unit belonging to nobody is a unit no player can build");
+        if (!world.HasPrereqs(p, def.Prereqs))
+        {
+            string missing = "";
+            if (def.Prereqs != null)
+                foreach (int r in def.Prereqs)
+                    if (!world.HasPrereqs(p, new[] { r })) missing += (missing.Length > 0 ? ", " : "") + StructName(world, r);
+            return Fail($"reachability: {UnitCatalogue.IdOf(t)} needs {missing}, which this player could not build, "
+                        + "so the unit is unreachable behind a building that is itself unreachable");
+        }
+        if (OrderUnit(world, p, t) is { } why)
+            return Fail($"reachability: {UnitCatalogue.IdOf(t)} (unit type {t}) could not be ordered by player {p} "
+                        + $"({(faction[p] == Dir ? "Directorate" : "Sodality")}): {why}. A unit that cannot be ordered "
+                        + "is a unit no player can have, and no amount of correct behaviour once it is spawned "
+                        + "changes that");
+        unitOrders++;
+    }
+
+    // --- 4. THE CONTROL, and it is what separates this gate from one that
+    //        cannot fail. Every stage above measures "the thing appeared"; if
+    //        that measurement were satisfied by anything else in the fixture, a
+    //        green run would mean nothing. So the same machinery is pointed at
+    //        two orders the sim is supposed to REFUSE, and both must come back
+    //        empty within the same budget the stages above call a pass.
+    {
+        // A factory unit ordered at the barracks: ADR-009 clause 2's split.
+        int barracks = FindStructure(world, 0, World.BarracksStructType);
+        int wrong = -1;
+        foreach (int t in registeredUnits)
+            if (world.GetUnitType(t).ProducedAt == World.FactoryStructType
+                && world.GetUnitType(t).Faction is World.FactionCommon or Dir) { wrong = t; break; }
+        if (barracks < 0 || wrong < 0) return Fail("reachability: the control needs a barracks and a factory unit");
+        int before = CountUnits(world, 0, wrong);
+        Step(world, One(new Command(world.Tick, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, wrong)));
+        for (int t = 0; t < world.GetUnitType(wrong).BuildTicks * 4 + 600; t++) Step(world);
+        if (CountUnits(world, 0, wrong) != before)
+            return Fail($"reachability control: a barracks built {UnitCatalogue.IdOf(wrong)}, a factory unit - so "
+                        + "'it appeared' in this gate does not mean the order was accepted");
+
+        // And a unit of the other side, ordered by a player who is not that side.
+        int foreign = -1;
+        foreach (int t in registeredUnits)
+            if (world.GetUnitType(t).Faction == Sod) { foreign = t; break; }
+        if (foreign < 0) return Fail("reachability: the control needs a unit of the other side");
+        int producer = FindStructure(world, 0, world.GetUnitType(foreign).ProducedAt);
+        int fbefore = CountUnits(world, 0, foreign);
+        Step(world, One(new Command(world.Tick, 0, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, foreign)));
+        for (int t = 0; t < world.GetUnitType(foreign).BuildTicks * 4 + 600; t++) Step(world);
+        if (CountUnits(world, 0, foreign) != fbefore)
+            return Fail($"reachability control: the Directorate built {UnitCatalogue.IdOf(foreign)} - the faction gate "
+                        + "is not binding, and every 'it appeared' above is suspect");
+    }
+
+    Console.WriteLine($"reachabilitygate: all {registeredUnits.Count} registered unit types were ORDERED with a Produce "
+                      + $"command at a producer the ordering player had BUILT, and all {unitOrders} appeared; "
+                      + $"all {buildableStructs.Count} buildable structure types of {registeredStructs.Count} registered "
+                      + $"were ordered with BuildStructure and placed ({structOrders} orders across two factions, plus "
+                      + $"{powerTopUps} power plants to keep both bases lit), from ONE spawned Construction Yard per "
+                      + $"player and nothing else; the {mapPlaced.Count} excluded types are excluded by a decision "
+                      + "recorded here AND by having no build time in /data, checked both ways; and the control proves "
+                      + "the measurement bites, since a barracks ordered a factory unit and the Directorate ordered a "
+                      + "Sodality one and neither appeared");
     return 0;
 }
 
@@ -9020,6 +9398,7 @@ return args.Length == 0
         "airgate" => AirGate(),
         "factiondefencegate" => FactionDefenceGate(),
         "infiltratorgate" => InfiltratorGate(),
+        "reachabilitygate" => ReachabilityGate(),
         "multiseatgate" => MultiSeatGate(),
         "lanaiseatsgate" => LanAiSeatsGate(),
         "saboteurgate" => SaboteurGate(),
