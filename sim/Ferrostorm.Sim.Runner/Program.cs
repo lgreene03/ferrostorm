@@ -31,6 +31,7 @@ using Ferrostorm.Sim;
 //   lanaiseatsgate     - P7-8f: a LAN match on a four-seat map - the seats no peer holds are played by commanders both peers generate locally, to identical hashes, and a divergent commander is CAUGHT
 //   saboteurgate       - P7-11a: the Saboteur switches a building off - the supply really falls, the building is neither taken nor harmed, a dark turret holds its fire, and it all comes back
 //   herogate           - P7-11b: the hero DAMAGES a building rather than deleting it and survives doing so, "one at a time" is enforced where a unit is queued and where it completes, and an uncapped unit is untouched
+//   minegate           - P7-11c: a mine is ORDERED and placed like any building, detonates on an enemy and not its owner, does NOT block where a wall does, hides until a detector finds it, obeys max_alive, and two going off together are deterministic
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
@@ -6493,6 +6494,440 @@ int HeroGate()
     return 0;
 }
 
+int MineGate()
+{
+    // P7-11c. Additive, the infiltratorgate pattern it is modelled on: a
+    // standalone mode and a Match battery stage, never a golden scenario, so
+    // the golden list stays 24 and every hash in it stays byte-identical.
+    //
+    // The mine is a STRUCTURE with four properties, and three of them are
+    // inherited rather than invented - it is hidden by the ordinary Stealth
+    // flag, it is bought and placed by the ordinary BuildStructure and
+    // PlaceStructure path, and it is damaged and killed by the ordinary rules.
+    // The one genuinely new property is that it does NOT block its footprint,
+    // and stage 4 is where that is proved, against a wall in the same fixture
+    // that does.
+    //
+    // Stage 1 exists because of a defect shape this phase met three times: a
+    // feature nobody could reach, green under every gate, because THE GATE
+    // CONSTRUCTED THE OUTCOME. So the first mine in this file is not spawned.
+    // It is ordered at a Construction Yard and placed with the command a click
+    // becomes, and everything after it rests on that having worked.
+    const int MineType = World.MineStructType;
+
+    List<Command> One(Command c) => new() { c };
+    void Step(World w, List<Command>? cmds = null) =>
+        w.Step(cmds is null ? default : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+
+    int CountMines(World w, int player)
+    {
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && e.Kind == EntityKind.Mine) n++;
+        }
+        return n;
+    }
+    int FindMine(World w, int player)
+    {
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.PlayerId == player && e.Kind == EntityKind.Mine) return i;
+        }
+        return -1;
+    }
+
+    // A base that can legally build a mine: the yard that queues it, the radar
+    // uplink its /data names as its prerequisite, and a plant so the line runs
+    // at full rate rather than at the brown-out half rate a budget could be
+    // mistaken for. The anchors are all inside one another's build radius.
+    (World W, int Cy) Base(ulong seed, int size = 64)
+    {
+        var w = new World(seed, size, size, players: 2);
+        int cy = w.SpawnConstructionYard(0, 20, 20);
+        w.SpawnRadarUplink(0, 20, 24);
+        w.SpawnPowerPlant(0, 20, 28, supply: 500);
+        w.GrantCredits(0, 200_000);
+        return (w, cy);
+    }
+
+    // ORDER ONE MINE, exactly as the sidebar does: queue it at the yard, wait
+    // for the ready slot, then place it at the named anchor. Returns null on
+    // success and the reason it never appeared otherwise. Nothing in this
+    // helper spawns anything.
+    string? OrderMine(World w, int cy, int ax, int ay)
+    {
+        int before = CountMines(w, 0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, MineType)));
+        int budget = w.GetStructureType(MineType).BuildTicks * 4 + 400;
+        for (int t = 0; t < budget && w.Entities[cy].ReadyStructure != MineType; t++) Step(w);
+        if (w.Entities[cy].ReadyStructure != MineType)
+            return $"the Construction Yard never finished it in {budget} ticks (queue {w.QueueLength(cy)}, "
+                   + $"ready slot {w.Entities[cy].ReadyStructure}, credits {w.Credits(0)})";
+        Step(w, One(new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                Map.CellCentre(ax), Map.CellCentre(ay), MineType)));
+        if (CountMines(w, 0) != before + 1)
+            return $"the placement at ({ax}, {ay}) was refused";
+        return null;
+    }
+
+    // Anchor (27, 20) is Chebyshev 7 from the yard's, which is exactly
+    // CyBuildRadius, and the column is clear of every building in the fixture.
+    const int MineAx = 27, MineAy = 20;
+    Fix64 MineCx = Map.CellCentre(MineAx), MineCy = Map.CellCentre(MineAy);
+
+    // --- 1. A player can actually HAVE one. Ordered, never constructed.
+    {
+        var (w, cy) = Base(4700);
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why)
+            return Fail($"mine: a mine could not be ORDERED through BuildStructure and PlaceStructure: {why}. "
+                        + "A building nobody can order is a building no player can have, whatever the sim does "
+                        + "with one that is spawned");
+        int m = FindMine(w, 0);
+        if (m < 0) return Fail("mine: the placement counted but no mine stands");
+        var e = w.Entities[m];
+        if (e.StructType != MineType)
+            return Fail($"mine: the placed entity carries struct type {e.StructType}, not {MineType} - its authored "
+                        + "def cannot be read back off it");
+        if (!e.Stealth)
+            return Fail("mine: a mine must set the ordinary entity Stealth flag. That flag is the whole reason it "
+                        + "inherits the detector and decloak rules instead of needing an invisibility of its own");
+        if (!World.IsStructure(e.Kind))
+            return Fail("mine: a mine must BE a structure to the sim, or it is placeable and nothing else - not "
+                        + "damageable, not sellable, not seen by any scan that says 'a building'");
+    }
+
+    // --- 2. THE FEATURE. An enemy walking into the trigger radius sets it off,
+    //        takes the blast, and the mine is consumed doing it. The damage is
+    //        asserted as an exact figure through the shared matrix rather than
+    //        as "some damage": a trigger that fired for one point would pass a
+    //        looser test and would not be a mine.
+    int hurt = 0, expectHurt = 0;
+    {
+        var (w, cy) = Base(4701);
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why) return Fail($"mine: fixture could not lay a mine ({why})");
+        int mine = FindMine(w, 0);
+        // Deliberately tough and UNARMED: it survives to be measured and it
+        // never shoots anything, so the only number that moves is the blast.
+        int victim = w.SpawnUnit(1, MineCx, MineCy + Fix64.FromInt(6), Fix64.FromFraction(1, 5),
+                                 hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        int hp0 = w.Entities[victim].Hp;
+        Step(w, One(new Command(w.Tick, 1, CommandType.PathMove, victim, MineCx, MineCy - Fix64.FromInt(6))));
+        for (int t = 0; t < 300 && w.Entities[mine].Alive; t++) Step(w);
+        if (w.Entities[mine].Alive)
+            return Fail("mine: an enemy unit walked over it and it did not go off. Without this the other six "
+                        + "stages describe an expensive invisible pebble");
+        hurt = hp0 - w.Entities[victim].Hp;
+        expectHurt = DamageMatrix.Apply(World.MineDamage, Warhead.Omni, ArmourClass.Heavy);
+        if (hurt != expectHurt)
+            return Fail($"mine: the detonation must land its full {World.MineDamage} through the shared area-damage "
+                        + $"path, which is {expectHurt} against Heavy armour, and it took {hurt}");
+        if (CountMines(w, 0) != 0)
+            return Fail("mine: detonating must CONSUME the mine - a reusable one is a turret that hides");
+    }
+
+    // --- 3. And a FRIENDLY unit walks over it untouched. The contrast is the
+    //        claim: a mine that answered any unit at all would be a hazard its
+    //        owner has to route around, which is the opposite of a defence.
+    {
+        var (w, cy) = Base(4702);
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why) return Fail($"mine: fixture could not lay a mine ({why})");
+        int mine = FindMine(w, 0);
+        int friend = w.SpawnUnit(0, MineCx, MineCy + Fix64.FromInt(6), Fix64.FromFraction(1, 5),
+                                 hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        int hp0 = w.Entities[friend].Hp;
+        Step(w, One(new Command(w.Tick, 0, CommandType.PathMove, friend, MineCx, MineCy - Fix64.FromInt(6))));
+        bool crossed = false;
+        for (int t = 0; t < 300; t++)
+        {
+            Step(w);
+            var u = w.Entities[friend];
+            if (Map.CellOf(u.X) == MineAx && Map.CellOf(u.Y) == MineAy) crossed = true;
+        }
+        if (!crossed)
+            return Fail("mine control: the friendly unit never actually reached the mine's cell, so this stage "
+                        + "proves nothing about what happens when it does");
+        if (!w.Entities[mine].Alive)
+            return Fail("mine: its OWNER's units must not set it off");
+        if (w.Entities[friend].Hp != hp0)
+            return Fail($"mine: its owner's unit walked over it and lost {hp0 - w.Entities[friend].Hp} hit points");
+    }
+
+    // --- 4. IT DOES NOT BLOCK, and this is the one property of the four that
+    //        is genuinely new. A wall stands in the same fixture as the control,
+    //        because "the unit got through" means nothing unless the identical
+    //        measurement shows a wall stopping it.
+    //
+    //        Both halves are asserted. The map's own passability, which is what
+    //        the flow field reads and therefore what would leak the mine's
+    //        position to an enemy watching their own units path; and the
+    //        behaviour, a unit crossing the mine's cell and never crossing the
+    //        wall's.
+    {
+        var (w, cy) = Base(4703);
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why) return Fail($"mine: fixture could not lay a mine ({why})");
+        int mine = FindMine(w, 0);
+        const int WallAx = 31, WallAy = 20;
+        int wall = w.SpawnWall(0, WallAx, WallAy);
+        if (w.Map.IsBlocked(MineAx, MineAy))
+            return Fail($"mine: cell ({MineAx}, {MineAy}) is BLOCKED with a mine standing on it. A blocking mine is "
+                        + "a wall that explodes, and worse: blocked cells are what the flow field routes around, "
+                        + "so an enemy would read the minefield straight off the way their own units walk and the "
+                        + "Stealth flag would be decoration");
+        if (!w.Map.IsBlocked(WallAx, WallAy))
+            return Fail("mine control: the wall in the same fixture does not block either, so the assertion above "
+                        + "is measuring a broken fixture rather than the mine");
+
+        Fix64 WallCx = Map.CellCentre(WallAx), WallCy = Map.CellCentre(WallAy);
+        int overMine = w.SpawnUnit(0, MineCx, MineCy + Fix64.FromInt(6), Fix64.FromFraction(1, 5),
+                                   hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        int overWall = w.SpawnUnit(0, WallCx, WallCy + Fix64.FromInt(6), Fix64.FromFraction(1, 5),
+                                   hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        var orders = new List<Command>
+        {
+            new(w.Tick, 0, CommandType.PathMove, overMine, MineCx, MineCy - Fix64.FromInt(6)),
+            new(w.Tick, 0, CommandType.PathMove, overWall, WallCx, WallCy - Fix64.FromInt(6)),
+        };
+        Step(w, orders);
+        bool crossedMine = false, crossedWall = false;
+        for (int t = 0; t < 400; t++)
+        {
+            Step(w);
+            var a = w.Entities[overMine];
+            if (Map.CellOf(a.X) == MineAx && Map.CellOf(a.Y) == MineAy) crossedMine = true;
+            var b = w.Entities[overWall];
+            if (Map.CellOf(b.X) == WallAx && Map.CellOf(b.Y) == WallAy) crossedWall = true;
+        }
+        if (!crossedMine)
+            return Fail("mine: a unit must path straight THROUGH a live mine's cell. It never entered it, which "
+                        + "means the cell is being routed around and the mine is blocking after all");
+        if (crossedWall)
+            return Fail("mine control: the unit walked through the WALL's cell too, so this fixture cannot tell a "
+                        + "blocking building from a non-blocking one and stage 4 proves nothing");
+        if (!w.Entities[mine].Alive || !w.Entities[wall].Alive)
+            return Fail("mine control: something in the fixture died during the crossing, so the passability "
+                        + "readings above were not taken against a standing mine and a standing wall");
+    }
+
+    // --- 5. HIDDEN, and revealed by the counter the GDD requires. Measured as
+    //        damage taken rather than read off the Stealth flag, for the reason
+    //        herogate records: a flag that was set and honoured nowhere would
+    //        pass an assertion on itself.
+    //
+    //        The gun sits three cells away - outside the 1.5-cell trigger, so it
+    //        never sets the mine off, and inside its own four-cell reach, so
+    //        being SEEN is the only thing that decides whether it shoots.
+    int blindTicks = 0;
+    {
+        var (w, cy) = Base(4704);
+        w.SetFaction(1, World.FactionDirectorate);   // the Sentinel Scout's side
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why) return Fail($"mine: fixture could not lay a mine ({why})");
+        int mine = FindMine(w, 0);
+        int hp0 = w.Entities[mine].Hp;
+        int gun = w.SpawnUnit(1, MineCx + Fix64.FromInt(3), MineCy, Fix64.Zero,
+                              hp: 4000, ArmourClass.Heavy, weaponId: 4);
+        blindTicks = 200;
+        for (int t = 0; t < blindTicks; t++) Step(w);
+        if (!w.Entities[mine].Alive || w.Entities[mine].Hp != hp0)
+            return Fail($"mine: an enemy gun three cells away must not be able to touch a hidden mine, and it took "
+                        + $"{hp0 - w.Entities[mine].Hp} over {blindTicks} ticks");
+        if ((w.Entities[mine].DetectedMask & (1 << 1)) != 0)
+            return Fail("mine: no detector is present, so no player may have detected it");
+        if (w.Entities[gun].Cooldown != 0)
+            return Fail("mine control: the gun fired at SOMETHING while the mine was hidden, so the stage above "
+                        + "may be measuring an empty fixture rather than a cloak");
+
+        // The counter. A Sentinel Scout five cells off: inside its own seven-cell
+        // sight, outside the mine's trigger, and read from the catalogue rather
+        // than hand-stated so a re-tuned scout re-tunes this fixture with it.
+        var scout = w.GetUnitType(6);
+        if (!scout.Detector)
+            return Fail("mine control: unit type 6 is meant to be the Sentinel Scout, the detector, and its def "
+                        + "says otherwise - this fixture is pointed at the wrong unit");
+        w.SpawnUnit(1, MineCx + Fix64.FromInt(5), MineCy, Fix64.Zero, scout.Hp, scout.Armour,
+                    scout.WeaponId, scout.SightCells, scout.Stealth, scout.Detector,
+                    veterancy: false, unitType: 6);
+        for (int t = 0; t < 600 && w.Entities[mine].Alive; t++) Step(w);
+        if (w.Entities[mine].Alive)
+            return Fail($"mine: a detector must reveal the field and a revealed mine must be killable by ordinary "
+                        + $"gunfire - it still stands on {w.Entities[mine].Hp} of {hp0}. GDD line 56 requires every "
+                        + "stealth tool to carry a public counter, and this is the mine's");
+    }
+
+    // --- 6. THE CAP. Without one a player carpets the map and MineSystem's
+    //        per-tick scan grows without bound, so max_alive is a performance
+    //        guarantee as much as a design one.
+    //
+    //        Both halves are asserted, because a cap that never frees is a
+    //        permanent lockout rather than a limit: the next mine is refused at
+    //        the cap, and one becomes available again the moment a standing mine
+    //        DETONATES.
+    int cap = 0;
+    {
+        cap = new World(0).GetStructureType(MineType).MaxAlive;
+        if (cap <= 1) return Fail($"mine: the cap must be a real number and com_mine.yaml authors {cap}");
+        var (w, cy) = Base(4705, size: 128);
+        // The first cap-1 are stood up directly: this stage is about the
+        // ENFORCEMENT at the cap boundary, and stage 1 has already proved the
+        // ordering path. Spaced four cells apart so the detonation below takes
+        // exactly one of them and not its neighbours (the blast reaches three).
+        const int PackAy = 60;
+        for (int k = 0; k < cap - 1; k++) w.SpawnMine(0, 40 + 4 * k, PackAy);
+        if (CountMines(w, 0) != cap - 1)
+            return Fail($"mine: the fixture wanted {cap - 1} mines standing and has {CountMines(w, 0)}");
+
+        if (OrderMine(w, cy, MineAx, MineAy) is { } why)
+            return Fail($"mine: the LAST mine under the cap must still be buildable ({why})");
+        if (CountMines(w, 0) != cap)
+            return Fail($"mine: {CountMines(w, 0)} mines stand where the cap is {cap}");
+
+        // One past the cap, refused where it is QUEUED. Asserted at the queue
+        // rather than at the placement because that is the point of refusing
+        // there: a player at the cap must not sink 400 credits into a ready
+        // slot that can never be spent.
+        long paid = w.Credits(0);
+        Step(w, One(new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, MineType)));
+        if (w.QueueLength(cy) != 0)
+            return Fail($"mine: an order for a mine past the cap must be refused where it is QUEUED "
+                        + $"(the queue holds {w.QueueLength(cy)})");
+        for (int t = 0; t < 120; t++) Step(w);
+        if (CountMines(w, 0) != cap)
+            return Fail($"mine: {CountMines(w, 0)} mines stand and the cap is {cap}");
+        if (w.Credits(0) != paid)
+            return Fail($"mine: a refused order must charge nothing ({paid} to {w.Credits(0)})");
+
+        // And the cap FREES. An enemy walks into the first of the pack; nothing
+        // else is spent and nothing else is destroyed.
+        Fix64 packX = Map.CellCentre(40), packY = Map.CellCentre(PackAy);
+        int walker = w.SpawnUnit(1, packX, packY + Fix64.FromInt(6), Fix64.FromFraction(1, 5),
+                                 hp: 1000, ArmourClass.Heavy, weaponId: 0);
+        Step(w, One(new Command(w.Tick, 1, CommandType.PathMove, walker, packX, packY - Fix64.FromInt(6))));
+        for (int t = 0; t < 300 && CountMines(w, 0) == cap; t++) Step(w);
+        if (CountMines(w, 0) != cap - 1)
+            return Fail($"mine: exactly one mine should have gone off and {cap - CountMines(w, 0)} left the field. "
+                        + "If more than one went, the pack is spaced inside the blast and this stage cannot "
+                        + "measure the cap");
+        if (OrderMine(w, cy, MineAx + 2, MineAy) is { } why2)
+            return Fail($"mine: a mine must be buildable again once a standing one has detonated ({why2}). A cap "
+                        + "that never frees is a permanent lockout after the first casualty, not a limit");
+    }
+
+    // --- 7. DETERMINISM, which is the real risk in this wave. Two mines
+    //        detonating on the SAME tick, in a scenario run twice, must leave
+    //        the identical state hash.
+    //
+    //        The fixture is symmetric on purpose: the two mines sit either side
+    //        of the walker's line and are therefore equidistant from it at every
+    //        point on that line, so they enter the trigger radius on the same
+    //        tick rather than on adjacent ones. That is what makes the stage
+    //        test simultaneity rather than a sequence.
+    //
+    //        Simultaneity is asserted DIRECTLY as well as through the hash,
+    //        because two runs of a scenario where only one mine ever went off
+    //        would agree with each other perfectly and prove nothing.
+    int bothBlasts = 0, expectBoth = 0;
+    {
+        // Returns the final hash, the tick each mine died, and what the walker
+        // lost. Everything about the run is a function of the seed.
+        (ulong Hash, int DiedA, int DiedB, int Hurt) TwinRun(ulong seed)
+        {
+            var w = new World(seed, 128, 128, players: 2);
+            int a = w.SpawnMine(0, 39, 61);   // centre (39.5, 61.5)
+            int b = w.SpawnMine(0, 41, 61);   // centre (41.5, 61.5)
+            Fix64 lane = Map.CellCentre(40);  // 40.5, exactly between the two
+            int walker = w.SpawnUnit(1, lane, Map.CellCentre(66), Fix64.FromFraction(1, 5),
+                                     hp: 4000, ArmourClass.Heavy, weaponId: 0);
+            int hp0 = w.Entities[walker].Hp;
+            Step(w, One(new Command(w.Tick, 1, CommandType.PathMove, walker, lane, Map.CellCentre(56))));
+            int diedA = -1, diedB = -1;
+            for (int t = 0; t < 300; t++)
+            {
+                Step(w);
+                if (diedA < 0 && !w.Entities[a].Alive) diedA = w.Tick;
+                if (diedB < 0 && !w.Entities[b].Alive) diedB = w.Tick;
+            }
+            return (w.ComputeStateHash(), diedA, diedB, hp0 - w.Entities[walker].Hp);
+        }
+
+        var r1 = TwinRun(4706);
+        var r2 = TwinRun(4706);
+        if (r1.DiedA < 0 || r1.DiedB < 0)
+            return Fail($"mine: the twin fixture never set both mines off (A at tick {r1.DiedA}, B at tick "
+                        + $"{r1.DiedB}), so it cannot say anything about two detonating together");
+        if (r1.DiedA != r1.DiedB)
+            return Fail($"mine: two mines that both hold a living trigger must BOTH go off on the same tick, and "
+                        + $"they went at {r1.DiedA} and {r1.DiedB}. This is the scan-then-apply rule: under "
+                        + "apply-as-you-go the lower-indexed mine's blast can kill the trigger the higher-indexed "
+                        + "one was waiting for, so whether the second fires depends on entity order");
+        bothBlasts = r1.Hurt;
+        expectBoth = 2 * DamageMatrix.Apply(World.MineDamage, Warhead.Omni, ArmourClass.Heavy);
+        if (bothBlasts != expectBoth)
+            return Fail($"mine: both charges must land in full, which is {expectBoth} against Heavy armour, and "
+                        + $"the walker lost {bothBlasts}. A short figure means one blast was absorbed - the "
+                        + "triggered mines are consumed BEFORE any damage is applied precisely so that neither "
+                        + "kills the other first");
+        if (r1.Hash != r2.Hash)
+            return Fail($"mine: two runs of the identical scenario diverged (0x{r1.Hash:X16} against "
+                        + $"0x{r2.Hash:X16}). The proximity scan walks entity indices and must never depend on "
+                        + "dictionary or set order");
+        if (r1.DiedA != r2.DiedA || r1.Hurt != r2.Hurt)
+            return Fail("mine: the two runs agree on the final hash but not on when the mines went off or what "
+                        + "the blast took, which should be impossible and means one of the two is not hashed");
+    }
+
+    // AIRCRAFT DO NOT SET IT OFF. The fourth target-selection path to need
+    // this, and the first draft of the mine missed it exactly as ADR-028's
+    // first pass missed one of three. An aircraft ignores terrain, blocks no
+    // cell and takes no part in separation; a buried charge is the same
+    // category of thing it is not touching. A mine that downed a flyer would
+    // also be a second anti-air answer, which ADR-028 clause 4 makes a
+    // deliberate scarcity.
+    {
+        var w = new World(7711, 64, 64, players: 2);
+        w.GrantCredits(0, 20000);
+        int mine = w.SpawnMine(0, 30, 20);
+        var fd = w.GetUnitType(15);
+        int flyer = w.SpawnUnit(1, Fix64.FromInt(30), Fix64.FromInt(20), fd.Speed, fd.Hp,
+                                fd.Armour, fd.WeaponId, veterancy: false, unitType: 15);
+        if (!w.IsAirborne(w.Entities[flyer]))
+            return Fail("mine: the fixture's flyer is not airborne, so this stage proves nothing");
+        int hpBefore = w.Entities[flyer].Hp;
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (!w.Entities[mine].Alive)
+            return Fail("mine: a Strike Flyer standing directly over a mine detonated it. Aircraft are not on "
+                        + "the ground (ADR-028 clause 2) and a mine that downs one is a second anti-air answer, "
+                        + "which clause 4 makes deliberately scarce.");
+        if (w.Entities[flyer].Hp != hpBefore)
+            return Fail($"mine: the flyer took {hpBefore - w.Entities[flyer].Hp} damage from a ground mine");
+        // Control: the same mine, a ground unit, goes off. Without this the
+        // stage above passes on a mine that never triggers at all.
+        var gd = w.GetUnitType(2);
+        w.SpawnUnit(1, Fix64.FromInt(30), Fix64.FromInt(20), gd.Speed, gd.Hp,
+                    gd.Armour, gd.WeaponId, veterancy: false, unitType: 2);
+        for (int t = 0; t < 10 && w.Entities[mine].Alive; t++) w.Step(default);
+        if (w.Entities[mine].Alive)
+            return Fail("mine: the control ground unit did not set it off, so the aircraft stage proves nothing");
+    }
+
+    Console.WriteLine($"minegate: a mine is ORDERED at a Construction Yard and PLACED with the command a click "
+                      + $"becomes, never spawned, so a player can really have one; an enemy walking into the "
+                      + $"trigger radius sets it off for exactly {hurt} through the shared area-damage path and "
+                      + $"the mine is consumed doing it, while its OWNER's units cross it untouched; it does not "
+                      + $"block - its cell reads passable and a unit walks straight through it, where a wall in "
+                      + $"the same fixture reads blocked and is routed around, which matters because the flow "
+                      + $"field is shared ground truth and a blocking mine would leak its own position; it is "
+                      + $"hidden, taking nothing at all from an enemy gun three cells away over {blindTicks} "
+                      + $"ticks, and a Sentinel Scout reveals it and that same gun then kills it, which is GDD "
+                      + $"line 56's public counter; the cap of {cap} refuses the next order where it is QUEUED "
+                      + $"and charges nothing for the refusal, and frees again the moment a standing mine "
+                      + $"detonates; and two mines holding a living trigger on the same tick BOTH go off, "
+                      + $"landing {bothBlasts} between them rather than one absorbing the other, to an identical "
+                      + $"state hash across two runs of the same scenario; and a Strike Flyer parked directly on top of one leaves it sitting there, because an aircraft is not on the ground and a mine is not a second anti-air answer");
+    return 0;
+}
+
 int CampaignGate()
 {
     // P7-9. The campaign is now six missions and a manifest of magic numbers,
@@ -7969,6 +8404,11 @@ int Match(ulong seed)
     // act, and is the first unit in the game a player may own only one of.
     int hero = HeroGate();
     if (hero != 0) return hero;
+    // P7-11c: the mine is bought and placed like any building, hides like any
+    // cloaked thing, and is the first structure in the game that does not block
+    // the ground it stands on.
+    int mine = MineGate();
+    if (mine != 0) return mine;
     // P7-9: six missions the game can open, and the two things missions 04 to
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
@@ -9479,6 +9919,7 @@ return args.Length == 0
         "lanaiseatsgate" => LanAiSeatsGate(),
         "saboteurgate" => SaboteurGate(),
         "herogate" => HeroGate(),
+        "minegate" => MineGate(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "harvesterdatagate" => HarvesterDataGate(),

@@ -1,0 +1,38 @@
+# Mine - struct type 19 (P7-11c). Doc 24 B6 recorded the gap as one line,
+# "No mines or minelayer", and the design behind these numbers is INVENTED
+# rather than inherited from the GDD; the ADR that records why is owed beside
+# this file. What is NOT invented is the shape: a mine is an ordinary
+# structure, so it is bought, placed, owned, priced and tech-gated by the
+# machinery every other building already uses.
+id: com_mine
+name: Mine
+faction: common
+cost: 400
+build_time_ticks: 60
+hp: 100
+power_supply: 0
+power_draw: 0
+sight_range: 0
+footprint: 1
+weapon_ids: []
+prerequisites: [com_radar_uplink]
+max_alive: 20
+notes: >
+  A hidden charge that detonates on the first enemy unit or harvester to come
+  within 1.5 cells, and is consumed doing it. Three of its four properties are
+  inherited rather than invented: it is hidden by the ordinary entity Stealth
+  flag, so the existing detector and decloak rules apply unchanged and GDD line
+  56's requirement that every stealth tool carry a public counter is met by a
+  Sentinel Scout revealing the field and anything at all shooting it; it takes
+  damage, dies and sells like any building; and it is bought through the
+  Construction Yard queue like any building. The one genuinely new property is
+  that it does NOT block its footprint. A blocking mine would be a wall that
+  explodes, and it would leak its own position through the flow field, which
+  every player's units read, so the cloak would be decoration.
+  sight_range 0 for the barrier's reason and one of its own: a buried charge
+  that lit the fog would be a free scout that also explodes.
+  max_alive 20 is the cap. Twenty at 400 credits is 8000, exactly the ceiling
+  the 80-segment barrier cap already sets at 100 credits a wall, so the two
+  tools that can carpet a map cost the same to max out; and it bounds the
+  per-tick proximity scan at a number rather than at whatever a treasury can
+  afford.

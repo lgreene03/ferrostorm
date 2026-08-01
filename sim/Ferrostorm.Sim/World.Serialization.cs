@@ -261,6 +261,13 @@ public sealed partial class World
         }
         int count = r.ReadInt32();
         for (int i = 0; i < count; i++) world._entities.Add(ReadEntity(r, hasRallyFields, hasFerriteCap, hasNoProgress, hasStance));
+        // P7-11c: restore MineSystem's fast path from the entities themselves
+        // rather than spending a save field and a format version on it. The flag
+        // is not state (see World._minesInPlay: with no living mine the system
+        // writes nothing either way), so a save carries no bit for it and every
+        // save written before the mine existed resumes correctly by construction.
+        foreach (var e in world._entities)
+            if (e.Kind == EntityKind.Mine) { world._minesInPlay = true; break; }
         int queues = r.ReadInt32();
         for (int i = 0; i < queues; i++)
         {

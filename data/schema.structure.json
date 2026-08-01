@@ -25,6 +25,10 @@
     "footprint": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal." },
     "weapon_ids": { "type": "array", "items": { "type": "string" }, "description": "First entry arms the structure; empty is unarmed." },
     "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required before this may be queued. Parsed and carried on the def; ENFORCEMENT is TICKET-P5-BD-17, which is a sim change." },
+    "max_alive": {
+      "type": "integer", "minimum": 0, "default": 0,
+      "description": "P7-11c. The per-player cap on LIVING buildings of this type. 0 means unlimited, which is every building but the mine, so an absent key changes nothing. Enforced where the order is queued (BuildStructure) and where it is placed (PlaceStructure), and folded into World.CatalogueChecksum because it decides whether a command is accepted."
+    },
     "notes": { "type": "string", "description": "Design intent and GDD traceback." }
   }
 }
