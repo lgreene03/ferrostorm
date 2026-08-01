@@ -1,0 +1,33 @@
+# P7-11b. Written doctrine, not invention: GDD s7 line 64 names a "Shadow
+# Commando (hero)" in the Sodality's roster. Read dir_commando.yaml first: this
+# is that unit with ONE property changed, the P7-2b Bastion / Shroud Nest
+# precedent, and every other number here is deliberately identical rather than
+# coincidentally so.
+# The one property is stealth. GDD line 30 gives the Sodality "cloaked units and
+# structures" as doctrine, so the side that cloaks gets a cloaked hero and the
+# side that does not gets one that walks in the open. The decloak-on-firing rule
+# and the detector rule are both entity-level and already written, so the
+# stealthed hero inherits both and this file adds no machinery at all: a
+# detector strips it, and it reveals itself the moment it shoots.
+# "one at a time" is GDD line 62's qualifier on the Directorate hero and is
+# applied here too, because the two are one unit: a faction that could field two
+# of the pair's hero while the other fielded one would be a balance split
+# nobody wrote down.
+id: sod_shadow_commando
+name: Shadow Commando
+faction: sodality
+tier: 3
+cost: 1500
+build_time_ticks: 300
+hp: 200
+armour_class: none
+speed: 20
+role: assault
+weapon_ids: [wpn_commando_rifle]
+sight_range: 6
+stealth: true
+detector: false
+produced_at: com_barracks
+prerequisites: [com_radar_uplink]
+veterancy_enabled: false
+max_alive: 1

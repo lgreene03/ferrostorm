@@ -65,7 +65,7 @@ public static class Weapons
     /// every loop that enumerates the table (World's seed, the /data loader's
     /// completeness check). Ids are dense from 1; 0 is None and is not a
     /// weapon.</summary>
-    public const int MaxWeaponId = 9;
+    public const int MaxWeaponId = 10;
 
     public static readonly WeaponDef None = new(Fix64.Zero, 0, Warhead.Omni, int.MaxValue);
     // Each def below is the reference copy of one file in data/weapons, named in
@@ -85,6 +85,10 @@ public static class Weapons
     public static readonly WeaponDef VanguardGun = new(Fix64.FromInt(3), 18, Warhead.AntiInfantry, 6);        // wpn_vanguard_autocannon
     public static readonly WeaponDef EmplacementGun = new(Fix64.FromInt(4), 22, Warhead.AntiInfantry, 7);     // wpn_emplacement_gun
     public static readonly WeaponDef FlakGun = new(Fix64.FromInt(6), 40, Warhead.AntiArmour, 10, antiAir: true); // wpn_flak_gun
+    // P7-11b: the hero's rifle, carried by both Commandos. A NEW def rather than
+    // a second user of the service rifle, because the hero's whole claim over an
+    // ordinary rifle squad is what it does to infantry.
+    public static readonly WeaponDef CommandoRifle = new(Fix64.FromInt(4), 45, Warhead.AntiInfantry, 10); // wpn_commando_rifle
 
     /// <summary>The compiled reference table: the values a /data/weapons file
     /// must reproduce exactly. Static so that callers with no World (the
@@ -102,6 +106,7 @@ public static class Weapons
         7 => VanguardGun,
         8 => EmplacementGun,
         9 => FlakGun,
+        10 => CommandoRifle,
         _ => None,
     };
 }

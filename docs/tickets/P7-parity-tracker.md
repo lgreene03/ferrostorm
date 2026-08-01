@@ -43,7 +43,7 @@ system removes a category of decision while a missing unit removes an option.
 | P7-11 | ~~Hero unit, mines, support infantry~~ - **SPLIT, 2026-08-01.** One row bundling one thing that is written, one the project has already ruled is a sample, and one that appears in no design document at all | B3/B4/B6 | - | - | **SPLIT** - see "What P7-11 turned out to be" below |
 | P7-11a | The Sodality's Saboteur: temporarily disables a building | B3 | - (GDD s7 names the unit AND its effect; only the duration is my call) | goldens NEUTRAL, measured; catalogue checksum MOVES; save format v10 | **DONE** - ADR-030; saboteurgate (6 stages) |
 | P7-7a | **Client defect carried by P7-7:** the Infiltrator's theft raised `GameEventType.Captured`, which the client reads as an ownership CHANGE, so robbing a building told its owner "STRUCTURE LOST TO CAPTURE" about a building they still held, klaxon and all | - | - | goldens NEUTRAL, measured (the event enum is neither hashed nor saved) | **DONE** - `GameEventType.Robbed`; infiltratorgate gained the stage that catches it (proved by restoring the defect and watching it fail); client harness 130 -> 133 checks |
-| P7-11b | Hero unit (Commando / Shadow Commando) | B4 | **PRODUCER.** Named in GDD s7, but with no ability, no stats, and a "one at a time" qualifier that has no machinery anywhere in the sim. Doc 23 s142 has ALREADY ruled on this line: "The GDD mandates the Repair Vehicle exactly as much as it mandates the Commando, which is to say it is a sample, not a system statement" | MOVES | **NOT TAKEN** |
+| P7-11b | Hero unit: Commando and Shadow Commando | B4 | - (authorised 2026-08-01; the design is INVENTED and recorded reversibly in ADR-035) | goldens NEUTRAL, measured; catalogue checksum MOVES | **DONE** - ADR-035; herogate (7 stages incl. the no-cap control that protects the goldens) |
 | P7-11c | Mines and a minelayer | B6 | **PRODUCER.** The word does not appear in the GDD, in any ADR, or anywhere in `sim/`. B6 is a one-line entry in doc 24 sitting on top of an entire new mechanic | MOVES | **NOT TAKEN** |
 
 Out of scope until a GDD amendment with Producer sign-off: naval, FMV briefings,
@@ -444,6 +444,31 @@ wave order went to the near refinery, and read 17 of 34 as a failure. It was the
 commander correctly moving on: the near refinery had fallen, so the far one WAS
 then the nearest. A gate demanding every order go to one place asserts that the
 AI never finishes anything. The claim is about the FIRST wave.
+
+## The hero, and the two defects adding it exposed
+
+P7-11b is the first row this phase where the design is INVENTED rather than
+implemented, and ADR-035 records the alternatives beside each choice so
+overturning one is an edit rather than an excavation. The three that matter:
+demolition is DAMAGE rather than deletion, so the hit-point column still decides
+who dies; the hero SURVIVES its own act where the other three contact units are
+consumed, which is what gives "one at a time" something to protect; and "one at
+a time" is BUILT, as a general `max_alive` column that is a no-op at 0.
+
+**Adding a fourth effect to a method that already had three is what exposed what
+the existing three assumed**, and both findings are worse than the feature:
+
+- **`UnitTypeDef.Air` was in neither `Equals` nor `CatalogueChecksum`**, since
+  ADR-028. A drifting `air:` key was invisible to the /data round-trip selftest
+  AND to the LAN desync guard, so two peers could disagree about which units FLY
+  while every unit, building and gun matched. Worse than the usual case: ADR-028
+  clause 3 makes engagement an equality between a weapon's anti-air flag and its
+  target's airborne one, so the peers would disagree about what can be SHOT.
+- **The Infiltrator crashed on a neutral outpost.** `CanBeActedOn` admits one
+  deliberately (capturing a neutral outpost is ADR-021's feature) and the theft
+  branch then indexed `_credits[-1]`. An index-out-of-range reachable by
+  right-clicking an outpost, latent since P7-7, proved by removing the guard and
+  watching the gate throw.
 
 ## What this phase does NOT do
 

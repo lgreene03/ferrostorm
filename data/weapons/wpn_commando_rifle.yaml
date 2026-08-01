@@ -1,0 +1,17 @@
+# P7-11b. The hero's rifle, carried by BOTH Commandos: the Directorate's and
+# the Sodality's Shadow Commando are one unit with one property changed, so they
+# share one gun rather than growing a mirrored pair of files.
+# A new def rather than a second user of wpn_service_rifle, because what the
+# hero claims over a rifle squad is exactly this: 45 a shot against 12, so a
+# single Commando out-shoots three squads of infantry and costs about as much.
+# Anti-infantry, so armour walks straight through it: 25 per cent against heavy
+# means 11 a shot, and a hero sent at a tank column is a dead hero. That is the
+# counter, and it is why 1500 credits buys a specialist rather than an upgrade.
+# Range 400 matches the emplacement gun and out-reaches the service rifle's 300,
+# which is the same one cell of reach that makes a defence a counter.
+id: wpn_commando_rifle
+name: "Commando Rifle"
+range: 400
+damage: 45
+warhead: anti_infantry
+cooldown_ticks: 10
