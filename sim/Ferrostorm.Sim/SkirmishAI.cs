@@ -923,7 +923,22 @@ public sealed class SkirmishAI
     /// already-crowded home base).</summary>
     private bool TryFindPlacement(World w, out int ax, out int ay)
     {
-        for (int i = w.Entities.Count - 1; i >= 0; i--)
+        // P7-8: OLDEST FIRST, and the direction is the whole fix.
+        //
+        // This walked backwards, so the anchor was the most recently built
+        // structure and every new building ringed off the last one. A base
+        // therefore WALKED: measured, a Sodality commander strung its twelve
+        // generators from its yard to the map corner, ending 31 cells out. The
+        // Directorate drifted too, to 11, and only looked acceptable because
+        // 100-supply plants meant it built five where the Sodality builds
+        // twelve - so DR-02 did not create this, it multiplied it.
+        //
+        // Forwards, the first eligible structure is the Construction Yard, so
+        // buildings ring outward from the base and it stays a base. Founding a
+        // SECOND base still works, because the rings around the first fill up
+        // and the loop falls through to the next yard - measured, the expansion
+        // scenario still migrates its economy.
+        for (int i = 0; i < w.Entities.Count; i++)
         {
             var s = w.Entities[i];
             if (!s.Alive || !World.IsOwnedBy(in s, _player)) continue;
