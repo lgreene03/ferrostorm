@@ -594,6 +594,51 @@ Three findings worth more than the feature:
   building fails CI rather than shipping unreachable - but deriving it properly
   is owed.
 
+## Naming the two questions the sim conflated, before teams
+
+Done as its own wave, deliberately, because P7-8c would otherwise have been
+nineteen hand-edits of a question that must be asked everywhere - **and that is
+exactly how the air layer was handled, which went wrong three times out of
+four.**
+
+The sim conflated TWO questions behind one expression: **ownership** ("is this
+mine", for commanding, loading, repairing) and **hostility** ("is this an
+enemy", for targeting, contact effects, the mine trigger, the AI's scans).
+Today both read `PlayerId != mine`, and **teams is precisely what splits them**:
+a teammate is neither mine nor an enemy. Left as one expression, teams could not
+have been added correctly at all.
+
+**The inventory is the deliverable, and it reshapes the row.** 41 sites: **9
+hostility, 32 ownership, 0 ambiguous.** The question teams changes is far smaller
+than it looked.
+
+But it is not one expression full stop. **Six sites are written as NOT-MINE on
+purpose and will not follow `IsEnemyOf`**, so teams is one expression plus six
+explicit design decisions, each now carrying a comment saying so:
+
+- `CanBeActedOn` - a neutral outpost is nobody's enemy, and capturing one is the
+  outpost's whole point (ADR-021)
+- the detector sweep - uncloaks anything not its own, including a neutral
+- the separation yield
+- `HasPrereqs` - does an ally's radar unlock your tech?
+- `HasHope` - is a team eliminated only when every member is?
+- the veil projector
+
+**And the airborne question is now structurally unavoidable rather than
+remembered.** `CanBeEngagedBy(byPlayer, antiAir, target)` takes the flag as a
+REQUIRED argument with no default, and the three paths that pick a victim go
+through it, including the mine trigger - so the shared gate absorbed a fourth
+path rather than tidying three. A comment saying "remember the air rule" was
+already present and was forgotten twice; an argument with no default cannot be
+left off. The residue is named rather than claimed away: somebody could still
+write a scan calling `IsEnemyOf` directly, so the doc comment enumerates all six
+selection paths and what each asks, including the three that deliberately stay
+out and why forcing them through would change behaviour.
+
+**Provably inert**: all 24 goldens byte-identical and the catalogue checksum
+unmoved, which is the entire proof that 41 sites were re-routed without one
+being sent to the wrong question.
+
 ## What this phase does NOT do
 
 It does not chase the unit counts in doc 24's table. Thirteen units against
