@@ -1095,6 +1095,10 @@ public sealed partial class World
     /// ENGINEER (unit type 11, a different namespace entirely) get confused.</summary>
     public const int FactoryStructType = 2;
     public const int BarracksStructType = 11;
+    /// <summary>ADR-028. Named for the same reason the two above are: the
+    /// sidebar routes a unit to its tab by its produced_at, and a bare 16 in
+    /// that comparison is a number nobody can check on sight.</summary>
+    public const int AirfieldStructType = 16;
 
     /// <summary>Cells per side of a structure type's square footprint (ADR-005), read from the def. Barriers are 1x1; everything else, including an unknown type (Footprint 0 on the default def), takes the 2x2 default that the placement path has always assumed.</summary>
     public int FootprintOf(int structType)
@@ -2324,17 +2328,37 @@ public sealed partial class World
     private static bool IsBarrier(EntityKind k) => k is EntityKind.Wall;
 
     /// <summary>
-    /// ADR-009 clause 1: the producer notion. Factory, Construction Yard and
-    /// Barracks; the Airfield joins when it exists (it is a slot-model
-    /// producer and waits on the air-layer ADR). Used at FOUR sites, three of
-    /// which fail silently if missed: Produce's kind test, ProductionSystem's
-    /// producer test (miss it and the barracks queue never advances with no
-    /// error), CancelProduce (miss it and barracks orders are uncancellable),
+    /// ADR-009 clause 1: the producer notion. Factory, Construction Yard,
+    /// Barracks and, since this was finally actioned, the Airfield. Used at
+    /// FOUR sites, three of which fail silently if missed: Produce's kind test,
+    /// ProductionSystem's producer test (miss it and the queue never advances
+    /// with no error), CancelProduce (miss it and orders are uncancellable),
     /// and the queue hash (which widens to all producer queues, closing
     /// PROD-D5, inside PROD-04's regeneration).
+    ///
+    /// This comment used to end "the Airfield joins when it exists (it is a
+    /// slot-model producer and waits on the air-layer ADR)". ADR-028 shipped
+    /// the air layer, the Airfield exists, and NOBODY CAME BACK. The
+    /// consequence was not subtle: Produce breaks on this predicate before it
+    /// reads anything else, so the Strike Flyer could not be built by anybody,
+    /// in any mode, from the day it shipped. An entire tier of the game was
+    /// unreachable behind a to-do note.
+    ///
+    /// It went unseen because `airgate` spawns its flyers with SpawnUnit and
+    /// never ORDERS one, so it proved everything about how an aircraft behaves
+    /// and nothing about whether a player can have one. That is the same shape
+    /// as P7-7a and the sidebar's missing buttons, and it is why the gate for
+    /// this fix issues a Produce command rather than constructing the outcome.
+    ///
+    /// "Slot-model producer" is left UNBUILT rather than invented: aircraft
+    /// occupying pads, with the airfield's capacity limiting how many can be
+    /// aloft, is a real design and is not what this fixes. The Airfield queues
+    /// like every other producer, which is the smallest thing that makes the
+    /// tier reachable.
     /// </summary>
     private static bool IsProducer(EntityKind k)
-        => k is EntityKind.Factory or EntityKind.ConstructionYard or EntityKind.Barracks;
+        => k is EntityKind.Factory or EntityKind.ConstructionYard or EntityKind.Barracks
+             or EntityKind.Airfield;
 
     /// <summary>
     /// ADR-009 clause 2: does this player own a LIVING instance of every

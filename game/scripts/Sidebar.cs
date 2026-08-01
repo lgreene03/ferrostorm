@@ -149,7 +149,8 @@ public partial class Sidebar : PanelContainer
     /// one: the panel's whole contract is that what it offers is what the sim
     /// accepts.</summary>
     private bool HasTabFor(int producedAt)
-        => producedAt == World.BarracksStructType || producedAt == World.FactoryStructType;
+        => producedAt == World.BarracksStructType || producedAt == World.FactoryStructType
+           || producedAt == World.AirfieldStructType;
 
     private static readonly Color Cinder = new(0.086f, 0.094f, 0.102f);
     private static readonly Color Seam = new(0.18f, 0.196f, 0.21f);
@@ -174,16 +175,25 @@ public partial class Sidebar : PanelContainer
     private int _readyType;
     private Tween? _placePulse;   // W3-16: PLACE-button ready pulse
 
-    // ADR-009 clause 6: GDD line 86's tabs. Four, not five - AIRCRAFT waits
-    // for the air ADR with the airfield it would build (see the class comment).
-    public const int TabBuildings = 0, TabDefence = 1, TabInfantry = 2, TabVehicles = 3;
-    private static readonly string[] TabTitles = { "BUILDINGS", "DEFENCE", "INFANTRY", "VEHICLES" };
+    // ADR-009 clause 6: GDD line 86's tabs. FIVE now. The comment here read
+    // "Four, not five - AIRCRAFT waits for the air ADR with the airfield it
+    // would build", and it waited past the point it was waiting for: ADR-028
+    // shipped the airfield and nobody came back, exactly as World.IsProducer's
+    // comment did about the same building. Both are actioned together, because
+    // a producer the sim accepts and the panel has no tab for is a unit that
+    // is buildable and unreachable, which is the defect this pair just fixed.
+    public const int TabBuildings = 0, TabDefence = 1, TabInfantry = 2, TabVehicles = 3, TabAircraft = 4;
+    private static readonly string[] TabTitles = { "BUILDINGS", "DEFENCE", "INFANTRY", "VEHICLES", "AIRCRAFT" };
+    /// <summary>How many tabs there are, for anything that cycles them. Read
+    /// rather than written, so adding a tab cannot break a test whose subject
+    /// is the cycling rather than the count.</summary>
+    public static int TabTitleCount => TabTitles.Length;
     private TabContainer _tabs = null!;
-    private readonly VBoxContainer[] _tabPages = new VBoxContainer[4];
+    private readonly VBoxContainer[] _tabPages = new VBoxContainer[5];
     /// <summary>Per tab, the line shown when every item in it is hidden. An
     /// empty tab is the ADR's teaching moment (absent, not greyed), but an
     /// empty PANEL teaches nothing, so each says what would fill it.</summary>
-    private readonly Label[] _tabEmptyNote = new Label[4];
+    private readonly Label[] _tabEmptyNote = new Label[5];
 
     // BD-02: build time is sim data and the sidebar has no World, so it is
     // handed the two catalogue reads it needs rather than reaching for a static.
@@ -300,8 +310,9 @@ public partial class Sidebar : PanelContainer
             int producedAt = _unitProducedAt(typeId);
             if (!HasTabFor(producedAt)) continue;
             var it = UnitItem(typeId);
-            var page = producedAt == World.BarracksStructType
-                ? _tabPages[TabInfantry] : _tabPages[TabVehicles];
+            var page = producedAt == World.BarracksStructType ? _tabPages[TabInfantry]
+                     : producedAt == World.AirfieldStructType ? _tabPages[TabAircraft]
+                     : _tabPages[TabVehicles];
             var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitCost(it.TypeId), _unitBuildTicks(it.TypeId),
                 onCancel: () => _game.CancelUnit(it.TypeId));   // C3 (ADR-020): right-click cancels
             // TICKET-P6-FACTION-01: the veil button's gate, generalised to the

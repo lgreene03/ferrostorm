@@ -6907,6 +6907,43 @@ int AirGate()
             return Fail("air control: a TANK must NOT cross a sealed wall, or this check proves nothing about air");
     }
 
+    // THE STAGE THIS GATE SHOULD HAVE HAD FROM THE START. Every stage above
+    // spawns its aircraft with SpawnUnit, so all of them proved how an aircraft
+    // BEHAVES and none proved a player can have one. World.IsProducer omitted
+    // the Airfield, Produce breaks on that predicate before reading anything
+    // else, and the Strike Flyer was therefore unbuildable by anybody in any
+    // mode from the day the air layer shipped. An entire tier of the game sat
+    // behind a to-do note in a comment, and this gate was green throughout.
+    //
+    // So this stage ORDERS one, the way a player does, and asserts a flyer
+    // exists at the end. Constructing the outcome is what hid the defect;
+    // asking for it is what finds it.
+    {
+        var w = new World(2811, 64, 64, players: 2);
+        w.GrantCredits(0, 20000);
+        // The tech the flyer's own /data prerequisites demand, stood directly
+        // so this stage tests PRODUCTION and not the build tree.
+        w.SpawnPowerPlant(0, 8, 8);
+        w.SpawnPowerPlant(0, 8, 12);
+        w.SpawnRadarUplink(0, 12, 8);
+        int pad = w.SpawnAirfield(0, 20, 20);
+        const int OrderedFlyer = 15;
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Produce, pad, Fix64.Zero, Fix64.Zero, OrderedFlyer) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        var def = w.GetUnitType(OrderedFlyer);
+        for (int t = 0; t < def.BuildTicks * 3 + 60; t++) w.Step(default);
+        int built = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+            if (w.Entities[i].Alive && w.Entities[i].PlayerId == 0 && w.Entities[i].UnitType == OrderedFlyer) built++;
+        if (built == 0)
+            return Fail("air: a Produce order at an AIRFIELD must yield a Strike Flyer. It does not, which means "
+                        + "World.IsProducer does not admit the Airfield and the aircraft cannot be built by "
+                        + "anybody, in any mode - exactly the defect every other stage in this gate missed by "
+                        + "spawning its flyers directly instead of ordering one.");
+        Console.WriteLine($"airgate: a Produce order at an airfield yields a flyer ({built} built), which is the "
+                          + "stage this gate lacked while the aircraft was unbuildable by every player in the game");
+    }
+
     Console.WriteLine("airgate: a rifle squad and a tank standing under an aircraft cannot scratch it, and neither can "
                       + "an EXPLICIT attack order; the flak track kills it; the flak track leaves the ground alone; and "
                       + "the aircraft crosses a sealed wall a tank cannot, so terrain means nothing to it. Both halves "

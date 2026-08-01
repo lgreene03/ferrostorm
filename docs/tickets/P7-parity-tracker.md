@@ -492,7 +492,26 @@ treats the symptom: a hand-maintained list of something the catalogue already
 knows will fall behind again, and the length guard is what makes it silent. One
 derivation now, shared, throwing on an unknown type rather than shrugging.
 
-**AND THE ONE STILL BROKEN, which is worse than any of the above.**
+**FIXED 2026-08-01, the wave after.** `IsProducer` admits the Airfield, the
+sidebar has an AIRCRAFT tab, and `airgate` gained the stage it should always have
+had: one that ORDERS a flyer rather than spawning it. **All 20 units now carry a
+button.** Measured neutral: no golden stands an airfield and the queue fold is
+`TryGetValue`-guarded, so an empty one contributes nothing.
+
+Both comments were to-do notes that outlived what they waited for.
+`IsProducer` said "the Airfield joins when it exists (it is a slot-model producer
+and waits on the air-layer ADR)"; the sidebar said "Four, not five - AIRCRAFT
+waits for the air ADR with the airfield it would build". ADR-028 shipped both and
+nobody came back to either. **A to-do in a comment is invisible to every gate in
+the project**, which is the reusable lesson: the note was accurate, prominent, and
+did nothing.
+
+"Slot-model producer" is left UNBUILT rather than invented - aircraft occupying
+pads, with capacity limiting how many fly, is a real design and is not what this
+fixed. The Airfield queues like every other producer, the smallest thing that
+makes the tier reachable.
+
+**The original finding, kept for the record:**
 `World.IsProducer` is `Factory or ConstructionYard or Barracks`. **The Airfield
 is not in it.** `Produce` breaks on that predicate before reading anything else,
 so **the Strike Flyer cannot be built by anybody, in any mode, and never could
