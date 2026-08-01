@@ -144,11 +144,32 @@ is not the same as a design document asking for it, and this row is where that
 distinction has to be made rather than blurred.
 
 **Also worth recording, because it was found looking for something else:**
-`data/schema.unit.json` declares `"additionalProperties": false` and does not
+`data/schema.unit.json` declared `"additionalProperties": false` and did not
 list the `air` key that `com_strike_flyer.yaml` authors and `DataLoader` reads.
-There is no runtime JSON-schema validator in `sim/`, so the schema is
-documentation that has silently drifted from the loader. Filed rather than
-fixed in passing.
+**FIXED 2026-08-01**, and the fix is the guard rather than the key.
+
+CLAUDE.md says gameplay numbers "live in /data as YAML **validated against**
+/data/schema.unit.json". The first half was true and the second half was not:
+the schemas declare `additionalProperties: false` and **nothing anywhere read
+them**. There is no JSON-schema validator in the tree, so they were
+documentation, and documentation drifts. It had already drifted for four waves,
+and under the schema as written `com_strike_flyer.yaml` was invalid the whole
+time.
+
+`schemagate` is that sentence enforced: 36 authored definitions and 540 keys
+checked against the three schemas every build. It checks the DATA against the
+SCHEMA rather than trying to prove the loader and schema agree statically,
+because a key the loader reads that nothing authors is harmless, while a key a
+file authors that the schema forbids is either a typo the loader is silently
+ignoring or a schema that has fallen behind. Both branches were proved to bite
+by breaking them.
+
+**And a second gap it surfaced: `data/weapons/` is EMPTY.** Every weapon number
+in the game lives compiled in `Combat.cs`, which contradicts "all gameplay
+numbers live in /data" as plainly as the unenforced schema did. Authoring them
+moves the catalogue checksum, so it is its own wave; the gate asserts the
+current truth and will fail the day someone adds a weapon yaml with no schema to
+validate it against.
 
 ## What P7-8 turned out to be
 

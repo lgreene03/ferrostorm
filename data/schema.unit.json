@@ -19,6 +19,8 @@
     "sight_range": { "type": "integer", "minimum": 0 },
     "stealth": { "type": "boolean", "default": false },
     "detector": { "type": "boolean", "default": false },
+    "air": { "type": "boolean", "default": false,
+      "description": "ADR-028 clause 1: whether this unit flies. A property of the TYPE and never per-entity state, which is what keeps it free of the state hash. An air unit steps straight towards its target, ignores terrain and separation, and can be engaged only by a weapon that declares anti-air (clause 3, an equality in both directions: a ground weapon cannot reach it and an anti-air weapon cannot shoot the ground). Authored since ADR-028 and read by DataLoader ever since; this schema simply had not been told." },
     "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required" },
     "produced_at": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$",
       "description": "Structure id of the building that produces this unit. The producer IS a prerequisite; do not repeat it in the prerequisites list." },
