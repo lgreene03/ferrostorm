@@ -242,11 +242,23 @@ reverting the fix leaves it with **type 0, none at all.**
 What the commander still does NOT build, stated plainly because the row is
 deliberately narrow: **the faction defences** (Bastion, Shroud Nest) and the
 **Veil Projector**, both of which are balance additions rather than defects since
-the common turret works for either side. And **a Sodality commander fires its
-seismic charge at refineries rather than at ferrite fields**, which is that
-weapon's entire reason to exist. Field-denial targeting is a different scan from
-structure-targeting and it is the largest single thing between the AI and playing
-its own faction.
+the common turret works for either side.
+
+**And the aim closed 2026-08-01** (P7-5e, ADR-046). Three waves had built the
+seismic charge, made the commander build one, and left it aiming with the attack
+wave's scan - at the nearest enemy refinery, which spends the only thing that
+weapon does that the orbital cannon cannot. It now hunts **the richest CLUSTER of
+enemy ferrite**, scored by what the whole 6-cell blast would take rather than by
+the single fattest field, and it refuses to deny ground nearer its own base than
+the enemy's.
+
+The defect underneath was one this campaign created. ADR-044 selected the effect
+with a **type-id literal**, the instance-not-property mistake this phase has
+corrected about fifteen times - and its second cost was subtler than usual: it
+left the AI no question it could ask. A commander cannot know that struct type 22
+is special, but it can ask whether its superweapon destroys fields. An authored
+`destroys_fields:` key now answers that for both the impact site and the aim,
+which is what a `/data` key driving the runtime is supposed to look like.
 
 ## Tier D: content volume
 

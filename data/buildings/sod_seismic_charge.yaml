@@ -22,6 +22,10 @@ sight_range: 4
 footprint: 2
 weapon_ids: []
 prerequisites: [com_radar_uplink]
+# P7-5e: the economic-warfare half, authored rather than hardcoded. It selects
+# the effect at the impact site AND tells the skirmish AI that it is holding a
+# denial weapon, so the commander hunts enemy ferrite instead of buildings.
+destroys_fields: true
 build_tab: defence
 notes: >
   Shares EntityKind.Superweapon with the orbital cannon, so charging, the ready

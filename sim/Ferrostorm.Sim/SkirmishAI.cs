@@ -591,7 +591,18 @@ public sealed class SkirmishAI
         // as fallback. No hesitation, no saving it for a rainy day. ---
         if (readySuper >= 0)
         {
-            int strike = enemyRefinery >= 0 ? enemyRefinery : enemyStructure;
+            // P7-5e: WHAT the weapon is decides WHERE it goes, and the question
+            // is asked of the def rather than of the faction. A commander whose
+            // superweapon destroys resource fields is holding an economic-denial
+            // weapon, and aiming it at a building throws away the only thing it
+            // does that the other side's cannot.
+            int strike = -1;
+            if (w.GetStructureType(w.Entities[readySuper].StructType).DestroysFields)
+                strike = BestFieldDenialTarget(w);
+            // The refinery aim is the fallback as well as the ordinary case, so
+            // a denial weapon with no field worth hitting still fires rather
+            // than banking a charged superweapon forever.
+            if (strike < 0) strike = enemyRefinery >= 0 ? enemyRefinery : enemyStructure;
             if (strike >= 0)
             {
                 var st = w.Entities[strike];
@@ -747,6 +758,85 @@ public sealed class SkirmishAI
     }
 
     /// <summary>Richest live field beyond 20 cells of home; ties break to lower id.</summary>
+    /// <summary>
+    /// P7-5e: where a FIELD-DESTROYING superweapon should land, which is a
+    /// different question from where a damaging one should.
+    ///
+    /// The existing aim reuses the wave scan: hit the nearest enemy refinery.
+    /// For the seismic charge that throws away the only thing it does that the
+    /// orbital cannon cannot, so this scan asks the weapon's own question -
+    /// which patch of ground, denied, costs the enemy the most ferrite.
+    ///
+    /// Three rules, and each is a decision rather than an obvious step:
+    ///
+    /// 1. SCORE BY CLUSTER, not by the single richest field. The blast kills
+    ///    every field within 6 cells (World.ApplySeismicCharge), so a tight
+    ///    group of three ordinary fields is worth more than one fat isolated
+    ///    one. This is the fact the effect's radius makes true and a
+    ///    single-field aim would ignore.
+    /// 2. ONLY THEIR GROUND. A field is a candidate only if it is nearer to an
+    ///    enemy structure than to my own base, so the commander cannot decide
+    ///    to deny the patch its own harvesters are working. Fields are neutral
+    ///    and there is no ownership to read, so proximity is the only honest
+    ///    proxy for "theirs".
+    /// 3. TIES BY LOWEST ENTITY INDEX, which is what keeps it deterministic.
+    ///    A strictly-greater comparison over an ascending walk does that by
+    ///    construction, and it is stated because it is load-bearing rather than
+    ///    incidental.
+    ///
+    /// Returns -1 when no field qualifies, and the caller falls back to the
+    /// ordinary refinery aim rather than banking a charged superweapon.
+    /// </summary>
+    private int BestFieldDenialTarget(World w)
+    {
+        // Where my own base is, and where theirs is, taken as the nearest
+        // structure of each. Both are needed for rule 2.
+        Fix64 myX = Fix64.Zero, myY = Fix64.Zero;
+        bool haveMine = false;
+        for (int i = 0; i < w.Entities.Count && !haveMine; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && World.IsOwnedBy(in e, _player) && World.IsStructure(e.Kind))
+            { myX = e.X; myY = e.Y; haveMine = true; }
+        }
+        if (!haveMine) return -1;
+
+        Fix64 blastSq = Fix64.FromInt(36);   // 6^2, ApplySeismicCharge's outer radius
+        int best = -1;
+        long bestScore = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var f = w.Entities[i];
+            if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount <= 0) continue;
+
+            // Rule 2: nearer to something of theirs than to something of mine.
+            Fix64 mine = Fix64.DistSq(f.X - myX, f.Y - myY);
+            Fix64 theirs = Fix64.MaxValue;
+            for (int j = 0; j < w.Entities.Count; j++)
+            {
+                var o = w.Entities[j];
+                if (!o.Alive || !World.IsStructure(o.Kind) || !w.IsEnemyOf(in o, _player)) continue;
+                Fix64 d = Fix64.DistSq(o.X - f.X, o.Y - f.Y);
+                if (d < theirs) theirs = d;
+            }
+            if (theirs == Fix64.MaxValue || theirs >= mine) continue;
+
+            // Rule 1: what the whole blast would take, not just this field.
+            long score = 0;
+            for (int j = 0; j < w.Entities.Count; j++)
+            {
+                var g = w.Entities[j];
+                if (!g.Alive || g.Kind != EntityKind.FerriteField || g.FerriteAmount <= 0) continue;
+                if (Fix64.DistSq(g.X - f.X, g.Y - f.Y) > blastSq) continue;
+                score += g.FerriteAmount;
+            }
+            // Rule 3: strictly greater over an ascending walk, so the lowest
+            // entity index wins a tie and the choice is reproducible.
+            if (score > bestScore) { bestScore = score; best = i; }
+        }
+        return best;
+    }
+
     private static int RichestDistantField(World w, Fix64 x, Fix64 y)
     {
         int best = -1, bestAmount = 0;
