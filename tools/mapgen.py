@@ -2,11 +2,18 @@
 """Shared machinery for the skirmish-map generators (TICKET-P6-MAP-01).
 
 The maps are generated rather than hand-typed because their fairness invariant
-is mechanical: every feature must be placed as a 180-degree rotation-symmetric
-pair about the map centre, the symmetry that maps start 0 onto start 1 exactly.
-A human editing thousands of characters cannot hold that invariant; a script
-can, and can then prove it. This module is the single place the invariant lives,
-so it is defined once and every generator inherits the same proof.
+is mechanical: every feature must be placed as its full ORBIT under the map's
+symmetry group, the group whose members carry each start onto the others
+exactly. A human editing thousands of characters cannot hold that invariant; a
+script can, and can then prove it. This module is the single place the invariant
+lives, so it is defined once and every generator inherits the same proof.
+
+The group is named, not hardcoded (P7-8b). "rot180" is the identity and the
+180-degree rotation, an orbit of two, and it is the default because it is what
+every two-start map in the pool is built on and proved against. "mirror2" adds
+the two centre-line mirrors for an orbit of four, which is what a four-start map
+needs. A one-member group containing only the identity is the asymmetric mission
+mode: the same code path, not a boolean special case, so the modes cannot drift.
 
 The map format spec is sim/Ferrostorm.Sim/MapLoader.cs. Grid characters:
     '.' open      '#' blocked        'F' ferrite (12000 each)
@@ -34,33 +41,94 @@ BLOCKING = set('#whrf')   # 'B' and 'b' are bridges: open to the sim while they 
 DECOR = set(',:=~')       # scrub, gravel, road, shallows
 
 
-def rot(x, y, w, h):
-    """(x,y) -> (w-1-x, h-1-y): the 180-degree rotation that maps each start
-    onto the other. A sine centred on the map centre is symmetric under it by
-    construction, but rounding to integer cells can slip a cell, so every
-    feature below is placed as an explicit rotation pair and then re-proved
-    cell by cell rather than trusted."""
+def ident(x, y, w, h):
+    """The identity. Every group contains it, so the authored cell is always a
+    member of its own orbit and a mutator never has to special-case it."""
+    return x, y
+
+
+def rot180(x, y, w, h):
+    """(x,y) -> (w-1-x, h-1-y): the 180-degree rotation about the map centre.
+    A sine centred on the map centre is symmetric under it by construction, but
+    rounding to integer cells can slip a cell, so every feature below is placed
+    as an explicit orbit and then re-proved cell by cell rather than trusted."""
     return w - 1 - x, h - 1 - y
 
 
-class Canvas:
-    """A grid under construction. Every mutator writes a cell together with its
-    rotation image, so the grid is symmetric by construction; validate() then
-    proves it, along with density, reachability, load-bearing crossings and
-    ferrite fairness."""
+def mirror_v(x, y, w, h):
+    """Reflection across the VERTICAL centre line: left half onto right half."""
+    return w - 1 - x, y
 
-    def __init__(self, w, h, starts, apron=4, symmetric=True):
+
+def mirror_h(x, y, w, h):
+    """Reflection across the HORIZONTAL centre line: top half onto bottom."""
+    return x, h - 1 - y
+
+
+# The symmetry groups. Each is an ordered tuple of transforms with the identity
+# FIRST, because the order is observable: outpost() emits one entity line per
+# orbit member in group order, so reordering a group would rewrite committed
+# maps. Every group is closed under composition, which is what makes "the orbit
+# of a cell" a well-defined set rather than a list that depends on where you
+# started.
+#
+# There is deliberately no 90-degree rotation group. A quarter turn maps a
+# w-by-h rectangle onto an h-by-w one, so it is only a symmetry of a SQUARE map,
+# and not one of the eight shipped maps is square (96x64, 128x96, 192x128,
+# 256x192). Adding it would mean a group that silently fails on every map in the
+# pool. Its absence is a decision, not an oversight; a square map wanting an
+# orbit of four uses mirror2, which works on any rectangle.
+SYMMETRY_GROUPS = {
+    "none": (ident,),                             # asymmetric: mission maps
+    "rot180": (ident, rot180),                    # orbit 2: the two-start pool
+    "mirror2": (ident, mirror_v, mirror_h, rot180),   # orbit 4: four starts
+}
+
+
+class Canvas:
+    """A grid under construction. Every mutator writes a cell together with the
+    whole of its orbit under the map's symmetry group, so the grid is symmetric
+    by construction; validate() then proves it, along with density,
+    reachability, load-bearing crossings and ferrite fairness."""
+
+    def __init__(self, w, h, starts, apron=4, symmetric=True, symmetry="rot180"):
         self.w, self.h = w, h
-        self.starts = dict(starts)          # {0:(x,y), 1:(x,y)}
+        self.starts = dict(starts)          # {0:(x,y), 1:(x,y), ...}
         self.apron = apron
-        self.symmetric = symmetric
+        # symmetric=False is the asymmetric mission mode and it selects the
+        # one-member group rather than switching off a code path, so there is a
+        # single orbit machine underneath both and the two cannot drift apart.
+        assert symmetry in SYMMETRY_GROUPS, \
+            f"unknown symmetry '{symmetry}': the groups are {sorted(SYMMETRY_GROUPS)}"
+        self.symmetry = symmetry if symmetric else "none"
+        self.group = SYMMETRY_GROUPS[self.symmetry]
+        # "symmetric" now means "this map has a fairness symmetry to prove",
+        # which is exactly "its group is bigger than the identity". Kept as a
+        # plain attribute because report() and the generators read it.
+        self.symmetric = len(self.group) > 1
         self.grid = [['.' for _ in range(w)] for _ in range(h)]
-        if symmetric:
-            # The starts must themselves be a rotation pair, or nothing built on
-            # top of the symmetry can rescue the fairness.
-            assert len(self.starts) == 2, "a symmetric map has exactly two starts"
-            assert rot(*self.starts[0], w, h) == self.starts[1], \
-                f"starts {self.starts[0]} and {self.starts[1]} are not a 180-rotation pair"
+        if self.symmetric:
+            # The starts must themselves BE an orbit, or nothing built on top of
+            # the symmetry can rescue the fairness.
+            assert sorted(self.starts) == list(range(len(self.starts))), \
+                f"start ids must be 0..n-1, got {sorted(self.starts)}"
+            want = sorted({t(*self.starts[0], w, h) for t in self.group})
+            got = sorted(self.starts.values())
+            assert got == want, (
+                f"the starts {got} are not the orbit of start 0 under '{self.symmetry}': "
+                f"that group expects exactly {want}")
+            # Start ORDER is a requirement, not a detail. rot180 is a member of
+            # every group here, so seats 0 and 1 being a 180-degree pair (and 2
+            # and 3 being the other one) makes a TWO-player game on a four-start
+            # map exactly as fair as a game on any two-start map in the pool.
+            # That is what makes it safe to offer a mirror2 map in the menu
+            # while the lobby still only expresses two seats: the two seats it
+            # fills are a rotation pair and the spare starts go unused.
+            if rot180 in self.group:
+                for i in range(0, len(self.starts) - 1, 2):
+                    assert rot180(*self.starts[i], w, h) == self.starts[i + 1], \
+                        (f"starts {i} {self.starts[i]} and {i + 1} {self.starts[i + 1]} are not a "
+                         f"180-rotation pair: a two-player game seated at 0 and 1 would be unfair")
         # Cells the aprons own. Nothing may be stamped into them, so they never
         # have to be re-cleared (which would silently delete a feature).
         self.apron_cells = set()
@@ -84,21 +152,26 @@ class Canvas:
         return 0 <= x < self.w and 0 <= y < self.h
 
     def _imgs(self, x, y):
-        """The cells a single authored cell stands for. On a symmetric map that
-        is the cell and its rotation image, written together so a pair can never
-        land half-placed; on an asymmetric mission map it is the cell alone.
-        Every mutator goes through this, so the two modes cannot drift."""
-        if not self.symmetric:
-            return ((x, y),)
-        return ((x, y), rot(x, y, self.w, self.h))
+        """The cells a single authored cell stands for: its full ORBIT under the
+        map's symmetry group, written together so an orbit can never land part
+        placed. On a rot180 map that is the cell and its rotation image, on a
+        mirror2 map the four quadrant images, on an asymmetric mission map the
+        cell alone. Every mutator goes through this, so the modes cannot drift.
+
+        De-duplicated and sorted. A cell sitting ON a mirror axis is its own
+        image under that mirror, and writing it twice would be harmless for a
+        grid write but not for the counting that cluster() and the budgets do.
+        Sorted so the order is a property of the cell rather than of the group's
+        internal order, which keeps failure messages stable."""
+        return tuple(sorted({t(x, y, self.w, self.h) for t in self.group}))
 
     # -- rivers -----------------------------------------------------------
     def river(self, centre_fn, halfwidth_fn, vertical=True):
         """Mark a winding river as water. centre_fn(t) and halfwidth_fn(t) take
         the along-axis coordinate (rows for a vertical river) and return the
-        cross-axis centre and half-width in cells. The river is closed under
-        rotation before it is written, so a sine that rounds a cell off-centre
-        is corrected rather than left to bias one bank."""
+        cross-axis centre and half-width in cells. The river is closed under the
+        symmetry group before it is written, so a sine that rounds a cell
+        off-centre is corrected rather than left to bias one bank."""
         cells = set()
         span = self.h if vertical else self.w
         for t in range(span):
@@ -121,9 +194,10 @@ class Canvas:
 
     def bridges(self, bands):
         """Turn the river cells inside each along-axis band into bridge decks.
-        bands is a list of (t0, t1) half-open ranges. Closed under rotation, so
-        three bridges are three pairs of identical crossings. These become the
-        load-bearing crossings validate() proves are the ONLY way across."""
+        bands is a list of (t0, t1) half-open ranges. Closed under the symmetry
+        group, so three bridges are three orbits of identical crossings. These
+        become the load-bearing crossings validate() proves are the ONLY way
+        across."""
         want = set()
         for (t0, t1) in bands:
             for t in range(t0, t1):
@@ -158,9 +232,9 @@ class Canvas:
 
     # -- terrain ----------------------------------------------------------
     def stamp(self, x0, y0, dx, dy, ch, choke=False):
-        """Write a dx-by-dy rectangle and its rotation image. A cell is written
-        only if BOTH it and its partner are free of water, bridge and apron, so
-        a pair can never land half-placed, the failure mode that quietly hands
+        """Write a dx-by-dy rectangle and its whole orbit. A cell is written
+        only if EVERY member of its orbit is free of water, bridge and apron, so
+        an orbit can never land part placed, the failure mode that quietly hands
         one player an advantage. If choke=True the cells are recorded as a
         crossing whose removal validate() will require to disconnect the map
         (used to prove a ridge's passes are load-bearing)."""
@@ -179,7 +253,7 @@ class Canvas:
                         self.choke_cells.add((ix, iy))
 
     def decor(self, x0, y0, dx, dy, ch, fill=1):
-        """Dress a dx-by-dy patch and its rotation image with a DECORATIVE
+        """Dress a dx-by-dy patch and its whole orbit with a DECORATIVE
         character. Passable, drawn, and invisible to every invariant.
 
         Writes only over OPEN ground ('.'), never over terrain, ferrite, a
@@ -199,8 +273,8 @@ class Canvas:
                 if not self.inb(x, y):
                     continue
                 imgs = self._imgs(x, y)
-                # Both halves must be free, exactly as stamp() requires, or the
-                # pair lands half-placed and the map stops being symmetric.
+                # Every image must be free, exactly as stamp() requires, or the
+                # orbit lands part placed and the map stops being symmetric.
                 if any(self.grid[iy][ix] != '.' for (ix, iy) in imgs):
                     continue
                 if any(i in self.apron_cells for i in imgs):
@@ -210,13 +284,13 @@ class Canvas:
 
     def mark_pass(self, cells):
         """Record open cells as a load-bearing pass through a ridge: validate()
-        proves that blocking them disconnects the two starts."""
+        proves that blocking them disconnects every start from every other."""
         for (x, y) in cells:
             self.choke_cells.update(self._imgs(x, y))
 
     def cluster(self, cx, cy, shape):
-        """Place a ferrite field and its rotation image. Both cells of every
-        pair must be open, or the pair would half-land and break both the budget
+        """Place a ferrite field and its whole orbit. Every cell of every orbit
+        must be open, or the orbit would part land and break both the budget
         and the symmetry, so fail loudly instead."""
         for dx, dy in shape:
             x, y = cx + dx, cy + dy
@@ -228,18 +302,32 @@ class Canvas:
             for (ix, iy) in imgs:
                 self.grid[iy][ix] = 'F'
 
+    def _block_anchor(self, t, ax, ay, size=2):
+        """The TOP-LEFT anchor of the image of a size-by-size block under one
+        transform. This is the one place where an orbit is not just "apply the
+        transform to the cell": a block is named by its min corner, and a
+        transform that flips an axis carries the min corner of that axis onto
+        the MAX corner of the image, so the anchor moves by size-1 along every
+        flipped axis. Derived rather than tabulated - both opposite corners are
+        transformed and the componentwise minimum taken - because a per-group
+        table of offsets is exactly the thing that goes silently wrong by one
+        cell when a group is added, and a one-cell shift can still pass the
+        distance-profile check."""
+        x0, y0 = t(ax, ay, self.w, self.h)
+        x1, y1 = t(ax + size - 1, ay + size - 1, self.w, self.h)
+        return min(x0, x1), min(y0, y1)
+
     def outpost(self, ax, ay):
-        """ADR-021: place a neutral capturable Outpost and its rotation image.
+        """ADR-021: place a neutral capturable Outpost and its whole orbit.
         (ax, ay) is the TOP-LEFT anchor of the 2x2 footprint, the anchor
-        convention World.SpawnOutpost takes. Both footprints must be wholly
+        convention World.SpawnOutpost takes. Every footprint must be wholly
         open, outside every apron (a base must not start owning one) and clear
         of the load-bearing crossings (an outpost is 2x2 and would part-seal a
-        pass it stood in). The rotation image of the block anchored at (ax, ay)
-        is anchored at rot(ax+1, ay+1), the min corner of the rotated cells."""
-        # The rotation image of the 2x2 block anchored at (ax, ay) is anchored
-        # at rot(ax+1, ay+1) - the min corner of the rotated cells.
-        anchors = ((ax, ay), rot(ax + 1, ay + 1, self.w, self.h)) if self.symmetric \
-            else ((ax, ay),)
+        pass it stood in). The image anchors come from _block_anchor: under
+        rot180 the image of the block at (ax, ay) is anchored at
+        rot180(ax+1, ay+1), the min corner of the rotated cells, and under a
+        mirror the anchor moves along the flipped axis only."""
+        anchors = tuple(self._block_anchor(t, ax, ay) for t in self.group)
         for (bx, by) in anchors:
             for y in range(by, by + 2):
                 for x in range(bx, bx + 2):
@@ -250,8 +338,10 @@ class Canvas:
                         f"outpost cell {(x, y)} sits in a start apron: a base would own it for free"
                     assert (x, y) not in self.choke_cells, \
                         f"outpost cell {(x, y)} sits on a load-bearing crossing"
-        if self.symmetric:
-            assert len(set(anchors)) == 2, "an outpost placed on the map centre is its own mirror"
+        assert len(set(anchors)) == len(self.group), \
+            (f"outpost at {(ax, ay)} has an orbit of {len(set(anchors))} under '{self.symmetry}', "
+             f"not {len(self.group)}: it sits on a symmetry axis and is its own image, "
+             f"so one commander would get a copy the others do not")
         self.outposts.extend(anchors)
 
     # -- proof ------------------------------------------------------------
@@ -271,10 +361,10 @@ class Canvas:
     def validate(self, expected_fields, density_range, min_separation=None, objectives=()):
         """Prove the map. `objectives` is the mission-map addition: cells every
         start must be able to walk to. A skirmish map's objectives are implicit
-        (the far start, the ferrite, the aprons) and rotation makes them fair; a
-        mission map has NO far start and no fairness to prove, so what has to be
-        checked instead is that the thing the script tells the player to go and
-        do is somewhere they can actually reach."""
+        (the far starts, the ferrite, the aprons) and the symmetry makes them
+        fair; a mission map has NO far start and no fairness to prove, so what
+        has to be checked instead is that the thing the script tells the player
+        to go and do is somewhere they can actually reach."""
         w, h, grid = self.w, self.h, self.grid
         assert len(grid) == h
         for row in grid:
@@ -298,28 +388,51 @@ class Canvas:
         #    A mission map has one player start and a scripted opponent, so
         #    there is no second start to be separated FROM and the guard has
         #    nothing to say. It is skipped rather than weakened.
+        #
+        #    With more than two starts it is the MINIMUM pairwise separation
+        #    that has to clear the floor, not the separation of some chosen
+        #    pair. On a four-start map the diagonal pairs are far apart by
+        #    construction while the adjacent ones are not, so measuring only
+        #    seats 0 and 1 would pass a map on which seats 0 and 2 are
+        #    neighbours - the same accidental rush, hidden behind a comfortable
+        #    number. For two starts there is one pair and the meaning is
+        #    unchanged.
         if self.symmetric:
-            sep = max(abs(self.starts[0][0] - self.starts[1][0]),
-                      abs(self.starts[0][1] - self.starts[1][1]))
+            pairs = [(p, q) for p in sorted(self.starts) for q in sorted(self.starts) if p < q]
+            sep, near = min(
+                (max(abs(self.starts[p][0] - self.starts[q][0]),
+                     abs(self.starts[p][1] - self.starts[q][1])), (p, q))
+                for (p, q) in pairs)
             floor = min_separation if min_separation is not None else int(0.7 * max(w, h))
             assert sep >= floor, (
-                f"starts are {sep} cells apart (Chebyshev), below the {floor} this map size wants. "
+                f"starts {near[0]} and {near[1]} are {sep} cells apart (Chebyshev), the closest pair on "
+                f"the map and below the {floor} this map size wants. "
                 f"A short run makes whoever attacks first the winner before the other has an army; "
                 f"pass min_separation= explicitly if a rush map is the INTENT.")
 
-        # 1. Rotation symmetry of blocked cells, fields and bridges, cell by cell.
+        # 1. Symmetry of blocked cells, fields and bridges, cell by cell, over
+        #    the WHOLE ORBIT of each cell rather than one rotation partner.
         #    This is the FAIRNESS invariant and it is meaningless on a mission
         #    map: a campaign mission is asymmetric on purpose - the player and
         #    the scripted enemy are not meant to be evenly matched, and a
         #    mirrored mission would be a skirmish with dialogue.
+        #
+        #    Every member of the orbit is checked against the authored cell, so
+        #    an orbit of four is proved to agree four ways rather than pairwise
+        #    round a cycle. Under rot180 the orbit is the cell and its rotation
+        #    image, so this is the identical check it has always been.
         if self.symmetric:
             for y in range(h):
                 for x in range(w):
-                    rx, ry = rot(x, y, w, h)
-                    a, b = grid[y][x], grid[ry][rx]
-                    assert (a in BLOCKING) == (b in BLOCKING), f"blocked asymmetry at {(x, y)}"
-                    assert (a == 'F') == (b == 'F'), f"ferrite asymmetry at {(x, y)}"
-                    assert (a == 'B') == (b == 'B'), f"bridge asymmetry at {(x, y)}"
+                    a = grid[y][x]
+                    for (ix, iy) in self._imgs(x, y):
+                        b = grid[iy][ix]
+                        assert (a in BLOCKING) == (b in BLOCKING), \
+                            f"blocked asymmetry at {(x, y)}: its orbit image {(ix, iy)} disagrees"
+                        assert (a == 'F') == (b == 'F'), \
+                            f"ferrite asymmetry at {(x, y)}: its orbit image {(ix, iy)} disagrees"
+                        assert (a == 'B') == (b == 'B'), \
+                            f"bridge asymmetry at {(x, y)}: its orbit image {(ix, iy)} disagrees"
 
         # 2. Aprons fully open, so the 2x2 CY footprint and the MCV always fit.
         for (x, y) in self.apron_cells:
@@ -354,8 +467,14 @@ class Canvas:
             for o in objectives:
                 assert o in seen, f"player {p} cannot reach objective cell {o}"
 
-        # 6. The crossings are load-bearing: close them and prove the two starts
+        # 6. The crossings are load-bearing: close them and prove the starts
         #    fall into separate components. A river without this is decoration.
+        #
+        #    Checked over EVERY ordered pair of starts, not just the first two.
+        #    A crossing set that severs seats 0 and 1 while leaving seats 0 and
+        #    2 joined by a lane round the end of the ridge is exactly the map
+        #    this check exists to reject, and on a two-start map there is one
+        #    pair, so the meaning is unchanged.
         #
         #    A mission map has no second start to be cut off from, so the same
         #    proof is restated against what the mission actually cares about:
@@ -370,8 +489,14 @@ class Canvas:
                 grid[y][x] = '#'
             try:
                 if len(self.starts) >= 2:
-                    assert self.starts[1] not in self._flood(*self.starts[0]), \
-                        "starts stay connected with every crossing closed: the crossings are not load-bearing"
+                    for p, s in sorted(self.starts.items()):
+                        seen = self._flood(*s)
+                        for q, s2 in sorted(self.starts.items()):
+                            if q == p:
+                                continue
+                            assert s2 not in seen, (
+                                f"starts {p} and {q} stay connected with every crossing closed: "
+                                f"the crossings are not load-bearing")
                 elif objectives:
                     seen = self._flood(*next(iter(self.starts.values())))
                     for o in objectives:
@@ -382,14 +507,19 @@ class Canvas:
                 for (x, y, ch) in saved:
                     grid[y][x] = ch
 
-        # 7. Chebyshev-distance fairness: the multiset of distances from each
+        # 7. Chebyshev-distance fairness: the multiset of distances from EVERY
         #    start to all fields must be identical, or one player is closer to
-        #    the economy. Rotation guarantees it; this proves it held.
+        #    the economy. The symmetry guarantees it; this proves it held. Each
+        #    start is compared against start 0's profile, so an orbit of four is
+        #    held to one shared standard rather than checked round a ring, and
+        #    with two starts it is the same single comparison as before.
         if self.symmetric:
             def cheb(s):
                 return sorted(max(abs(x - s[0]), abs(y - s[1])) for x, y in fields)
-            assert cheb(self.starts[0]) == cheb(self.starts[1]), \
-                "ferrite distance profiles differ between starts"
+            base = cheb(self.starts[0])
+            for p, s in sorted(self.starts.items()):
+                assert cheb(s) == base, \
+                    f"ferrite distance profile of start {p} at {s} differs from start 0's"
 
         # 8. ADR-021 outposts. They are entities, not terrain, so they are absent
         #    from the grid and from the density above; what has to be proved is
@@ -399,7 +529,10 @@ class Canvas:
         #    field would otherwise only be discovered in a match.
         if self.outposts:
             if self.symmetric:
-                assert len(self.outposts) % 2 == 0, "outposts must be placed in rotation pairs"
+                assert len(self.outposts) % len(self.group) == 0, \
+                    (f"{len(self.outposts)} outposts is not a whole number of orbits under "
+                     f"'{self.symmetry}' (orbit size {len(self.group)}): outposts must be placed "
+                     f"as complete orbits or one commander gets one the others do not")
             saved = []
             for (ax, ay) in self.outposts:
                 for y in range(ay, ay + 2):
@@ -427,19 +560,25 @@ class Canvas:
             #
             # Measured to the footprint CENTRE, not the anchor, and in DOUBLED
             # integers so it stays exact. Ferrite can use the cell itself
-            # because rotation maps a single cell onto a single cell, but the
+            # because a transform maps a single cell onto a single cell, but the
             # 180-rotation of a 2x2 block maps its top-left anchor onto the
             # rotated block's BOTTOM-RIGHT, so anchor distances differ by one
             # between the two starts even when the placement is perfectly
-            # symmetric. The centre is what the sim itself uses
-            # (World.FootprintCentre) and it is the only measure that rotates
-            # cleanly. (Written the naive way first; this check caught it.)
+            # symmetric. A mirror does the same along the axis it flips. The
+            # centre is what the sim itself uses (World.FootprintCentre) and it
+            # is the only measure that transforms cleanly. (Written the naive
+            # way first; this check caught it.) It is also the check that would
+            # catch a wrong image ANCHOR under a mirror, which is why the
+            # anchors are derived from the block's corners in _block_anchor
+            # rather than written out per group.
             if self.symmetric:
                 def cheb_out(s):
                     return sorted(max(abs((2 * x + 1) - 2 * s[0]), abs((2 * y + 1) - 2 * s[1]))
                                   for x, y in self.outposts)
-                assert cheb_out(self.starts[0]) == cheb_out(self.starts[1]), \
-                    "outpost distance profiles differ between starts"
+                base_out = cheb_out(self.starts[0])
+                for p, s in sorted(self.starts.items()):
+                    assert cheb_out(s) == base_out, \
+                        f"outpost distance profile of start {p} at {s} differs from start 0's"
 
         # 9. ADR-025: the map must survive losing EVERY destroyable span at
         #    once. A rubbled bridge is a neutral blocker, so the DEF-05 breach
@@ -469,11 +608,15 @@ class Canvas:
             finally:
                 for (x, y, ch) in saved:
                     grid[y][x] = ch
-            # Fairness: spans are a rotation-symmetric set like everything else.
+            # Fairness: the spans are a closed set under the symmetry, like
+            # everything else. Every member of a span's orbit must itself be a
+            # span, or one commander can cut a crossing the others cannot.
             if self.symmetric:
-                for (x, y) in self.span_cells:
-                    assert rot(x, y, w, h) in self.span_cells, \
-                        f"destroyable span {(x, y)} has no rotation partner: one player can cut a crossing the other cannot"
+                for (x, y) in sorted(self.span_cells):
+                    for (ix, iy) in self._imgs(x, y):
+                        assert (ix, iy) in self.span_cells, \
+                            (f"destroyable span {(x, y)} has no partner at its orbit image {(ix, iy)}: "
+                             f"one player can cut a crossing the others cannot")
 
         return fields, blocked, density
 
@@ -563,6 +706,9 @@ def report(name, canvas, fields, blocked, density, path, crossings):
     if canvas.outposts:
         print(f"  outposts: {len(canvas.outposts)} neutral (ADR-021) at {canvas.outposts}")
     if canvas.symmetric:
+        if canvas.symmetry != "rot180":
+            print(f"  symmetry: '{canvas.symmetry}', orbit size {len(canvas.group)} "
+                  f"(seats 0 and 1 are the 180-degree pair)")
         print("  all symmetry, density, reachability, crossing and fairness checks passed")
     else:
         print("  asymmetric MISSION map: density, reachability and objective-reachability "
