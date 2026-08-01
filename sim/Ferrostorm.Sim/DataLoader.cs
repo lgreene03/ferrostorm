@@ -409,40 +409,90 @@ public static class UnitCatalogue
     public static WeaponDef ToWeaponDef(DataLoader.WeaponData w)
         => new(w.Range, w.Damage, w.Warhead, w.CooldownTicks, w.MinRange, w.SplashRadius, w.AntiAir);
 
-    /// <summary>Producible unit type ids: the file names the thing, this map
+    /// <summary>Producible unit type ids: the file names the thing, this table
     /// names the number, and neither is free to drift alone - the selftest
     /// directory walk (TICKET-P5-PROD-02) proves every file against its
-    /// compiled def through this map. Mirrors StructureCatalogue.TypeIdOf;
-    /// throws on an unknown id rather than defaulting. Unit types are dense
-    /// 1 through 12; struct type numbering is a DIFFERENT namespace (unit 11
-    /// is the engineer, struct 11 is the barracks).</summary>
-    public static int TypeIdOf(string id) => id switch
+    /// compiled def through it, and RegisterUnits refuses a compiled type that
+    /// no file provides, so the table is complete over the dense range by two
+    /// gates rather than by hope. Unit types are dense from 1; struct type
+    /// numbering is a DIFFERENT namespace (unit 11 is the engineer, struct 11
+    /// is the barracks).
+    ///
+    /// ONE table read in BOTH directions. It used to be a switch expression,
+    /// which can only be read forwards, and so the client could not ask what a
+    /// type is CALLED: the build sidebar kept its own list of units and labels
+    /// instead, and that list fell seven units behind the catalogue, which is
+    /// how the transport, the flak track and both heroes came to exist in the
+    /// sim with no way for a player to build them.</summary>
+    private static readonly string[] Ids =
     {
-        "dir_cannon_tank" => 1,
-        "com_rifle_squad" => 2,
-        "com_rocket_squad" => 3,
-        "com_harvester" => 4,
-        "sod_shade_raider" => 5,
-        "dir_sentinel_scout" => 6,
-        "com_mcv" => 7,
-        "dir_howitzer" => 8,
-        "sod_phantom_tank" => 9,
-        "dir_bulwark_tank" => 10,
-        "com_engineer" => 11,
-        "dir_vanguard_car" => 12,
-        "com_repair_vehicle" => 13,   // ADR-019 (P6 Wave C2)
-        "com_carrier" => 14,          // P7-3: the transport
-        "com_strike_flyer" => 15,     // ADR-028 (P7-4)
-        "com_flak_track" => 16,       // ADR-028 clause 4: the answer
-        "sod_infiltrator" => 17,      // P7-7: GDD s7's "Infiltrator (steals intel/credits)"
-        "sod_saboteur" => 18,         // P7-11a: GDD s7's "Saboteur (disables buildings)"
+        "",                           // index 0: no unit type, so the array is indexed BY type id
+        "dir_cannon_tank",            // 1
+        "com_rifle_squad",            // 2
+        "com_rocket_squad",           // 3
+        "com_harvester",              // 4
+        "sod_shade_raider",           // 5
+        "dir_sentinel_scout",         // 6
+        "com_mcv",                    // 7
+        "dir_howitzer",               // 8
+        "sod_phantom_tank",           // 9
+        "dir_bulwark_tank",           // 10
+        "com_engineer",               // 11
+        "dir_vanguard_car",           // 12
+        "com_repair_vehicle",         // 13: ADR-019 (P6 Wave C2)
+        "com_carrier",                // 14: P7-3, the transport
+        "com_strike_flyer",           // 15: ADR-028 (P7-4)
+        "com_flak_track",             // 16: ADR-028 clause 4, the answer
+        "sod_infiltrator",            // 17: P7-7, GDD s7's "Infiltrator (steals intel/credits)"
+        "sod_saboteur",               // 18: P7-11a, GDD s7's "Saboteur (disables buildings)"
         // P7-11b: GDD s7's two heroes, lines 62 and 64. Adjacent ids because
         // they are one unit authored twice, differing by faction and by stealth
         // alone - the P7-2b Bastion / Shroud Nest precedent.
-        "dir_commando" => 19,
-        "sod_shadow_commando" => 20,
-        _ => throw new FormatException($"unknown unit id '{id}'"),
+        "dir_commando",               // 19
+        "sod_shadow_commando",        // 20
     };
+
+    /// <summary>The number for a name. Mirrors StructureCatalogue.TypeIdOf;
+    /// throws on an unknown id rather than defaulting. A scan of a score of
+    /// entries, run once per /data file at load, which is cheaper than a second
+    /// lookup structure that can disagree with the table it was built from.</summary>
+    public static int TypeIdOf(string id)
+    {
+        for (int t = 1; t < Ids.Length; t++) if (Ids[t] == id) return t;
+        throw new FormatException($"unknown unit id '{id}'");
+    }
+
+    /// <summary>The name for a number, the same table read the other way. Throws
+    /// on a type the table does not name, matching TypeIdOf: a blank name would
+    /// reach a player as a blank button, which is the silent failure this whole
+    /// table exists to stop.</summary>
+    /// <summary>The player-facing name for a unit type, derived from its /data
+    /// id: the faction prefix cut, underscores to spaces, upper-cased. So
+    /// com_flak_track reads FLAK TRACK.
+    ///
+    /// ONE derivation, here, because there were two hand-maintained name tables
+    /// in the client and BOTH had fallen behind the catalogue: the sidebar's
+    /// stopped at thirteen units of twenty, so seven were unbuildable, and
+    /// SkirmishLive's stopped at the same thirteen, so every unit above it read
+    /// as "UNIT" in the readout and in toasts. The second table's own comment
+    /// records this happening once before and being fixed by adding entries,
+    /// which treats the symptom: a hand-maintained list of a thing the
+    /// catalogue already knows will fall behind again.
+    ///
+    /// Verified inert when it replaced the sidebar's table: all thirteen
+    /// hand-written labels are EXACTLY what this produces, with zero
+    /// mismatches.</summary>
+    public static string DisplayNameOf(int typeId)
+    {
+        string id = IdOf(typeId);
+        int cut = id.IndexOf('_');
+        return (cut >= 0 ? id[(cut + 1)..] : id).Replace('_', ' ').ToUpperInvariant();
+    }
+
+    public static string IdOf(int typeId)
+        => typeId > 0 && typeId < Ids.Length
+            ? Ids[typeId]
+            : throw new FormatException($"unknown unit type {typeId}");
 
     public static World.UnitTypeDef ToTypeDef(DataLoader.UnitData u)
         => new(u.Cost, u.BuildTimeTicks, u.Hp, u.Armour,

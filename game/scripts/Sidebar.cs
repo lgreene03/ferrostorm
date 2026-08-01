@@ -13,12 +13,17 @@ namespace Ferrostorm.Client;
 /// Factory. Reads sim state through public accessors only; emits commands
 /// through the scene's pending list.
 ///
-/// AIRCRAFT is the fifth name on GDD line 86 and is deliberately ABSENT.
-/// ADR-009 clause 10 keeps the airfield out of this wave entirely, and clause
-/// 6 says the tab waits with it, matching the philosophy this file already
-/// shipped: disallowed items are absent, not greyed, because progression
-/// should read as the tree growing. An AIRCRAFT tab over an empty list would
-/// advertise a building the game cannot build.
+/// AIRCRAFT is the fifth name on GDD line 86 and is still deliberately ABSENT,
+/// though the reason has MOVED and the old one is no longer true. ADR-009
+/// clause 10 kept the airfield out of that wave entirely and clause 6 said the
+/// tab waits with it; ADR-028 has since shipped the airfield, so that argument
+/// has expired. What holds the tab back now is one rung lower down: the sim's
+/// own producer predicate covers the Factory, the Construction Yard and the
+/// Barracks, so a Produce command sent to an airfield is dropped in silence and
+/// the strike flyer cannot be built by anybody at all. A tab over it would be a
+/// tab of buttons that do nothing, and this panel's contract is that what it
+/// offers is what the sim accepts. Widening the sim's predicate is a sim change
+/// with an ADR behind it; the tab lands with that, not before it.
 ///
 /// Struct type 11 is the BARRACKS. Unit type 11 is the ENGINEER. Different
 /// namespaces, no clash, and both appear in this file within a few lines of
@@ -102,31 +107,49 @@ public partial class Sidebar : PanelContainer
     /// which is what SkirmishLive.IsBarrier already asks and what the sim's own
     /// IsBarrier tests.</summary>
     private bool IsBarrierType(int structType) => _structDef(structType).Kind == EntityKind.Wall;
-    private static readonly BuildItem[] Units =
+
+    /// <summary>
+    /// One unit button, DERIVED from a registered type id rather than authored
+    /// beside it. There is no Units table any more: there was one, hand-kept
+    /// here, and it had fallen SEVEN units behind the catalogue - the transport,
+    /// the flak track, the infiltrator, the saboteur and both heroes all existed
+    /// in the sim and no player could build any of them, because a unit only
+    /// reached the panel if whoever added it remembered this file. That is a
+    /// rule keyed on an INSTANCE (a list of ids) where it should key on a
+    /// PROPERTY (what the catalogue registers), which is the defect shape this
+    /// project keeps finding.
+    ///
+    /// The label comes off the /data id: the faction prefix is cut, underscores
+    /// become spaces, and the rest is upper-cased. That reproduces all thirteen
+    /// labels the old table carried, exactly and with no exceptions -
+    /// com_rifle_squad gives RIFLE SQUAD, com_mcv gives MCV, dir_sentinel_scout
+    /// gives SENTINEL SCOUT - which is what makes deriving the list inert for
+    /// everything that already had a button and additive for everything that
+    /// did not. The icon name is the id itself, the convention every icon in
+    /// ui/icons already follows, and MakeButton's Exists guard tolerates a
+    /// sprite that has not been cut yet.
+    /// </summary>
+    private static BuildItem UnitItem(int typeId)
     {
-        new("RIFLE SQUAD", 2, "com_rifle_squad"),
-        new("ROCKET SQUAD", 3, "com_rocket_squad"),
-        new("SENTINEL SCOUT", 6, "dir_sentinel_scout"),
-        new("ENGINEER", 11, "com_engineer"),
-        // TICKET-P6-FACTION-01: the Sodality's two signature units, in the
-        // sim's catalogue since P3 and never buttoned until the faction
-        // picker made a Sodality player 0 reachable. The icon names follow
-        // the id convention and the Exists guard in MakeButton tolerates the
-        // sprites not being cut yet.
-        new("SHADE RAIDER", 5, "sod_shade_raider"),
-        new("VANGUARD CAR", 12, "dir_vanguard_car"),
-        new("CANNON TANK", 1, "dir_cannon_tank"),
-        // ADR-019 (P6 Wave C2): the repair vehicle, common, produced at the
-        // factory so it sits in VEHICLES. The icon sprite is not cut yet; the
-        // MakeButton Exists guard tolerates that, and the bespoke icon is owed
-        // to art-pipeline with the model.
-        new("REPAIR VEHICLE", World.RepairVehicleType, "com_repair_vehicle"),
-        new("HOWITZER", 8, "dir_howitzer"),
-        new("PHANTOM TANK", 9, "sod_phantom_tank"),
-        new("HARVESTER", 4, "com_harvester"),
-        new("BULWARK TANK", 10, "dir_bulwark_tank"),
-        new("MCV", 7, "com_mcv"),
-    };
+        return new BuildItem(UnitCatalogue.DisplayNameOf(typeId), typeId, UnitCatalogue.IdOf(typeId));
+    }
+
+    /// <summary>Does this panel have a tab for the producer this unit names?
+    /// Asked of the CATALOGUE's produced_at, never of a list of ids, so the
+    /// answer follows what /data declares.
+    ///
+    /// One producer says no today, and it is the AIRFIELD, which the strike
+    /// flyer names. Two things would have to change before an aircraft could
+    /// carry a button honestly: this panel needs a tab for it (GDD line 86's
+    /// fifth name, see the class comment), and the SIM needs to accept the
+    /// order at all - World's own producer predicate covers the Factory, the
+    /// Construction Yard and the Barracks and nothing else, so a Produce sent
+    /// to an airfield is dropped without a word. A button here before both of
+    /// those would be a button that does nothing, which is worse than an absent
+    /// one: the panel's whole contract is that what it offers is what the sim
+    /// accepts.</summary>
+    private bool HasTabFor(int producedAt)
+        => producedAt == World.BarracksStructType || producedAt == World.FactoryStructType;
 
     private static readonly Color Cinder = new(0.086f, 0.094f, 0.102f);
     private static readonly Color Seam = new(0.18f, 0.196f, 0.21f);
@@ -264,14 +287,20 @@ public partial class Sidebar : PanelContainer
         foreach (var it in Structures) AddStructButton(it, _tabPages[TabBuildings]);
         foreach (var it in Defences) AddStructButton(it, _tabPages[TabDefence]);
 
-        foreach (var it in Units)
+        // The unit list IS the catalogue, walked in ascending type id so the
+        // panel reads the same at every seat and on every machine (World's
+        // accessor sorts; see UnitItem for why there is no table here any more).
+        foreach (int typeId in _game.LiveWorld.UnitTypeIds())
         {
             // ADR-009 clause 6: membership follows the unit's OWN produced_at,
             // read from the live catalogue. Struct type 11 is the barracks
             // here; unit type 11 (the engineer) is one of the units being
             // sorted BY it, which is exactly the confusion the ADR asked to
             // be named out loud.
-            var page = _unitProducedAt(it.TypeId) == World.BarracksStructType
+            int producedAt = _unitProducedAt(typeId);
+            if (!HasTabFor(producedAt)) continue;
+            var it = UnitItem(typeId);
+            var page = producedAt == World.BarracksStructType
                 ? _tabPages[TabInfantry] : _tabPages[TabVehicles];
             var b = MakeButton(it, () => _game.QueueUnit(it.TypeId), _unitCost(it.TypeId), _unitBuildTicks(it.TypeId),
                 onCancel: () => _game.CancelUnit(it.TypeId));   // C3 (ADR-020): right-click cancels
@@ -693,6 +722,28 @@ public partial class Sidebar : PanelContainer
     /// for the same reason - visibility IS the faction gate, so it is what a
     /// test must read.</summary>
     public bool UnitButtonVisible(int typeId) => _unitButtons.TryGetValue(typeId, out var b) && b.Visible;
+    /// <summary>How many unit buttons the panel actually built. The number the
+    /// hand-kept table used to fix at thirteen while the catalogue grew to
+    /// twenty, so it is the measurement that would have caught the gap.</summary>
+    public int UnitButtonCount => _unitButtons.Count;
+    /// <summary>The FIXED half of a unit button's visibility - the campaign
+    /// allow-list and the faction gate - without the live producer and
+    /// prerequisite clauses Refresh adds. A check needs it separately, because
+    /// the live half hides almost everything at tick 0 and would mask a faction
+    /// gate that had stopped binding.</summary>
+    public bool UnitFixedGateForTest(int typeId) => FixedGatesAllowUnit(typeId);
+    /// <summary>Press a unit's button as the mouse would, through the button's
+    /// OWN Pressed signal, so a check proves the wired handler rather than a
+    /// recomputation of it (the TriggerSlot precedent, and the same one-rule
+    /// law). False if there is no such button, if it is hidden or if it is
+    /// disabled: all three are ways a button can be present and unreachable,
+    /// and "present" was never the claim worth checking.</summary>
+    public bool PressUnitButton(int typeId)
+    {
+        if (!_unitButtons.TryGetValue(typeId, out var b) || !b.Visible || b.Disabled) return false;
+        b.EmitSignal(Godot.BaseButton.SignalName.Pressed);
+        return true;
+    }
     public string PowerText => _powerLabel.Text;
     public float PowerFillWidth => _powerFill.Size.X;
     public float PowerTickX => _powerTick.Position.X;

@@ -533,6 +533,29 @@ public sealed partial class World
         { 20, new UnitTypeDef(1500, 300, 200, ArmourClass.None, 10, Fix64.FromFraction(1, 5), Stealth: true, Veterancy: false, SightCells: 6, Faction: FactionSodality, Prereqs: new[] { 12 }, ProducedAt: 11, MaxAlive: 1) }, // sod_shadow_commando
     };
     public UnitTypeDef GetUnitType(int typeId) => _unitTypes.TryGetValue(typeId, out var d) ? d : default;
+
+    /// <summary>
+    /// Every unit type id this world has registered, ASCENDING. A read, and only
+    /// a read: a fresh list each call, so a caller may keep it and the catalogue
+    /// is never handed a mutable view of itself.
+    ///
+    /// Sorted for the reason CatalogueChecksum sorts the same keys: dictionary
+    /// iteration order must never leak into anything a player or a peer can see,
+    /// and a sidebar whose buttons came out in a different order on two machines
+    /// would make the grid hotkeys mean different things at each seat.
+    ///
+    /// It exists because the client had no way to ASK what the catalogue holds,
+    /// so the build sidebar kept a hand-written list of units beside it that had
+    /// fallen seven behind - a rule keyed on an instance where it should key on
+    /// the property, which is this project's most-repeated defect.
+    /// </summary>
+    public IReadOnlyList<int> UnitTypeIds()
+    {
+        var ids = new List<int>(_unitTypes.Keys);
+        ids.Sort();
+        return ids;
+    }
+
     public void RegisterUnitType(int typeId, UnitTypeDef def)
     {
         if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
