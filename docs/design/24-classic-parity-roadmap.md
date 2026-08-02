@@ -435,6 +435,26 @@ break the rule is telling you about the FIXTURE, not the rule.** The instinct is
 to doubt the break; the right move is to ask what makes broken and unbroken
 indistinguishable.
 
+**The seventh outing called the method's diminishing returns** (P7-14, ADR-056),
+and that is the more useful half of it. The question was whether units end up
+stranded, and the table looked alarming - three units idle over 3000 ticks, the
+longest 16,885, eighteen minutes of a twenty-two minute match. **The column that
+settled it says zero are far from home**: every one is the garrison, sitting where
+the design puts it. No defect, and deliberately **no gate**, because by ADR-054's
+own rule it would catch nothing `arrivalgate` does not and there is no versioned
+format here to future-proof.
+
+The curve is the argument for stopping: the first three outings found four
+defects, the last four found one, and that one came from turning the method on the
+**tooling** rather than the game. The remaining candidates are each half-covered
+by an existing gate, and a probe against a half-covered question is how a suite
+gets expensive without getting stronger.
+
+**Final ledger: five defects and two guarantees from seven questions**, plus two
+habits worth more than the count - *a bite test that passes when you break the
+rule is about the fixture*, and *when a table confuses you, add a column, not a
+theory* (which corrected three separate wrong readings).
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
