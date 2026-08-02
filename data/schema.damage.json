@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ferrostorm damage matrix (GDD s6)",
+  "description": "P7-15. The warhead-versus-armour percentage matrix, the last gameplay number to leave code. Exactly one file lives in data/combat and schemagate checks every key here against it on each build. Each row is four percentages in ARMOUR ORDER (none, light, heavy, structure) applied as base * pct / 100 with integer truncation, which is load-bearing for determinism. The matrix is folded into World.CatalogueChecksum, so two peers holding different files refuse to play rather than desyncing.",
+  "type": "object",
+  "required": ["id", "name", "anti_infantry", "anti_armour", "anti_building", "omni"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^damage_matrix$", "description": "Exactly one matrix exists, so the id is fixed. A second file would be a second source of truth for the same numbers." },
+    "name": { "type": "string", "description": "Player-facing name. British spelling." },
+    "anti_infantry": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": { "type": "integer", "minimum": 0, "maximum": 400 },
+      "description": "Percentages against none, light, heavy, structure."
+    },
+    "anti_armour": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": { "type": "integer", "minimum": 0, "maximum": 400 },
+      "description": "Percentages against none, light, heavy, structure."
+    },
+    "anti_building": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": { "type": "integer", "minimum": 0, "maximum": 400 },
+      "description": "Percentages against none, light, heavy, structure."
+    },
+    "omni": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": { "type": "integer", "minimum": 0, "maximum": 400 },
+      "description": "Percentages against none, light, heavy, structure. Used by superweapons, the seismic charge and mines. Deliberately flat so an area effect does not quietly favour an armour class."
+    }
+  }
+}

@@ -1432,6 +1432,47 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// P7-15: the live damage matrix, seeded from the compiled reference and
+    /// overridable from /data before tick 0. The fifth leg of ADR-006, and the
+    /// last gameplay number to move out of code.
+    ///
+    /// Warhead-major, 4x4, the shape DamageMatrix.ToArray produces.
+    /// </summary>
+    private int[] _damagePct = DamageMatrix.ToArray();
+
+    /// <summary>
+    /// The percentage this world applies for one warhead against one armour
+    /// class. EVERY damage site asks this rather than DamageMatrix.Apply, which
+    /// is what makes the authored file drive the game rather than decorate it -
+    /// the defect this project has now found in five separate authored keys.
+    /// </summary>
+    public int DamageOf(int baseDamage, Warhead w, ArmourClass a)
+        => baseDamage * _damagePct[(int)w * DamageMatrix.ArmourClasses + (int)a] / 100;
+
+    /// <summary>
+    /// Overwrite the matrix before tick 0, mirroring the other registrars and
+    /// frozen after tick 0 for their reason: a mid-match change is a silent
+    /// replay divergence.
+    ///
+    /// Takes the whole matrix rather than a cell, because a partial override
+    /// would let two peers hold matrices that differ in a cell neither wrote.
+    /// </summary>
+    public void RegisterDamageMatrix(int[] warheadMajorPercentages)
+    {
+        if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
+        if (warheadMajorPercentages.Length != DamageMatrix.Warheads * DamageMatrix.ArmourClasses)
+            throw new ArgumentException(
+                $"the damage matrix is {DamageMatrix.Warheads}x{DamageMatrix.ArmourClasses}, so it needs "
+                + $"{DamageMatrix.Warheads * DamageMatrix.ArmourClasses} percentages and was given "
+                + $"{warheadMajorPercentages.Length}");
+        _damagePct = (int[])warheadMajorPercentages.Clone();
+    }
+
+    /// <summary>The live matrix, flat and warhead-major. For the /data
+    /// round-trip and the checksum fold.</summary>
+    public int[] DamageMatrixSnapshot() => (int[])_damagePct.Clone();
+
+    /// <summary>
     /// The live AI TUNING catalogue, the fourth leg of ADR-006. The skirmish
     /// commander's numbers used to be compiled literals in SkirmishAI.cs, which
     /// made two LAN peers agree on them by construction; moving them into
@@ -1592,6 +1633,19 @@ public sealed partial class World
                 h.Add(id); h.Add(d.Range); h.Add(d.Damage); h.Add((int)d.Warhead);
                 h.Add(d.CooldownTicks); h.Add(d.MinRange); h.Add(d.SplashRadius); h.Add(d.AntiAir);
             }
+            // P7-15: the damage matrix, folded APPENDED for the reason the
+            // weapons block above records - the earlier sections keep
+            // contributing exactly what they always did, so this change to the
+            // value is one thing rather than several.
+            //
+            // It has the strongest safety case of any section here. Every other
+            // number decides what a player may build; these sixteen decide what
+            // every shot in the game DOES, so two peers holding different
+            // matrices would fight the same battle to different outcomes while
+            // agreeing on every unit, building and gun. That is a desync no
+            // other comparison in the protocol can see, and folding it turns it
+            // into a refusal before tick 0.
+            foreach (int pct in _damagePct) h.Add(pct);
             // The AI tuning joined the catalogue when its numbers moved into
             // data/ai, and it is the section with the sharpest safety argument.
             // Every other section describes something both peers can SEE going
@@ -4136,7 +4190,7 @@ public sealed partial class World
                     // credit is awarded, matching the superweapon - and matching
                     // this unit's own veterancy_enabled false, so there is
                     // nothing to award it to.
-                    t.Hp -= DamageMatrix.Apply(DemolitionDamage, Warhead.AntiBuilding, t.Armour);
+                    t.Hp -= DamageOf(DemolitionDamage, Warhead.AntiBuilding, t.Armour);
                     if (t.Hp <= 0)
                     {
                         _events.Add(new GameEvent(GameEventType.Died, touched, -1));
@@ -4397,7 +4451,7 @@ public sealed partial class World
             if (target >= 0)
             {
                 // Veterancy scales outgoing damage: 4/4, 5/4, 6/4 by rank.
-                int dmg = DamageMatrix.Apply(w.Damage, w.Warhead, _entities[target].Armour) * (4 + e.Rank) / 4;
+                int dmg = DamageOf(w.Damage, w.Warhead, _entities[target].Armour) * (4 + e.Rank) / 4;
                 pendingDamage[target] += dmg;
                 if (firstAttacker[target] < 0) firstAttacker[target] = i;
                 _events.Add(new GameEvent(GameEventType.Fired, i, target));
@@ -4414,7 +4468,7 @@ public sealed partial class World
                         var vic = _entities[v];
                         if (!vic.Alive || vic.Kind == EntityKind.FerriteField) continue;
                         if (Fix64.DistSq(vic.X - tp.X, vic.Y - tp.Y) > rr) continue;
-                        pendingDamage[v] += DamageMatrix.Apply(w.Damage, w.Warhead, vic.Armour) * (4 + e.Rank) / 8;
+                        pendingDamage[v] += DamageOf(w.Damage, w.Warhead, vic.Armour) * (4 + e.Rank) / 8;
                         if (firstAttacker[v] < 0) firstAttacker[v] = i;
                     }
                 }
@@ -5343,7 +5397,7 @@ public sealed partial class World
                 _entities[i] = t;
                 continue;
             }
-            int dmg = DamageMatrix.Apply(SeismicDamage, Warhead.Omni, t.Armour);
+            int dmg = DamageOf(SeismicDamage, Warhead.Omni, t.Armour);
             if (d > innerSq) dmg /= 2;
             t.Hp -= dmg;
             if (t.Hp <= 0)
@@ -5370,7 +5424,7 @@ public sealed partial class World
             if (!t.Alive || t.Kind == EntityKind.FerriteField) continue;
             Fix64 d = Fix64.DistSq(t.X - x, t.Y - y);
             if (d > outerSq) continue;
-            int dmg = DamageMatrix.Apply(baseDamage, Warhead.Omni, t.Armour);
+            int dmg = DamageOf(baseDamage, Warhead.Omni, t.Armour);
             if (d > innerSq) dmg /= 2;
             t.Hp -= dmg;
             if (t.Hp <= 0)

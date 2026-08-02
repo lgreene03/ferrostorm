@@ -1,0 +1,49 @@
+# P7-15 (ADR-057): GDD s6's warhead-versus-armour percentage matrix, the last
+# gameplay number to move out of code.
+#
+# Combat.cs carried this table with its own comment saying "Phase 1: compiled-in
+# table; wiring to /data YAML is a Phase 2 ticket". It was the ONE gameplay
+# number outside /data, in a project whose CLAUDE.md says every gameplay number
+# lives here and that "hand-editing stats in code is forbidden".
+#
+# GDD s6: "Warhead types (anti-infantry, anti-armour, anti-building, omni) x
+# armour classes (none, light, heavy, structure) with a percentage matrix.
+# Classic, legible, moddable." The last word is what this file is for.
+#
+# EVERY ROW IS FOUR PERCENTAGES IN ARMOUR ORDER: none, light, heavy, structure.
+# They are percentages of the weapon's base damage, applied with integer maths
+# (base * pct / 100), so a value of 100 means "full damage" and the truncation
+# is deliberate and load-bearing for determinism.
+#
+# These values are the compiled reference transcribed exactly, which is what
+# keeps all 24 golden hashes still. The selftest proves the two agree cell by
+# cell and names the cell if they ever stop agreeing.
+#
+# CHANGING A NUMBER HERE CHANGES EVERY FIGHT IN THE GAME. It rides
+# World.CatalogueChecksum, so two LAN peers holding different matrices refuse to
+# play rather than desyncing - but within one machine it is the single most
+# powerful balance lever in /data, and doc 12's balance tool is the thing that
+# measures what a change did. Any move above 15 per cent wants Balance and Game
+# Designer co-sign (charter A11).
+id: damage_matrix
+name: Warhead versus armour
+
+# Anti-infantry: murderous against troops in the open, nearly useless against
+# armour or masonry. The 25 against heavy is what makes a rifle screen a screen
+# rather than an answer to tanks.
+anti_infantry: [100, 60, 25, 25]
+
+# Anti-armour: the tank and rocket line. Full damage against heavy, and the 40
+# against unarmoured infantry is GDD s6's "soft counter" - a rocket squad still
+# hurts men, it just wastes most of its warhead doing it.
+anti_armour: [40, 75, 100, 50]
+
+# Anti-building: siege. Full against structures and poor against everything
+# mobile, which is what makes artillery a role rather than a bigger gun.
+anti_building: [30, 40, 50, 100]
+
+# Omni: the flat row, and deliberately the ONLY one with no shape. It is what
+# superweapons, the seismic charge and mines use, so an area effect does not
+# quietly favour or spare an armour class. No weapon carries it - see
+# docs/design/29 for the note that the omni row is unreachable from a gun.
+omni: [80, 80, 80, 80]
