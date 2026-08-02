@@ -5305,14 +5305,37 @@ int SchemaGate()
     }
 
     int files = 0, keysChecked = 0;
-    foreach (var (dir, schema) in new[]
-             {
-                 ("data/units", "data/schema.unit.json"),
-                 ("data/buildings", "data/schema.structure.json"),
-                 ("data/fields", "data/schema.field.json"),
-                 ("data/weapons", "data/schema.weapon.json"),
-                 ("data/ai", "data/schema.ai.json"),
-             })
+    var schemaRows = new[]
+    {
+        ("data/units", "data/schema.unit.json"),
+        ("data/buildings", "data/schema.structure.json"),
+        ("data/fields", "data/schema.field.json"),
+        ("data/weapons", "data/schema.weapon.json"),
+        ("data/ai", "data/schema.ai.json"),
+        ("data/combat", "data/schema.damage.json"),   // P7-15
+    };
+
+    // P7-15: THE TWO LISTS MUST AGREE, asserted rather than hoped.
+    //
+    // This table is a second hand-written copy of CatalogueFiles.DataDirs, and
+    // when data/combat landed the copy did not have it - so the new kind was
+    // registered, loaded and played while being validated against no schema at
+    // all, silently. That is the exact defect schemagate was built to answer,
+    // one level up: a hand-kept list falling behind the catalogue it mirrors.
+    //
+    // Asked of the loader's own table, so a kind cannot be added there without
+    // this failing until a schema exists for it.
+    foreach (string kind in CatalogueFiles.RegisteredKinds())
+    {
+        bool covered = false;
+        foreach (var (dir, _) in schemaRows) if (dir == "data/" + kind) covered = true;
+        if (!covered)
+            return Fail($"schema: /data/{kind} registers a catalogue kind and this gate has no schema row for it, "
+                        + "so its authored files are validated against nothing. Add a schema and a row here, or "
+                        + "take the kind out of CatalogueFiles.DataDirs");
+    }
+
+    foreach (var (dir, schema) in schemaRows)
     {
         string schemaPath = Root(schema);
         if (!File.Exists(schemaPath)) return Fail($"schema: {schema} is missing");
@@ -5357,12 +5380,138 @@ int SchemaGate()
     // in the other's file. additionalProperties:false is still enforced here for
     // all five, which is what catches the typo.
 
-    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the five "
-                      + "schemas, and every key is one the schema allows. This is the enforcement CLAUDE.md's "
-                      + "\"validated against /data/schema.unit.json\" always claimed and nothing performed: the "
-                      + "schemas say additionalProperties:false and nothing read them, so schema.unit.json had "
-                      + "already fallen four waves behind the loader on the 'air' key. data/ai is the newest of "
-                      + "the five and was empty until the skirmish commander's tuning moved out of SkirmishAI.cs");
+    // The COUNT is derived, not written. It said "the five schemas" and named
+    // data/ai as "the newest of the five" while there were six, which is the
+    // hand-kept-claim defect this gate exists to police, in the gate's own
+    // report. A number a reader can check should never be a literal beside the
+    // thing that produces it.
+    Console.WriteLine($"schemagate: {files} authored definitions and {keysChecked} keys checked against the "
+                      + $"{schemaRows.Length} schemas, and every key is one the schema allows. This is the "
+                      + "enforcement CLAUDE.md's \"validated against /data/schema.unit.json\" always claimed and "
+                      + "nothing performed: the schemas say additionalProperties:false and nothing read them, so "
+                      + "schema.unit.json had already fallen four waves behind the loader on the 'air' key. Every "
+                      + "kind CatalogueFiles registers is now PROVED to have a schema row here, which is what stops "
+                      + "this list falling behind that one - it already had, when data/combat landed");
+    return 0;
+}
+
+int DamageDataGate()
+{
+    // P7-15 (ADR-057). GDD s6's matrix was the ONE gameplay number outside
+    // /data, and Combat.cs's own comment had promised the wiring since Phase 1.
+    //
+    // The gate that matters is not "the file parses". It is that the file WINS
+    // over the compiled default, because authored data that does not drive the
+    // runtime is this project's most-repeated defect - found in the faction
+    // key, the tab, the cap, the detector flag and the field-destroying flag,
+    // five separate times.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+
+    // --- 1. The authored file reproduces the compiled reference EXACTLY, cell
+    //        by cell, and names the cell if it ever stops. This is what keeps a
+    //        bare World and a loaded one playing the same game.
+    {
+        var authored = CatalogueFiles.LoadDamageMatrixFile(
+            Path.Combine(root, "data/combat/damage_matrix.yaml"));
+        for (int wi = 0; wi < DamageMatrix.Warheads; wi++)
+            for (int ai = 0; ai < DamageMatrix.ArmourClasses; ai++)
+            {
+                int want = DamageMatrix.PercentOf((Warhead)wi, (ArmourClass)ai);
+                int got = authored[wi * DamageMatrix.ArmourClasses + ai];
+                if (got != want)
+                    return Fail($"damage data: data/combat says {(Warhead)wi} vs {(ArmourClass)ai} is {got} per "
+                                + $"cent and the compiled reference says {want}. A bare World and a loaded one "
+                                + "would fight the same battle differently");
+            }
+    }
+
+    // --- 2. THE FILE WINS. A world given a poisoned matrix must deal the
+    //        poisoned damage, or the authored numbers are decoration.
+    {
+        var w = new World(4500, 64, 64, players: 2);
+        var poisoned = DamageMatrix.ToArray();
+        poisoned[(int)Warhead.AntiInfantry * DamageMatrix.ArmourClasses + (int)ArmourClass.None] = 10;
+        w.RegisterDamageMatrix(poisoned);
+        if (w.DamageOf(100, Warhead.AntiInfantry, ArmourClass.None) != 10)
+            return Fail($"damage data: a REGISTERED matrix must decide damage and this world dealt "
+                        + $"{w.DamageOf(100, Warhead.AntiInfantry, ArmourClass.None)} where the registered table "
+                        + "says 10 - the sim is playing the compiled numbers and /data is decoration");
+        // ...and the compiled reference is untouched by that, so the poison is
+        // per-world rather than a static nobody can undo.
+        if (DamageMatrix.Apply(100, Warhead.AntiInfantry, ArmourClass.None) != 100)
+            return Fail("damage data: registering a matrix must not mutate the compiled reference");
+    }
+
+    // --- 3. And it wins in a REAL FIGHT, not just in the accessor. A rifle
+    //        squad's damage against unarmoured infantry is the matrix's 100 per
+    //        cent cell; poison that cell and the victim must survive longer.
+    int HpAfter(ulong seed, int[]? matrix)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        if (matrix != null) w.RegisterDamageMatrix(matrix);
+        var d = w.GetUnitType(2);
+        w.SpawnUnit(0, Fix64.FromInt(20), Fix64.FromInt(20), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                    veterancy: false, unitType: 2);
+        int victim = w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(20), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                                 veterancy: false, unitType: 2);
+        for (int t = 0; t < 60; t++) w.Step(default);
+        return w.Entities[victim].Alive ? w.Entities[victim].Hp : 0;
+    }
+    {
+        var soft = DamageMatrix.ToArray();
+        soft[(int)Warhead.AntiInfantry * DamageMatrix.ArmourClasses + (int)ArmourClass.None] = 10;
+        int stock = HpAfter(4501, null), softened = HpAfter(4502, soft);
+        if (stock == softened)
+            return Fail($"damage data: softening the anti-infantry-versus-none cell changed nothing in a real "
+                        + $"firefight (both left {stock} hit points), so CombatSystem is not reading the live "
+                        + "matrix");
+        if (softened <= stock)
+            return Fail($"damage data: a SOFTER matrix must leave the victim healthier ({softened} against "
+                        + $"{stock})");
+        Console.WriteLine($"  damagedata: same firefight, stock matrix leaves {stock} hit points and a 10-per-cent "
+                          + $"anti-infantry cell leaves {softened}");
+    }
+
+    // --- 4. Frozen after tick 0, like every other registrar. A mid-match
+    //        change is a silent replay divergence.
+    {
+        var w = new World(4503, 32, 32, players: 2);
+        w.Step(default);
+        bool refused = false;
+        try { w.RegisterDamageMatrix(DamageMatrix.ToArray()); }
+        catch (InvalidOperationException) { refused = true; }
+        if (!refused) return Fail("damage data: the matrix must be frozen after tick 0");
+    }
+
+    // --- 5. And it rides the CHECKSUM, which is the whole safety argument.
+    //        Every other catalogue section decides what a player may BUILD;
+    //        these sixteen decide what every shot DOES, so two peers holding
+    //        different matrices fight the same battle to different outcomes
+    //        while agreeing on every unit, building and gun.
+    {
+        var a = new World(4504, 32, 32, players: 2);
+        var b = new World(4504, 32, 32, players: 2);
+        ulong before = a.CatalogueChecksum;
+        if (b.CatalogueChecksum != before)
+            return Fail("damage data: two identical worlds must agree on the checksum");
+        var tweaked = DamageMatrix.ToArray();
+        tweaked[0] += 1;                      // ONE percentage point
+        b.RegisterDamageMatrix(tweaked);
+        if (b.CatalogueChecksum == before)
+            return Fail("damage data: one percentage point of difference must move the catalogue checksum, or two "
+                        + "LAN peers can fight the same battle to different outcomes and nothing in the protocol "
+                        + "notices");
+    }
+
+    Console.WriteLine("damagedatagate: GDD s6's matrix now lives in /data, which Combat.cs had promised since Phase "
+                      + "1 and which made it the last gameplay number in the game outside /data. The authored file "
+                      + "reproduces the compiled reference cell by cell, so a bare World still plays the same game; "
+                      + "a REGISTERED matrix wins over the compiled default both in the accessor and in a real "
+                      + "firefight, which is what stops these numbers being decoration the way five earlier "
+                      + "authored keys were; it is frozen after tick 0 like every other registrar; and ONE "
+                      + "percentage point moves the catalogue checksum, because these sixteen numbers decide what "
+                      + "every shot in the game does and two peers disagreeing about them is a desync no other "
+                      + "comparison in the protocol can see");
     return 0;
 }
 
@@ -11084,6 +11233,9 @@ int Match(ulong seed)
     // And the weapon numbers in /data are the ones the sim actually fires.
     int weaponData = WeaponDataGate();
     if (weaponData != 0) return weaponData;
+    // P7-15: and the damage matrix, the last gameplay number to leave code.
+    int damageData = DamageDataGate();
+    if (damageData != 0) return damageData;
     // The commander's own numbers are /data too, and they are the ones that ride
     // the checksum to keep two LAN peers on one AI.
     int aiTuning = AiTuningGate();
@@ -12784,6 +12936,7 @@ return args.Length == 0
         "harvesterdatagate" => HarvesterDataGate(),
         "aitargetgate" => AiTargetGate(),
         "weapondatagate" => WeaponDataGate(),
+        "damagedatagate" => DamageDataGate(),
         "aituninggate" => AiTuningGate(),
         "catalogueloadgate" => CatalogueLoadGate(),
         "sizeprobe" => SizeProbe(),

@@ -4,12 +4,28 @@ public enum ArmourClass : byte { None = 0, Light = 1, Heavy = 2, Structure = 3 }
 public enum Warhead : byte { AntiInfantry = 0, AntiArmour = 1, AntiBuilding = 2, Omni = 3 }
 
 /// <summary>
-/// Warhead vs armour percentage matrix (GDD s6). Phase 1: compiled-in table;
-/// wiring to /data YAML is a Phase 2 ticket (needs the data loader).
+/// Warhead vs armour percentage matrix (GDD s6), the COMPILED REFERENCE that
+/// data/combat/damage_matrix.yaml must reproduce exactly.
+///
+/// P7-15 finished what this class's own comment had promised since Phase 1:
+/// "wiring to /data YAML is a Phase 2 ticket". Until then this was the ONE
+/// gameplay number left outside /data, in a project whose CLAUDE.md says every
+/// gameplay number lives there and that "hand-editing stats in code is
+/// forbidden".
+///
+/// It stays a compiled table for the reason every other catalogue keeps one: a
+/// bare World with no /data must behave identically, which roughly 138 runner
+/// scenarios depend on, and the round-trip proves the authored file equals it.
+/// The LIVE table a match plays is World.DamageOf, which honours
+/// RegisterDamageMatrix.
+///
 /// Values are percentages applied to base damage, integer maths only.
 /// </summary>
 public static class DamageMatrix
 {
+    public const int Warheads = 4;
+    public const int ArmourClasses = 4;
+
     //                              None Light Heavy Structure
     private static readonly int[,] Pct =
     {
@@ -21,6 +37,22 @@ public static class DamageMatrix
 
     public static int Apply(int baseDamage, Warhead w, ArmourClass a)
         => baseDamage * Pct[(int)w, (int)a] / 100;
+
+    /// <summary>One compiled cell, so a loader comparing an authored file to
+    /// this reference can name the cell that differs rather than reporting that
+    /// "the matrix drifted".</summary>
+    public static int PercentOf(Warhead w, ArmourClass a) => Pct[(int)w, (int)a];
+
+    /// <summary>A flat copy in warhead-major order, the shape a registered
+    /// override and the checksum fold both use.</summary>
+    public static int[] ToArray()
+    {
+        var flat = new int[Warheads * ArmourClasses];
+        for (int wi = 0; wi < Warheads; wi++)
+            for (int ai = 0; ai < ArmourClasses; ai++)
+                flat[wi * ArmourClasses + ai] = Pct[wi, ai];
+        return flat;
+    }
 }
 
 public readonly struct WeaponDef

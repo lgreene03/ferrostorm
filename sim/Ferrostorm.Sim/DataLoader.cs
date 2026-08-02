@@ -835,6 +835,22 @@ public static class CatalogueFiles
     /// this, but the order still decides which failure a broken /data reports
     /// first, so it is stated here rather than left to chance.
     /// </summary>
+    /// <summary>
+    /// P7-15: the /data kinds that actually REGISTER something, in table order.
+    ///
+    /// Exposed so `schemagate` can assert it has a schema row for every one of
+    /// them instead of keeping a second hand-written list beside this one. That
+    /// second list already existed and already had this row missing when
+    /// data/combat landed - which is the same defect schemagate itself was
+    /// built to answer, one level up: a hand-kept copy of a catalogue that
+    /// falls behind it silently.
+    /// </summary>
+    public static IEnumerable<string> RegisteredKinds()
+    {
+        foreach (var (dir, register) in DataDirs)
+            if (register != null) yield return dir;
+    }
+
     private static readonly (string Dir, Action<World, string>? Register)[] DataDirs =
     {
         ("units",     RegisterUnits),
@@ -846,6 +862,9 @@ public static class CatalogueFiles
         // tuning" and held nothing, which is exactly the state this table exists
         // to make impossible for longer than one wave.
         ("ai",        RegisterAiTuning),
+        // P7-15: GDD s6's damage matrix, the last gameplay number to leave code.
+        // One file, not a walk - see RegisterDamageMatrix for why.
+        ("combat",    RegisterDamageMatrix),
         // Known, and deliberately NOT a catalogue kind. Listed rather than
         // silently skipped, so the guard can tell a directory that holds no
         // defs from one nobody has ever heard of.
@@ -1049,6 +1068,68 @@ public static class CatalogueFiles
     /// but a MATCH registers these files over the top and CombatSystem reads
     /// the world's table, so editing a range here changes the game.
     /// </summary>
+    /// <summary>
+    /// P7-15: the damage matrix, the fifth and last catalogue kind.
+    ///
+    /// Unlike every other kind this directory holds EXACTLY ONE file, and the
+    /// loader says so rather than walking whatever it finds: a second matrix
+    /// would be a second source of truth for the same sixteen numbers, and the
+    /// one that lost would do so by filename order.
+    /// </summary>
+    public static void RegisterDamageMatrix(World w, string combatDir)
+    {
+        if (!Directory.Exists(combatDir))
+            throw new IOException(
+                $"/data is missing: expected {combatDir}. " +
+                "GDD s6's damage matrix lives in /data (ADR-006) and a battle cannot start without it. " +
+                "Restore the data directory beside the game and try again.");
+
+        var files = Directory.GetFiles(combatDir, "*.yaml");
+        Array.Sort(files, StringComparer.Ordinal);
+        if (files.Length != 1)
+            throw new FormatException(
+                $"{combatDir}: expected exactly one damage matrix and found {files.Length}. "
+                + "Sixteen numbers decide every fight in the game, so a second file would be a second source "
+                + "of truth and the loser would be decided by filename order.");
+        try
+        {
+            w.RegisterDamageMatrix(LoadDamageMatrixFile(files[0]));
+        }
+        catch (FormatException e)
+        {
+            throw new FormatException($"{files[0]}: {e.Message}", e);
+        }
+    }
+
+    /// <summary>Parse one damage-matrix file into the flat warhead-major array
+    /// World.RegisterDamageMatrix takes. Rows are named rather than positional,
+    /// so a file cannot silently transpose itself.</summary>
+    public static int[] LoadDamageMatrixFile(string path)
+    {
+        var m = DataLoader.ParseFlatYaml(File.ReadAllText(path));
+        if (!m.TryGetValue("id", out var id) || id != "damage_matrix")
+            throw new FormatException("the damage matrix must declare 'id: damage_matrix'");
+        var flat = new int[DamageMatrix.Warheads * DamageMatrix.ArmourClasses];
+        string[] rows = { "anti_infantry", "anti_armour", "anti_building", "omni" };
+        for (int wi = 0; wi < rows.Length; wi++)
+        {
+            if (!m.TryGetValue(rows[wi], out var raw))
+                throw new FormatException($"missing row '{rows[wi]}'");
+            var cells = DataLoader.ParseInlineList(raw);
+            if (cells.Count != DamageMatrix.ArmourClasses)
+                throw new FormatException(
+                    $"row '{rows[wi]}' needs {DamageMatrix.ArmourClasses} percentages in armour order "
+                    + $"(none, light, heavy, structure) and has {cells.Count}");
+            for (int ai = 0; ai < cells.Count; ai++)
+            {
+                if (!int.TryParse(cells[ai], out int pct) || pct < 0)
+                    throw new FormatException($"row '{rows[wi]}' cell {ai} is not a non-negative integer: '{cells[ai]}'");
+                flat[wi * DamageMatrix.ArmourClasses + ai] = pct;
+            }
+        }
+        return flat;
+    }
+
     public static void RegisterWeapons(World w, string weaponsDir)
     {
         if (!Directory.Exists(weaponsDir))
