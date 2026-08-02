@@ -8537,6 +8537,79 @@ int FactionPowerGate()
     return 0;
 }
 
+int IdleProbe()
+{
+    // MEASUREMENT: how many units sit doing NOTHING for a long stretch?
+    // Movement gates prove a unit REACHES a point. Nothing proves it never
+    // stops trying - a unit that finishes an order and idles forever is a unit
+    // its owner paid for and cannot use, and it is invisible to every gate.
+    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    var map = MapData.Load(Path.Combine(root, "data/maps/skirmish-07.fmap"));
+    var w = map.BuildWorld(2026, players: 2, out _);
+    CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+    map.PlaceSkirmishStart(w, 8000);
+    var a0 = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+    var a1 = SkirmishAI.Standard(1, AiDifficulty.Normal, w);
+    var cmds = new List<Command>();
+
+    // Per entity: how many consecutive ticks it has not moved and has no target.
+    var still = new Dictionary<int, int>();
+    var worstStill = new Dictionary<int, int>();
+    Console.WriteLine("idleprobe: movement gates prove a unit REACHES a point; nothing proves it never stops trying. "
+                      + "Measuring units that sit still with no order for a long stretch.");
+    // Where each side's base is, so an idle unit can be told apart from a
+    // stranded one. A GARRISON unit idling at home is the design; a field unit
+    // idling in open ground is a unit that stopped and never resumed.
+    var home = new Dictionary<int, (int X, int Y)>();
+    for (int i = 0; i < w.EntityCount; i++)
+    {
+        var e = w.Entities[i];
+        if (e.Alive && e.Kind == EntityKind.ConstructionYard && e.PlayerId >= 0)
+            home[e.PlayerId] = (Map.CellOf(e.X), Map.CellOf(e.Y));
+    }
+    Console.WriteLine("   tick   units   idle>900t   idle>3000t   longest   of those, FAR from home (>20 cells)");
+    for (int t = 1; t <= 20000; t++)
+    {
+        cmds.Clear();
+        a0.Act(w, cmds); a1.Act(w, cmds);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Unit) { still.Remove(i); continue; }
+            bool busy = e.Moving || e.ExplicitTarget >= 0;
+            if (busy) { still[i] = 0; continue; }
+            still[i] = still.TryGetValue(i, out var n) ? n + 1 : 1;
+            if (!worstStill.TryGetValue(i, out var wst) || still[i] > wst) worstStill[i] = still[i];
+        }
+        if (t % 5000 != 0) continue;
+        int units = 0, idle900 = 0, idle3000 = 0, longest = 0, farIdle = 0;
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Unit) continue;
+            units++;
+            int cur = still.TryGetValue(i, out var n) ? n : 0;
+            if (cur > 900) idle900++;
+            if (cur > 3000)
+            {
+                idle3000++;
+                if (home.TryGetValue(e.PlayerId, out var h))
+                {
+                    int dx = Map.CellOf(e.X) - h.X, dy = Map.CellOf(e.Y) - h.Y;
+                    if ((int)System.Math.Sqrt(dx * dx + dy * dy) > 20) farIdle++;
+                }
+            }
+            if (cur > longest) longest = cur;
+        }
+        Console.WriteLine($"  {t,5}   {units,5}   {idle900,9}   {idle3000,10}   {longest,7}   {farIdle,36}");
+    }
+    Console.WriteLine("idleprobe: a unit still for thousands of ticks with no order is one its owner paid for and "
+                      + "cannot use. GARRISON units are meant to sit, so a nonzero count is not automatically a "
+                      + "defect - the question is whether it is the garrison or the field army.");
+    return 0;
+}
+
 int ArrivalGate()
 {
     // P7-11. aitargetgate proves where a wave is AIMED. Nothing had ever asked
@@ -12695,6 +12768,7 @@ return args.Length == 0
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),
         "arrivalgate" => ArrivalGate(),
+        "idleprobe" => IdleProbe(),
         "savescalegate" => SaveScaleGate(),
         "infiltratorgate" => InfiltratorGate(),
         "reachabilitygate" => ReachabilityGate(),
