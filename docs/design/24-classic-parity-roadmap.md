@@ -411,6 +411,30 @@ all: **do not let a gate ship on the assumption that it is valuable - measure wh
 it catches that an existing gate does not, and if the answer is "nothing today",
 say so and justify it on the future rather than pretending.**
 
+**The sixth outing turned the method on the TOOLING and found the largest thing
+since base shape** (P7-13, ADR-055). The client harness exists because the sim
+battery cannot see the panel, and it drives the real scene from seat 1 so that a
+rule written as "me versus the other one" fails there. Asked what it had NOT been
+asked about: `Sidebar.StructButtonVisible` has existed since P5 and **the harness
+had never called it once**, while the unit-side twin's own comment cites it as
+the precedent for the check that WAS written. Six faction-locked buildings had
+shipped unchecked.
+
+**And the second finding is worse than the first.** The new building check was
+bite-tested by breaking the rule the way it would really break - reading seat 0
+instead of the local seat - and **every check still passed**. `VerifyRunner` had
+never set the factions, so both seats defaulted to Directorate, and a gate reading
+the wrong seat returns the same answer as one reading the right seat. That makes
+the pre-existing **unit** check vacuous too, and it has been since
+TICKET-P6-FACTION-01. This harness's own defect shape, turned on itself: right at
+seat 0 by luck, in the thing whose job is to catch right-at-seat-0-by-luck.
+
+With the seats given different factions, the same break now reports eight
+buildings disagreeing. The rule worth carrying: **a bite test that passes when you
+break the rule is telling you about the FIXTURE, not the rule.** The instinct is
+to doubt the break; the right move is to ask what makes broken and unbroken
+indistinguishable.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
