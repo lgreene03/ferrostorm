@@ -772,6 +772,21 @@ public partial class Sidebar : PanelContainer
     /// the live half hides almost everything at tick 0 and would mask a faction
     /// gate that had stopped binding.</summary>
     public bool UnitFixedGateForTest(int typeId) => FixedGatesAllowUnit(typeId);
+    /// <summary>
+    /// P7-13: the STRUCTURE twin of UnitFixedGateForTest, and it should have
+    /// existed first.
+    ///
+    /// StructButtonVisible has been here since P5 and the harness has never
+    /// called it once; UnitButtonVisible's own comment cites it as the precedent
+    /// for a check that was then written for units only. So the building side of
+    /// the faction gate - six faction-locked buildings by now - has never been
+    /// asserted from the seat where getting it wrong matters.
+    ///
+    /// Separate from StructButtonVisible for the reason its unit twin records:
+    /// the LIVE prerequisite half hides almost everything at tick 0 and would
+    /// mask a faction gate that had stopped binding.
+    /// </summary>
+    public bool StructFixedGateForTest(int typeId) => FixedGatesAllow(typeId);
     /// <summary>Press a unit's button as the mouse would, through the button's
     /// OWN Pressed signal, so a check proves the wired handler rather than a
     /// recomputation of it (the TriggerSlot precedent, and the same one-rule

@@ -61,6 +61,25 @@ public partial class VerifyRunner : Node
         // CurrentSetup() relativises what it is given.
         MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-02.fmap");
         MatchConfig.AiPreset = 0;
+        // P7-13: THE TWO SEATS MUST HOLD DIFFERENT FACTIONS, and this was never
+        // set, so both defaulted to 0.
+        //
+        // Every faction-gate check in this harness was therefore VACUOUS - the
+        // unit one that has shipped since TICKET-P6-FACTION-01 as much as the
+        // building one added beside it. With both seats Directorate, a gate that
+        // reads FactionOf(0) and a gate that reads FactionOf(LocalPlayerId)
+        // return the same answer, so a rule keyed on the WRONG SEAT reads
+        // correct. Proved by breaking the rule that way and watching every check
+        // still pass.
+        //
+        // That is this harness's own defect shape turned on itself: right at
+        // seat 0 by luck, in the thing whose job is to catch exactly that.
+        // MEASURED which way round these land rather than assumed: this gives
+        // seat 0 the Sodality and seat 1 (the joiner, the seat this harness
+        // drives) the Directorate. Which seat gets which does not matter; that
+        // they DIFFER is the whole point.
+        MatchConfig.Faction = 1;
+        MatchConfig.OppositionFaction = 0;
 
         var scene = GD.Load<PackedScene>("res://scenes/Skirmish.tscn");
         _game = scene.Instantiate<SkirmishLive>();
@@ -839,6 +858,74 @@ public partial class VerifyRunner : Node
         }
         Check(gateWrong == 0,
               $"every unit button's faction gate agrees with the sim's own Produce refusal ({gateWrong} disagree)");
+
+        // 3b. THE SAME CHECK FOR BUILDINGS, which had never been written.
+        //
+        //     Sidebar.StructButtonVisible has existed since P5 and this harness
+        //     had never called it once; UnitButtonVisible's own comment cites it
+        //     as the precedent for the unit check above. So the hook was built
+        //     for the building side, the unit side got written citing it, and
+        //     the building side never was - while six faction-locked buildings
+        //     shipped (Bastion, Shroud Nest, Veil Projector, the Sodality
+        //     generator, the Watch Post and the seismic charge) and two common
+        //     ones became Directorate-only.
+        //
+        //     This is the class this harness exists for: the rule reads
+        //     LocalPlayerId and is therefore RIGHT AT SEAT 0 whether or not it
+        //     is right at all, and the sim battery cannot see the panel.
+        int structGateWrong = 0, structChecked = 0;
+        foreach (int t in _game.LiveWorld.StructureTypeIds())
+        {
+            if (_game.LiveWorld.GetStructureType(t).Tab == BuildTab.None) continue;
+            structChecked++;
+            int f = _game.LiveWorld.GetStructureType(t).Faction;
+            bool shouldShow = f == World.FactionCommon || f == myFaction;
+            if (sb.StructFixedGateForTest(t) != shouldShow) structGateWrong++;
+        }
+        // THE FIXTURE MUST DISCRIMINATE, and this check is here because without
+        // it the two above pass vacuously.
+        //
+        // Found the hard way: breaking FixedGatesAllow to read FactionOf(0)
+        // instead of FactionOf(LocalPlayerId) - the exact "right at seat 0 by
+        // luck" defect this harness exists to catch - and the new checks still
+        // passed. They passed because in this fixture the two seats can hold the
+        // SAME faction, so seat 0's answer and the local seat's answer are
+        // identical and the hardcode is invisible.
+        //
+        // So the seats must differ, or a faction gate keyed on the wrong seat
+        // reads correct. This is the same trap one level up: a CHECK that is
+        // right at seat 0 by luck.
+        Check(_game.FactionOf(0) != _game.FactionOf(1),
+              $"the two seats hold DIFFERENT factions ({_game.FactionOf(0)} and {_game.FactionOf(1)}), without "
+              + "which every faction-gate check above passes whatever seat the rule reads");
+        Check(structChecked > 0, $"the panel offers buildings to gate ({structChecked} with a tab)");
+        Check(structGateWrong == 0,
+              $"every BUILDING button's faction gate agrees with the sim's own BuildStructure refusal across "
+              + $"{structChecked} buildings ({structGateWrong} disagree)");
+
+        // 3c. And the control, the shape the unit check above uses: a building
+        //     of the OTHER side must be absent here AND refused by the sim if
+        //     the order is sent past the panel. Picked from the catalogue at run
+        //     time so it does not care which seat it is sitting in.
+        int foreignStruct = -1;
+        foreach (int t in _game.LiveWorld.StructureTypeIds())
+        {
+            var d = _game.LiveWorld.GetStructureType(t);
+            if (d.Tab == BuildTab.None || d.Faction == World.FactionCommon || d.Faction == myFaction) continue;
+            foreignStruct = t;
+            break;
+        }
+        Check(foreignStruct > 0,
+              $"the catalogue carries a building of the other side to control against (type {foreignStruct})");
+        if (foreignStruct > 0)
+        {
+            Check(!sb.StructFixedGateForTest(foreignStruct),
+                  $"building type {foreignStruct} is gated OUT at this seat");
+            Check(!sb.StructButtonVisible(foreignStruct),
+                  "...and its button is genuinely not visible, not merely gated in principle");
+            Check(!_game.LiveWorld.StructureAllowedForFaction(foreignStruct, myFaction),
+                  "...and the SIM refuses it too, so the panel and the sim agree rather than both being wrong");
+        }
 
         // 4. Reachability, which is the claim worth making: the flak track (type
         //    16, ADR-028's answer to the air layer) had NO button at all before
