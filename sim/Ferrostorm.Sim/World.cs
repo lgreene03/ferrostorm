@@ -838,6 +838,26 @@ public sealed partial class World
     /// what makes the guarded hash fold sound rather than merely convenient.
     /// A world with no transport carries no entry and hashes identically.</summary>
     public readonly record struct CargoUnit(int UnitType, int Hp, int Rank);
+    /// <summary>
+    /// P7-22: live orbital-scan reveals. A SIDE COLLECTION, empty in every
+    /// scenario that never fires one, which is what keeps this row hash-neutral:
+    /// the fold below contributes zero bytes when the list is empty, so an
+    /// absent scan is provably nothing rather than a zero that has to be
+    /// serialised. CLAUDE.md records the technique; this is its fifth user.
+    ///
+    /// Ordered by insertion and pruned in place, never keyed by a dictionary, so
+    /// iteration order is the command order and needs no sort to stay
+    /// deterministic.
+    /// </summary>
+    private readonly List<ScanReveal> _scans = new();
+    private readonly struct ScanReveal
+    {
+        public readonly int Player, CX, CY, Radius, TicksLeft;
+        public ScanReveal(int player, int cx, int cy, int radius, int ticksLeft)
+        { Player = player; CX = cx; CY = cy; Radius = radius; TicksLeft = ticksLeft; }
+        public ScanReveal Tick() => new(Player, CX, CY, Radius, TicksLeft - 1);
+    }
+
     private readonly Dictionary<int, List<CargoUnit>> _cargo = new();
 
     /// <summary>P7-11a: which structures are switched off, keyed by entity id
@@ -1237,8 +1257,12 @@ public sealed partial class World
         // P7-2b: the faction defences, both from written GDD s3 doctrine - the
         // Directorate's buildings are "tough but expensive", the Sodality has
         // "cloaked units AND structures".
+        // P7-22: and the Bastion carries GDD s3 line 25's ORBITAL SCAN. It is
+        // the Directorate's eye as much as its gun - SightCells 7 is the widest
+        // of any building in the game - which is why the scan's radius is that
+        // number rather than one of its own.
         17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
-                                   Tab: BuildTab.Defence),
+                                   Tab: BuildTab.Defence, SupportPowerId: OrbitalScanPowerId),
         18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
                                    Tab: BuildTab.Defence),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality,
@@ -2520,6 +2544,7 @@ public sealed partial class World
         HarvestSystem();
         RegrowthSystem();
         ProductionSystem();
+        ScanSystem();   // P7-22: age scans before the fog reads them
         FogSystem();
         VictorySystem();
         Tick++;
@@ -3061,7 +3086,7 @@ public sealed partial class World
             case CommandType.LaunchSuper:
             {
                 if (e.Kind != EntityKind.Superweapon || e.ChargeTicks > 0 || e.StrikeTicks >= 0) break;
-                e.StrikeTicks = 75; // five seconds of incoming warning
+                e.StrikeTicks = SuperweaponWarningTicks; // five seconds of incoming warning
                 e.StrikeX = Fix64.Clamp(c.X, Fix64.Zero, Fix64.FromInt(Map.Width));
                 e.StrikeY = Fix64.Clamp(c.Y, Fix64.Zero, Fix64.FromInt(Map.Height));
                 _events.Add(new GameEvent(GameEventType.SuperweaponLaunched, c.EntityId, -1, e.StrikeX, e.StrikeY));
@@ -3099,6 +3124,20 @@ public sealed partial class World
                 // is not a dirty trick.
                 e.ChargeTicks = SupportPowerChargeTicks;
                 _events.Add(new GameEvent(GameEventType.SupportPowerUsed, c.EntityId, power, px, py));
+                // P7-22: the first power with an effect. GDD s3 line 25's
+                // ORBITAL SCAN, Directorate, doctrine word "surgical".
+                //
+                // The radius is the UNLOCKING BUILDING'S OWN SightCells, derived
+                // rather than invented: the scan shows what that building's
+                // sensors would see, projected anywhere on the map. It needs no
+                // number of its own, it explains itself, and a future scan
+                // building gets a radius the day it is authored.
+                if (power == OrbitalScanPowerId)
+                {
+                    int radius = GetStructureType(e.StructType).SightCells;
+                    _scans.Add(new ScanReveal(c.PlayerId, Map.CellOf(px), Map.CellOf(py),
+                                              radius, OrbitalScanRevealTicks));
+                }
                 // NOTE, and it is the honest state of this row: no EFFECT is
                 // applied here yet. P7-21 lands the machinery - charge, ready,
                 // the command, its three refusals, the checksum fold and the
@@ -3387,6 +3426,35 @@ public sealed partial class World
     /// </summary>
     public const int SupportPowerChargeDivisor = 3;
     public const int SupportPowerChargeTicks = SuperweaponChargeTicks / SupportPowerChargeDivisor;
+
+    /// <summary>
+    /// P7-22: the superweapon's incoming warning, named once. It was a bare 75
+    /// at its only site, and it is the closest thing this game has to a stated
+    /// "long enough to see it and react" interval - which is why the orbital
+    /// scan's reveal is derived from it rather than from a new number.
+    /// </summary>
+    public const int SuperweaponWarningTicks = 75;
+
+    /// <summary>
+    /// P7-22: GDD s3 line 25 names the Directorate's ORBITAL SCAN. Power id 1,
+    /// the first support power with an effect.
+    /// </summary>
+    public const int OrbitalScanPowerId = 1;
+
+    /// <summary>
+    /// P7-22: how long a scan's reveal lasts, DERIVED from the superweapon's
+    /// warning window rather than invented.
+    ///
+    /// The derivation is the argument: 75 ticks is already this game's answer to
+    /// "how long does a player need to notice something and act on it", written
+    /// into the one mechanic whose whole purpose is to give a victim that
+    /// chance. A scan buys the Directorate exactly one such window. Rejected: a
+    /// fifth of the power's charge (100 ticks), which is a number derived from
+    /// nothing about seeing; and a reveal lasting the full charge, which stops
+    /// being a scan and becomes permanent vision on a cooldown.
+    /// </summary>
+    public const int OrbitalScanRevealTicks = SuperweaponWarningTicks;
+
 
     public const int VeilStructType = 7;
 
@@ -5660,9 +5728,47 @@ public sealed partial class World
     /// If a lobby wants it later it is a per-team OR of these bitsets and a
     /// deliberate ADR, not a quiet widening here.
     /// </summary>
+    /// <summary>P7-22: age the live scans and prune the expired. Pruning on
+    /// zero is what makes the hash fold sound - no entry provably means no
+    /// scan, which is the same rule the cargo collection follows.</summary>
+    private void ScanSystem()
+    {
+        for (int k = _scans.Count - 1; k >= 0; k--)
+        {
+            var sc = _scans[k].Tick();
+            if (sc.TicksLeft <= 0) _scans.RemoveAt(k);
+            else _scans[k] = sc;
+        }
+    }
+
     private void FogSystem()
     {
         for (int p = 0; p < _players; p++) Array.Clear(_visible[p]);
+        // P7-22: orbital scans light the fog for their owner alone, ORed into
+        // the same bitset the sight pass writes. Runs BEFORE the entity pass and
+        // marks EXPLORED as well as visible, so a scan leaves the map remembered
+        // exactly as walking there would - the point of a scan is intelligence
+        // you keep, not a torch you have to hold.
+        for (int k = 0; k < _scans.Count; k++)
+        {
+            var sc = _scans[k];
+            int sr2 = sc.Radius * sc.Radius;
+            var svis = _visible[sc.Player];
+            var sexp = _explored[sc.Player];
+            for (int dy = -sc.Radius; dy <= sc.Radius; dy++)
+            {
+                int ny = sc.CY + dy;
+                if ((uint)ny >= (uint)Map.Height) continue;
+                for (int dx = -sc.Radius; dx <= sc.Radius; dx++)
+                {
+                    int nx = sc.CX + dx;
+                    if ((uint)nx >= (uint)Map.Width || dx * dx + dy * dy > sr2) continue;
+                    int c = Map.CellIndex(nx, ny);
+                    svis[c >> 6] |= 1UL << (c & 63);
+                    sexp[c >> 6] |= 1UL << (c & 63);
+                }
+            }
+        }
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
@@ -5886,6 +5992,20 @@ public sealed partial class World
             // never unconditional: a bare h.Add here would move all 24 goldens
             // for a feature no golden scenario uses.
             if (_gateOpenUntil.TryGetValue(e.Id, out int openUntil)) h.Add(openUntil);
+        }
+        // P7-22: live orbital scans, folded on exactly the terms every guarded
+        // fold above uses and for exactly their reason. A scan decides what a
+        // player can SEE, which decides what its units acquire and therefore
+        // what they shoot, so it is state a desync could hide in. The entry is
+        // pruned the tick it lapses, so no entry provably means no scan, and a
+        // world in which none was ever fired - which is all 24 goldens - hashes
+        // byte-identically to one compiled before scans existed. Guarded, never
+        // unconditional.
+        if (_scans.Count > 0)
+        {
+            h.Add(_scans.Count);
+            foreach (var sc in _scans)
+            { h.Add(sc.Player); h.Add(sc.CX); h.Add(sc.CY); h.Add(sc.Radius); h.Add(sc.TicksLeft); }
         }
         if (_orderQueues.Count > 0)
         {

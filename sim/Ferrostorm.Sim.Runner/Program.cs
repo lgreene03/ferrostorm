@@ -2375,11 +2375,11 @@ int CatalogueRefuse()
 // shared, layout-aware helper.)
 byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu, magicV12 = 0x534C413Cu;
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu, magicV12 = 0x534C413Cu, magicV13 = 0x534C413Du;
     using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    // P7-10: the SOURCE is whatever Save() currently writes, which is v12 now.
+    // P7-22: the SOURCE is whatever Save() currently writes, which is v13 now.
     // Pinned to a literal version this helper breaks the moment the format
     // moves, and it breaks in the BATTERY rather than here - the same
     // name-one-version trap the loader's hasBuildLanes had, and it caught v12
@@ -2387,11 +2387,15 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // plus a walk step for whatever field the new format appended (here, the
     // open-gates block) and one more entry in each "keep" predicate, because
     // the format that WAS the source is now a legal target.
-    if (input.ReadUInt32() != magicV12)
-        throw new InvalidOperationException("save surgery expects a v12 stream (the current Save format)");
+    //
+    // P7-22 is the fifth time that comment has been right, and it caught the
+    // v13 bump in the BATTERY exactly as predicted, not here. v12 is now a
+    // legal TARGET and the scan block is the new walk step.
+    if (input.ReadUInt32() != magicV13)
+        throw new InvalidOperationException("save surgery expects a v13 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10 or magicV11) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10 or magicV11 or magicV12) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2409,7 +2413,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         // all and those worlds load as the free-for-alls they were, which is what
         // those formats meant.
         int team = input.ReadInt32();
-        if (targetMagic == magicV11) w.Write(team);
+        if (targetMagic is magicV11 or magicV12) w.Write(team);
         w.Write(input.ReadInt64());   // credits
         w.Write(input.ReadBoolean()); // eliminated flag
         int words = input.ReadInt32(); w.Write(words);
@@ -2459,9 +2463,9 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // ADR-023's lane block: kept for a v8 target and above, dropped below it.
     // v12 is the SOURCE format and is refused as a target rather than
     // half-copied, the same reason v11, v10 and v9 each used to be.
-    if (targetMagic == magicV12) throw new InvalidOperationException("save surgery downgrades; v12 is the source format, not a target");
+    if (targetMagic == magicV13) throw new InvalidOperationException("save surgery downgrades; v13 is the source format, not a target");
     int laneCount = input.ReadInt32();
-    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10 or magicV11;
+    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10 or magicV11 or magicV12;
     if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
@@ -2475,7 +2479,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // hold cannot be expressed at all - and a unit that was aboard is simply
     // not in that older world, which is what those formats meant.
     int cargoCount = input.ReadInt32();
-    bool keepCargo = targetMagic is magicV9 or magicV10 or magicV11;
+    bool keepCargo = targetMagic is magicV9 or magicV10 or magicV11 or magicV12;
     if (keepCargo) w.Write(cargoCount);
     for (int i = 0; i < cargoCount; i++)
     {
@@ -2492,19 +2496,33 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // where a disable cannot be expressed at all - and a building that was dark
     // simply works in that older world, which is what those formats meant.
     int disabledCount = input.ReadInt32();
-    bool keepSabotage = targetMagic is magicV10 or magicV11;
+    bool keepSabotage = targetMagic is magicV10 or magicV11 or magicV12;
     if (keepSabotage) w.Write(disabledCount);
     for (int i = 0; i < disabledCount; i++)
     {
         int id = input.ReadInt32(), until = input.ReadInt32();
         if (keepSabotage) { w.Write(id); w.Write(until); }
     }
-    // P7-10's open gates: dropped for EVERY target, because v12 is the format
-    // that introduced the block and v12 is refused as a target above. A gate
-    // cannot be open in any older world, and one that was resumes shut - which
-    // GateSystem reopens on the first tick an ally is still standing beside it.
+    // P7-10's open gates: KEPT for a v12 target now that v12 is a legal one,
+    // dropped for everything older, because v12 is the format that introduced
+    // the block. A gate cannot be open in any pre-v12 world, and one that was
+    // resumes shut - which GateSystem reopens on the first tick an ally is
+    // still standing beside it.
+    bool keepGates = targetMagic == magicV12;
     int openGateCount = input.ReadInt32();
-    for (int i = 0; i < openGateCount; i++) { input.ReadInt32(); input.ReadInt32(); }
+    if (keepGates) w.Write(openGateCount);
+    for (int i = 0; i < openGateCount; i++)
+    {
+        int gid = input.ReadInt32(), gUntil = input.ReadInt32();
+        if (keepGates) { w.Write(gid); w.Write(gUntil); }
+    }
+    // P7-22's live scans: dropped for EVERY target, because v13 is the format
+    // that introduced the block and v13 is refused as a target above. No older
+    // world can hold a scan, and one taken mid-scan resumes with the ground
+    // dark - which is what those formats meant, since the power did not exist.
+    int scanCount = input.ReadInt32();
+    for (int i = 0; i < scanCount; i++)
+    { input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); }
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
@@ -9355,6 +9373,149 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int OrbitalScanGate()
+{
+    // P7-22 (ADR-063). The first support power with an EFFECT: GDD s3 line 25's
+    // ORBITAL SCAN, Directorate, doctrine word "surgical".
+    //
+    // What this catches that supportpowergate does not: that gate proves the
+    // MACHINERY - charge, ready, refusal, checksum, counterplay - using a power
+    // with no effect at all, and every one of its stages would still pass if
+    // firing a scan revealed nothing. This one proves the scan SEES.
+    const int Bastion = 17;
+
+    (World w, int bas) Base(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int bas = w.SpawnFactionDefence(0, Bastion, 8, 8);
+        return (w, bas);
+    }
+
+    // The far corner: outside anything this player owns can see, so it is dark
+    // unless a scan lights it. Derived from the map rather than picked - the
+    // opposite corner to the base is the farthest cell there is.
+    const int FarX = 54, FarY = 54;
+
+    // --- 1. THE CONTROL, FIRST. The corner must be DARK to begin with, or every
+    //        assertion below passes on a map that was never fogged and this gate
+    //        proves nothing. ADR-059 stage 2's rule, applied before the feature
+    //        rather than after it.
+    {
+        var (w, _) = Base(7200);
+        for (int t = 0; t < 5; t++) w.Step(default);
+        if (w.IsVisible(0, FarX, FarY))
+            return Fail($"orbital scan: cell ({FarX},{FarY}) is already visible without any scan, so this gate "
+                        + "cannot tell a working scan from a map with no fog on it");
+    }
+
+    // --- 2. A charged scan LIGHTS the far corner for its owner.
+    {
+        var (w, bas) = Base(7201);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+        if (!w.IsVisible(0, FarX, FarY))
+            return Fail($"orbital scan: a charged scan aimed at ({FarX},{FarY}) did not reveal it. GDD s3 line 25 "
+                        + "gives the Directorate an orbital scan and this is the whole of what it does");
+        // And it is REMEMBERED, not merely lit: a scan is intelligence you keep.
+        if (!w.IsExplored(0, FarX, FarY))
+            return Fail("orbital scan: the scan lit the cell but did not mark it explored - a scan whose ground "
+                        + "goes back to unmapped the moment it lapses is a torch, not intelligence");
+    }
+
+    // --- 3. It reveals to ITS OWNER ALONE. The scan is a Directorate power, not
+    //        a public broadcast, and this is the seat-flavoured mistake this
+    //        project keeps catching (the client harness exists for it).
+    {
+        var (w, bas) = Base(7202);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+        if (w.IsVisible(1, FarX, FarY))
+            return Fail("orbital scan: player 0's scan revealed the ground to player 1 as well - a scan lights the "
+                        + "map for the side that paid for it");
+    }
+
+    // --- 4. And it LAPSES. A reveal that never expires is permanent vision on a
+    //        cooldown, which is a different and much stronger building than the
+    //        one the Bastion is priced as.
+    {
+        var (w, bas) = Base(7203);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+        for (int t = 0; t < World.OrbitalScanRevealTicks + 5; t++) w.Step(default);
+        if (w.IsVisible(0, FarX, FarY))
+            return Fail($"orbital scan: the reveal was still lit {World.OrbitalScanRevealTicks + 5} ticks after "
+                        + "firing - a scan that never lapses is permanent vision on a cooldown");
+        // ...and the ground stays REMEMBERED after it lapses, which is stage 2's
+        // claim proved over time rather than on the tick it fired.
+        if (!w.IsExplored(0, FarX, FarY))
+            return Fail("orbital scan: the ground went back to unmapped when the reveal lapsed");
+    }
+
+    // --- 5. THE RADIUS IS THE BUILDING'S OWN SIGHT, which is the row's whole
+    //        design decision and the reason the scan needed no number of its
+    //        own. Asserted as the RULE rather than as the value 7, so an
+    //        authored sight change carries the scan with it deliberately.
+    {
+        var (w, bas) = Base(7204);
+        int sight = w.GetStructureType(Bastion).SightCells;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+        // Just inside the building's own sight radius must be lit...
+        if (!w.IsVisible(0, FarX + sight - 1, FarY))
+            return Fail($"orbital scan: a cell {sight - 1} from the aim point is dark, but the scan's radius is the "
+                        + $"Bastion's own sight of {sight}");
+        // ...and comfortably outside it must not be.
+        if (w.IsVisible(0, FarX + sight + 2, FarY))
+            return Fail($"orbital scan: a cell {sight + 2} from the aim point is lit, but the scan's radius is the "
+                        + $"Bastion's own sight of {sight} - the reveal is wider than the rule that defines it");
+    }
+
+    // --- 6. AND IT SURVIVES A SAVE. `saveload` cannot catch this: it never
+    //        fires a scan, so a v13 block that was written and never read - or
+    //        never written at all - would pass it silently. A save taken
+    //        mid-scan that resumed with the ground dark is a DIVERGENCE, not a
+    //        missing feature, because what a player can see decides what its
+    //        units acquire.
+    {
+        var (w, bas) = Base(7205);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+        if (!w.IsVisible(0, FarX, FarY))
+            return Fail("orbital scan: the scan was not lit before the save, so stage 6 would prove nothing");
+        ulong before = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != before)
+            return Fail($"orbital scan: the state hash moved across a save taken mid-scan (0x{before:X16} -> "
+                        + $"0x{loaded.ComputeStateHash():X16}) - the live reveal did not round-trip");
+        loaded.Step(default);
+        if (!loaded.IsVisible(0, FarX, FarY))
+            return Fail("orbital scan: a save taken mid-scan resumed with the ground dark - the reveal was lost "
+                        + "across the round trip, which is a divergence rather than a missing feature");
+    }
+
+    Console.WriteLine($"orbitalscangate: GDD s3 line 25's ORBITAL SCAN, the first support power with an effect. A "
+                      + $"charged Bastion lights a circle of the map for {World.OrbitalScanRevealTicks} ticks - "
+                      + "derived from the superweapon's incoming warning, this game's own answer to \"long enough "
+                      + $"to notice and act\" - with a radius of {new World(1, 8, 8, players: 2).GetStructureType(Bastion).SightCells} "
+                      + "cells, DERIVED as the building's own sight rather than given a number of its own: the scan "
+                      + "shows what its sensors would see, projected anywhere on the map. It marks the ground "
+                      + "EXPLORED as well as visible, because a scan is intelligence you keep; it reveals to its "
+                      + "owner alone; and it lapses, because a reveal that does not is permanent vision on a "
+                      + "cooldown");
+    return 0;
+}
+
 int SupportPowerGate()
 {
     // P7-21 (ADR-062). GDD s8's second sentence, which had NO machinery in the
@@ -9398,12 +9559,41 @@ int SupportPowerGate()
     //        writing it this way survives ADR-044's refused change to the
     //        superweapon's own charge.
     {
-        if (World.SupportPowerChargeTicks >= World.SuperweaponChargeTicks)
-            return Fail($"support power: a power charges in {World.SupportPowerChargeTicks} ticks against the "
-                        + $"superweapon's {World.SuperweaponChargeTicks} - GDD s8 says minor powers run on SHORTER "
-                        + "timers, and shorter than the superweapon is the only reading that sentence supports");
-        if (World.SupportPowerChargeTicks <= 0)
-            return Fail("support power: a charge of zero or less is not a timer at all");
+        // MEASURED, not compared. P7-21 wrote this stage as two `const` against
+        // `const` comparisons, which the compiler FOLDED AWAY - it proved 500 <
+        // 1500 at build time and deleted the branch, and the build said so in a
+        // CS0162 unreachable-code warning nobody read. That is ADR-047's defect
+        // exactly (a gate that measures itself), and it shipped one wave ago in
+        // the gate that was supposed to be careful about it.
+        //
+        // So both timers are now OBSERVED from a running world: charge a
+        // superweapon and a support power side by side and count the ticks each
+        // takes to announce itself. Nothing here can be folded, and the numbers
+        // are the ones a match would actually see.
+        int Ticks(bool superweapon)
+        {
+            var w = new World(7050, 64, 64, players: 2);
+            if (!superweapon)
+                w.RegisterStructureType(Carrier, w.GetStructureType(Carrier) with { SupportPowerId = TestPower });
+            w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+            _ = superweapon ? w.SpawnSuperweapon(0, 20, 20) : w.SpawnRadarUplink(0, 20, 20);
+            var want = superweapon ? GameEventType.SuperweaponReady : GameEventType.SupportPowerReady;
+            for (int t = 1; t <= 20000; t++)
+            {
+                w.Step(default);
+                if (w.Events.Any(ev => ev.Type == want)) return t;
+            }
+            return -1;
+        }
+        int superTicks = Ticks(true), powerTicks = Ticks(false);
+        if (superTicks < 0) return Fail("support power: the superweapon never announced itself, so the bound this "
+                                        + "stage compares against cannot be measured");
+        if (powerTicks < 0) return Fail("support power: a support power never announced itself - a power that never "
+                                        + "becomes ready is not on a timer, it is off");
+        if (powerTicks >= superTicks)
+            return Fail($"support power: a power became ready in {powerTicks} ticks against the superweapon's "
+                        + $"{superTicks} - GDD s8 says minor powers run on SHORTER timers, and shorter than the "
+                        + "superweapon is the only reading that sentence supports");
     }
 
     // --- 2. It CHARGES and announces itself, and cannot be used before then.
@@ -11814,6 +12004,9 @@ int Match(ulong seed)
     // power - enforced rather than described.
     int supportPower = SupportPowerGate();
     if (supportPower != 0) return supportPower;
+    // P7-22: and the first power with an effect actually SEES.
+    int orbitalScan = OrbitalScanGate();
+    if (orbitalScan != 0) return orbitalScan;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -13539,6 +13732,7 @@ return args.Length == 0
         "mcvtechgate" => McvTechGate(),
         "comebackgate" => ComebackGate(),
         "supportpowergate" => SupportPowerGate(),
+        "orbitalscangate" => OrbitalScanGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
