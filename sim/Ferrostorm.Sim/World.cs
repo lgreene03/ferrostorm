@@ -495,7 +495,7 @@ public sealed partial class World
         // shape this phase keeps finding. Keyed on the DEF carrying a power, so
         // it is a no-op for every building in the shipped catalogue and this row
         // stays hash-neutral.
-        if (IsStructure(e.Kind) && e.ChargeTicks == 0 && GetStructureType(e.StructType).SupportPowerId != 0)
+        if (IsStructure(e.Kind) && e.ChargeTicks == 0 && HasSupportPowers(GetStructureType(e.StructType)))
         {
             var seeded = e;
             seeded.ChargeTicks = SupportPowerChargeTicks;
@@ -1131,10 +1131,21 @@ public sealed partial class World
         // veil, the superweapon and the mine carry no weapon. See the enum for
         // why it is deliberately absent from CatalogueChecksum.
         BuildTab Tab = BuildTab.None,
-        // P7-21: this building UNLOCKS A SUPPORT POWER, and which one. 0 means
-        // none, so every building authored before this row is untouched and the
-        // charge pass below is a no-op for all of them - which is what keeps
-        // this row hash-neutral.
+        // P7-21: this building UNLOCKS SUPPORT POWERS. Null or empty means none,
+        // so every building authored before that row is untouched and the charge
+        // pass is a no-op for all of them.
+        //
+        // P7-23 made it a LIST, and the reason is arithmetic rather than taste.
+        // GDD s8 asks for "3-4 minor support powers per faction". The Directorate
+        // owns exactly THREE faction-exclusive buildings - the power plant, the
+        // Bastion and the orbital cannon - and of those the cannon cannot carry a
+        // power at all (it already uses ChargeTicks for its own cycle) and the
+        // plant is the first building anyone raises, so a power gated on it is
+        // not gated on anything. One power per building could therefore never
+        // satisfy the specification: it caps the Directorate at ONE.
+        //
+        // The powers on a building SHARE ITS CHARGE, which is the design decision
+        // rather than a shortcut. See UseSupportPower for the argument.
         //
         // GDD s8: "3-4 minor support powers per faction on shorter timers,
         // UNLOCKED BY STRUCTURES". The power lives on the STRUCTURE DEF rather
@@ -1146,7 +1157,7 @@ public sealed partial class World
         //
         // Asked as a property, never as a type id, because that is the mistake
         // this phase has now corrected about seventeen times.
-        int SupportPowerId = 0)
+        int[]? SupportPowerIds = null)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -1180,7 +1191,7 @@ public sealed partial class World
             // checksum - it decides what a command may do, so two peers holding
             // different answers would diverge rather than merely disagree about
             // a button.
-            && SupportPowerId == other.SupportPowerId
+            && PrereqsEqual(SupportPowerIds, other.SupportPowerIds)
             && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
@@ -1188,7 +1199,7 @@ public sealed partial class World
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
             h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector); h.Add(DestroysFields);
-            h.Add(SupportPowerId); // P7-21
+            if (SupportPowerIds != null) foreach (int sp in SupportPowerIds) h.Add(sp); // P7-21/P7-23
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -1262,7 +1273,8 @@ public sealed partial class World
         // of any building in the game - which is why the scan's radius is that
         // number rather than one of its own.
         17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
-                                   Tab: BuildTab.Defence, SupportPowerId: OrbitalScanPowerId),
+                                   Tab: BuildTab.Defence,
+                                   SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId }),
         18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
                                    Tab: BuildTab.Defence),
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality,
@@ -1724,7 +1736,8 @@ public sealed partial class World
                 // command stream, while every stat in the game matched. Folded
                 // BEFORE the prereqs, beside the other decision-carrying
                 // columns, rather than appended at the end.
-                h.Add(d.SupportPowerId);
+                h.Add(d.SupportPowerIds?.Length ?? 0);
+                if (d.SupportPowerIds != null) foreach (int sp in d.SupportPowerIds) h.Add(sp);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -3107,8 +3120,12 @@ public sealed partial class World
                 //    power the day its file says so and never because of its
                 //    kind or its type id.
                 if (!IsStructure(e.Kind)) break;
-                int power = GetStructureType(e.StructType).SupportPowerId;
-                if (power == 0) break;
+                // P7-23: the command NAMES the power in AuxId, because a
+                // building may now grant several. A power the building does not
+                // grant is refused, which is the same "the structure is the
+                // permission" rule as before, now asked of a list.
+                int power = c.AuxId;
+                if (!GrantsPower(GetStructureType(e.StructType), power)) break;
                 // 2. IT MUST BE CHARGED. The same shape as the superweapon's,
                 //    on a third of the clock.
                 if (e.ChargeTicks > 0) break;
@@ -3122,6 +3139,16 @@ public sealed partial class World
                 // gives the global ping and five-second warning to the
                 // superweapon alone, and a surprise the victim is warned about
                 // is not a dirty trick.
+                //
+                // P7-23: AND THE POWERS ON A BUILDING SHARE THIS ONE CHARGE.
+                // That is a design decision, not a shortcut for avoiding
+                // per-power state. A shared charge makes the choice between a
+                // building's powers a real one - a Bastion holds a scan OR a
+                // strike ready, never both - which is a tactical decision the
+                // player makes rather than a pair of timers that both happen to
+                // be full. Rejected: an independent charge per power, which
+                // needs per-(entity, power) state, moves goldens, and buys a
+                // player nothing except never having to choose.
                 e.ChargeTicks = SupportPowerChargeTicks;
                 _events.Add(new GameEvent(GameEventType.SupportPowerUsed, c.EntityId, power, px, py));
                 // P7-22: the first power with an effect. GDD s3 line 25's
@@ -3138,6 +3165,14 @@ public sealed partial class World
                     _scans.Add(new ScanReveal(c.PlayerId, Map.CellOf(px), Map.CellOf(py),
                                               radius, OrbitalScanRevealTicks));
                 }
+                // P7-23: GDD s3 line 25's PRECISION STRIKE, the Directorate's
+                // other surgical power. Its own function, never a widened
+                // ApplyAreaDamage - ADR-044 clause 4's argument for the third
+                // time, and it is the same argument: ApplyAreaDamage is shared
+                // with the MINE, minegate asserts its 1.5/3 shape, and a radius
+                // parameter would put every mine in the game one careless
+                // argument from changing.
+                else if (power == PrecisionStrikePowerId) ApplyPrecisionStrike(px, py);
                 // NOTE, and it is the honest state of this row: no EFFECT is
                 // applied here yet. P7-21 lands the machinery - charge, ready,
                 // the command, its three refusals, the checksum fold and the
@@ -3440,6 +3475,30 @@ public sealed partial class World
     /// the first support power with an effect.
     /// </summary>
     public const int OrbitalScanPowerId = 1;
+
+    /// <summary>
+    /// P7-23: GDD s3 line 25 names the Directorate's other surgical power, the
+    /// PRECISION STRIKE. Power id 2.
+    /// </summary>
+    public const int PrecisionStrikePowerId = 2;
+
+    /// <summary>P7-23: does this building unlock anything? Asked in one place so
+    /// the null-or-empty question is answered identically at the three sites
+    /// that ask it.</summary>
+    internal static bool HasSupportPowers(in StructureTypeDef d)
+        => d.SupportPowerIds is { Length: > 0 };
+
+    /// <summary>P7-23: may this building fire this power? A LINEAR SEARCH over
+    /// at most a handful of ids, which is deliberate - a set would need an
+    /// allocation per def and an iteration order to keep deterministic, for a
+    /// list this short.</summary>
+    internal static bool GrantsPower(in StructureTypeDef d, int powerId)
+    {
+        if (d.SupportPowerIds == null || powerId == 0) return false;
+        foreach (int p in d.SupportPowerIds) if (p == powerId) return true;
+        return false;
+    }
+
 
     /// <summary>
     /// P7-22: how long a scan's reveal lasts, DERIVED from the superweapon's
@@ -5371,7 +5430,7 @@ public sealed partial class World
             // rather than a choice made here: a browned-out base stops charging.
             // It is also the second half of s8's counterplay - you can smother a
             // power by killing generators, not only the building itself.
-            if (IsStructure(e.Kind) && GetStructureType(e.StructType).SupportPowerId != 0)
+            if (IsStructure(e.Kind) && HasSupportPowers(GetStructureType(e.StructType)))
             {
                 int spp = e.PlayerId;
                 if (e.ChargeTicks > 0 && supply[spp] >= draw[spp])
@@ -5405,7 +5464,7 @@ public sealed partial class World
                     // Same branch, and now the authored key decides it - which
                     // is what lets the AI ask the same question when it aims.
                     if (GetStructureType(e.StructType).DestroysFields) ApplySeismicCharge(e.StrikeX, e.StrikeY);
-                    else ApplyAreaDamage(e.StrikeX, e.StrikeY, 900);
+                    else ApplyAreaDamage(e.StrikeX, e.StrikeY, OrbitalCannonDamage);
                     e = _entities[i]; // the strike may have killed the launcher itself
                 }
                 _entities[i] = e;
@@ -5656,6 +5715,50 @@ public sealed partial class World
     /// ADR-038 splash rule applied unchanged - a weapon that spared its owner's
     /// ground would make area denial free.
     /// </summary>
+    /// <summary>
+    /// P7-23: GDD s3 line 25's PRECISION STRIKE. Its OWN function, never a
+    /// widened ApplyAreaDamage - ADR-044 clause 4's argument for the third time,
+    /// and unchanged: ApplyAreaDamage is shared with the MINE, minegate asserts
+    /// its shape, and a radius parameter would put every mine in the game one
+    /// careless argument from changing.
+    ///
+    /// ONE BAND, no falloff ring, and that is what makes it surgical rather than
+    /// small. The cannon is 1.5 inner / 3 outer and the seismic charge 3 / 6;
+    /// this is the cannon's CORE and nothing outside it. A strike that spilled
+    /// half damage into a ring would be a smaller superweapon, which is the one
+    /// thing GDD s8 says a minor power is not.
+    ///
+    /// Like the cannon, the charge and the mine it asks NO OWNERSHIP QUESTION:
+    /// it hits whatever stands under it, including the firing player's own.
+    /// ADR-038's splash rule, applied unchanged.
+    /// </summary>
+    private void ApplyPrecisionStrike(Fix64 x, Fix64 y)
+    {
+        // The orbital cannon's inner radius, squared in the idiom the two
+        // effect functions above already use: 1.5^2 = 2.25.
+        Fix64 coreSq = Fix64.FromFraction(9, 4);
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            var t = _entities[i];
+            if (!t.Alive) continue;
+            // A ferrite field is NOT touched, and that is the line that keeps
+            // the Sodality's identity intact: GDD s8 gives "destroys resource
+            // fields" to the seismic charge alone as its economic-warfare
+            // flavour, and a Directorate power that quietly did it too would
+            // take that identity away without a word being written.
+            if (t.Kind == EntityKind.FerriteField) continue;
+            if (Fix64.DistSq(t.X - x, t.Y - y) > coreSq) continue;
+            t.Hp -= DamageOf(PrecisionStrikeDamage, Warhead.Omni, t.Armour);
+            if (t.Hp <= 0)
+            {
+                _events.Add(new GameEvent(GameEventType.Died, i, -1));
+                t.Alive = false; t.Moving = false; t.HState = HarvestState.Idle;
+                if (IsStructure(t.Kind)) FootprintOnDeath(in t);
+            }
+            _entities[i] = t;
+        }
+    }
+
     private void ApplySeismicCharge(Fix64 x, Fix64 y)
     {
         Fix64 innerSq = Fix64.FromInt(9);    // 3^2
@@ -5693,6 +5796,32 @@ public sealed partial class World
     /// <summary>P7-5c: the seismic charge's base damage, named rather than
     /// buried, so the one number a balance pass would reach for is findable.</summary>
     public const int SeismicDamage = 350;
+
+    /// <summary>
+    /// P7-23: the orbital cannon's damage, named once. It was a bare 900 at its
+    /// only site, and it is the calibration point the PRECISION STRIKE is
+    /// derived from - so it needed a name before anything could sit below it.
+    /// ADR-044 measured it: 900 Omni in a 1.5-cell core, "huge single-point
+    /// damage" as GDD s8 writes the Directorate's superweapon.
+    /// </summary>
+    public const int OrbitalCannonDamage = 900;
+
+    /// <summary>
+    /// P7-23: the PRECISION STRIKE's damage, DERIVED as a third of the orbital
+    /// cannon's.
+    ///
+    /// The same ratio ADR-062 chose for the charge, deliberately: a minor power
+    /// does a third of the major one's damage on a third of its clock. One idea
+    /// in two places rather than two numbers to remember. It also lands between
+    /// the game's two calibration points without being told to - below the
+    /// cannon's 900 and below the seismic charge's 350 - which is what "minor"
+    /// has to mean if the word is to mean anything.
+    ///
+    /// Rejected: half the cannon (450), which is more than the SEISMIC CHARGE, a
+    /// superweapon, and so is not minor at all; and a tenth (90), which against
+    /// a 1600-hp Bastion or a 2000-hp refinery is a scratch dressed as a strike.
+    /// </summary>
+    public const int PrecisionStrikeDamage = OrbitalCannonDamage / 3;
 
     private void ApplyAreaDamage(Fix64 x, Fix64 y, int baseDamage)
     {
