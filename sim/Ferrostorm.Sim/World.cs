@@ -654,7 +654,7 @@ public sealed partial class World
         // P7-16 answered Q006 and moved ONE of them, the MCV. The rest are a
         // Game Designer's tier curation and NOT that row's to take: taking them
         // because they share a SHAPE with the one that was answered is the
-        // scope creep ADR-009 reserved against. They are now Q018.
+        // scope creep ADR-009 reserved against. They are now Q020.
         //
         // TWO THINGS THIS COMMENT USED TO SAY WERE WRONG, left visible because
         // the correction is the useful part. It said the tautologies were the
@@ -4790,7 +4790,7 @@ public sealed partial class World
             int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
             Fix64 pushX = Fix64.Zero, pushY = Fix64.Zero;
             bool pressedOnStationary = false;
-            // ADR-027 / Q018: the inverse of pressedOnStationary. That flag
+            // ADR-027 / Q020: the inverse of pressedOnStationary. That flag
             // notices a MOVER jammed against a stalled unit; this one notices a
             // STALLED unit being pressed by a mover, which is the other half of
             // the same event and the half nothing acted on.
@@ -4912,7 +4912,7 @@ public sealed partial class World
                 if (!Map.IsBlocked(Map.CellOf(e.X), Map.CellOf(ny))) e.Y = ny;
             }
 
-            // ADR-027, THE YIELD. Q018 traced the jam to a cascade: the first
+            // ADR-027, THE YIELD. Q020 traced the jam to a cascade: the first
             // unit to give up becomes a STATIONARY obstacle, and pressing
             // against a stationary unit is exactly what feeds the next unit's
             // stall counter, so a production cluster freezes solid from the

@@ -1,4 +1,12 @@
-# Q018: four units carry a prerequisite that cannot refuse anything
+# Q020: four units carry a prerequisite that cannot refuse anything
+
+> **Filed as Q018 by P7-16 and renumbered to Q020 on 2026-08-03**, because Q018
+> was already taken by "an army large enough to attack jams itself in its own
+> base" (raised during P6 wave DR-18, still open, cited by ADR-027 and docs 26
+> and 27). P7-16 filed a question without reading the questions directory, which
+> is the same rule it had just watched doc 29 break when that filed a Tech Centre
+> Q006 had already answered. Renumbered rather than merged: the two are unrelated
+> and the older one has citations.
 
 Owner: game-designer
 Raised by: P7-16 (ADR-058), 2026-08-03, while answering Q006
