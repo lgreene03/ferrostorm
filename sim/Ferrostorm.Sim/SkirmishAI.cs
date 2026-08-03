@@ -503,14 +503,21 @@ public sealed class SkirmishAI
             if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount < 2000) continue;
             if (Fix64.DistSq(f.X - homeX, f.Y - homeY) <= Fix64.FromInt(400)) { homeThin = false; break; }
         }
-        // ADR-009 clause 7's subtlest failure, addressed by keeping this gate
-        // exactly equal to the MCV's authored prerequisite. com_mcv.yaml still
-        // reads `prerequisites: [com_factory]` this wave (Q006 owns moving it
-        // behind the radar), so gating on the factory is gating on the data:
-        // the AI never saves 3500 credits for an MCV it cannot buy. The day
-        // Q006 moves that prerequisite, this line moves with it in the same
-        // change, or the saving-for-nothing failure appears here first.
-        bool expansionDesired = homeThin && cyCount < 2 && ownMcv < 0 && factory >= 0;
+        // ADR-009 clause 7's subtlest failure: a commander that saves 3500
+        // credits for an MCV it cannot buy saves forever and never expands.
+        //
+        // This used to be a hand-kept COPY of the MCV's prerequisite - it read
+        // `factory >= 0` because com_mcv.yaml read `[com_factory]` - with a
+        // comment binding whoever answered Q006 to move both in the same change.
+        // P7-16 answered Q006 and did something better than moving it: the gate
+        // now ASKS THE DATA. Whatever the MCV waits on, this waits on the same
+        // thing, and the two cannot drift apart again because there is no longer
+        // a second copy to fall behind.
+        //
+        // The same correction P7 has made about fifteen times: read the rule as
+        // the property it means rather than the instance it names.
+        bool canBuyMcv = w.HasPrereqs(_player, w.GetUnitType(World.McvUnitType).Prereqs);
+        bool expansionDesired = homeThin && cyCount < 2 && ownMcv < 0 && factory >= 0 && canBuyMcv;
         if (ownMcv >= 0)
         {
             var mcv = w.Entities[ownMcv];

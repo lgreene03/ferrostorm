@@ -4,6 +4,13 @@ Owner: game-designer
 Raised by: ADR-009 drafting, 2026-07-17 (ordered by doc 22's BD-17 clause 7
 and doc 23 s4.3, which both refused to let an implementer decide it silently)
 Decide by: 2026-07-24
+Status: **ANSWERED 2026-08-03 by ADR-058 (P7-16), option 1** - the Radar Uplink
+absorbs the role. `com_mcv`'s prerequisite is now `[com_radar_uplink]`, GDD s5
+line 47 is enforced for the first time, and the golden this question predicted
+would move (`expansion`) moved and was regenerated. The AI's expansion gate
+moved in the same change and now asks the catalogue rather than keeping a copy.
+Left open beside it: Q018 (four other units carry the same tautology shape) and
+the yard-loss freeze defect that makes the AI half of this row untestable.
 
 ## The question
 

@@ -455,6 +455,50 @@ habits worth more than the count - *a bite test that passes when you break the
 rule is about the fixture*, and *when a table confuses you, add a column, not a
 theory* (which corrected three separate wrong readings).
 
+### A postscript the method wrote after it stopped (P7-16, ADR-058)
+
+Stopping the hunt was right, and the next row found two defects anyway - not by
+hunting, but by **answering an open question and building a fixture honestly**.
+That is worth recording, because it says where the remaining defects actually
+live.
+
+P7-16 answered Q006 and enforced GDD s5 line 47, which gates replacement MCVs
+behind a "Tech Centre" that does not exist. `com_mcv` had named the **factory it
+is produced at**, a prerequisite that can never refuse anything, so the clause
+was decorative. The Radar Uplink absorbed the role: line 47 wants MCV
+replacement TIER-GATED, and reading it as a demand for a building of that NAME
+would have added a structure whose only job is to be a prerequisite.
+
+**The first defect came from a gate stage that DERIVES a list.** Stage 3 counts
+units whose prerequisite names their own producer. `World.cs` had a hand-written
+comment naming them, correct when written, silently wrong from the moment
+ADR-028's air layer added the strike flyer - and mis-attributing the rest to
+Q007, which is about the engineer. A comment documenting the
+hand-kept-list-lags-its-catalogue defect had become an instance of it. Now
+Q018.
+
+**The second came from taking ADR-055's rule seriously**, and it is the more
+serious finding. Deleting the AI's new guard changed nothing, tick for tick.
+Four successive fixtures failed to make it bite, each failure measured rather
+than reasoned about, and the last measurement found why: **a commander that
+loses its Construction Yard stops playing entirely.** The army block is gated on
+`wanted == 0`, the yard ladder can never be satisfied without a yard, so a base
+with a live factory, barracks, refinery, harvester and twenty thousand credits
+builds nothing for the rest of the match. Controlled measurement, same world,
+one variable: yard present, nine thousand credits spent; yard absent, **zero,
+forever**.
+
+Killing the yard is the most common thing that happens to a base in this genre,
+and the benchmark games all expect the loser of that exchange to keep fighting.
+Filed as `DEFECT-AI-yard-loss-freeze.md`, and it is the strongest remaining
+parity gap in the AI.
+
+**The lesson generalises the ledger's own habit.** The hunt looked for questions
+one step to the side of an existing gate. This found more by asking, of a guard
+that had just been written, *what state would make this matter* - and refusing
+to accept a fixture that could not answer. The four failed fixtures were not
+wasted work; the fourth one was the defect.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the
