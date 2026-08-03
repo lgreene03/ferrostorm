@@ -118,7 +118,8 @@
         "enum": [
           "orbital_scan",
           "precision_strike",
-          "radar_jamming"
+          "radar_jamming",
+          "tunnel_deployment"
         ]
       },
       "minItems": 1,

@@ -54,6 +54,16 @@ Each needs the same three answers, and none of them is written anywhere:
   no new mechanic: ADR-008's minimap blackout already existed and a jam is the
   third term in its predicate.
 
+- **tunnel deployment** - ANSWERED and shipped 2026-08-03 (ADR-066). Veil
+  Projector; reach = the mouth's own sight; how many = CarrierCapacity; where
+  they land = the producers' spawn ring; and it may only aim at ground the
+  player can SEE, which is its counterplay. It needed no new state and no
+  invented number - every one belonged to something already in the game.
+
+**Only the DECOY ARMY remains**, and it is the one that may not be buildable as
+specified: entities that look real to one player and not another need per-viewer
+entity visibility, which the sim does not have.
+
 ADR-064 also removed the blocker the rest of this question would have hit: a
 building now unlocks a LIST of powers, because the Directorate owns only three
 exclusive buildings and one power each could never reach s8's "3-4 per faction".

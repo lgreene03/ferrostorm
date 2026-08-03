@@ -798,6 +798,7 @@ public static class StructureCatalogue
         "orbital_scan" => World.OrbitalScanPowerId,
         "precision_strike" => World.PrecisionStrikePowerId,
         "radar_jamming" => World.RadarJammingPowerId,
+        "tunnel_deployment" => World.TunnelDeploymentPowerId,
         _ => throw new FormatException($"unknown support_power '{name}'"),
     };
 
