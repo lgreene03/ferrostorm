@@ -60,6 +60,13 @@ That leaves the Veil Projector still unbuilt by any commander, which is
 belongs with GDD s8's support powers - the largest remaining feature gap - not
 smuggled in under a defence rung. Filed, not fixed.
 
+> **CORRECTED 2026-08-03 by ADR-062.** "It is support machinery" was
+> speculation and is wrong. The Veil Projector is a PERSISTENT AURA that already
+> works - it cloaks nearby friendly units every tick while powered, with no
+> charge, no cooldown and no activation. It is not a timed power and converting
+> it into one would be a design change to a working building. What stands from
+> this row is the measured part: no commander ever builds one.
+
 ### It is bought from SURPLUS, and this is the part that was measured into shape
 
 The rung is gated on `Credits >= Cost + 1500`, matching the radar's and

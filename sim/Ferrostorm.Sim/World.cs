@@ -22,6 +22,12 @@ public enum CommandType : byte
     SetStance = 17,      // EntityId (own unit) stance = (Stance)AuxId; Patrol reads X/Y as the far waypoint (ADR-015)
     LoadTransport = 18,  // P7-3: EntityId (own infantry) boards transport AuxId; walks to it if out of reach
     UnloadTransport = 19,// P7-3: EntityId (own transport) sets its whole cargo down around itself
+    // P7-21: EntityId (own structure whose def carries a support power, charged)
+    // uses it at map position X/Y. GDD s8: "3-4 minor support powers per faction
+    // on shorter timers, UNLOCKED BY STRUCTURES" - so the structure IS the
+    // permission, which is what makes the design rule's "kill it" counterplay
+    // fall out rather than needing to be arranged.
+    UseSupportPower = 20,
 }
 
 public readonly struct Command
@@ -278,6 +284,16 @@ public enum GameEventType : byte
     // already happening. It is the same argument: a robbery is not an
     // ownership change, and the building's flag never moves.
     Robbed = 13,
+    // P7-21: A the unlocking structure. Its superweapon twin is a separate type
+    // for the reason the whole family above keeps re-learning - an alert that
+    // says the wrong thing is worse than no alert - and "your minor power is
+    // ready" is not "your superweapon is ready".
+    SupportPowerReady = 14,
+    // P7-21: A the structure that used it, at map position (X, Y). No warning
+    // twin, unlike SuperweaponLaunched: GDD s8 gives the five-second global ping
+    // and audio warning to the SUPERWEAPON specifically, and a minor power that
+    // announced itself to its victim would have no surprise left to trade on.
+    SupportPowerUsed = 15,
 }
 public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default, int C = -1);
 
@@ -463,7 +479,32 @@ public sealed partial class World
     public bool IsExplored(int player, int cx, int cy)
     { int c = Map.CellIndex(cx, cy); return (_explored[player][c >> 6] & (1UL << (c & 63))) != 0; }
 
-    private int Add(in Entity e) { _entities.Add(e); return e.Id; }
+    private int Add(in Entity e)
+    {
+        // P7-21: a building that grants a support power starts UNCHARGED.
+        //
+        // Found by the gate rather than by design, which is the useful part: the
+        // first version let a freshly built power building fire on the tick it
+        // landed, because ChargeTicks defaults to 0 and 0 means READY. A timer
+        // you can skip by rebuilding the building is not a timer, and GDD s8's
+        // whole sentence is about timers.
+        //
+        // Done HERE because Add is the one funnel every spawn passes through -
+        // there are two dozen BlockFootprint sites and no shared structure
+        // helper, so any other choice would be the hand-duplicated-constant
+        // shape this phase keeps finding. Keyed on the DEF carrying a power, so
+        // it is a no-op for every building in the shipped catalogue and this row
+        // stays hash-neutral.
+        if (IsStructure(e.Kind) && e.ChargeTicks == 0 && GetStructureType(e.StructType).SupportPowerId != 0)
+        {
+            var seeded = e;
+            seeded.ChargeTicks = SupportPowerChargeTicks;
+            _entities.Add(seeded);
+            return seeded.Id;
+        }
+        _entities.Add(e);
+        return e.Id;
+    }
 
     public int SpawnUnit(int player, Fix64 x, Fix64 y, Fix64 speed, int hp, ArmourClass armour, int weaponId, int sightCells = 5,
         bool stealth = false, bool detector = false, bool veterancy = true, int unitType = 0)
@@ -1069,7 +1110,23 @@ public sealed partial class World
         // is a producer that belongs beside the defences, and the wall, the
         // veil, the superweapon and the mine carry no weapon. See the enum for
         // why it is deliberately absent from CatalogueChecksum.
-        BuildTab Tab = BuildTab.None)
+        BuildTab Tab = BuildTab.None,
+        // P7-21: this building UNLOCKS A SUPPORT POWER, and which one. 0 means
+        // none, so every building authored before this row is untouched and the
+        // charge pass below is a no-op for all of them - which is what keeps
+        // this row hash-neutral.
+        //
+        // GDD s8: "3-4 minor support powers per faction on shorter timers,
+        // UNLOCKED BY STRUCTURES". The power lives on the STRUCTURE DEF rather
+        // than in a per-player list of unlocked abilities, and that is the whole
+        // design decision. It makes s8's own counterplay rule - "spread out,
+        // scout the structure, KILL IT" - fall out of the data model instead of
+        // needing to be arranged: the permission IS the building, so killing the
+        // building removes the power with no bookkeeping to get wrong.
+        //
+        // Asked as a property, never as a type id, because that is the mistake
+        // this phase has now corrected about seventeen times.
+        int SupportPowerId = 0)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -1099,6 +1156,11 @@ public sealed partial class World
             // stops a bare World (no /data at all) offering a different sidebar
             // from a loaded one.
             && Tab == other.Tab
+            // P7-21: and the support power, which UNLIKE the tab does ride the
+            // checksum - it decides what a command may do, so two peers holding
+            // different answers would diverge rather than merely disagree about
+            // a button.
+            && SupportPowerId == other.SupportPowerId
             && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
@@ -1106,6 +1168,7 @@ public sealed partial class World
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
             h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector); h.Add(DestroysFields);
+            h.Add(SupportPowerId); // P7-21
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
         }
@@ -1630,6 +1693,14 @@ public sealed partial class World
                 // would watch the same launch take the map's economy apart on
                 // one machine and not the other.
                 h.Add(d.DestroysFields);
+                // P7-21: which support power this building unlocks. It decides
+                // whether a UseSupportPower command is ACCEPTED and what it
+                // does, so two peers holding different answers would watch one
+                // machine's power fire and the other's refuse from the same
+                // command stream, while every stat in the game matched. Folded
+                // BEFORE the prereqs, beside the other decision-carrying
+                // columns, rather than appended at the end.
+                h.Add(d.SupportPowerId);
                 h.Add(d.Prereqs?.Length ?? 0);
                 if (d.Prereqs != null) foreach (int p in d.Prereqs) h.Add(p);
             }
@@ -1964,7 +2035,7 @@ public sealed partial class World
     /// <param name="structType">P7-5c: which side's superweapon. Defaults to the
     /// Directorate's orbital cannon, so every existing caller and every golden
     /// scenario spawns exactly the building it always did.</param>
-    public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = 1500,
+    public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = SuperweaponChargeTicks,
                                 int structType = OrbitalCannonStructType)
     {
         var def = GetStructureType(structType);
@@ -2996,6 +3067,48 @@ public sealed partial class World
                 _events.Add(new GameEvent(GameEventType.SuperweaponLaunched, c.EntityId, -1, e.StrikeX, e.StrikeY));
                 break;
             }
+            // P7-21: GDD s8's minor powers. Deliberately NOT a widened
+            // LaunchSuper, for ADR-044 clause 4's reason applied a second time:
+            // that path is shared with two superweapons whose warning, strike
+            // delay and impact are asserted by three gates and two goldens, and
+            // adding a branch to it would put both of them one careless
+            // condition away from changing.
+            case CommandType.UseSupportPower:
+            {
+                // The three refusals, in the order they express the design.
+                //
+                // 1. THE STRUCTURE IS THE PERMISSION (GDD s8, "unlocked by
+                //    structures"). Asked of the def, so a building grants a
+                //    power the day its file says so and never because of its
+                //    kind or its type id.
+                if (!IsStructure(e.Kind)) break;
+                int power = GetStructureType(e.StructType).SupportPowerId;
+                if (power == 0) break;
+                // 2. IT MUST BE CHARGED. The same shape as the superweapon's,
+                //    on a third of the clock.
+                if (e.ChargeTicks > 0) break;
+                // 3. And it fires at a place on the map, clamped like every
+                //    other map-targeted command in this switch.
+                Fix64 px = Fix64.Clamp(c.X, Fix64.Zero, Fix64.FromInt(Map.Width));
+                Fix64 py = Fix64.Clamp(c.Y, Fix64.Zero, Fix64.FromInt(Map.Height));
+                // The cycle begins again immediately: a minor power has no
+                // strike delay, which is what distinguishes it from the
+                // superweapon rather than merely making it smaller. GDD s8
+                // gives the global ping and five-second warning to the
+                // superweapon alone, and a surprise the victim is warned about
+                // is not a dirty trick.
+                e.ChargeTicks = SupportPowerChargeTicks;
+                _events.Add(new GameEvent(GameEventType.SupportPowerUsed, c.EntityId, power, px, py));
+                // NOTE, and it is the honest state of this row: no EFFECT is
+                // applied here yet. P7-21 lands the machinery - charge, ready,
+                // the command, its three refusals, the checksum fold and the
+                // counterplay - and each named power arrives in its own wave
+                // with its own numbers and its own ADR. GDD s3 names five
+                // (orbital scan, precision strike, radar jamming, decoy army,
+                // tunnel deployment) and every one of them needs a radius or a
+                // duration that is not written anywhere.
+                break;
+            }
             case CommandType.SellStructure:
             {
                 if (!IsStructure(e.Kind)) break;
@@ -3243,6 +3356,38 @@ public sealed partial class World
     /// <summary>Struct type 7, the Veil Projector: Sodality doctrine. Named
     /// rather than spelled 7 in the gate below, because it was spelled 7 in the
     /// sim AND in the sidebar, in two projects, with nothing tying them.</summary>
+    /// <summary>
+    /// P7-21: the superweapon's charge, named ONCE. It was written as a bare
+    /// 1500 at two sites - SpawnSuperweapon's default and the recharge that
+    /// begins the cycle again - which is the hand-duplicated-constant shape this
+    /// phase keeps finding. Same value, so nothing moves.
+    ///
+    /// ADR-044 REFUSED changing this to GDD s8's "~6 minute charge" (5400
+    /// ticks), as an A11 balance call awaiting co-sign. That refusal stands, and
+    /// naming the number does not weaken it - it makes the day it is taken a
+    /// one-line change rather than a hunt.
+    /// </summary>
+    public const int SuperweaponChargeTicks = 1500;
+
+    /// <summary>
+    /// P7-21: a support power's charge, DERIVED rather than invented.
+    ///
+    /// GDD s8 says support powers run on "shorter timers" - shorter THAN THE
+    /// SUPERWEAPON, which is the only other timer in the sentence. So this is
+    /// expressed as a fraction of that charge rather than as an absolute, and
+    /// "shorter" stays true BY CONSTRUCTION: if ADR-044's refusal is ever
+    /// overturned and the superweapon goes to 5400, support powers scale with it
+    /// and the specification is still honoured without anyone remembering to
+    /// look here.
+    ///
+    /// A THIRD, chosen for readability the way ADR-044 chose the seismic
+    /// charge's radius of exactly twice: a ratio a reader can hold. Rejected: a
+    /// half, too close to read as a different class of thing; a fifth, which at
+    /// 300 ticks is twenty seconds and makes a "power" into a cooldown.
+    /// </summary>
+    public const int SupportPowerChargeDivisor = 3;
+    public const int SupportPowerChargeTicks = SuperweaponChargeTicks / SupportPowerChargeDivisor;
+
     public const int VeilStructType = 7;
 
     /// <summary>
@@ -5149,6 +5294,25 @@ public sealed partial class World
                 _entities[i] = e;
                 continue;
             }
+            // P7-21: support powers charge on the same terms as the superweapon
+            // and on a THIRD of its clock (GDD s8's "shorter timers"). Keyed on
+            // the DEF carrying a power, never on a kind or a type id, so a
+            // building acquires one the day its file says so.
+            //
+            // Power-gated exactly as the superweapon is, and that is s5's rule
+            // rather than a choice made here: a browned-out base stops charging.
+            // It is also the second half of s8's counterplay - you can smother a
+            // power by killing generators, not only the building itself.
+            if (IsStructure(e.Kind) && GetStructureType(e.StructType).SupportPowerId != 0)
+            {
+                int spp = e.PlayerId;
+                if (e.ChargeTicks > 0 && supply[spp] >= draw[spp])
+                {
+                    if (--e.ChargeTicks == 0)
+                        _events.Add(new GameEvent(GameEventType.SupportPowerReady, i, -1));
+                    _entities[i] = e;
+                }
+            }
             if (e.Kind == EntityKind.Superweapon)
             {
                 int sp = e.PlayerId;
@@ -5161,7 +5325,7 @@ public sealed partial class World
                 else if (e.StrikeTicks == 0)
                 {
                     e.StrikeTicks = -1;
-                    e.ChargeTicks = 1500; // the cycle begins again
+                    e.ChargeTicks = SuperweaponChargeTicks; // the cycle begins again
                     _events.Add(new GameEvent(GameEventType.SuperweaponImpact, i, -1, e.StrikeX, e.StrikeY));
                     _entities[i] = e;
                     // P7-5c: THE ONE PLACE the two superweapons differ. Charge,

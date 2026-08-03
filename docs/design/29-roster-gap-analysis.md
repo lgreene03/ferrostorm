@@ -68,7 +68,7 @@ GDD s7 names the missing unit: the Sodality's mainline light tank.
 |---|---|---|
 | **Air** | 1 aircraft, 1 anti-air weapon on 1 unit | **no anti-air building anywhere** |
 | **Splash** | 1 gun splashes (`wpn_howitzer`) | every other area effect is non-weapon |
-| **Support powers** | **nothing at all** | GDD s8 promises 3 to 4 per faction |
+| **Support powers** | **machinery shipped 2026-08-03 (P7-21, ADR-062); no power has an effect yet** | GDD s8 promises 3 to 4 per faction - **and this row was incomplete: GDD s3 already NAMES FIVE** (Directorate "surgical: orbital scan, precision strike"; Sodality "dirty tricks: radar jamming, decoy army, tunnel deployment"). The roster was two-thirds specified all along and this analysis said "nothing at all". Numbers filed as Q021 |
 
 Research names anti-air as *the* most commonly missed role, and notes air
 advantage scales with map size because "the relative range of anti-air is
