@@ -459,6 +459,7 @@ public sealed partial class World
         _credits = new long[players];
         int words = (mapWidth * mapHeight + 63) / 64;
         _eliminatedAnnounced = new bool[players];
+        _radarJamUntil = new int[players];   // P7-24: 0 = never jammed
         _playerFaction = new byte[players]; // everyone Directorate until told otherwise
         // P7-8c: everyone on their own team until a lobby says otherwise, which
         // is what makes a free-for-all the default by construction rather than
@@ -474,6 +475,20 @@ public sealed partial class World
     public IReadOnlyList<Entity> Entities => _entities;
     public DeterministicRandom Rng => _rng;
     public long Credits(int player) => _credits[player];
+    /// <summary>
+    /// P7-24: is this player's radar jammed right now? PUBLIC because the
+    /// CLIENT must ask it - ADR-008 computes the minimap blackout as
+    /// `hasUplink && supply >= draw`, and a jam is the third term.
+    ///
+    /// The answer lives in the SIM rather than in the client, which is the whole
+    /// architectural point: a blackout the client decided for itself would
+    /// differ between two LAN peers watching the same command stream, and the
+    /// hardcoded-seat guard exists because exactly that class of mistake keeps
+    /// being made here.
+    /// </summary>
+    public bool IsRadarJammed(int player)
+        => (uint)player < (uint)_radarJamUntil.Length && _radarJamUntil[player] > Tick;
+
     public bool IsVisible(int player, int cx, int cy)
     { int c = Map.CellIndex(cx, cy); return (_visible[player][c >> 6] & (1UL << (c & 63))) != 0; }
     public bool IsExplored(int player, int cx, int cy)
@@ -849,6 +864,19 @@ public sealed partial class World
     /// iteration order is the command order and needs no sort to stay
     /// deterministic.
     /// </summary>
+    /// <summary>
+    /// P7-24: live radar jams, one entry per blinded player. A SIDE COLLECTION
+    /// on exactly the terms _scans uses and for exactly its reason: empty in
+    /// every scenario that never fires one, so the guarded fold contributes zero
+    /// bytes and this row stays hash-neutral.
+    ///
+    /// Indexed BY PLAYER rather than keyed, so there is no dictionary iteration
+    /// order to leak into a hash or a save, and re-jamming an already-jammed
+    /// player REFRESHES rather than stacking - two jams do not blind anyone
+    /// twice as hard.
+    /// </summary>
+    private int[] _radarJamUntil = System.Array.Empty<int>();
+
     private readonly List<ScanReveal> _scans = new();
     private readonly struct ScanReveal
     {
@@ -1411,7 +1439,11 @@ public sealed partial class World
         21 => new StructureTypeDef(350, EntityKind.WatchPost, 80, Hp: 260, SightCells: 8,
                                    PowerDraw: 15, Footprint: 1, Prereqs: new[] { 1 },
                                    Faction: FactionSodality, Detector: true,
-                                   Tab: BuildTab.Defence),
+                                   // P7-24: and it carries GDD s3 line 30's RADAR JAMMING. The
+                                   // Sodality's sensor building is where sensor warfare belongs -
+                                   // my eyes on, your eyes off, from one structure a scout can
+                                   // find and kill, which is s8's counterplay by construction.
+                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { RadarJammingPowerId }),
         // P7-5c (DR-04): the Sodality's SEISMIC CHARGE. GDD s8 says "one
         // superweapon per faction", so every number it shares with the orbital
         // cannon is shared ON PURPOSE - same 4000 credits, same 600 build
@@ -3173,6 +3205,24 @@ public sealed partial class World
                 // parameter would put every mine in the game one careless
                 // argument from changing.
                 else if (power == PrecisionStrikePowerId) ApplyPrecisionStrike(px, py);
+                // P7-24: GDD s3 line 30's RADAR JAMMING, the first Sodality
+                // dirty trick. It blinds every player HOSTILE to the firer -
+                // not a map position, because a radar is not somewhere you aim.
+                // The command's X/Y are therefore unused by this power, which is
+                // honest rather than untidy: a jam has no ground zero.
+                //
+                // Re-jamming REFRESHES rather than stacks, and allies are never
+                // caught: ADR-038's splash rule does not apply here because this
+                // is not splash - it is an effect on a PLAYER, and a trick that
+                // blinded your own team would be played by nobody.
+                else if (power == RadarJammingPowerId)
+                {
+                    for (int pl = 0; pl < _players; pl++)
+                    {
+                        if (TeamOf(pl) == TeamOf(c.PlayerId)) continue;
+                        _radarJamUntil[pl] = Tick + RadarJamTicks;
+                    }
+                }
                 // NOTE, and it is the honest state of this row: no EFFECT is
                 // applied here yet. P7-21 lands the machinery - charge, ready,
                 // the command, its three refusals, the checksum fold and the
@@ -3481,6 +3531,33 @@ public sealed partial class World
     /// PRECISION STRIKE. Power id 2.
     /// </summary>
     public const int PrecisionStrikePowerId = 2;
+
+    /// <summary>
+    /// P7-24: GDD s3 line 30 names the Sodality's RADAR JAMMING, the first of
+    /// its three dirty tricks. Power id 3.
+    /// </summary>
+    public const int RadarJammingPowerId = 3;
+
+    /// <summary>
+    /// P7-24: how long a jam blinds its victims, DERIVED as a third of the
+    /// power's own charge rather than invented.
+    ///
+    /// The THIRD is this project's established ratio, used twice already and for
+    /// the same reason each time: ADR-062 gave a support power a third of the
+    /// superweapon's charge, and ADR-064 gave the precision strike a third of
+    /// the orbital cannon's damage. Applying it one level down gives a jam that
+    /// is up for a third of its own cooldown - a duty cycle a reader can check,
+    /// and one that says outright that a jammed player is blind AT MOST a third
+    /// of the time even against a commander who fires it the instant it charges.
+    ///
+    /// Rejected: the orbital scan's 75-tick reveal, which is tempting for the
+    /// symmetry (one power gives sight, the other takes it) and is too short to
+    /// be a trick - five seconds of blank minimap is a flicker. Rejected: the
+    /// full charge, which is not a jam at all but a permanent blackout, since
+    /// the power recharges exactly as it lapses.
+    /// </summary>
+    public const int RadarJamTicks = SupportPowerChargeTicks / 3;
+
 
     /// <summary>P7-23: does this building unlock anything? Asked in one place so
     /// the null-or-empty question is answered identically at the three sites
@@ -6130,6 +6207,14 @@ public sealed partial class World
         // world in which none was ever fired - which is all 24 goldens - hashes
         // byte-identically to one compiled before scans existed. Guarded, never
         // unconditional.
+        // P7-24: live radar jams, folded on exactly the scans' terms. A jam
+        // decides what a player can SEE on its minimap, and a peer that
+        // disagreed about it would show a different map from the same command
+        // stream. Guarded: a deadline of 0 or one already lapsed contributes
+        // nothing, so a world in which none was fired - which is all 24
+        // goldens - hashes byte-identically to one compiled before jams existed.
+        for (int pl = 0; pl < _radarJamUntil.Length; pl++)
+            if (_radarJamUntil[pl] > Tick) { h.Add(pl); h.Add(_radarJamUntil[pl]); }
         if (_scans.Count > 0)
         {
             h.Add(_scans.Count);

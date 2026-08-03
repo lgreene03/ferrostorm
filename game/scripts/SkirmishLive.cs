@@ -2102,7 +2102,13 @@ public partial class SkirmishLive : Node3D
                     (float)(e.X.Raw / 4294967296.0), (float)(e.Y.Raw / 4294967296.0));
                 break;
             }
-        bool radarLive = hasUplink && supply >= draw;
+        // P7-24 (ADR-065): and GDD s3 line 30's RADAR JAMMING is the third term.
+        // Asked of the SIM, never decided here: a blackout the client worked out
+        // for itself would differ between two LAN peers reading the same command
+        // stream, and it would differ in the direction this project's
+        // hardcoded-seat guard exists to catch. LocalPlayerId, so a joiner sees
+        // ITS OWN jam rather than the host's.
+        bool radarLive = hasUplink && supply >= draw && !_world.IsRadarJammed(LocalPlayerId);
         if (!radarLive && _wasRadarLive)
         {
             // ALERT-02's last clause, through the standard alert plumbing:
