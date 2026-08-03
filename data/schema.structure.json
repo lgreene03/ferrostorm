@@ -3,44 +3,120 @@
   "title": "Structure definition",
   "description": "TICKET-P5-BD-06. Mirrors schema.unit.json's shape for placeable structures. CLAUDE.md forbids hand-editing stats in code, so these files are the catalogue and World's compiled defaults exist only to be proved equal to them by the selftest round-trip.",
   "type": "object",
-  "required": ["id", "name", "faction", "cost", "build_time_ticks", "hp", "power_supply", "power_draw", "sight_range", "footprint", "build_tab"],
+  "required": [
+    "id",
+    "name",
+    "faction",
+    "cost",
+    "build_time_ticks",
+    "hp",
+    "power_supply",
+    "power_draw",
+    "sight_range",
+    "footprint",
+    "build_tab"
+  ],
   "additionalProperties": false,
   "properties": {
-    "id": { "type": "string", "pattern": "^(dir|sod|com)_[a-z0-9_]+$" },
-    "name": { "type": "string", "description": "Player-facing name. British spelling. Must pass legal sweep." },
+    "id": {
+      "type": "string",
+      "pattern": "^(dir|sod|com)_[a-z0-9_]+$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Player-facing name. British spelling. Must pass legal sweep."
+    },
     "faction": {
-      "enum": ["directorate", "sodality", "common"],
+      "enum": [
+        "directorate",
+        "sodality",
+        "common"
+      ],
       "description": "BEHAVIOURAL, exactly like the unit schema's faction key. StructureTypeDef.Faction carries it (added P7-1) and World.StructureAllowedForFaction refuses a BuildStructure command from the wrong side, so this key decides what a player can build. It is folded into CatalogueChecksum (added P7-5), so two peers authoring it differently refuse to play rather than desyncing. 'common' means both sides. Note the id prefix is a LEGACY LABEL and not this key: com_power_plant is directorate-only and dir_turret is common."
     },
-    "cost": { "type": "integer", "minimum": 1, "description": "Credits" },
+    "cost": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Credits"
+    },
     "build_time_ticks": {
       "type": "integer",
       "minimum": 0,
       "description": "Sim ticks at 15Hz. 0 is load-bearing and means 'never queued at a Construction Yard': the yard refuses it (BuildTicks <= 0). The MCV-deployed yard and the upfront-cost barrier both rely on this."
     },
-    "hp": { "type": "integer", "minimum": 1 },
-    "power_supply": { "type": "integer", "minimum": 0, "description": "Power produced" },
-    "power_draw": { "type": "integer", "minimum": 0, "description": "Power consumed" },
-    "sight_range": { "type": "integer", "minimum": 0, "description": "Cells. 0 is load-bearing for barriers: FogSystem skips zero-sight entities." },
-    "footprint": { "type": "integer", "minimum": 1, "maximum": 4, "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal." },
-    "weapon_ids": { "type": "array", "items": { "type": "string" }, "description": "First entry arms the structure; empty is unarmed." },
-    "prerequisites": { "type": "array", "items": { "type": "string" }, "description": "Structure ids required before this may be queued. Parsed and carried on the def; ENFORCEMENT is TICKET-P5-BD-17, which is a sim change." },
+    "hp": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "power_supply": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Power produced"
+    },
+    "power_draw": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Power consumed"
+    },
+    "sight_range": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cells. 0 is load-bearing for barriers: FogSystem skips zero-sight entities."
+    },
+    "footprint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4,
+      "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal."
+    },
+    "weapon_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "First entry arms the structure; empty is unarmed."
+    },
+    "prerequisites": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Structure ids required before this may be queued. Parsed and carried on the def; ENFORCEMENT is TICKET-P5-BD-17, which is a sim change."
+    },
     "max_alive": {
-      "type": "integer", "minimum": 0, "default": 0,
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
       "description": "P7-11c. The per-player cap on LIVING buildings of this type. 0 means unlimited, which is every building but the mine, so an absent key changes nothing. Enforced where the order is queued (BuildStructure) and where it is placed (PlaceStructure), and folded into World.CatalogueChecksum because it decides whether a command is accepted."
     },
     "detector": {
-      "type": "boolean", "default": false,
+      "type": "boolean",
+      "default": false,
       "description": "P7-5b. Whether this building reveals cloaked hostiles within sight_range, which for a detector IS the detection radius (the sim carries no separate detection range). False on every building but the Sodality Watch Post, so an absent key changes nothing. Folded into World.CatalogueChecksum because it decides what a player can SEE and therefore what its units may target: two peers disagreeing would resolve the same firefight differently while every stat matched."
     },
     "destroys_fields": {
-      "type": "boolean", "default": false,
+      "type": "boolean",
+      "default": false,
       "description": "P7-5e. This building's superweapon strike DESTROYS ferrite fields within its radius, which GDD s8 gives to the Sodality seismic charge alone as its economic-warfare identity. False on every other building, so an absent key changes nothing. Read in two places: the impact site chooses the effect by it, and the skirmish AI aims by it (a commander whose superweapon destroys fields hunts the richest CLUSTER of enemy ferrite instead of the nearest refinery). Folded into World.CatalogueChecksum because it decides what a launch does."
     },
     "build_tab": {
-      "enum": ["buildings", "defence", "none"],
+      "enum": [
+        "buildings",
+        "defence",
+        "none"
+      ],
       "description": "Which tab of the build sidebar offers this building. AUTHORED because the split is editorial and nothing on the def implies it: the Airfield is a producer that sits under DEFENCE, and the wall, veil, superweapon and mine carry no weapon. 'none' is the three map-placed buildings (the MCV-deployed yard, the outpost, the bridge) and the loader refuses any file whose answer disagrees with the sim's own queueability rule, so this cannot become a second list of what a player may build. REQUIRED, so a new building cannot arrive with no answer and therefore no button, which is how the sidebar's two hand-kept arrays fell behind the catalogue. Presentation only: the sim reads it nowhere and it is deliberately outside World.CatalogueChecksum."
     },
-    "notes": { "type": "string", "description": "Design intent and GDD traceback." }
+    "notes": {
+      "type": "string",
+      "description": "Design intent and GDD traceback."
+    },
+    "support_power": {
+      "type": "string",
+      "enum": [
+        "orbital_scan"
+      ],
+      "description": "P7-22. Which support power this building UNLOCKS (GDD s8: \"3-4 minor support powers per faction on shorter timers, unlocked by structures\"). Absent means none, which is every building but the Bastion. An ENUM rather than a free string, so a typo is refused by the schema before the loader has to throw. The unlocking building is also the power's counterplay - GDD s8's design rule is \"scout the structure, kill it\" - so this key decides how the power is answered as well as how it is gained."
+    }
   }
 }

@@ -27,6 +27,9 @@ public static class DataLoader
         int MaxAlive = 0,          // P7-11c: 0 means unlimited, which is every building but the mine
         bool Detector = false,     // P7-5b: reveals cloak within sight_range, which only a unit could do before
         bool DestroysFields = false, // P7-5e: this building's strike deletes ferrite fields (GDD s8's seismic charge)
+        // P7-22: which support power this building unlocks, by /data id. Empty
+        // means none, which is every building but the Bastion.
+        string SupportPower = "",
         // Which build tab offers this building: "buildings", "defence" or
         // "none". REQUIRED by the schema on every file, so a new building
         // cannot arrive without an answer; "none" is the three map-placed
@@ -224,6 +227,11 @@ public static class DataLoader
             // P7-5e: absent means false, which is every building but the
             // seismic charge.
             DestroysFields: OptBool(m, "destroys_fields", false),
+            // P7-22: absent means no power, which is every building but the
+            // Bastion. Named rather than numbered in the file for the reason
+            // every /data cross-reference is: `orbital_scan` says what it is,
+            // and 1 does not.
+            SupportPower: m.TryGetValue("support_power", out var spw) ? spw : "",
             BuildTab: buildTab,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
@@ -762,8 +770,31 @@ public static class StructureCatalogue
                // never reads. It crosses for the same reason all the same: a
                // key authored, validated and dropped is the P7-1 defect, and
                // here it would leave the sidebar guessing again.
-               tab);
+               tab,
+               // P7-22: and the support power, resolved from its /data name.
+               // Parsed-and-dropped here would be the loudest instance yet of
+               // this project's most-repeated defect: a building advertising an
+               // ability in its file that the sim never granted.
+               SupportPowerIdOf(s.SupportPower));
     }
+
+    /// <summary>
+    /// P7-22: /data support-power names to the sim's ids. A compiled map keyed
+    /// by the /data id, exactly as WeaponIdOf and the structure ids are, and for
+    /// the identical reason: the file names the thing, the map names the number,
+    /// and neither is free to drift alone.
+    ///
+    /// An UNKNOWN name throws rather than silently meaning none - a typo in
+    /// `support_power` would otherwise ship a building whose file promises an
+    /// ability it does not have, which is the exact failure the loud-refusal
+    /// rule exists for.
+    /// </summary>
+    public static int SupportPowerIdOf(string name) => name switch
+    {
+        "" => 0,
+        "orbital_scan" => World.OrbitalScanPowerId,
+        _ => throw new FormatException($"unknown support_power '{name}'"),
+    };
 }
 
 /// <summary>

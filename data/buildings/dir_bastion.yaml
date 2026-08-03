@@ -18,3 +18,14 @@ footprint: 2
 weapon_ids: [wpn_turret_gun]
 prerequisites: [com_radar_uplink]
 build_tab: defence
+# P7-22 (ADR-063): the Directorate's ORBITAL SCAN, GDD s3 line 25, doctrine word
+# "surgical". The Bastion carries it because it is the Directorate's EYE as much
+# as its gun - sight_range 7 is the widest of any building in the game - and
+# because GDD s8's counterplay rule ("scout the structure, kill it") wants the
+# unlocking building to be findable and killable, which a forward defensive
+# hardpoint is by construction.
+#
+# The scan's RADIUS is this building's own sight_range, not a separate number:
+# the scan shows what its sensors would see, projected anywhere on the map.
+# Change sight_range and the scan changes with it, deliberately.
+support_power: orbital_scan
