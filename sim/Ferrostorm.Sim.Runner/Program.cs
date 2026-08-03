@@ -9387,6 +9387,78 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int ParityProbe()
+{
+    // P7-27. A DERIVED status report for doc 24's parity tiers, and it exists
+    // because that document had fallen behind the work in three places at once.
+    //
+    // Measured on 2026-08-03, doc 24's Tier B claimed:
+    //   B1 "the turret is the only defence in the game"  - 12 defence buildings
+    //   B4 "No hero unit"                                 - both Commandos ship
+    //   B6 "No mines or minelayer. NOT TAKEN"             - com_mine ships, and
+    //                                                       minegate asserts it
+    //
+    // The tracker's own header already warns that "several of the design docs
+    // lag by whole waves", which is the project knowing about a defect and
+    // writing a note instead of a check. This is the check: a reader comparing
+    // doc 24's prose to this output sees the lag immediately, and nobody has to
+    // remember to look.
+    //
+    // NON-ASSERTING, deliberately. Every number here is a COUNT of what the
+    // catalogue holds, and counts are the project's definition of a balance
+    // question rather than a correctness one (ADR-061's gate-vs-probe rule). A
+    // gate pinning "there are 12 defence buildings" would fail the day somebody
+    // authored a thirteenth, which is not a defect.
+    var w = new World(9000, 32, 32, players: 2);
+
+    int Structs(System.Func<World.StructureTypeDef, bool> pred, int faction = -1)
+    {
+        int n = 0;
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            var d = w.GetStructureType(t);
+            if (d.BuildTicks <= 0 && d.Kind == EntityKind.Unit) continue;
+            if (d.Cost == 0 && d.Hp == 0) continue;              // not a real entry
+            if (faction >= 0 && d.Faction != faction) continue;
+            if (pred(d)) n++;
+        }
+        return n;
+    }
+    int Units(System.Func<World.UnitTypeDef, bool> pred)
+    {
+        int n = 0;
+        for (int t = 1; t <= 20; t++) { var d = w.GetUnitType(t); if (d.Hp > 0 && pred(d)) n++; }
+        return n;
+    }
+    int PowersFor(int faction)
+    {
+        int n = 0;
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            var d = w.GetStructureType(t);
+            if (d.SupportPowerIds == null) continue;
+            if (d.Faction != faction) continue;
+            n += d.SupportPowerIds.Length;
+        }
+        return n;
+    }
+
+    Console.WriteLine("parityprobe: doc 24's tier claims, DERIVED from the catalogue rather than remembered.");
+    Console.WriteLine($"  B1 defence-tab buildings ............ {Structs(d => d.Tab == BuildTab.Defence)} "
+                      + $"(Directorate-only {Structs(d => d.Tab == BuildTab.Defence, World.FactionDirectorate)}, "
+                      + $"Sodality-only {Structs(d => d.Tab == BuildTab.Defence, World.FactionSodality)})");
+    Console.WriteLine($"  B4 hero units (MaxAlive == 1) ....... {Units(d => d.MaxAlive == 1)}");
+    Console.WriteLine($"  B6 mine-laying buildings ............ {Structs(d => d.Kind == EntityKind.Mine)}");
+    Console.WriteLine($"  s8 support powers, Directorate ...... {PowersFor(World.FactionDirectorate)}"
+                      + "   (GDD s8 asks 3-4 per faction)");
+    Console.WriteLine($"  s8 support powers, Sodality ......... {PowersFor(World.FactionSodality)}");
+    Console.WriteLine($"  roster: units ....................... {Units(_ => true)}");
+    Console.WriteLine($"  roster: buildings ................... {Structs(_ => true)}");
+    Console.WriteLine($"  detectors (buildings) ............... {Structs(d => d.Detector)}");
+    Console.WriteLine($"  superweapons ........................ {Structs(d => d.Kind == EntityKind.Superweapon)}");
+    return 0;
+}
+
 int DecoyArmyGate()
 {
     // P7-26 (ADR-067). GDD s3 line 30's DECOY ARMY, the last of the five named
@@ -14303,6 +14375,7 @@ return args.Length == 0
         "radarjamminggate" => RadarJammingGate(),
         "tunneldeploymentgate" => TunnelDeploymentGate(),
         "decoyarmygate" => DecoyArmyGate(),
+        "parityprobe" => ParityProbe(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),

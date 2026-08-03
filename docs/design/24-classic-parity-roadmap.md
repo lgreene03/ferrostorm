@@ -80,7 +80,15 @@ the cost of that decision is visible in a way it was not before.
 
 ## Tier B: roster holes that distort play
 
-**B1. One defensive structure.** The turret is the only defence in the game.
+**B1. One defensive structure. STALE, CORRECTED 2026-08-03 (P7-27).** This
+section said "the turret is the only defence in the game". **Measured, there are
+TWELVE buildings on the defence tab**, two of them Directorate-only and four
+Sodality-only: P7-2b shipped the Bastion and the Shroud Nest, ADR-043 the Watch
+Post, and ADR-060 made the commander actually build its own side's. `parityprobe`
+now derives that count so this cannot go stale unnoticed again. The original text
+is kept below because its correction is worth more than the claim.
+
+The turret is the only defence in the game.
 Its file used to read `faction: directorate`, and this document's first draft
 reported that as the Sodality being unable to defend at all. **That was wrong**,
 and the correction is worth keeping: nothing enforced the line. StructureTypeDef
@@ -130,7 +138,12 @@ analysis noticing that a benchmark had something is not the same as this game's
 design asking for it, and the remainder of B3 needs a Producer to say which of
 those three, if any, this game actually wants before it is a ticket.
 
-**B4. No hero unit.** Each benchmark had one, and it carried a disproportionate
+**B4. No hero unit. STALE, CORRECTED 2026-08-03 (P7-27).** **Measured, TWO hero
+units ship** - `dir_commando` and `sod_shadow_commando`, both capped at one alive
+per player, delivered by P7-11b. `parityprobe` derives the count from the
+MaxAlive cap rather than from a list anyone maintains.
+
+Each benchmark had one, and it carried a disproportionate
 share of that game's character. **NOT TAKEN, and blocked on the Producer**
 (P7-11b). The GDD names both heroes - `Commando (hero, one at a time)` and
 `Shadow Commando (hero)` - and gives neither an ability, stats nor a tier, and
@@ -149,7 +162,13 @@ information warfare. It has nothing that steals, reveals, disables or denies: no
 spy, no thief, no jamming structure. The Sodality's written identity is raiding
 and economy denial, and the roster gives it no tool for the second half of that.
 
-**B6. No mines or minelayer.** **NOT TAKEN, and blocked on the Producer**
+**B6. No mines or minelayer. STALE, CORRECTED 2026-08-03 (P7-27).** **Measured,
+`com_mine` ships and `minegate` asserts its 1.5/3-cell shape** - P7-11c delivered
+it, and ADR-044 clause 4 later cited that gate's assertion as the reason the
+seismic charge needed its own effect function. The refusal below was overtaken by
+events and nobody updated it.
+
+~~**NOT TAKEN, and blocked on the Producer**~~
 (P7-11c). Worth stating what this one-line entry is actually asking for, because
 the line badly understates it: the word "mine" appears nowhere in the GDD, in
 any ADR, or anywhere in `sim/`. The damage half would be nearly free - splash
