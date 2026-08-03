@@ -274,6 +274,13 @@ the common turret works for either side.
 > weapon, so a defence rung buying one would be answering an attack with a cloak
 > field. It is support machinery and belongs with GDD s8's support powers.
 >
+> **That last clause was wrong, corrected 2026-08-03 by ADR-062.** The Veil
+> Projector is a PERSISTENT AURA that already works - powered projectors cloak
+> nearby friendly units every tick, and a brown-out drops the veil. It has no
+> charge, no cooldown and no activation, so it is not a support power and making
+> it one would be a design change to a working building. The real gap ADR-060
+> measured is the one that stands: no commander ever builds one.
+>
 > The row also produced the phase's first **balance** finding of any size, and
 > it came from a control the row did not have to run. Ungated, the new rung
 > flipped the faction war from Directorate 6-0 to **0-6**: the Bastion costs

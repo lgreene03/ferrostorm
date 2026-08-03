@@ -9355,6 +9355,139 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int SupportPowerGate()
+{
+    // P7-21 (ADR-062). GDD s8's second sentence, which had NO machinery in the
+    // sim at all: "3-4 minor support powers per faction on SHORTER TIMERS,
+    // UNLOCKED BY STRUCTURES", plus the design rule "every power has counterplay
+    // (spread out, scout the structure, KILL IT)".
+    //
+    // What this catches that no existing gate does: aisupergate and the two
+    // superweapon scenarios all assert the SUPERWEAPON path - one power per
+    // faction, a five-second warning, a strike delay, an impact. None of them
+    // can see a minor power, because until this row there was not one, and the
+    // command they exercise (LaunchSuper) is deliberately NOT the one this row
+    // adds - ADR-044 clause 4's argument applied a second time.
+    //
+    // Every stage asserts the SPECIFICATION rather than the implementation's
+    // constants: the charge is checked as a RATIO against the superweapon's
+    // ("shorter timers" is relative, and it is the only other timer in the
+    // sentence), and the counterplay is checked as an OUTCOME.
+    // The Radar Uplink is used as the CARRIER, re-registered per world with a
+    // power added and nothing else changed. That is deliberately not the same as
+    // giving the shipped game a power: the override lives in this gate's world
+    // only, so the machinery is proved without the catalogue acquiring an
+    // ability nobody designed. The ROSTER is a Game Designer's - GDD s3 names
+    // five and not one of them has a radius or a duration written anywhere.
+    const int Carrier = 12;
+    const int TestPower = 1;
+
+    World WithPower(ulong seed, out int bld)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        var stock = w.GetStructureType(Carrier);
+        w.RegisterStructureType(Carrier, stock with { SupportPowerId = TestPower });
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        bld = w.SpawnRadarUplink(0, 20, 20);
+        return w;
+    }
+
+    // --- 1. SHORTER THAN THE SUPERWEAPON, asserted as the ratio rather than as
+    //        the number. GDD s8 says "shorter timers"; the superweapon is the
+    //        only other timer in that sentence, so that is the bound, and
+    //        writing it this way survives ADR-044's refused change to the
+    //        superweapon's own charge.
+    {
+        if (World.SupportPowerChargeTicks >= World.SuperweaponChargeTicks)
+            return Fail($"support power: a power charges in {World.SupportPowerChargeTicks} ticks against the "
+                        + $"superweapon's {World.SuperweaponChargeTicks} - GDD s8 says minor powers run on SHORTER "
+                        + "timers, and shorter than the superweapon is the only reading that sentence supports");
+        if (World.SupportPowerChargeTicks <= 0)
+            return Fail("support power: a charge of zero or less is not a timer at all");
+    }
+
+    // --- 2. It CHARGES and announces itself, and cannot be used before then.
+    {
+        var w = WithPower(7100, out int bld);
+        // Firing while still charging must be refused, or the timer means
+        // nothing. This is the stage that would pass vacuously if the command
+        // did not check ChargeTicks.
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
+                                   Map.CellCentre(30), Map.CellCentre(30)) });
+        if (w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
+            return Fail("support power: a power fired while still charging - the timer decides nothing");
+
+        bool ready = false;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 50; t++)
+        {
+            w.Step(default);
+            if (w.Events.Any(ev => ev.Type == GameEventType.SupportPowerReady)) { ready = true; break; }
+        }
+        if (!ready)
+            return Fail($"support power: no SupportPowerReady within {World.SupportPowerChargeTicks + 50} ticks - "
+                        + "a power that never becomes ready is not on a timer, it is off");
+    }
+
+    // --- 3. THE COUNTERPLAY CLAUSE, which is the one line of GDD s8 that is
+    //        directly testable: "scout the structure, KILL IT". Killing the
+    //        unlocking building must remove the power.
+    {
+        var w = WithPower(7101, out int bld);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        // THE CONTROL FIRST, and without it this stage is satisfied by a power
+        // that never works at all - which is a different bug wearing the same
+        // passing test (ADR-059 stage 2's rule).
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
+                                   Map.CellCentre(30), Map.CellCentre(30)) });
+        if (!w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
+            return Fail("support power: a charged power on a LIVING structure did not fire, so stage 3's kill test "
+                        + "would prove nothing - a power that never works passes any counterplay assertion");
+
+        // Now kill the building and try again.
+        var w2 = WithPower(7102, out int bld2);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w2.Step(default);
+        // Destroyed, through the entity the sim itself reads: Alive false is
+        // what a razed building IS, and ApplyCommandCore's own precondition
+        // (`!e.Alive` returns) is the line under test.
+        var dead = w2.Entities[bld2];
+        dead.Alive = false;
+        dead.Hp = 0;
+        w2.SetEntityForTest(bld2, dead);
+        w2.Step(new[] { new Command(w2.Tick, 0, CommandType.UseSupportPower, bld2,
+                                    Map.CellCentre(30), Map.CellCentre(30)) });
+        if (w2.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
+            return Fail("support power: the unlocking structure was destroyed and its power still fired. GDD s8's "
+                        + "design rule is that every power has counterplay - \"scout the structure, kill it\" - and "
+                        + "a power that outlives its building has none");
+    }
+
+    // --- 4. And it rides the catalogue checksum, for the reason every
+    //        decision-carrying column does: two peers disagreeing about which
+    //        building grants which power would watch one machine's power fire
+    //        and the other's refuse, from the same command stream, while every
+    //        stat in the game matched.
+    {
+        var a = new World(7103, 32, 32, players: 2);
+        var b = new World(7103, 32, 32, players: 2);
+        if (a.CatalogueChecksum != b.CatalogueChecksum)
+            return Fail("support power: two identical bare worlds disagree on the catalogue checksum");
+        b.RegisterStructureType(Carrier, b.GetStructureType(Carrier) with { SupportPowerId = TestPower });
+        if (a.CatalogueChecksum == b.CatalogueChecksum)
+            return Fail("support power: granting a building a support power did NOT move the catalogue checksum, so "
+                        + "two peers could hold different powers and the LAN hello would let them play");
+    }
+
+    Console.WriteLine($"supportpowergate: GDD s8's minor powers had NO machinery in the sim at all. A building now "
+                      + $"grants a power BY ITS DEF, charges in {World.SupportPowerChargeTicks} ticks - a third of "
+                      + $"the superweapon's {World.SuperweaponChargeTicks}, asserted as a RATIO so \"shorter\" "
+                      + "survives ADR-044's refused change to that number - announces itself, refuses to fire early, "
+                      + "and rides the catalogue checksum. The counterplay clause is enforced rather than described: "
+                      + "kill the building and the power dies with it, because the STRUCTURE IS THE PERMISSION and "
+                      + "there is no separate unlock list to get wrong. No power has an EFFECT yet, deliberately - "
+                      + "GDD s3 names five and every one needs a radius or a duration written nowhere");
+    return 0;
+}
+
 int ComebackGate()
 {
     // P7-17 (ADR-059). DR-10 gave the AI a last stand: with a rebuild MCV in
@@ -11676,6 +11809,11 @@ int Match(ulong seed)
     // gate it needs and calling itself beaten.
     int comeback = ComebackGate();
     if (comeback != 0) return comeback;
+    // P7-21: and GDD s8's minor powers have machinery at last, with the one
+    // clause of s8 that is directly testable - kill the building, lose the
+    // power - enforced rather than described.
+    int supportPower = SupportPowerGate();
+    if (supportPower != 0) return supportPower;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -13400,6 +13538,7 @@ return args.Length == 0
         "yardlossprobe" => YardLossProbe(args.Length > 1 ? int.Parse(args[1]) : 1500),
         "mcvtechgate" => McvTechGate(),
         "comebackgate" => ComebackGate(),
+        "supportpowergate" => SupportPowerGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
