@@ -6,15 +6,38 @@ A modern real-time strategy game inspired by the classic RTS games of the 90s, b
 
 This is an in-development repository for a playable game, public on GitHub with green CI. The game is playable from source, and `tools/package.sh [macos|linux|windows|all]` produces self-contained builds for all three desktop platforms (see docs/tickets/P6-packaging.md); the public title is still provisional.
 
+**Status, 2026-08-03: P7 is code-complete and unplayed.** The parity work against
+the benchmark 90s RTS games is finished - every tracker row is done, or refused
+with the argument that would overturn it written down. What the project is waiting
+on is not code: it is somebody sitting down with the game. See
+`docs/tickets/P7-playtest-brief-2026-08-03.md`.
+
 ## What exists today
 
-- Playable skirmish against an AI (three temperaments: standard, rusher, turtle) on four committed maps
-- A three-mission campaign with briefings, driven by data-defined triggers
+- Playable skirmish against an AI on **nine maps**, from duel-sized to the 256x192
+  Karsthollow Basin, including a four-player map. Three AI temperaments (standard,
+  rusher, turtle) crossed with a four-rung difficulty ladder whose numbers are
+  authored in `/data/ai` (ADR-032, DR-14), and **up to four seats** in a
+  free-for-all
+- A **six-mission campaign** with briefings, driven by data-defined triggers, whose
+  win conditions include the first non-destruction objective in the game (ADR-029)
 - Binary save/load, and replays with hash-verified bit-exact playback
 - A settings scene: every key rebindable with conflict detection, audio buses, applied video options
 - Walls and barrier mechanics (ADR-005), and the full alert set (base and harvester attack warnings, low power, superweapon launch detection, jump-to-event)
 - A full visual overhaul (docs/design/25-visual-overhaul-roadmap.md): natural terrain shaders (ground biome, grass, foliage, water), re-baked materials, fog and ambient fixes, a camera FOV fix that closed the off-map void, and faction colour
-- Thirteen unit types and ten buildable buildings authored as YAML in /data, plus wall segments and two map-placed structures (the capturable neutral outpost and the destroyable bridge). All ten are buildable in a match through the tabbed production sidebar with prerequisites enforced; the barracks has been buildable since ADR-009 and the radar uplink since ADR-008
+- **Twenty unit types and twenty-two buildings**, every one authored as YAML in
+  `/data` and validated against a schema on each build. That includes an air layer
+  (ADR-028), a transport (P7-3), a hero unit per faction capped at one alive
+  (P7-11b), minelaying (P7-11c), wall gates (P7-10), and **a superweapon per
+  faction** - the Directorate's orbital cannon and the Sodality's seismic charge,
+  which denies ground by destroying the ferrite under it (ADR-044).
+  **These counts rot; `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --
+  parityprobe` derives them from the catalogue, and is the number to trust**
+- **Five support powers** (GDD s3's named set, ADR-063 to ADR-067): orbital scan and
+  precision strike for the Directorate, radar jamming, tunnel deployment and a decoy
+  army for the Sodality. A power is a property of the building that unlocks it, so
+  GDD s8's counterplay rule - scout the structure, kill it - falls out of the data
+  model rather than being arranged
 - Unit command stances (hold-fire, guard, patrol; ADR-015), client-side formations (ADR-018), a mobile repair vehicle (ADR-019), right-click cancel and refund on every sidebar item (ADR-020), two parallel build lanes at the Construction Yard (ADR-023), capturable neutral outposts that pay their owner (ADR-021) and bridges that can be felled to cut a crossing (ADR-025)
 - **LAN play, reachable from the menu.** The relay and clients are soak-tested with zero desyncs, the battle scene's frame loop is lockstep-driven, HOST and JOIN are live, the host's match setup rides the handshake so a joiner builds the identical world (ADR-022), and a player who leaves is announced to the survivor. Two in-process battle scenes play each other to identical state hashes as a gate. **The one thing still owed is a real two-machine session**, which no in-process test can provide (docs/questions/Q002)
 
@@ -26,7 +49,7 @@ Requires the .NET 8 SDK. NuGet package sources are disabled by design; the sim h
 - Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
 - Individual modes: `selftest`, `determinism [seed]`, `match [seed]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs)
 - The client: open `game/` in Godot 4.7 (the .NET build) and run
-- **The client harness: `./tools/verify-client.sh`.** It boots the real battle scene headless from the joiner's seat and asserts on what it does. Run it for any `/game` change - it has caught ten defects the sim battery cannot see, and CI runs it on every push, so a failure blocks the merge either way
+- **The client harness: `./tools/verify-client.sh`.** It boots the real battle scene headless from the joiner's seat and asserts on what it does. Run it for any `/game` change. It keeps catching a class the sim battery is structurally blind to, and the reason is worth more than a running total: it drives the real scene **from seat 1**, so any rule written as "me versus the other one" that happens to be right at seat 0 fails here. CI runs it on every push, so a failure blocks the merge either way
 
 ## The determinism story
 
@@ -52,11 +75,17 @@ Determinism is the project's law, not an aspiration:
 ## Where the truth lives
 
 1. `CLAUDE.md` - operating rules for everyone working in this repository
-2. `docs/tickets/P6-campaign-tracker.md` - the CURRENT state of play, wave by
-   wave, and the resume point if a session dies
-3. `docs/design/` - the design package. Note that `18-game-review-roadmap.md` is
+2. `docs/tickets/P7-parity-tracker.md` - the state of play wave by wave, and the
+   resume point if a session dies. **P7 is code-complete**: every row is done or
+   refused with the argument that would overturn it recorded. The P6 campaign
+   tracker is history, not a resume point
+3. `docs/tickets/P7-playtest-brief-2026-08-03.md` - **the one thing the project is
+   actually waiting on.** Seventeen ADRs name a playtest as what would settle them;
+   this is four matches and about ninety minutes, and `tools/playtest-index.sh`
+   flags any decision it has fallen behind
+4. `docs/design/` - the design package. Note that `18-game-review-roadmap.md` is
    a superseded 2026-07-14 snapshot whose plan has shipped, not the current
    roadmap; it carries a status banner saying so. Read it as history
-4. `docs/adr/` - architecture decisions and their status
-5. `docs/questions/` - open cross-team questions with owners and decide-by dates
-6. `docs/tickets/phase-1-backlog.md` - the work ledger, entry by entry
+5. `docs/adr/` - architecture decisions and their status
+6. `docs/questions/` - open cross-team questions with owners and decide-by dates
+7. `docs/tickets/phase-1-backlog.md` - the work ledger, entry by entry
