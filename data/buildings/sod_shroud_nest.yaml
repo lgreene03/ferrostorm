@@ -19,3 +19,12 @@ footprint: 2
 weapon_ids: [wpn_emplacement_gun]
 prerequisites: [com_power_plant]
 build_tab: defence
+# P7-26 (ADR-067): GDD s3 line 30's DECOY ARMY, the last of the five named
+# support powers. The name is the argument - a shroud is deception - and this
+# building is cheap and early, which suits a trick the Sodality's "cheap
+# infantry swarms" doctrine wants in the opening rather than the endgame.
+#
+# A decoy is a REAL entity, not a per-viewer illusion: the rifle squad's type
+# and speed, ONE hit point, no weapon, and no sight at all. The deception is
+# that an observer cannot tell which army is which until they shoot it.
+support_powers: [decoy_army]

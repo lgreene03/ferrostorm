@@ -1303,8 +1303,12 @@ public sealed partial class World
         17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
                                    Tab: BuildTab.Defence,
                                    SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId }),
+        // P7-26: and the Shroud Nest carries GDD s3 line 30's DECOY ARMY. The
+        // name is the argument - a shroud is deception - and it is cheap and
+        // early, which suits a trick the Sodality's "cheap infantry swarms"
+        // doctrine wants in the opening rather than the endgame.
         18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
-                                   Tab: BuildTab.Defence),
+                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { DecoyArmyPowerId }),
         // P7-25: and the Veil carries GDD s3 line 30's TUNNEL DEPLOYMENT. The
         // building that hides things is where concealed transit belongs, and
         // ADR-060 measured that no commander ever built one - a persistent aura
@@ -3224,6 +3228,8 @@ public sealed partial class World
                 // state and NO new numbers, which is the whole reason it went
                 // before the decoy army: every part of it already existed.
                 else if (power == TunnelDeploymentPowerId) ApplyTunnelDeployment(in e, c.PlayerId, px, py);
+                // P7-26: GDD s3 line 30's DECOY ARMY, the last named power.
+                else if (power == DecoyArmyPowerId) ApplyDecoyArmy(c.PlayerId, px, py);
                 else if (power == RadarJammingPowerId)
                 {
                     for (int pl = 0; pl < _players; pl++)
@@ -3552,6 +3558,23 @@ public sealed partial class World
     /// dirty trick. Power id 4.
     /// </summary>
     public const int TunnelDeploymentPowerId = 4;
+
+    /// <summary>
+    /// P7-26: GDD s3 line 30 names the Sodality's DECOY ARMY, the last of its
+    /// three dirty tricks and the last of the five named powers. Power id 5.
+    /// </summary>
+    public const int DecoyArmyPowerId = 5;
+
+    /// <summary>
+    /// P7-26: a decoy's hit points. ONE, which is not a chosen number but the
+    /// smallest thing that can exist - "dies to the first shot that touches it"
+    /// is the defining property of a decoy, and 1 is the only value that says it
+    /// exactly. Rejected: a fraction of the real unit's hp, which makes a decoy
+    /// a cheap unit rather than an empty one, and would have to be re-derived
+    /// every time a unit is rebalanced.
+    /// </summary>
+    public const int DecoyHp = 1;
+
 
 
     /// <summary>
@@ -5848,6 +5871,57 @@ public sealed partial class World
     /// Harvesters do not either: a tunnel is a raiding tool, and moving the
     /// economy through it is a different power nobody designed.
     /// </summary>
+    /// <summary>
+    /// P7-26: GDD s3 line 30's DECOY ARMY.
+    ///
+    /// THE DESIGN QUESTION THIS ROW ANSWERED WAS WHETHER IT COULD BE BUILT AT
+    /// ALL. A decoy was assumed to need entities that look real to one player
+    /// and fake to another - per-viewer entity visibility, which this sim does
+    /// not have and should not grow for one power. That assumption was wrong,
+    /// and measuring the entity model is what showed it.
+    ///
+    /// A decoy does not need to be RENDERED differently. It needs to BE a real
+    /// entity that looks like a real unit and does nothing, so that an observer
+    /// cannot tell which army is which UNTIL THEY SHOOT IT. The deception lives
+    /// in the observer's uncertainty, not in the renderer. That is also how the
+    /// benchmark games did it: their fakes were real objects with no function.
+    ///
+    /// So a decoy is an ordinary unit with the real one's TYPE (it renders as
+    /// that unit), the real one's SPEED (it can be ordered about, and an army
+    /// that cannot move is not a convincing army), ONE hit point and NO WEAPON.
+    ///
+    /// It SEES NOTHING - sight 0 - which is a rule rather than a number, and it
+    /// is the same trap tunnel deployment had: a power that quietly doubled as
+    /// a free scout would be two powers. A hollow imitation has no eyes.
+    /// </summary>
+    private void ApplyDecoyArmy(int player, Fix64 x, Fix64 y)
+    {
+        // The unit a decoy imitates: the RIFLE SQUAD, which is the one thing
+        // both factions field in numbers from the opening minute (ADR-009 makes
+        // it the only unit either side can build until a wave stands). A decoy
+        // army of anything rarer would announce itself by being unaffordable.
+        const int ImitatedType = 2;
+        var real = GetUnitType(ImitatedType);
+        // HOW MANY: one WAVE's worth, read from the commander's own tuning.
+        // That is the number this game already uses for "an army worth
+        // attacking with", which is exactly what a decoy has to look like -
+        // fewer reads as a patrol, more reads as an army nobody could afford.
+        int count = GetAiTuning(AiTuning.StandardId).WaveSize;
+        int cx = Map.CellOf(x), cy = Map.CellOf(y);
+        int placed = 0;
+        foreach (var (ox, oy) in SpawnOffsets)
+        {
+            if (placed >= count) break;
+            int nx = cx + ox, ny = cy + oy;
+            if (nx < 0 || ny < 0 || nx >= Map.Width || ny >= Map.Height) continue;
+            if (Map.IsBlocked(nx, ny) || CellOccupied(nx, ny)) continue;
+            SpawnUnit(player, Map.CellCentre(nx), Map.CellCentre(ny), real.Speed,
+                      DecoyHp, real.Armour, weaponId: 0, sightCells: 0,
+                      veterancy: false, unitType: ImitatedType);
+            placed++;
+        }
+    }
+
     private void ApplyTunnelDeployment(in Entity mouth, int player, Fix64 x, Fix64 y)
     {
         int dx0 = Map.CellOf(x), dy0 = Map.CellOf(y);

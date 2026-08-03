@@ -1,5 +1,14 @@
 # Q021: the five support powers are NAMED in the GDD. What are their numbers?
 
+> **ANSWERED AND CLOSED 2026-08-03.** All five shipped: orbital scan (ADR-063),
+> precision strike (ADR-064), radar jamming (ADR-065), tunnel deployment
+> (ADR-066), decoy army (ADR-067). Not one needed a balance argument, because
+> every number in all five is derived from something already in the game.
+>
+> The decoy army was expected to be REFUSED as unbuildable - it was thought to
+> need per-viewer entity visibility. That was wrong: a decoy needs to BE a real
+> entity that does nothing, not to be rendered differently. See ADR-067.
+
 Owner: game-designer (+ balance for the numbers)
 Raised by: P7-21 (ADR-062), 2026-08-03, on landing the machinery
 Decide by: unset (not blocking; the machinery is inert until a power is authored)
