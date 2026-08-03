@@ -2375,11 +2375,11 @@ int CatalogueRefuse()
 // shared, layout-aware helper.)
 byte[] DowngradeSave(byte[] current, uint targetMagic)
 {
-    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu, magicV12 = 0x534C413Cu, magicV13 = 0x534C413Du;
+    const uint magicV1 = 0x534C4131u, magicV3 = 0x534C4133u, magicV4 = 0x534C4134u, magicV5 = 0x534C4135u, magicV6 = 0x534C4136u, magicV7 = 0x534C4137u, magicV8 = 0x534C4138u, magicV9 = 0x534C4139u, magicV10 = 0x534C413Au, magicV11 = 0x534C413Bu, magicV12 = 0x534C413Cu, magicV13 = 0x534C413Du, magicV14 = 0x534C413Eu;
     using var input = new BinaryReader(new MemoryStream(current));
     var outMs = new MemoryStream();
     using var w = new BinaryWriter(outMs);
-    // P7-22: the SOURCE is whatever Save() currently writes, which is v13 now.
+    // P7-24: the SOURCE is whatever Save() currently writes, which is v14 now.
     // Pinned to a literal version this helper breaks the moment the format
     // moves, and it breaks in the BATTERY rather than here - the same
     // name-one-version trap the loader's hasBuildLanes had, and it caught v12
@@ -2388,14 +2388,14 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // open-gates block) and one more entry in each "keep" predicate, because
     // the format that WAS the source is now a legal target.
     //
-    // P7-22 is the fifth time that comment has been right, and it caught the
-    // v13 bump in the BATTERY exactly as predicted, not here. v12 is now a
-    // legal TARGET and the scan block is the new walk step.
-    if (input.ReadUInt32() != magicV13)
-        throw new InvalidOperationException("save surgery expects a v13 stream (the current Save format)");
+    // P7-24 is the SIXTH time that comment has been right, and it caught the
+    // v14 bump in the BATTERY exactly as predicted, not here. v13 is now a
+    // legal TARGET and the jam block is the new walk step.
+    if (input.ReadUInt32() != magicV14)
+        throw new InvalidOperationException("save surgery expects a v14 stream (the current Save format)");
     w.Write(targetMagic);
     ulong checksum = input.ReadUInt64();
-    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10 or magicV11 or magicV12) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
+    if (targetMagic is magicV3 or magicV4 or magicV5 or magicV6 or magicV7 or magicV8 or magicV9 or magicV10 or magicV11 or magicV12 or magicV13) w.Write(checksum); // v3+ keep the checksum; v1/v2 never had one
     w.Write(input.ReadInt32());   // tick
     w.Write(input.ReadInt32());   // winner
     w.Write(input.ReadBoolean()); // short game
@@ -2413,7 +2413,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
         // all and those worlds load as the free-for-alls they were, which is what
         // those formats meant.
         int team = input.ReadInt32();
-        if (targetMagic is magicV11 or magicV12) w.Write(team);
+        if (targetMagic is magicV11 or magicV12 or magicV13) w.Write(team);
         w.Write(input.ReadInt64());   // credits
         w.Write(input.ReadBoolean()); // eliminated flag
         int words = input.ReadInt32(); w.Write(words);
@@ -2463,9 +2463,9 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // ADR-023's lane block: kept for a v8 target and above, dropped below it.
     // v12 is the SOURCE format and is refused as a target rather than
     // half-copied, the same reason v11, v10 and v9 each used to be.
-    if (targetMagic == magicV13) throw new InvalidOperationException("save surgery downgrades; v13 is the source format, not a target");
+    if (targetMagic == magicV14) throw new InvalidOperationException("save surgery downgrades; v14 is the source format, not a target");
     int laneCount = input.ReadInt32();
-    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10 or magicV11 or magicV12;
+    bool keepLanes = targetMagic is magicV8 or magicV9 or magicV10 or magicV11 or magicV12 or magicV13;
     if (keepLanes) w.Write(laneCount);
     for (int i = 0; i < laneCount; i++)
     {
@@ -2479,7 +2479,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // hold cannot be expressed at all - and a unit that was aboard is simply
     // not in that older world, which is what those formats meant.
     int cargoCount = input.ReadInt32();
-    bool keepCargo = targetMagic is magicV9 or magicV10 or magicV11 or magicV12;
+    bool keepCargo = targetMagic is magicV9 or magicV10 or magicV11 or magicV12 or magicV13;
     if (keepCargo) w.Write(cargoCount);
     for (int i = 0; i < cargoCount; i++)
     {
@@ -2496,7 +2496,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // where a disable cannot be expressed at all - and a building that was dark
     // simply works in that older world, which is what those formats meant.
     int disabledCount = input.ReadInt32();
-    bool keepSabotage = targetMagic is magicV10 or magicV11 or magicV12;
+    bool keepSabotage = targetMagic is magicV10 or magicV11 or magicV12 or magicV13;
     if (keepSabotage) w.Write(disabledCount);
     for (int i = 0; i < disabledCount; i++)
     {
@@ -2508,7 +2508,7 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // the block. A gate cannot be open in any pre-v12 world, and one that was
     // resumes shut - which GateSystem reopens on the first tick an ally is
     // still standing beside it.
-    bool keepGates = targetMagic == magicV12;
+    bool keepGates = targetMagic is magicV12 or magicV13;
     int openGateCount = input.ReadInt32();
     if (keepGates) w.Write(openGateCount);
     for (int i = 0; i < openGateCount; i++)
@@ -2520,9 +2520,23 @@ byte[] DowngradeSave(byte[] current, uint targetMagic)
     // that introduced the block and v13 is refused as a target above. No older
     // world can hold a scan, and one taken mid-scan resumes with the ground
     // dark - which is what those formats meant, since the power did not exist.
+    // P7-22's live scans: KEPT for a v13 target now that v13 is a legal one,
+    // dropped for everything older.
+    bool keepScans = targetMagic == magicV13;
     int scanCount = input.ReadInt32();
+    if (keepScans) w.Write(scanCount);
     for (int i = 0; i < scanCount; i++)
-    { input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); input.ReadInt32(); }
+    {
+        int a = input.ReadInt32(), b = input.ReadInt32(), cc = input.ReadInt32();
+        int d = input.ReadInt32(), e2 = input.ReadInt32();
+        if (keepScans) { w.Write(a); w.Write(b); w.Write(cc); w.Write(d); w.Write(e2); }
+    }
+    // P7-24's jam deadlines: dropped for EVERY target, because v14 introduced
+    // the block and v14 is refused as a target above. No older world can hold a
+    // jam, and one taken mid-jam resumes with the minimap back - which is what
+    // those formats meant, since the power did not exist.
+    int jamCount = input.ReadInt32();
+    for (int i = 0; i < jamCount; i++) input.ReadInt32();
     w.Write(input.ReadUInt32());                          // trailer
     return outMs.ToArray();
 }
@@ -9373,6 +9387,125 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int RadarJammingGate()
+{
+    // P7-24 (ADR-065). GDD s3 line 30's RADAR JAMMING, the first of the
+    // Sodality's three dirty tricks.
+    //
+    // What this catches that nothing else does: every support-power gate so far
+    // asserts an effect on the MAP - a reveal, or damage at a point. This one is
+    // the first power whose effect is on a PLAYER, and the first whose result
+    // the CLIENT has to read back out of the sim. Neither orbitalscangate nor
+    // precisionstrikegate can see a jam, and neither would notice if
+    // IsRadarJammed always returned false.
+    const int WatchPost = 21;
+
+    (World w, int post) Base(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 3);
+        w.SetFaction(0, World.FactionSodality);
+        w.SetFaction(1, World.FactionDirectorate);
+        w.SetFaction(2, World.FactionDirectorate);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int post = w.SpawnFactionDefence(0, WatchPost, 10, 10);
+        return (w, post);
+    }
+
+    // --- 1. THE CONTROL, FIRST: nobody is jammed to begin with. Without this
+    //        every assertion below would pass in a world where IsRadarJammed
+    //        simply returned true for everyone.
+    {
+        var (w, _) = Base(7400);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 10; t++) w.Step(default);
+        for (int pl = 0; pl < 3; pl++)
+            if (w.IsRadarJammed(pl))
+                return Fail($"radar jamming: player {pl} is jammed before anything fired one, so this gate cannot "
+                            + "tell a jam from a world that is always jammed");
+    }
+
+    // --- 2. A jam blinds the ENEMY and never its owner.
+    {
+        var (w, post) = Base(7401);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, post,
+                                   Fix64.Zero, Fix64.Zero, World.RadarJammingPowerId) });
+        if (!w.IsRadarJammed(1) || !w.IsRadarJammed(2))
+            return Fail("radar jamming: a fired jam did not blind both hostile players. GDD s3 line 30 gives the "
+                        + "Sodality radar jamming and this is the whole of what it does");
+        if (w.IsRadarJammed(0))
+            return Fail("radar jamming: the jam blinded its OWN owner - a dirty trick nobody would play");
+    }
+
+    // --- 3. It LAPSES, on the derived duration. A jam that never lifts is not a
+    //        trick, it is deleting the enemy's minimap.
+    {
+        var (w, post) = Base(7402);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, post,
+                                   Fix64.Zero, Fix64.Zero, World.RadarJammingPowerId) });
+        for (int t = 0; t < World.RadarJamTicks + 5; t++) w.Step(default);
+        if (w.IsRadarJammed(1))
+            return Fail($"radar jamming: still jammed {World.RadarJamTicks + 5} ticks after firing - a jam that "
+                        + "never lifts is not a trick, it is deleting the enemy's minimap");
+    }
+
+    // --- 4. THE DUTY CYCLE, which is the derivation asserted as a game rule
+    //        rather than as a constant. The jam is a THIRD of its own cooldown,
+    //        so a commander firing it the instant it charges leaves the victim
+    //        SEEING for longer than it is blind. That is the property a reader
+    //        can check, and it is what stops this power being a permanent
+    //        blackout dressed as a timer.
+    {
+        var (w, post) = Base(7403);
+        int jammed = 0, clear = 0;
+        for (int t = 0; t < World.SupportPowerChargeTicks * 3; t++)
+        {
+            // Fire the moment it is ready, every time - the worst case for the
+            // victim, which is the case worth bounding.
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, post,
+                                       Fix64.Zero, Fix64.Zero, World.RadarJammingPowerId) });
+            if (w.IsRadarJammed(1)) jammed++; else clear++;
+        }
+        if (jammed >= clear)
+            return Fail($"radar jamming: under continuous firing the victim was blind for {jammed} ticks and "
+                        + $"sighted for {clear}. The jam is derived as a THIRD of its own charge precisely so a "
+                        + "victim spends most of the match able to see");
+    }
+
+    // --- 5. And it SURVIVES A SAVE. `saveload` never fires a jam, so a v14
+    //        block written and never read would pass it silently - the same hole
+    //        ADR-063 stage 6 found for scans.
+    {
+        var (w, post) = Base(7404);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, post,
+                                   Fix64.Zero, Fix64.Zero, World.RadarJammingPowerId) });
+        if (!w.IsRadarJammed(1)) return Fail("radar jamming: not jammed before the save, so stage 5 proves nothing");
+        ulong before = w.ComputeStateHash();
+        using var ms = new MemoryStream();
+        w.Save(ms);
+        ms.Position = 0;
+        var loaded = World.Load(ms);
+        if (loaded.ComputeStateHash() != before)
+            return Fail($"radar jamming: the state hash moved across a save taken mid-jam (0x{before:X16} -> "
+                        + $"0x{loaded.ComputeStateHash():X16}) - the deadline did not round-trip");
+        if (!loaded.IsRadarJammed(1))
+            return Fail("radar jamming: a save taken mid-jam resumed with the victim's minimap back");
+    }
+
+    Console.WriteLine($"radarjamminggate: GDD s3 line 30's RADAR JAMMING, the first Sodality dirty trick and the "
+                      + "first support power whose effect is on a PLAYER rather than on the map. The Watch Post "
+                      + "carries it - the Sodality's sensor building is where sensor warfare belongs, and it is "
+                      + "unarmed, visible and killable by design, so s8's \"scout the structure, kill it\" needs no "
+                      + $"arranging. It blinds every hostile for {World.RadarJamTicks} ticks, DERIVED as a third of "
+                      + "its own charge (the ratio this project already uses twice), which bounds the victim to "
+                      + "being blind at most a third of the time even against a commander who fires it on every "
+                      + "recharge. Never its owner, it lapses, and it rides the save at v14. The client asks the "
+                      + "SIM whether it is jammed, because a blackout the client decided for itself would differ "
+                      + "between two LAN peers");
+    return 0;
+}
+
 int PrecisionStrikeGate()
 {
     // P7-23 (ADR-064). GDD s3 line 25's PRECISION STRIKE, completing the
@@ -12159,6 +12292,9 @@ int Match(ulong seed)
     // P7-23: and the Directorate's second power, on a building that grants two.
     int precisionStrike = PrecisionStrikeGate();
     if (precisionStrike != 0) return precisionStrike;
+    // P7-24: and the first Sodality dirty trick, whose effect lands on a PLAYER.
+    int radarJamming = RadarJammingGate();
+    if (radarJamming != 0) return radarJamming;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -13886,6 +14022,7 @@ return args.Length == 0
         "supportpowergate" => SupportPowerGate(),
         "orbitalscangate" => OrbitalScanGate(),
         "precisionstrikegate" => PrecisionStrikeGate(),
+        "radarjamminggate" => RadarJammingGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),

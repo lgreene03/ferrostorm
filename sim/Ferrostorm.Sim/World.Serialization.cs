@@ -102,12 +102,14 @@ public sealed partial class World
     private const uint SaveMagicV12 = 0x534C413C;
     // v13 adds the LIVE ORBITAL SCANS block (P7-22); the tag byte runs on from '<'
     private const uint SaveMagicV13 = 0x534C413D;
+    // v14 adds the RADAR JAM deadlines block (P7-24); the tag byte runs on from '='
+    private const uint SaveMagicV14 = 0x534C413E;
     private const uint SaveTrailer = 0x454E4453; // "SDNE"
 
     public void Save(Stream stream)
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        w.Write(SaveMagicV13);
+        w.Write(SaveMagicV14);
         w.Write(CatalogueChecksum); // v3: the catalogue this match was played against
         w.Write(Tick);
         w.Write(Winner);
@@ -238,6 +240,15 @@ public sealed partial class World
             w.Write(sc.Player); w.Write(sc.CX); w.Write(sc.CY);
             w.Write(sc.Radius); w.Write(sc.TicksLeft);
         }
+        // P7-24 (v14): radar jam deadlines, one per player, written positionally
+        // so there is no id to sort and no iteration order to leak. A world that
+        // never fired a jam writes zeroes, which is what those saves mean.
+        //
+        // Without this block a save taken mid-jam would resume with the victim's
+        // minimap restored - a divergence, since the sim's own state hash folds
+        // the deadline and the client reads it.
+        w.Write(_radarJamUntil.Length);
+        foreach (int until in _radarJamUntil) w.Write(until);
         w.Write(SaveTrailer);
     }
 
@@ -262,7 +273,7 @@ public sealed partial class World
     {
         using var r = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         uint magic = r.ReadUInt32();
-        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10 && magic != SaveMagicV11 && magic != SaveMagicV12 && magic != SaveMagicV13)
+        if (magic != SaveMagicV1 && magic != SaveMagicV2 && magic != SaveMagicV3 && magic != SaveMagicV4 && magic != SaveMagicV5 && magic != SaveMagicV6 && magic != SaveMagicV7 && magic != SaveMagicV8 && magic != SaveMagicV9 && magic != SaveMagicV10 && magic != SaveMagicV11 && magic != SaveMagicV12 && magic != SaveMagicV13 && magic != SaveMagicV14)
             throw new InvalidDataException("not a ferrostorm save");
         // v3 introduced the checksum and every later format keeps it (the
         // B1-era regression was conditioning a v3+ field on one magic alone).
@@ -271,35 +282,37 @@ public sealed partial class World
         // regression was conditioning a later field on one magic alone; do not
         // repeat it - every new format MUST be listed in each tail's predicate
         // or that tail misreads and the whole entity record misaligns).
-        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13;
+        bool hasRallyFields = magic == SaveMagicV4 || magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13 || magic == SaveMagicV14;
         // ADR-012: v5 and every later format carry the cap (do not condition a
         // later field on one magic alone - the B1-era regression this guards).
-        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13;
+        bool hasFerriteCap = magic == SaveMagicV5 || magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13 || magic == SaveMagicV14;
         // Q013/ADR-014: v6 and every later format carry the backstop state.
-        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13;
-        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13; // ADR-015: v7+ entities carry the command stance tail
+        bool hasNoProgress = magic == SaveMagicV6 || magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13 || magic == SaveMagicV14;
+        bool hasStance = magic == SaveMagicV7 || magic == SaveMagicV8 || magic == SaveMagicV9 || magic == SaveMagicV10 || magic == SaveMagicV11 || magic == SaveMagicV12 || magic == SaveMagicV13 || magic == SaveMagicV14; // ADR-015: v7+ entities carry the command stance tail
         // P7-3: every version from v8 ONWARD carries the lane block, not v8
         // alone. Written as an equality it silently skipped the block on a v9
         // save and the reader then fell out of step with the writer, which
         // surfaced as "save truncated or corrupt" - a version test that names
         // one version is the same enumeration trap as a rule that names one
         // kind, and it will bite again at v10 unless it is written as a floor.
-        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13; // ADR-023
+        bool hasBuildLanes = magic is SaveMagicV8 or SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13 or SaveMagicV14; // ADR-023
         // P7-11a: the warning above came true at v10 exactly as written. The
         // cargo block's own test was `magic == SaveMagicV9`, an equality, so
         // adding v10 skipped it on a save that HAD written it and every later
         // read fell out of step with the writer. Both tests are floors now.
-        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13;   // P7-3
-        bool hasSabotage = magic is SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13;               // P7-11a
+        bool hasCargo = magic is SaveMagicV9 or SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13 or SaveMagicV14;   // P7-3
+        bool hasSabotage = magic is SaveMagicV10 or SaveMagicV11 or SaveMagicV12 or SaveMagicV13 or SaveMagicV14;               // P7-11a
         // P7-8c: v11 and every later format carry the per-player team id. A
         // floor from the first line it is written on, for the reason the two
         // comments above record twice over.
-        bool hasTeams = magic is SaveMagicV11 or SaveMagicV12 or SaveMagicV13;
+        bool hasTeams = magic is SaveMagicV11 or SaveMagicV12 or SaveMagicV13 or SaveMagicV14;
         // P7-10: v12 and every later format carry the open-gates block. A floor
         // from the first line it is written on, for the reason above.
-        bool hasOpenGates = magic is SaveMagicV12 or SaveMagicV13;
+        bool hasOpenGates = magic is SaveMagicV12 or SaveMagicV13 or SaveMagicV14;
         // P7-22 (v13): live orbital scans.
-        bool hasScans = magic is SaveMagicV13;
+        bool hasScans = magic is SaveMagicV13 or SaveMagicV14;
+        // P7-24 (v14): the radar jam deadlines.
+        bool hasJams = magic is SaveMagicV14;
         ulong recordedCatalogue = hasCatalogue ? r.ReadUInt64() : 0;
         int tick = r.ReadInt32();
         int winner = r.ReadInt32();
@@ -488,6 +501,19 @@ public sealed partial class World
                 if ((uint)pl >= (uint)world._players) continue;
                 if ((uint)cx >= (uint)world.Map.Width || (uint)cy >= (uint)world.Map.Height) continue;
                 world._scans.Add(new ScanReveal(pl, cx, cy, rad, left));
+            }
+        }
+        // P7-24 (v14): radar jam deadlines. A pre-v14 save carries no block and
+        // loads with nobody jammed, which is exactly what those saves meant.
+        if (hasJams)
+        {
+            int jamCount = r.ReadInt32();
+            for (int i = 0; i < jamCount; i++)
+            {
+                int until = r.ReadInt32();
+                // Refuse an entry for a player this world does not have, from a
+                // hand-edited file, on the terms every block above uses.
+                if (i < world._radarJamUntil.Length) world._radarJamUntil[i] = until;
             }
         }
         if (r.ReadUInt32() != SaveTrailer) throw new InvalidDataException("save truncated or corrupt");

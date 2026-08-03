@@ -26,6 +26,12 @@ detector: true
 weapon_ids: []
 prerequisites: [com_power_plant]
 build_tab: defence
+# P7-24 (ADR-065): GDD s3 line 30's RADAR JAMMING, the first Sodality dirty
+# trick. The Sodality's sensor building is where sensor warfare belongs - my
+# eyes on, your eyes off - and it makes GDD s8's counterplay rule true by
+# construction: the Watch Post is unarmed, visible and killable by design
+# (GDD line 56), so "scout the structure, kill it" needs no arranging.
+support_powers: [radar_jamming]
 notes: >
   Reveals cloaked hostiles within sight_range, which for a detector IS the
   detection radius: the sim has never carried a separate detection range, and

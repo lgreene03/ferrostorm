@@ -117,7 +117,8 @@
         "type": "string",
         "enum": [
           "orbital_scan",
-          "precision_strike"
+          "precision_strike",
+          "radar_jamming"
         ]
       },
       "minItems": 1,
