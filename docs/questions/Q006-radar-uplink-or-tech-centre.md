@@ -9,7 +9,7 @@ absorbs the role. `com_mcv`'s prerequisite is now `[com_radar_uplink]`, GDD s5
 line 47 is enforced for the first time, and the golden this question predicted
 would move (`expansion`) moved and was regenerated. The AI's expansion gate
 moved in the same change and now asks the catalogue rather than keeping a copy.
-Left open beside it: Q018 (four other units carry the same tautology shape) and
+Left open beside it: Q020 (four other units carry the same tautology shape) and
 the yard-loss freeze defect that makes the AI half of this row untestable.
 
 ## The question

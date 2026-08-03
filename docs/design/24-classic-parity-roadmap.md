@@ -516,7 +516,7 @@ comment naming them, correct when written, silently wrong from the moment
 ADR-028's air layer added the strike flyer - and mis-attributing the rest to
 Q007, which is about the engineer. A comment documenting the
 hand-kept-list-lags-its-catalogue defect had become an instance of it. Now
-Q018.
+Q020.
 
 **The second came from taking ADR-055's rule seriously**, and it is the more
 serious finding. Deleting the AI's new guard changed nothing, tick for tick.

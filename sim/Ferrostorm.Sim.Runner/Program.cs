@@ -24,8 +24,8 @@ using Ferrostorm.Sim;
 //   bridgegate         - ADR-025: a standing bridge is passable, a felled one BLOCKS its cell (the one death that reduces passability)
 //   mapgate            - every committed map loads, spawns the opening hand, plays AI-vs-AI, and the AI CAPTURES at least one of its declared outposts (C4c inverted this from the original "stand neutral" assertion)
 //   lanpoll            - Q002/C7a: the non-blocking TryAdvanceTick drive, clean and under chaos, no call ever blocking on the socket
-//   pinprobe           - Q018 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
-//   pintrace           - Q018 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
+//   pinprobe           - Q020 diagnostic: per-commander attack-move counts, attrition and end positions across every committed map (not a gate; nothing asserts)
+//   pintrace           - Q020 diagnostic stage two: per-unit travelled-vs-net, engagement, enclosure, reachable region and crowding for the stalled commander (not a gate; nothing asserts)
 //   infiltratorgate    - P7-7: the Infiltrator moves credits rather than minting them, robs without capturing, and leaves the engineer alone
 //   multiseatgate      - P7-8a: four seats get four opening hands, victory waits for all but one to fall, the commander is seat-agnostic, and 2-player placement is byte-identical to main
 //   lanaiseatsgate     - P7-8f: a LAN match on a four-seat map - the seats no peer holds are played by commanders both peers generate locally, to identical hashes, and a divergent commander is CAUGHT
@@ -4282,7 +4282,7 @@ int AiRepairGate()
 
 int PinTrace()
 {
-    // Q018 stage two. pinprobe established that the stalled commander orders
+    // Q020 stage two. pinprobe established that the stalled commander orders
     // constantly, keeps its units alive and leaves them near home, and named
     // two mechanisms that fit: AttackMove prosecuting local targets forever, or
     // the wave and defence cadences re-ordering units before they travel. It
@@ -4356,7 +4356,7 @@ int PinTrace()
         }
     }
 
-    Console.WriteLine("pintrace (Q018 stage two): skirmish-05, player 1, the stalled commander");
+    Console.WriteLine("pintrace (Q020 stage two): skirmish-05, player 1, the stalled commander");
     Console.WriteLine("  unit  orders  travelled  net  engaged%  moving%   reading");
     int thrash = 0, prosecute = 0, neither = 0;
     foreach (var id in orders.Keys.OrderBy(k => k))
@@ -4490,7 +4490,7 @@ int PinTrace()
 
 int PinProbe()
 {
-    // TEMPORARY diagnostic for Q018. The question as filed ASSERTED a mechanism
+    // TEMPORARY diagnostic for Q020. The question as filed ASSERTED a mechanism
     // ("nothing ever says the raid is over, so a pinned commander has no path
     // back to offence") on reasoning alone. Two mechanisms fit the same
     // symptom and they predict OPPOSITE command streams:
@@ -9543,7 +9543,7 @@ int McvTechGate()
     //
     //        That same comment also said Q007 owned them. Q007 is about where
     //        the ENGINEER is built. Nothing owns these four, which is now
-    //        Q018.
+    //        Q020.
     {
         var w = new World(5102, 64, 64, players: 2);
         var taut = new List<int>();
@@ -9558,9 +9558,9 @@ int McvTechGate()
                         + "tautology Q006 answered, and it gates nothing");
         if (taut.Count != 4)
             return Fail($"mcv tech: expected exactly FOUR remaining produced-at tautologies (howitzer 8, phantom 9, "
-                        + $"bulwark 10, strike flyer 15 - Q018's curation, not this row's), found {taut.Count}: "
+                        + $"bulwark 10, strike flyer 15 - Q020's curation, not this row's), found {taut.Count}: "
                         + $"[{string.Join(", ", taut)}]. A NEW one means a prerequisite was written that cannot "
-                        + "refuse anything; a FEWER one means Q018 was answered and this count should be retired "
+                        + "refuse anything; a FEWER one means Q020 was answered and this count should be retired "
                         + "with it rather than quietly following it down");
     }
 
@@ -9616,7 +9616,7 @@ int McvTechGate()
                       + "already wait behind. A Factory alone now REFUSES an MCV and a Factory plus radar accepts "
                       + "one; the commander reaches the radar first, so it never saves 3500 credits for a unit it "
                       + "cannot buy; and the FOUR remaining produced-at tautologies are COUNTED rather than "
-                      + "quietly fixed, because curating a unit's tier is a Game Designer call (now Q018). That "
+                      + "quietly fixed, because curating a unit's tier is a Game Designer call (now Q020). That "
                       + "count found its own defect on first run: World.cs named four INCLUDING the MCV and had "
                       + "never been updated when ADR-028's strike flyer added a fifth, so the comment documenting "
                       + "this defect class had itself become an instance of it");
@@ -11242,7 +11242,7 @@ int FordGate()
     // measure. Holding a new map to a bar no existing map meets would be
     // inventing a standard rather than applying one. The one-sidedness is real
     // and is filed as a finding against the AI, where it belongs, not tuned
-    // around here (docs/questions/Q018).
+    // around here (docs/questions/Q020).
     Fix64 CellC(int c) => Map.CellCentre(c);
     var north = map.Starts[0];
     var south = map.Starts[1];
@@ -11294,7 +11294,7 @@ int FordGate()
     Console.WriteLine($"fordgate: Ashford Reach is walkable in BOTH directions under a real flow field - a unit "
                       + $"ordered across arrived southbound and northbound - over {spans} destroyable spans plus the "
                       + "permanent centre ford. Whether both COMMANDERS choose to march is a property of the AI and "
-                      + "not of this map: it is filed as Q018");
+                      + "not of this map: it is filed as Q020");
 
     // skirmish-06 (Sable Crossroads) rides the same proof, because it fails the
     // same way if it fails at all: its four quadrants touch only at four gaps,

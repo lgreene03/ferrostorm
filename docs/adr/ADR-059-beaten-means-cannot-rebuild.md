@@ -41,7 +41,7 @@ and the credits to pay. If so, order one and return. Selling is for a commander
 that is actually beaten.
 
 The producer is found by `ProducedAt` rather than by naming the factory, so this
-keeps working if Q018 ever moves it.
+keeps working if Q020 ever moves it.
 
 ### Rejected: sell everything except what is needed to rebuild
 

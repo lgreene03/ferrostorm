@@ -358,7 +358,7 @@ public sealed class SkirmishAI
             {
                 // The producer is the MCV's OWN produced_at (ADR-009 clause 2)
                 // rather than the factory by name, so this keeps working if
-                // Q018 ever moves it.
+                // Q020 ever moves it.
                 int producer = -1;
                 bool building = false;
                 for (int i = 0; i < w.Entities.Count && !building; i++)

@@ -152,7 +152,7 @@ about where the **engineer** is built.
 
 A comment documenting the hand-kept-list-lags-its-catalogue defect had itself
 become an instance of it. The list is now derived; the remaining four are filed
-as **Q018** for the Game Designer, and counted rather than quietly fixed,
+as **Q020** for the Game Designer, and counted rather than quietly fixed,
 because curating a unit's tier is not a tidy-up.
 
 ## Consequences
@@ -160,6 +160,6 @@ because curating a unit's tier is not a tidy-up.
 Q006 is **ANSWERED** after seventeen days. GDD s5 line 47 is enforced for the
 first time. All 18 local CI gates green; client harness PASS.
 
-Two things this leaves behind on purpose: **Q018**, the four remaining
+Two things this leaves behind on purpose: **Q020**, the four remaining
 tautologies, and **the yard-loss freeze**, which is the more serious of the two
 and is the reason this row's AI guard cannot yet be proved.
