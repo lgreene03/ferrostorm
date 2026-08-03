@@ -9156,6 +9156,46 @@ int FreeHarvesterGate()
     return 0;
 }
 
+int DefenceProbe()
+{
+    // MEASURING what each commander actually builds before deciding anything.
+    // The claim under test is "the AI builds the COMMON turret rather than its
+    // faction defence, and never builds a Veil Projector".
+    void Run(int faction, string label)
+    {
+        var w = new World(6300, 96, 96, players: 2);
+        w.SetFaction(0, faction);
+        w.SetFaction(1, faction == 0 ? 1 : 0);
+        w.GrantCredits(0, 60000);
+        w.SpawnConstructionYard(0, 10, 10);
+        w.SpawnFerriteField(Fix64.FromInt(16), Fix64.FromInt(14), 60000);
+        w.SpawnConstructionYard(1, 80, 80);
+        w.SpawnFerriteField(Fix64.FromInt(74), Fix64.FromInt(76), 60000);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        for (int t = 0; t < 12000; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        var byType = new SortedDictionary<int, int>();
+        foreach (var e in w.Entities)
+        {
+            if (!e.Alive || e.PlayerId != 0 || !World.IsStructure(e.Kind)) continue;
+            byType.TryGetValue(e.StructType, out int n); byType[e.StructType] = n + 1;
+        }
+        var parts = new List<string>();
+        foreach (var kv in byType)
+            parts.Add($"t{kv.Key}x{kv.Value}({w.GetStructureType(kv.Key).Kind})");
+        Console.WriteLine($"{label,-13} credits={w.Credits(0),-6} {string.Join(" ", parts)}");
+    }
+    Console.WriteLine("defenceprobe: structures built by a commander given 60000 credits and a huge field, 12000 ticks");
+    Run(0, "DIRECTORATE");
+    Run(1, "SODALITY");
+    return 0;
+}
+
 int YardLossProbe(int Horizon = 1500)
 {
     // MEASURING what a yard-less commander does, because P7-16 filed a defect
@@ -9210,6 +9250,108 @@ int YardLossProbe(int Horizon = 1500)
     Run("ENEMY, no radar, no mcv",    true,  false, false);
     Run("ENEMY, radar, no mcv",       true,  true,  false);
     Run("ENEMY, radar, MCV in hand",  true,  true,  true);
+    return 0;
+}
+
+int AiDefenceLadderGate()
+{
+    // P7-18 (ADR-060). NOT a duplicate of FactionDefenceGate (P7-2b), and the
+    // difference is the point ADR-054 asks every new gate to state: that one
+    // asserts the CATALOGUE - each side can build its own defence and not the
+    // other's, and the stats express doctrine. It passed throughout, because it
+    // was right: the hardware existed. This one asserts the COMMANDER actually
+    // BUILDS it, which nothing checked, and which was false for both sides.
+    //
+    // Both commanders put up one COMMON turret and stopped, so
+    // a Sodality base and a Directorate base were defensively identical while
+    // the Bastion and the Shroud Nest sat in the catalogue and in the sidebar as
+    // dead hardware - exactly what P7-5d found for the superweapon and the Watch
+    // Post, one rung further down the same ladder.
+    //
+    // The specification asserted here is GDD s5's faction identity, expressed as
+    // a property a reader can check: A COMMANDER BUILDS SOMETHING ITS OPPONENT
+    // CANNOT. No stage names the Bastion or the Shroud Nest, so authoring a
+    // third faction defence would not need this gate rewritten.
+    (int factionDefence, int commonTurret, bool built) Play(int faction)
+    {
+        var w = new World(6400, 96, 96, players: 2);
+        w.SetFaction(0, faction);
+        w.SetFaction(1, faction == 0 ? 1 : 0);
+        w.GrantCredits(0, 60000);
+        w.SpawnConstructionYard(0, 10, 10);
+        w.SpawnFerriteField(Fix64.FromInt(16), Fix64.FromInt(14), 60000);
+        w.SpawnConstructionYard(1, 80, 80);
+        w.SpawnFerriteField(Fix64.FromInt(74), Fix64.FromInt(76), 60000);
+        int own = w.BuildableFactionDefence(0);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        bool built = false, turret = false;
+        for (int t = 0; t < 12000; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        foreach (var e in w.Entities)
+        {
+            if (!e.Alive || e.PlayerId != 0 || !World.IsStructure(e.Kind)) continue;
+            if (e.StructType == own) built = true;
+            if (e.Kind == EntityKind.Turret) turret = true;
+        }
+        return (own, turret ? 1 : 0, built);
+    }
+
+    // --- 1. Each side HAS a defence of its own, and BUILDS it.
+    foreach (int faction in new[] { 0, 1 })
+    {
+        var (own, _, built) = Play(faction);
+        if (own == 0)
+            return Fail($"faction defence: faction {faction} has no armed defence building of its own in the "
+                        + "catalogue, so GDD s5's faction identity has nothing to express here and this gate "
+                        + "cannot ask its question");
+        if (!built)
+            return Fail($"faction defence: a faction {faction} commander with sixty thousand credits and twelve "
+                        + $"thousand ticks never built its own defence (struct type {own}). Both sides putting up "
+                        + "the same common turret and stopping is the thing this row exists to end");
+    }
+
+    // --- 2. THE CONTROL, and without it this row is satisfied by deleting the
+    //        common turret rung. The shared turret must STILL be built: it is
+    //        anti-armour and cheap, a side's own defence is neither for either
+    //        faction, and swapping them would be a balance change to the opening
+    //        dressed up as a fix.
+    foreach (int faction in new[] { 0, 1 })
+    {
+        var (_, turret, _) = Play(faction);
+        if (turret == 0)
+            return Fail($"faction defence: a faction {faction} commander stopped building the COMMON turret. This "
+                        + "row ADDS a side's own defence after it; replacing the shared anti-armour turret with a "
+                        + "faction building is a different change and a balance one");
+    }
+
+    // --- 3. The Veil Projector is NOT a defence for this purpose, and that is a
+    //        decision rather than an oversight. It sits on the Defence tab and
+    //        has NO WEAPON: it is a cloak field, and a ladder rung asking for
+    //        defence must not silently buy one. Asserted so the query's meaning
+    //        cannot drift into "anything filed under Defence".
+    {
+        var w = new World(6401, 64, 64, players: 2);
+        w.SetFaction(0, 1);
+        int own = w.BuildableFactionDefence(0);
+        if (own == 0 || w.GetStructureType(own).WeaponId == 0)
+            return Fail($"faction defence: the Sodality's own defence resolved to struct type {own}, which carries "
+                        + "no weapon - the query has drifted into 'anything on the Defence tab' and would have the "
+                        + "commander answer an attack with a cloak field");
+    }
+
+    Console.WriteLine("aidefenceladdergate: both commanders built one COMMON turret and stopped, so a Sodality base "
+                      + "and a Directorate base were defensively identical while the Bastion and the Shroud Nest "
+                      + "sat in the catalogue as dead hardware. Each side now builds its OWN defence as well, "
+                      + "chosen by asking the catalogue (Defence tab, armed, faction-exclusive) rather than by "
+                      + "naming type ids, so a third one would be picked up the day it is authored. The shared "
+                      + "turret is still built - this row adds rather than swaps - and the Veil Projector is "
+                      + "excluded BY HAVING NO WEAPON, because a defence rung must not answer an attack with a "
+                      + "cloak field");
     return 0;
 }
 
@@ -11532,6 +11674,11 @@ int Match(ulong seed)
     // gate it needs and calling itself beaten.
     int comeback = ComebackGate();
     if (comeback != 0) return comeback;
+    // P7-18: and each side defends its base with its OWN hardware rather than
+    // both putting up the same common turret. FactionDefenceGate above proves
+    // the hardware exists; this proves the commander uses it.
+    int aiDefenceLadder = AiDefenceLadderGate();
+    if (aiDefenceLadder != 0) return aiDefenceLadder;
     // P7-8: and the base it builds with all that income is a base rather than a
     // trail of buildings walking off the map.
     int baseShape = BaseShapeGate();
@@ -13247,9 +13394,11 @@ return args.Length == 0
         "seismicaimgate" => SeismicAimGate(),
         "economyfloatgate" => EconomyFloatGate(),
         "freeharvestergate" => FreeHarvesterGate(),
+        "defenceprobe" => DefenceProbe(),
         "yardlossprobe" => YardLossProbe(args.Length > 1 ? int.Parse(args[1]) : 1500),
         "mcvtechgate" => McvTechGate(),
         "comebackgate" => ComebackGate(),
+        "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),

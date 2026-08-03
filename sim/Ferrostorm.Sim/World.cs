@@ -3327,6 +3327,36 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// P7-18: the ARMED defence building that belongs to this player's side
+    /// alone, or 0 for a side whose only defences are the common ones.
+    ///
+    /// Derived from the catalogue rather than naming the Bastion and the
+    /// Shroud Nest, for the reason a hand-written list has now failed this
+    /// project many times: a third faction defence would be picked up the day
+    /// it is authored, and this cannot fall behind the thing it describes.
+    ///
+    /// Three conditions, each meaning something a reader can check:
+    ///   - the Defence TAB, which is the catalogue's own statement of role;
+    ///   - a WEAPON, so a Veil Projector (Defence tab, no gun) is excluded -
+    ///     it is a support building and a ladder rung asking for defence must
+    ///     not silently buy a cloak field;
+    ///   - FACTION-EXCLUSIVE, because the common turret is already the rung
+    ///     above and this one exists to say what the sides do DIFFERENTLY.
+    /// </summary>
+    public int BuildableFactionDefence(int player)
+    {
+        int faction = _playerFaction[player];
+        for (int t = 1; t <= MaxStructType; t++)
+        {
+            var d = GetStructureType(t);
+            if (d.Tab != BuildTab.Defence || d.WeaponId == 0 || d.BuildTicks <= 0) continue;
+            if (d.Faction == FactionCommon || d.Faction != faction) continue;
+            return t;
+        }
+        return 0;
+    }
+
+    /// <summary>
     /// ADR-009 clause 2: does this player own a living instance of every
     /// prerequisite?
     ///
