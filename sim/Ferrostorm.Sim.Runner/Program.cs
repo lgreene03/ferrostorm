@@ -9477,12 +9477,14 @@ int McvTechGate()
     // were moved back to anything the factory already implies. That is the
     // ADR-047 rule: assert the game's rule, never the implementation's
     // constant.
-    const int Factory = 2, Radar = 12, PowerPlant = 1;
-
-    // The tier gate itself. Named as the ANSWER to Q006 rather than inlined,
-    // so the one place a reader must look to see what "Tech Centre" resolved to
-    // is beside the sentence explaining it.
-    const int TechGate = Radar;
+    // P7-19 tidy: this block used to declare Factory, Radar, PowerPlant and a
+    // TechGate alias, none of which anything used, under a comment claiming
+    // TechGate was "the one place a reader must look" to see what Q006
+    // resolved to. It was not used anywhere - the stages spawn the tier gate
+    // through SpawnRadarUplink - so the comment described code that was not
+    // there. Deleted rather than wired up: the answer to Q006 belongs in
+    // ADR-058 and in com_mcv.yaml, and a gate should assert behaviour rather
+    // than restate a decision in a constant.
 
     World Base(ulong seed, out int cy, out int factory)
     {

@@ -217,8 +217,17 @@ report.AppendLine("## Static defence: does a walled base fall to a siege army?")
 report.AppendLine();
 report.AppendLine($"Fortification: 1 Construction Yard, 1 power plant (supply 200 >= draw 140), 2 turrets, 12 wall segments (\"none\" is the unwalled control). Besieger: {ArmyCredits} credits of one type, attack-move, cap {SiegeTicks} ticks.");
 report.AppendLine();
-report.AppendLine("| Besieger | Wall | Segments lost | Turrets killed | Yard razed | Army retained | Verdict |");
-report.AppendLine("|---|---|---|---|---|---|---|");
+// P7-19: "Ticks bought" is DERIVED per besieger rather than left for a reader to
+// subtract across rows. The summary table below already computed it for the
+// howitzer; every other besieger's was invisible, and one of them is NEGATIVE -
+// against rifle squads a GAPPED wall makes the yard fall SOONER than no wall at
+// all. That sat in this report for waves, in plain numbers, unnoticed, because
+// seeing it meant doing arithmetic between two non-adjacent rows.
+//
+// The rule this applies is the phase's own: when a table is confusing, add a
+// COLUMN, not a theory.
+report.AppendLine("| Besieger | Wall | Segments lost | Turrets killed | Yard razed | Ticks bought | Army retained | Verdict |");
+report.AppendLine("|---|---|---|---|---|---|---|---|");
 
 var razeBy = new Dictionary<(int, string), int>();
 foreach (var (id, name) in besiegers)
@@ -233,7 +242,16 @@ foreach (var (id, name) in besiegers)
                                    && x.RazeTick == r.RazeTick && x.SurvPct == r.SurvPct);
         razeBy[(id, shape)] = r.RazeTick;
         bool breached = r.RazeTick > 0 && r.SurvPct > 30;
-        report.AppendLine($"| {name} | {shape} | {r.WallsDead} | {r.TurretsDead}/2 | {(r.RazeTick > 0 ? "t=" + r.RazeTick : "no")} | {r.SurvPct}% | {(breached ? "BREACHED" : "held")} |");
+        // The unwalled control for THIS besieger, always already measured: the
+        // shape loop runs none first. A negative number is not a formatting
+        // accident, it is a wall that helped the attacker, so it is signed.
+        string bought = "-";
+        if (shape != "none" && razeBy.TryGetValue((id, "none"), out int ctrl) && ctrl > 0 && r.RazeTick > 0)
+        {
+            int delta = r.RazeTick - ctrl;
+            bought = delta > 0 ? "+" + delta : delta.ToString();
+        }
+        report.AppendLine($"| {name} | {shape} | {r.WallsDead} | {r.TurretsDead}/2 | {(r.RazeTick > 0 ? "t=" + r.RazeTick : "no")} | {bought} | {r.SurvPct}% | {(breached ? "BREACHED" : "held")} |");
 
         if (!seedsAgree)
         { report.AppendLine($"  - HARD FAIL: {name} vs {shape} wall disagrees across seeds - the siege path has become non-deterministic"); hardFail = true; }
