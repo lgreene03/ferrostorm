@@ -79,242 +79,371 @@ The 22 match the owed-models count exactly, derived independently.
 
 ## 4. Units
 
-Format: **silhouette at 40px** / team mark location / the one distinguishing
-feature. `[E]` = an established shape already exists (a sprite in `art/sprites/`, a shipped
-`.glb`, or both). `[N]` = new here, and one of the 22 owed models.
+Each entry gives a **physical description** - what the object actually is, for
+someone modelling or drawing it - then *Reads as*, the 40-pixel silhouette and
+team-mark placement. `[E]` = an established shape already exists (sprite, shipped
+`.glb`, or both); the description records it. `[N]` = new, one of the 22 owed.
 
-### Common (field olive, ferrite-gold marks)
+### Common hardware (field olive `#6e6a5e`, ferrite-gold marks)
+
+Common kit is what both sides inherited rather than built: utilitarian, boxy,
+slightly agricultural. Rounded-off corners from wear, no styling, visible bolts
+and panel joins. It should look older than either faction's own hardware.
 
 **com_rifle_squad** `[E]` 200cr, 100hp
-A **dot-cluster**, per doc 16. Four or five small upright figures in loose
-formation, reading as one blob with texture rather than one object. Team band on
-the shoulder plane - the only surface angled towards a high camera.
+Four or five infantry moving as a loose group. Bulky olive fatigues with a webbing
+harness over the chest, a shallow domed helmet, and a stubby rifle carried across
+the body. Deliberately anonymous - no faces, no insignia detail, silhouettes
+slightly hunched forward as if advancing. The figures should be simple capsules
+with squared shoulders rather than anatomically modelled people.
+*Reads as:* a dot-cluster of vertical ticks. Team band across the shoulders.
 
 **com_rocket_squad** `[E]` 300cr, 80hp
-The same dot-cluster, but each figure carries a **long diagonal** over the
-shoulder. That diagonal is the entire read: rifle squads are vertical ticks,
-rocket squads are ticks with a slash. Team band on the shoulder.
+The same fatigues and helmets, but each figure carries a **long tube over one
+shoulder**, angled up and back past the head. The tube is thick, cylindrical, with
+a flared rear venturi and a bulbous warhead at the front. Slightly fewer figures
+than a rifle squad, standing more upright to balance the weight.
+*Reads as:* the same dot-cluster, but each tick now has a diagonal slash across
+it. That diagonal is the whole distinction. Team band across the shoulders.
 
 **com_engineer** `[E]` 500cr, 60hp
-A **single** figure, not a cluster - immediately different from every other
-infantry. Hunched, carrying a boxy case. Ferrite-gold hard hat: the one bright
-point, so a player can find him in a crowd. No weapon silhouette at all.
+A **single** figure in olive coveralls rather than combat webbing, hunched forward
+under the weight of a large rectangular toolcase carried in one hand. A
+ferrite-gold hard hat is the one bright element on him. No weapon anywhere - empty
+hands and a case, which is the point.
+*Reads as:* one small tick with a gold dot on top, never a cluster. Team band on
+the back of the coveralls.
 
 **com_harvester** `[E]` 1400cr, 700hp
-Doc 16: **a fat beetle with a gold hopper.** Wide, low, no turret. The hopper is
-the read and it should visibly **fill** - ferrite gold rising as it loads is the
-best free feedback in the game. Team band low on the flank.
+A wide, low, tracked machine with no turret and no weapon. The front third is a
+downward-angled **intake maw** with visible cutting teeth, close to the ground.
+Behind it sits a large open-topped **hopper** whose interior fills visibly with
+ferrite gold as it works. The cab is a small armoured box offset to one side,
+almost an afterthought. Heavy fenders over both tracks, caked and industrial.
+*Reads as:* a fat beetle with a glowing gold back. Team band low on the flank.
 
 **com_mcv** `[E]` 3000cr, 600hp
-The **largest vehicle silhouette**. A slab on tracks, unarmed, with visible fold
-seams that promise it unpacks. Reads as cargo, not weapon. Team slash across the
-back plate.
+The largest vehicle in the game: a long slab-sided box on wide tracks, completely
+unarmed. The body is visibly **segmented into folding sections** - deep seams,
+heavy hinges, external locking clamps and folded-flat outrigger legs along the
+lower edge. It should look like a building lying down. A small armoured cab at the
+front, no windows to speak of.
+*Reads as:* an oversized featureless brick on tracks. Team slash on the rear plate.
 
 **com_repair_vehicle** `[N]` 700cr, 300hp
-Small, boxy, unarmed, with an **arm or crane folded on the roof** - the top
-profile is the read, since it has no turret to distinguish it. Ferrite-gold tool
-markings. Currently borrows the MCV mesh, which is far too big and reads wrong.
+A small, boxy, unarmed tracked utility vehicle - roughly a third the size of the
+MCV. The defining feature is a **folded articulated arm** lying along the roof,
+ending in a claw or welding head, with hydraulic cylinders visible along its
+length. Ferrite-gold hazard striping on the arm and around the rear deck. Toolboxes
+and a spare drum strapped to the flanks.
+*Reads as:* a small box with a bent stick on top. Team band on the cab side.
+*Currently borrows the MCV mesh, which is several times too large.*
 
 **com_carrier** `[N]` 600cr, 350hp
-Unarmed transport for five. A **long flat deck** with low sides - the silhouette
-of a thing that carries, deliberately empty on top so cargo reads when loaded.
-Wider than it is tall. Team band on the cab.
+A long, low, unarmed transport with a **flat open deck** taking up two thirds of
+its length and shallow drop-sides. The cab is a small forward box with a heavy
+grille. The deck should read as deliberately empty when unloaded, with tie-down
+rails and a fold-down rear ramp visible. Six wheels rather than tracks, giving it
+a lighter, more civilian look than anything armed.
+*Reads as:* a long flat plank with a lump at one end. Team band on the cab.
 
 **com_flak_track** `[N]` 550cr, 260hp
-Light chassis with a **short fat barrel cluster angled upward**. The upward angle
-is the read at distance: this is the only ground unit pointing at the sky. Open
-mount, exposed gunner.
+A light half-tracked chassis with an **open-topped mount** at the rear carrying a
+cluster of four short, fat barrels angled steeply upward. Ammunition boxes are
+stacked around the mount, and an exposed gunner's seat and hand-cranked traverse
+wheel sit beside it. The front is an ordinary truck cab. Everything about it says
+converted rather than purpose-built.
+*Reads as:* the only ground unit whose silhouette points at the sky. Team band on
+the cab door.
 
 **com_strike_flyer** `[N]` 1100cr, 180hp
-The only airborne unit. A **thin forward-swept dart**, small, no bulk anywhere.
-Must read instantly as *not on the ground* - which the shadow gap does, so keep
-the mesh spare. Team mark on the tail fin, the highest visible surface.
+A small single-seat aircraft with **forward-swept wings** and a slim tapering
+fuselage. No bulk anywhere - a thin fuselage, a bubble canopy set well forward,
+twin tail fins, and a single underslung rocket pod beneath each wing. It should
+look fast and fragile.
+*Reads as:* a thin dart with a shadow gap beneath it, which is what sells it as
+airborne. Team mark on the tail fins, the highest visible surface.
 
-### Directorate (gunmetal, signal orange)
+### Directorate (gunmetal `#5b6770`, plate `#78848c`, signal orange `#e8762c`)
+
+Directorate hardware is **issued**: every vehicle looks like it came off the same
+production line. Flat welded plate, bilateral symmetry, level tops, hard right
+angles, and no visible improvisation. Panel lines are regular and repeated.
+Stencilled serial numbers in the same place on every hull. Clean, cold, and
+slightly overbuilt.
 
 **dir_cannon_tank** `[E]` 600cr, 300hp
-The **baseline slab**: symmetric, level-topped, a single centred barrel. Every
-other Directorate vehicle is read against this one. Team band across the hull
-front, square to the world.
+The faction's baseline: a low, wide tracked tank with a **single sloped frontal
+plate** and a squat hexagonal turret set centrally. One long smoothbore barrel with
+a blunt muzzle brake. Track guards run the full length as unbroken plates, hiding
+the running gear so the whole vehicle reads as one solid mass. No stowage, no
+clutter, no curves anywhere.
+*Reads as:* the reference slab with a barrel. Team band across the hull front.
 
 **dir_bulwark_tank** `[E]` 1600cr, 550hp
-Doc 16: **a slab.** The widest, lowest, heaviest silhouette in the game - "the
-wall that walks". No visible weak points, no clutter, tracks as thick as the hull.
-Should look like it costs 1600 credits from 40 pixels away. Team band low and wide.
+The widest, lowest, heaviest thing on the field - "the wall that walks". A vast
+flat-topped hull sitting on **two pairs of tracks per side**, with armour so thick
+the track guards and hull merge into one continuous slab. The turret is barely a
+turret: a low armoured hump with a short heavy barrel, set well back. Deep bolted
+seams across the frontal plate. It should look immovable rather than fast.
+*Reads as:* a slab, per doc 16 - the broadest silhouette in the game. Team band
+low and wide across the front.
 
 **dir_howitzer** `[E]` 900cr, 160hp
-Artillery: a **long barrel over a small hull**, with the barrel elevated so the
-top profile is unmistakably a gun pointing far away. Visible recoil housing.
-Fragile-looking, which is honest at 160hp.
+A small, thin-skinned tracked chassis almost entirely occupied by a **very long
+barrel**, elevated well above the horizontal and overhanging the front by half the
+vehicle's length again. A large recoil housing and recuperator sit above the
+breech, and two hydraulic spades are folded at the rear. The crew compartment is
+an open-backed box, obviously unarmoured.
+*Reads as:* a small body under a long raised stick. Team band on the hull side,
+below the barrel.
 
 **dir_sentinel_scout** `[E]` 400cr, 90hp
-Light, fast, and the faction's **eyes** - a tall thin **mast or dish** above a
-small hull. The mast is the read and it must clear the two-pixel threshold, so
-make it taller than looks natural.
+A light four-wheeled scout car with a small faceted hull and no main gun. Its
+defining feature is a **tall slender mast** rising from the rear deck, topped with
+a flat dish or sensor paddle - taller than looks natural, because at distance the
+mast is the entire identity. Small vision blocks, a light machine gun on a pintle.
+*Reads as:* a small box with a thin vertical line above it. Team band on the
+bonnet.
 
 **dir_vanguard_car** `[E]` 450cr, 150hp
-Wheeled, not tracked - the **only Directorate wheels**, which is the distinction
-from the cannon tank at distance. Low open-topped body, small forward gun.
+A fast **six-wheeled** armoured car with a low, open-topped welded body and a
+sharply sloped nose. A small forward-firing autocannon sits in a shallow shielded
+mount rather than a turret. Wheels are large and exposed with chunky treads - the
+only Directorate vehicle where the running gear is visible, which is exactly what
+separates it from the cannon tank at distance.
+*Reads as:* a low wedge on visible round wheels. Team band on the nose slope.
 
 **dir_commando** `[N]` 1500cr, 200hp, one alive
-A single figure like the engineer, but **armoured and upright** where the engineer
-hunches. Larger than any other infantry - hero scale is permitted and expected.
-Signal orange should be generous here: this is a unit the player must never lose
-track of.
+A single figure, noticeably **larger than any other infantry** - hero scale is
+intended. Heavy segmented plate armour over the chest and shoulders, a full helmet
+with a narrow visor slit, and a long rifle held across the body rather than
+shouldered. Stands fully upright where line infantry hunch. Signal orange is
+generous here: shoulder plates and helmet band both.
+*Reads as:* one tall bright tick that stands out from every crowd.
 
-### Sodality (rust, corroded teal)
+### Sodality (rust `#8a4a34`, plate `#a35c40`, corroded teal `#4fb8a8`)
+
+Sodality hardware is **welded from salvage**: mismatched plate of visibly different
+ages, asymmetric mountings, tilted or broken rooflines, and things strapped on top
+that break the silhouette. Rust streaks below every join. Where the Directorate has
+stencils, the Sodality has hand-painted marks. Nothing looks like it came from the
+same factory as the thing beside it.
 
 **sod_shade_raider** `[E]` 500cr, 150hp
-Fast, stealthed, improvised. **Asymmetric** - weapon on one side only, salvage
-strapped to the other. Low and leaning forward. Reads as a civilian vehicle that
-has been made dangerous.
+A fast, low, four-wheeled raider built on an obviously **civilian chassis** - a
+pickup-like body with the roof cut away. A weapon is bolted to one side only:
+asymmetry is the read. The other side carries strapped-on salvage - jerrycans, a
+spare wheel, rolled tarpaulin. Improvised plate is welded over the cab in
+mismatched sheets, leaving gaps.
+*Reads as:* a lopsided low wedge, leaning forward. Team mark hand-painted on the
+door panel.
 
 **sod_phantom_tank** `[E]` 900cr, 200hp
-Doc 16: **a faceted wedge.** All flat angled planes, no curves, no clutter - the
-stealth read. Narrow front, wide rear. When cloaked the mesh should still be
-*present* as a distortion, not absent.
+The Sodality's one piece of precision engineering: an angular tracked tank built
+entirely from **flat faceted planes**, no curves and no clutter anywhere. Narrow
+sharply-pointed front widening to a broad rear. The weapon is a slim rocket box
+rather than a barrel, low over the hull. Surfaces are matte and dark, with faint
+teal seams that glow slightly when cloaked.
+*Reads as:* a faceted wedge, per doc 16. Team mark as a thin slash along the hull
+edge - minimal, since this thing is meant to disappear.
 
 **sod_infiltrator** `[N]` 700cr, 90hp
-Single stealthed figure. **Civilian silhouette** - no visible weapon, coat rather
-than webbing. Should read as "a person", which is exactly what makes it
-frightening among the Sodality's welded machines.
+A single figure in a long **civilian coat** over ordinary clothes, carrying no
+visible weapon at all. Hands in pockets or at the sides. Head bare or lightly
+hooded. The whole point is that it reads as a person rather than a soldier, which
+is what makes it unnerving among welded machines.
+*Reads as:* one plain tick with no hard edges and nothing carried.
 
 **sod_saboteur** `[N]` 600cr, 80hp
-Same civilian read as the infiltrator, distinguished by a **satchel or charge
-carried low** - the one geometric addition. The pair should be confusable at a
-glance and separable on a second look, which is the doctrine.
+Same civilian coat and posture as the infiltrator, distinguished by a **satchel
+carried low at the hip**, bulky and square, with a strap across the chest. That
+satchel is the only geometric addition. The two should be confusable at a glance
+and separable on a second look - which is the doctrine, not an accident.
+*Reads as:* the infiltrator's tick with a small box at waist height.
 
 **sod_shadow_commando** `[N]` 1500cr, 200hp, one alive
-The Sodality hero. Upright and armoured like its Directorate twin, but
-**asymmetric and hooded**, with mismatched plate. Corroded teal generous, same
-rule: never lose track of it.
-
----
+The Sodality hero: a tall figure in **mismatched scavenged plate**, deliberately
+asymmetric - a heavy pauldron on one shoulder only, a hood over a partial mask,
+wrapped cloth at the forearms. Carries a long rifle. Where the Directorate commando
+is issued and uniform, this one looks assembled from what was available.
+*Reads as:* one tall lopsided tick with a hood. Corroded teal generous on the
+pauldron and hood.
 
 ## 5. Buildings
 
-Footprint `fp2` = 2×2, `fp1` = 1×1.
+Footprint `fp2` = 2x2, `fp1` = 1x1. Buildings are **compressed in height** relative
+to reality so they do not occlude the units in front of them.
 
 ### Common infrastructure (field olive)
 
 **com_construction_yard** `[E]` 3000cr, 3000hp, fp2
-The **anchor of the base** and it should look it: the largest, heaviest footprint,
-with a visible gantry or crane on top. Everything else is built from here, so it
-reads as a factory that makes factories. Ferrite-gold trim on the gantry.
+The anchor of the base: a wide, heavy industrial hall with a **gantry crane
+spanning the roof**, its rails running the full width. The crane's trolley is
+visible and ferrite-gold trimmed. Corrugated walls with a large roller shutter on
+one face, external stairs and a railed walkway along one side. It should look like
+the factory that builds factories.
+*Reads as:* the largest footprint with a horizontal bar floating above it.
 
 **com_refinery** `[E]` 2000cr, 2000hp, fp2
-A **docking bay with a visible opening** on one side - the harvester goes *in*.
-Tanks and pipework above. Ferrite gold on the pipes: this is where the resource
-becomes credits, so the gold should be brightest here of anywhere.
+A processing plant built around a **docking bay with a wide open mouth** on one
+side, deep enough that a harvester visibly enters it. Above sit two cylindrical
+storage tanks and a tangle of pipework, with ferrite-gold running through the pipes
+and pooling brightest at the outflow. A short chimney vents at the rear.
+*Reads as:* a box with a dark opening and gold pipes above it - the brightest gold
+on the map.
 
 **com_factory** `[E]` 2000cr, 1500hp, fp2
-A wide shed with **large doors on one face** and a flat roof. Vehicles come out,
-so the door must read at 40px. Roof plane deliberately plain - it is a workshop.
+A wide flat-roofed shed with **two large vehicle doors** on the front face and a
+concrete apron in front of them. The roof carries ventilation louvres and nothing
+else - deliberately plain, because it is a workshop. Steel-framed walls with
+visible bracing, and a painted lane marking leading out from the doors.
+*Reads as:* a plain flat box with two dark rectangles on one face.
 
 **com_barracks** `[N]` 500cr, 800hp, fp2
-Smaller and cheaper than the factory, and must not be confused with it. **Pitched
-roof** against the factory's flat one, small personnel door rather than a vehicle
-door. Currently borrows the service depot, which is wrong in both size and read.
+Smaller and simpler than the factory, and must not be confused with it: a **pitched
+roof** against the factory's flat one is the distinction. A single personnel-sized
+door with a short covered porch, small square windows along one side, and a rack of
+kit and a water butt against the wall.
+*Reads as:* a small hut with a peaked roof.
+*Currently borrows the service depot, which is both too large and flat-roofed.*
 
-**com_power_plant** `[E]` 300cr, 150hp, fp2 *(Directorate-only since P7-5a)*
-Doc 15's centralised grid: **fewer, bigger, juicier targets**. Cooling stacks or
-a turbine housing on the roof - the top profile is the read. At 150hp it is the
-most fragile building in the game and should look it: thin walls, exposed plant.
+**com_power_plant** `[E]` 300cr, 150hp, fp2 *(Directorate-only)*
+GDD s3's centralised grid, so it is a **big juicy target**: a squat turbine hall
+with two broad **cooling stacks** rising from the roof, venting faint heat haze.
+Thin walls, large louvred vents, exposed conduit running down the outside to
+ground level. At 150hp it is the most fragile building in the game and should look
+it - all plant and no armour.
+*Reads as:* a low box with two thick chimneys, the tallest common silhouette.
 
 **com_service_depot** `[E]` 1200cr, 1000hp, fp2
-A flat apron with a **repair gantry over it** - an open structure, not a sealed
-box. That openness distinguishes it from the barracks and factory.
+An **open** structure rather than a sealed box: a flat concrete apron under a
+skeletal repair gantry, with a hoist on a rail and floodlights on posts at the
+corners. Oil drums, a tool cart and a stack of track links sit around the edges.
+The openness is what distinguishes it from the barracks and factory.
+*Reads as:* a flat pad with an open frame over it - you can see through it.
 
 **com_radar_uplink** `[N]` 900cr, 1000hp, fp2
-The **tallest thin structure** in the game: a mast or dish on a small base. Pure
-vertical, which nothing else is. Ferrite-gold dish face. Currently borrows the
-veil projector - a Sodality building standing in for a common one, which breaks
-the faction read entirely.
+The **tallest thin structure** in the game: a small windowless equipment blockhouse
+with a lattice mast rising from it, carrying a large ferrite-gold dish angled
+skyward. Guy wires run from the mast to ground anchors. Pure vertical emphasis,
+which nothing else common has.
+*Reads as:* a small base under a tall thin line with a dish on top.
+*Currently borrows the Sodality veil projector, breaking the faction read.*
 
 **com_airfield** `[N]` 1800cr, 1100hp, fp2
-A **flat pad with a control mast at one corner** - mostly horizontal, deliberately
-low so the aircraft on it reads as the tall thing. Painted landing markings in
-ferrite gold.
+Deliberately **horizontal**: a large flat concrete pad with painted ferrite-gold
+landing markings, a low fuel bowser at one edge, and a slim control mast with a
+glazed cabin at one corner. Everything low so the aircraft standing on it reads as
+the tall element.
+*Reads as:* a flat marked rectangle with one thin post at a corner.
 
 **com_outpost** `[N]` 500cr, 1000hp, fp2 *(neutral, capturable)*
-Must read as **nobody's**: bleached, weathered, no faction plate, no team colour
-at all until captured - at which point the band appears. A small blockhouse with a
-flag mast. Currently borrows the refinery, which is badly misleading since it
-implies an economy building.
+Must read as **nobody's**: a weathered concrete blockhouse, bleached and stained,
+with a flat roof, narrow slit windows and a bare flagpole with nothing on it. No
+faction plate, no livery, no team colour at all - the flag and a painted band
+appear only on capture.
+*Reads as:* a pale, plain, colourless box with a bare pole.
+*Currently borrows the refinery, which misleadingly implies an economy building.*
 
 **com_bridge** `[N]` 400cr, 800hp, fp1 *(map-placed, destroyable)*
-Flat span, no superstructure, reads as terrain rather than building. Should look
-*structural* - visible trusses underneath - so that felling it feels consequential.
+A flat roadway span with **visible truss girders beneath** and low kerb rails at
+the sides. No superstructure above deck level, so it reads as terrain rather than
+building. Concrete abutments at each end. The underside trusses matter: they are
+what make felling it feel structural.
+*Reads as:* a flat strip across a gap, dark underneath.
 
-### Defence (common)
+### Defence
 
-**dir_turret** `[E]` 600cr, 400hp, fp2
-Small base, **rotating gun on top**. The gun is the read; the base is almost
-incidental. Common hardware despite the `dir_` id.
+**dir_turret** `[E]` 600cr, 400hp, fp2 *(common hardware)*
+A small circular concrete base carrying a **rotating armoured turret** with a
+single medium barrel. The base is almost incidental - low, plain, half-sunk. The
+turret is the read: a faceted box that visibly tracks its target.
+*Reads as:* a small dark disc with a gun on top that moves.
 
 **com_emplacement** `[N]` 350cr, 300hp, fp2
-Cheaper and lower than the turret: a **sandbagged ring** with a short weapon,
-mostly horizontal. Anti-infantry, so it should look like a pit rather than a tower.
+Lower and cheaper than the turret: a **sandbagged ring** with a short-barrelled
+automatic weapon on a pintle at its centre, and an ammunition box beside it. Mostly
+horizontal, dug in rather than built up. Reads as a pit, not a tower.
+*Reads as:* a low ring with a small stub in the middle.
 
 **com_wall** `[N]` 100cr, 500hp, fp1
-A plain segment. **The one rule that matters: it must tile seamlessly** and read
-as continuous from above, since players build them in runs.
+A plain reinforced concrete segment with a chamfered top edge and a visible
+vertical joint at each end. **It must tile seamlessly** and read as a continuous
+run from above - that is the only rule that matters. Light weathering at the base.
+*Reads as:* an unbroken line when built in runs.
 
 **com_gate** `[N]` 200cr, 500hp, fp1
-Visibly a wall segment **with a moving part** - a gap and two posts. The open and
-shut states must be distinguishable at 40px, which means the moving element needs
-to be large and to change the silhouette, not slide inside it.
+Visibly a wall segment **with a moving part**: two heavy posts with a barred
+sliding leaf between them, and a small mechanism housing on one post. Open and shut
+must be distinguishable at 40px, so the leaf slides fully clear rather than
+retracting inside the posts.
+*Reads as:* a gap in the wall line that visibly opens and closes.
 
 **com_mine** `[N]` 400cr, 100hp, fp1
-Small, low, mostly flush with the ground. Barely a silhouette by design. A single
-ferrite-gold pressure plate is the only visible feature - and it should be visible
-*only to its owner's player colour*, which is a shader question.
+Small, low, and almost flush with the ground - barely a silhouette by design. A
+shallow disc with a single **ferrite-gold pressure plate** at its centre and a
+scatter of disturbed earth around it. Visible to its owner, near-invisible to
+everyone else.
+*Reads as:* a faint gold dot on the ground, easily missed.
 
 ### Directorate structures
 
 **dir_bastion** `[N]` 1400cr, 1600hp, fp2
-The Directorate's own defence and its **toughest building per credit**. A squat
-armoured blockhouse - thick sloped plate, a heavy weapon in an embrasure rather
-than a turret on a pole. Should read as fortification, not as a gun emplacement.
-Now also carries two support powers, so a **dish or antenna** on the roof is
-earned. Currently borrows the turret, which badly under-reads 1400 credits.
+The toughest building per credit and it must look it: a squat **armoured
+blockhouse** with steeply sloped concrete flanks, a heavy weapon firing through a
+narrow embrasure rather than sitting on a turret, and a stepped parapet along the
+top. A small dish and antenna cluster on the roof, earned by its two support
+powers. Reads as fortification, not as a gun on a pole.
+*Reads as:* a wide sloped mass with a slot in the front and aerials above.
+*Currently borrows the turret, which badly under-reads 1400 credits.*
 
 **dir_superweapon** `[E]` 4000cr, 1200hp, fp2 *(orbital cannon)*
-The largest and most vertical Directorate structure: a **cannon aimed upward**,
-with the barrel as the whole silhouette. Charge state should be readable - ferrite
-gold intensifying up the barrel as it fills is the obvious language, and it
-matches the viewer's ferrite-seam glow.
+The most **vertical** Directorate structure: a massive segmented barrel angled
+steeply skyward, mounted in a heavy ring cradle on a broad reinforced base. Cable
+looms and coolant pipes run up the barrel's length. Ferrite gold intensifies up
+the barrel as the charge fills, brightest at the muzzle just before firing.
+*Reads as:* a huge diagonal line pointing up, with a glow that climbs it.
 
 ### Sodality structures
 
 **sod_generator** `[N]` 130cr, 70hp, fp1
-Doc 15's **decentralised power: many small generators.** The cheapest and most
-fragile thing in the game at 130cr/70hp. A single **salvaged drum** with cabling.
-Players will build a dozen, so it must tile visually without becoming noise.
+GDD s3's decentralised grid: the cheapest, flimsiest thing in the game. A single
+**salvaged fuel drum** stood on end on a pallet, with a small motor bolted to the
+top, a pull-cord, and cables trailing away across the ground. Rust streaks, dents,
+faded painted markings from a previous life.
+*Reads as:* a small rusty cylinder. Players build a dozen, so it must cluster
+without becoming noise.
 
 **sod_shroud_nest** `[N]` 400cr, 260hp, fp2
-The Sodality's defence, and now the decoy-army building. A **lean-to of mismatched
-plate** with a weapon poking through a gap - deliberately looks improvised and
-temporary against the Bastion's permanence.
+A **lean-to of mismatched plate** propped at an angle against a low frame, with a
+weapon poking through a gap between sheets. Corrugated iron, salvaged vehicle
+panels and mesh, all different ages. Sandbags at the base. Deliberately temporary
+against the Bastion's permanence.
+*Reads as:* a tilted asymmetric hump with something sticking out of it.
 
 **sod_watch_post** `[N]` 350cr, 260hp, fp1
-The detector, and **unarmed by design** (GDD line 56: detectors are visible and
-killable). A **thin tower with a crow's nest** - tall, spindly, obviously fragile.
-No weapon anywhere on the silhouette; that absence is the read. Now also the radar
-jamming building, so a scavenged aerial array on top is earned.
+A **thin scaffold tower** with a small enclosed crow's nest at the top, reached by
+an external ladder. Scavenged aerials and a small dish are lashed to the upper
+frame. **Unarmed by design** (GDD line 56) - no weapon anywhere on the silhouette,
+and that absence is the read. Spindly and obviously fragile.
+*Reads as:* a tall thin lattice with a box on top and no gun.
 
 **sod_veil_projector** `[E]` 1500cr, 900hp, fp2
-Cloak field generator. A **dish or emitter aimed outward and up**, on a squat base.
-Its effect radius is invisible, so the building should imply reach - the emitter
-oversized relative to the base. Now also the tunnel building, so a **visible shaft
-or hatch** at ground level is earned.
+A squat armoured base carrying an oversized **emitter dish** angled outward and
+up, ringed by coil housings that pulse faint teal. The dish is deliberately large
+relative to the base, because its effect radius is invisible and the building must
+imply reach. A ground-level hatch and shaft head sit at one side, earned by tunnel
+deployment.
+*Reads as:* a low base under a big tilted dish, with a teal shimmer around it.
 
 **sod_seismic_charge** `[N]` 4000cr, 1200hp, fp2 *(superweapon)*
-The Sodality's superweapon and the deliberate opposite of the orbital cannon:
-where that aims *up*, this **drives down**. A drill rig or piston over a shaft.
-Charge readable the same way, ferrite gold descending rather than rising.
-
----
+The deliberate opposite of the orbital cannon: where that aims up, this **drives
+down**. A heavy drill rig over a shaft head - a lattice derrick with a massive
+piston hammer suspended in it, cables and counterweights on either side, and a
+concrete collar around the borehole. Ferrite gold descends the shaft as it charges.
+*Reads as:* a squat derrick over a dark hole, with a glow that sinks rather than
+climbs.
 
 ## 6. Rules that apply to everything
 
