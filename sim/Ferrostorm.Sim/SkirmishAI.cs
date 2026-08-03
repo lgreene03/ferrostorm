@@ -325,9 +325,58 @@ public sealed class SkirmishAI
                 output.Add(new Command(w.Tick, _player, CommandType.Deploy, ownMcv, Fix64.Zero, Fix64.Zero));
                 return;
             }
-            // No yard, no MCV: beaten. Sell everything still standing and send
-            // every unit in one last wave - the classic Fire Sale, the ending
-            // that goes out with a bang instead of a mop-up. Once.
+            // P7-17: and being able to BUY one counts as having one. DR-10's
+            // comeback rule keyed on OWNING an MCV and never asked whether it
+            // could get one, so a commander holding a Factory, the tier gate
+            // the MCV waits behind, and twenty thousand credits against a three
+            // thousand credit unit sold its whole base - radar included - and
+            // called itself beaten. MEASURED: five structures sold for a 2850
+            // credit consolation, one production order from a full rebuild.
+            //
+            // The seventeenth time P7 has found this defect: a rule keyed on an
+            // INSTANCE where it means a CAPABILITY. "Do I have an MCV" should
+            // always have read "can I get an MCV".
+            //
+            // ADR-058 widened the gap it hid in. While the MCV's prerequisite
+            // was the factory it is produced at, having one and being able to
+            // buy one nearly coincided; putting it behind the Radar Uplink made
+            // them genuinely different states.
+            var mcvDef = w.GetUnitType(World.McvUnitType);
+            if (w.HasPrereqs(_player, mcvDef.Prereqs))
+            {
+                // The producer is the MCV's OWN produced_at (ADR-009 clause 2)
+                // rather than the factory by name, so this keeps working if
+                // Q018 ever moves it.
+                int producer = -1;
+                bool building = false;
+                for (int i = 0; i < w.Entities.Count && !building; i++)
+                {
+                    var p = w.Entities[i];
+                    if (!p.Alive || !World.IsOwnedBy(in p, _player) || !World.IsStructure(p.Kind)) continue;
+                    if (p.StructType != mcvDef.ProducedAt) continue;
+                    if (producer < 0) producer = i;
+                    // AN MCV ALREADY ON ORDER COUNTS. Without this the fix
+                    // failed its own first measurement: the order went out,
+                    // and on the NEXT beat the producer's queue was no longer
+                    // empty, so the search skipped it and fell straight through
+                    // to the fire sale - selling the very factory that was
+                    // building the comeback. Measured, not reasoned about: the
+                    // sale count did not move at all.
+                    foreach (int q in w.QueueContents(i))
+                        if (q == World.McvUnitType) { building = true; break; }
+                }
+                // Waiting for one to finish is not being beaten.
+                if (building) return;
+                if (producer >= 0 && w.Credits(_player) >= mcvDef.Cost)
+                {
+                    output.Add(new Command(w.Tick, _player, CommandType.Produce, producer,
+                                           Fix64.Zero, Fix64.Zero, World.McvUnitType));
+                    return;
+                }
+            }
+            // No yard, no MCV and no way to get one: beaten. Sell everything
+            // still standing and send every unit in one last wave - the classic
+            // Fire Sale, the ending that goes out with a bang, not a mop-up. Once.
             if (_lastStandMade || enemyStructure < 0) return;
             _lastStandMade = true;
             for (int i = 0; i < w.Entities.Count; i++)
