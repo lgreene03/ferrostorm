@@ -244,6 +244,25 @@ deliberately narrow: **the faction defences** (Bastion, Shroud Nest) and the
 **Veil Projector**, both of which are balance additions rather than defects since
 the common turret works for either side.
 
+> **The faction defences closed 2026-08-03** (P7-18, ADR-060), and the judgement
+> above was respected rather than overturned: the common turret does work, which
+> is why that row ADDS a rung after it instead of swapping. `!hasTurret ? 5` was
+> the last hardcoded type id left in the ladder after P7-5d converted the other
+> three. **The Veil Projector is still unbuilt, now deliberately** - it has no
+> weapon, so a defence rung buying one would be answering an attack with a cloak
+> field. It is support machinery and belongs with GDD s8's support powers.
+>
+> The row also produced the phase's first **balance** finding of any size, and
+> it came from a control the row did not have to run. Ungated, the new rung
+> flipped the faction war from Directorate 6-0 to **0-6**: the Bastion costs
+> 1,400 behind a radar, the Shroud Nest 400 behind a plant, so buying both out
+> of the opening budget loses the Directorate every match. Shipping it gated on
+> surplus restores 6-0 and is independently correct, but that **masks** the
+> problem rather than solving it. Filed for A11 co-sign, because the tool that
+> measured it reports 6-0 in one direction and calls that a PASS - it can tell
+> you the sign of a change, not whether the result is good. A war with no middle
+> is not a balanced game.
+
 **And the aim closed 2026-08-01** (P7-5e, ADR-046). Three waves had built the
 seismic charge, made the commander build one, and left it aiming with the attack
 wave's scan - at the nearest enemy refinery, which spends the only thing that

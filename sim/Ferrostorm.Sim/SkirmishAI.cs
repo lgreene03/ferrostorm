@@ -206,6 +206,14 @@ public sealed class SkirmishAI
 
         int cy = -1, factory = -1, refinery = -1, barracks = -1;
         bool hasPlant = false, hasTurret = false, hasRadar = false;
+        // P7-18: tracked by TYPE rather than by kind, because a side's own
+        // defence and the common turret can share a kind (the Sodality's Shroud
+        // Nest and the common emplacement are both EntityKind.Emplacement), so
+        // a kind flag would report the shared one as the faction one.
+        bool hasFactionDefence = false;
+        // P7-18: its OWN side's armed defence, 0 for a side that has none.
+        // Asked BEFORE the scan, because the scan needs it to recognise one.
+        int factionDefence = w.BuildableFactionDefence(_player);
         // P7-5d: does anything of mine reveal cloak? Asked of the ENTITY FLAG
         // rather than of a building kind, so it counts the Directorate's Sentinel
         // Scout and the Sodality's Watch Post alike without naming either.
@@ -231,6 +239,10 @@ public sealed class SkirmishAI
             if (World.IsOwnedBy(in e, _player))
             {
                 if (e.Detector) hasDetector = true;
+                // P7-18: compared against the type the QUERY returned, so the
+                // flag and the rung can never disagree about what "my side's
+                // defence" means.
+                if (World.IsStructure(e.Kind) && e.StructType == factionDefence) hasFactionDefence = true;
                 switch (e.Kind)
                 {
                     case EntityKind.ConstructionYard:
@@ -476,6 +488,29 @@ public sealed class SkirmishAI
                    // was refused. This is the row that refusal pointed at.
                    : refineryCount < cyCount * RefineriesPerBase ? 3
                    : !hasTurret ? 5
+                   // P7-18: and then its OWN side's defence, which no commander
+                   // has ever built. Both sides put up one common turret and
+                   // stopped, so a Sodality base and a Directorate base were
+                   // defensively identical - the Bastion and the Shroud Nest
+                   // existed in the catalogue and in the sidebar and were dead
+                   // hardware, exactly as the superweapon and the Watch Post
+                   // were before P7-5d asked the same question of them.
+                   //
+                   // This is deliberately the LAST word on defence rather than a
+                   // replacement for the turret above. The common turret is
+                   // anti-armour and cheap; a side's own defence is neither of
+                   // those things for either faction, and swapping them would be
+                   // a balance change to the opening dressed as a fix.
+                   //
+                   // Gated on the prerequisites because the rung above it is
+                   // not: the Directorate's Bastion waits behind the radar, and
+                   // queueing a building the yard will refuse stalls it forever
+                   // rather than failing loudly. So the rung self-sequences -
+                   // the Sodality builds its Shroud Nest as soon as it has a
+                   // plant, the Directorate its Bastion once the radar is up.
+                   : factionDefence != 0 && !hasFactionDefence
+                     && w.Credits(_player) >= w.GetStructureType(factionDefence).Cost + 1500
+                     && w.HasPrereqs(_player, w.GetStructureType(factionDefence).Prereqs) ? factionDefence
                    // P7-5d: EYES. The Directorate's unit cycle below has built a
                    // Sentinel Scout every sixth unit since TICKET-P3-FAC-04,
                    // described there as "eyes for the wall" - so that commander
