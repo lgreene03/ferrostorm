@@ -119,7 +119,8 @@
           "orbital_scan",
           "precision_strike",
           "radar_jamming",
-          "tunnel_deployment"
+          "tunnel_deployment",
+          "decoy_army"
         ]
       },
       "minItems": 1,

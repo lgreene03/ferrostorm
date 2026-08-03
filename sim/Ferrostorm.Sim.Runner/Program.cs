@@ -9387,6 +9387,136 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int DecoyArmyGate()
+{
+    // P7-26 (ADR-067). GDD s3 line 30's DECOY ARMY, the last of the five named
+    // support powers.
+    //
+    // What this catches that nothing else does: it is the first power that
+    // CREATES entities. The tunnel moves existing ones and every other power
+    // reveals, damages or blinds, so no other gate would notice decoys that
+    // could shoot, that saw the map, that were tough enough to be worth killing,
+    // or that did not look like anything real.
+    const int Nest = 18, RifleType = 2;
+
+    (World w, int nest) Base(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        w.SetFaction(1, World.FactionDirectorate);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int nest = w.SpawnFactionDefence(0, Nest, 10, 10);
+        return (w, nest);
+    }
+
+    // Decoys are identified BY PROVENANCE - the entities the power created -
+    // and deliberately not by any property this gate asserts about them.
+    //
+    // Two earlier versions of this helper identified them by hit points and
+    // then by "no weapon and no eyes", and BOTH were wrong in the same way:
+    // breaking the very rule a later stage tests made the decoys unfindable, so
+    // the COUNT stage failed first and reported the wrong thing. A gate whose
+    // stages can only fail in one order is one assertion wearing four hats.
+    // Provenance is independent of every property below.
+    List<int> FireAndCollect(World w, int nest, int aimX, int aimY)
+    {
+        int before = w.EntityCount;
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, nest,
+                                   Map.CellCentre(aimX), Map.CellCentre(aimY), World.DecoyArmyPowerId) });
+        var made = new List<int>();
+        for (int i = before; i < w.EntityCount; i++) made.Add(i);
+        return made;
+    }
+    const int AimX = 40, AimY = 40;
+
+    // --- 1. THE CONTROL, FIRST: no decoys before one is called. Without it
+    //        every count below would pass in a world that spawns them anyway.
+    {
+        var (w, _) = Base(7600);
+        int before = w.EntityCount;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 10; t++) w.Step(default);
+        if (w.EntityCount != before)
+            return Fail($"decoy army: {w.EntityCount - before} entities appeared before any decoy was called, so "
+                        + "this gate cannot tell a decoy army from a world that makes units on its own");
+    }
+
+    // --- 2. It CREATES a wave's worth, asserted against the DERIVATION rather
+    //        than a literal, so the count and the rule that sets it cannot
+    //        drift apart.
+    {
+        var (w, nest) = Base(7601);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        var made = FireAndCollect(w, nest, AimX, AimY);
+        int want = w.GetAiTuning(AiTuning.StandardId).WaveSize;
+        if (made.Count != want)
+            return Fail($"decoy army: {made.Count} decoys where a wave is {want}. The count is DERIVED from the "
+                        + "commander's own wave size, because a decoy has to look like an army worth attacking - "
+                        + "fewer reads as a patrol and more reads as one nobody could afford");
+    }
+
+    // --- 3. THEY LOOK REAL AND DO NOTHING. This is the row's whole design: a
+    //        decoy is a real entity that an observer cannot distinguish until
+    //        they shoot it, NOT a per-viewer illusion. So it must carry the
+    //        imitated unit's TYPE (it renders as that unit) and its SPEED (an
+    //        army that cannot move is not convincing), and it must carry no
+    //        weapon and no sight.
+    {
+        var (w, nest) = Base(7602);
+        var real = w.GetUnitType(RifleType);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        foreach (int di in FireAndCollect(w, nest, AimX, AimY))
+        {
+            var d = w.Entities[di];
+            if (d.UnitType != RifleType)
+                return Fail($"decoy army: a decoy carries unit type {d.UnitType} rather than the rifle squad's "
+                            + $"{RifleType}. A decoy that does not render as a real unit deceives nobody");
+            if (d.Speed != real.Speed)
+                return Fail("decoy army: a decoy does not move at the real unit's speed - an army that cannot "
+                            + "keep up is not a convincing army");
+            if (d.WeaponId != 0)
+                return Fail($"decoy army: a decoy carries weapon {d.WeaponId}. A decoy that can shoot is not a "
+                            + "decoy, it is a free army");
+            if (d.Sight != Fix64.Zero)
+                return Fail("decoy army: a decoy has sight. A hollow imitation has no eyes, and a power that "
+                            + "quietly doubled as a scouting power would be two powers");
+            if (d.MaxHp != World.DecoyHp)
+                return Fail($"decoy army: a decoy has {d.MaxHp} hit points where a decoy has {World.DecoyHp}. "
+                            + "Dying to the first shot that touches it is the defining property; a decoy that "
+                            + "trades is an army");
+        }
+    }
+
+    // --- 4. AND THEY DIE TO ONE HIT, which is what stops the trick being an
+    //        army. Measured through a real shot rather than by reading MaxHp,
+    //        because the claim is about what happens in a firefight.
+    {
+        var (w, nest) = Base(7603);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        var born = FireAndCollect(w, nest, AimX, AimY);
+        if (born.Count == 0) return Fail("decoy army: no decoy to shoot, so stage 4 proves nothing");
+        int decoy = born[0];
+        var rd = w.GetUnitType(RifleType);
+        int shooter = w.SpawnUnit(1, w.Entities[decoy].X + Fix64.One, w.Entities[decoy].Y,
+                                  rd.Speed, rd.Hp, rd.Armour, rd.WeaponId, veterancy: false, unitType: RifleType);
+        w.Step(new[] { new Command(w.Tick, 1, CommandType.Attack, shooter, Fix64.Zero, Fix64.Zero, decoy) });
+        for (int t = 0; t < 60 && w.Entities[decoy].Alive; t++) w.Step(default);
+        if (w.Entities[decoy].Alive)
+            return Fail("decoy army: a decoy survived a rifle squad shooting it for four seconds. Dying to the "
+                        + "first shot that touches it is the defining property - a decoy that trades is an army");
+    }
+
+    Console.WriteLine($"decoyarmygate: GDD s3 line 30's DECOY ARMY, the LAST of the five named powers - and the one "
+                      + "that was expected to be unbuildable. It was assumed to need entities that look real to one "
+                      + "player and fake to another, which is per-viewer visibility this sim does not have. THAT "
+                      + "ASSUMPTION WAS WRONG: a decoy does not need to be RENDERED differently, it needs to BE a "
+                      + "real entity that looks like a real unit and does nothing, so an observer cannot tell which "
+                      + "army is which until they shoot it. The deception lives in the observer's uncertainty, not "
+                      + $"in the renderer. So it is {new World(1, 8, 8, players: 2).GetAiTuning(AiTuning.StandardId).WaveSize} "
+                      + "rifle squads - one WAVE's worth, the game's own number for an army worth attacking - with "
+                      + "the real unit's type and speed, ONE hit point, no weapon and no sight at all");
+    return 0;
+}
+
 int TunnelDeploymentGate()
 {
     // P7-25 (ADR-066). GDD s3 line 30's TUNNEL DEPLOYMENT, the Sodality's second
@@ -12440,6 +12570,9 @@ int Match(ulong seed)
     // P7-25: and the first power that MOVES ENTITIES.
     int tunnel = TunnelDeploymentGate();
     if (tunnel != 0) return tunnel;
+    // P7-26: and the last named power, the first that CREATES entities.
+    int decoy = DecoyArmyGate();
+    if (decoy != 0) return decoy;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -14169,6 +14302,7 @@ return args.Length == 0
         "precisionstrikegate" => PrecisionStrikeGate(),
         "radarjamminggate" => RadarJammingGate(),
         "tunneldeploymentgate" => TunnelDeploymentGate(),
+        "decoyarmygate" => DecoyArmyGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),

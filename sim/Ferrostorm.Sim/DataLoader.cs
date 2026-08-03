@@ -799,6 +799,7 @@ public static class StructureCatalogue
         "precision_strike" => World.PrecisionStrikePowerId,
         "radar_jamming" => World.RadarJammingPowerId,
         "tunnel_deployment" => World.TunnelDeploymentPowerId,
+        "decoy_army" => World.DecoyArmyPowerId,
         _ => throw new FormatException($"unknown support_power '{name}'"),
     };
 
