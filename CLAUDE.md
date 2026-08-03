@@ -26,7 +26,28 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 ## Phase gate status
 - Current phase: **P7, closing the parity gap to the benchmark games.** The analysis is docs/design/24-classic-parity-roadmap.md and **the plan and resume point is docs/tickets/P7-parity-tracker.md**, whose status table is authoritative; prefer it over any prose in the design docs, several of which lag by whole waves. That tracker also records, for every row it REFUSED, the argument that would have to be overturned to take it - so disagreeing with a refusal does not mean reconstructing why.
 - P6 is behind this and its tracker (docs/tickets/P6-campaign-tracker.md) is history rather than a resume point. Of the items it listed as open, the air layer shipped under ADR-028 (bespoke art still owed), and the rest still need a human: C8 multi-resource (Q014). **C9's Q017 is answered** (P7-5a, ADR-042): the sides no longer share a power grid, and the sequencing question closed by taking its own first candidate. The useful part is why it need not have been a question at all - three of its four candidates were already WRITTEN in the GDD, and only per-faction refinery economics was genuinely unspecified. **C6b wall gates shipped** (P7-10): ADR-005 clause 6's blocker turned out to be scoped to SIMULTANEOUS per-player passability, which a gate with one global open/closed state does not need - so it was sidestepped rather than overridden, and clause 6 stands untouched with an amendment recording the distinction and its price (an enemy can follow you through an open gate).
-- **What P7 needs from a human is now ONE thing, and the list shrinking is the useful part.** It used to name three: the design sentences for P7-8c, P7-11b and P7-11c, and a decision on regenerating golden hashes. All were authorised on 2026-08-01, every design call was taken and recorded reversibly in an ADR with its alternatives beside it, and in the event **no row has yet needed a regeneration** - eleven consecutive rows landed byte-identical across all 24 goldens, including three that the tracker predicted would move. What remains is **a PLAYTEST**: four-player free-for-all, six campaign missions, a LAN match on a four-seat map and two genuinely different faction economies all work, and nobody has played any of it. Every balance number in `/data` is therefore a guess that has passed a gate rather than a game.
+- **P7 IS CODE-COMPLETE as of 2026-08-03** (P7-27/ADR-068 audited it; P7-28 shipped
+  the playtest kit). The tracker is exhausted: every row is DONE or REFUSED with
+  the argument that would overturn it recorded. **Two things now need a human, and
+  only a human can do either.** First, **a PLAYTEST** - `docs/tickets/P7-playtest-brief-2026-08-03.md`
+  is four matches and about ninety minutes, derived from the seventeen ADRs whose
+  own overturning clauses name one, and `tools/playtest-index.sh` flags any
+  decision the brief has fallen behind. Second, **Q022**: one sentence naming the
+  Directorate's third support power, or ruling that two against the Sodality's
+  three is the correct asymmetry and GDD s8's "3-4" should be amended. Q020 and
+  the A11 balance tickets are also open and also human calls.
+- **A SECOND claim this file carried and that was measurably false, corrected
+  2026-08-03.** The bullet below said "**no row has yet needed a regeneration** -
+  eleven consecutive rows landed byte-identical". Derived from the history of
+  `sim/golden-hashes.txt`, **six P7 rows have regenerated goldens**: P7-7a, P7-7d,
+  P7-8, P7-16, P7-18 and P7-25. One of those commits is even titled "the first
+  golden regeneration in sixteen rows". The useful part is the pattern rather than
+  the number - **this file has now been wrong twice in the same way, and it is the
+  document every session loads first.** A count written into prose is a
+  hand-maintained list, and this phase found around eighteen of those lagging
+  their source, including doc 24 claiming three shipped features were missing.
+  Where a number can be derived, derive it and do not write it down here.
+- **What P7 needed from a human while it was in flight, kept for the record.** It used to name three: the design sentences for P7-8c, P7-11b and P7-11c, and a decision on regenerating golden hashes. All were authorised on 2026-08-01, every design call was taken and recorded reversibly in an ADR with its alternatives beside it, and in the event **no row has yet needed a regeneration** - eleven consecutive rows landed byte-identical across all 24 goldens, including three that the tracker predicted would move. What remains is **a PLAYTEST**: four-player free-for-all, six campaign missions, a LAN match on a four-seat map and two genuinely different faction economies all work, and nobody has played any of it. Every balance number in `/data` is therefore a guess that has passed a gate rather than a game.
 - **A claim this file carried and that turned out to be false**, left visible because the correction is the useful part: it said "NOTHING in P7 is hash-neutral, because every row is a sim or catalogue change". Eleven rows have since landed byte-identical across all 24 goldens. The technique is nearly always the same and is worth knowing before starting a row: read a rule as the PROPERTY it means rather than the instance it names, and put optional per-entity state in a side collection folded into the hash only when present, so an absent entry contributes zero bytes. Assume a row moves hashes only after measuring it.
 - Standing determinism rule: cross-platform determinism is enforced by the golden-hash CI gate. If it ever cannot be held, halt and rethink rather than patch around it.
 
@@ -47,6 +68,23 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 - The sim keeps a COMPILED REFERENCE for each kind that the /data files must reproduce exactly. That is what lets a bare `World` with no /data behave identically, which roughly 138 runner scenarios depend on, and it is why authoring a kind is hash-neutral when transcribed correctly.
 - **Anything that can differ between two LAN peers and change the command stream must be in `World.CatalogueChecksum`.** Moving a number from code into /data moves it from "agreed by construction" to "agreed only if checked" (ADR-032).
 - Keys: lower_snake_case. IDs: faction prefix `dir_` (Directorate) or `sod_` (Sodality), shared `com_`.
+- **Support powers (GDD s8, shipped P7-21 to P7-26).** A power is a property of a
+  STRUCTURE DEF - `support_powers: [name]` in the building's yaml, a list because
+  the Directorate owns only three exclusive buildings and s8 asks for three to
+  four powers. That one decision makes s8's counterplay rule ("scout the
+  structure, kill it") fall out of the data model rather than needing arranging:
+  the permission IS the building. **Powers on one building SHARE its charge**, so
+  a Bastion holds a scan or a strike ready and never both. Charges are DERIVED
+  from the superweapon's, never invented, so "shorter timers" stays true by
+  construction. Each effect gets its OWN function - never widen `ApplyAreaDamage`,
+  which the mine shares and `minegate` asserts the shape of.
+- **The method that let five powers ship with no balance argument between them:
+  DERIVE EVERY NUMBER FROM ONE ALREADY IN THE GAME.** The scan's radius is its
+  building's own sight; the strike's damage is a third of the orbital cannon's;
+  the jam lasts a third of its own charge; the tunnel moves one transport's worth
+  onto the producers' spawn ring; the decoy army is one wave's worth at one hit
+  point. A derived number needs no defence, only a reader - and it cannot drift,
+  because there is nothing separate to keep in step.
 - Any stat change >15% requires Balance + Game Designer co-sign (charter A11).
 
 ## Agent roster
