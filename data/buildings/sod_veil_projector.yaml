@@ -11,6 +11,17 @@ footprint: 2
 weapon_ids: []
 prerequisites: [com_power_plant]
 build_tab: defence
+# P7-25 (ADR-066): GDD s3 line 30's TUNNEL DEPLOYMENT. The building that hides
+# things is where concealed transit belongs. ADR-060 measured that no commander
+# ever builds a Veil Projector - a persistent aura was not worth 1500 credits on
+# its own - and this gives it a second reason to exist without changing one of
+# its numbers.
+#
+# Every number the power uses is DERIVED: who travels is whoever stands within
+# this building's own sight_range, how many is one transport's worth, where they
+# land is the producers' own spawn ring, and it may only aim at ground the
+# player can already SEE - which is its counterplay, expressed as a rule.
+support_powers: [tunnel_deployment]
 notes: >
   Sodality doctrine and the one structure the sim really does gate by faction.
   The faction gate and this prerequisite are ORTHOGONAL (ADR-009 clause 3):

@@ -9387,6 +9387,148 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int TunnelDeploymentGate()
+{
+    // P7-25 (ADR-066). GDD s3 line 30's TUNNEL DEPLOYMENT, the Sodality's second
+    // dirty trick.
+    //
+    // What this catches that nothing else does: it is the first support power
+    // that MOVES ENTITIES. Every other one reveals, damages or blinds, and none
+    // of their gates would notice if units teleported to the wrong cells, landed
+    // on top of each other, or kept walking their old orders across the map from
+    // the far end.
+    const int Veil = 7;
+
+    (World w, int veil) Base(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        w.SetFaction(1, World.FactionDirectorate);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int veil = w.SpawnVeilProjector(0, 10, 10);
+        return (w, veil);
+    }
+
+    int Rifle(World w, int player, int cx, int cy)
+    {
+        var d = w.GetUnitType(2);
+        return w.SpawnUnit(player, Map.CellCentre(cx), Map.CellCentre(cy), d.Speed, d.Hp, d.Armour,
+                           d.WeaponId, veterancy: d.Veterancy, unitType: 2);
+    }
+
+    // The destination: far from the tunnel mouth, and the SIGHT RULE means it
+    // must be lit for the power to work at all. A friendly unit standing there
+    // is the honest way to have vision of it - which is also how a player would
+    // really do it, with a scout.
+    const int DestX = 45, DestY = 45;
+
+    // --- 1. THE CONTROL, FIRST: a unit left alone does not move. Without it
+    //        every assertion below would pass in a world where units wander.
+    {
+        var (w, _) = Base(7500);
+        int r = Rifle(w, 0, 12, 10);
+        Fix64 x0 = w.Entities[r].X, y0 = w.Entities[r].Y;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 10; t++) w.Step(default);
+        if (w.Entities[r].X != x0 || w.Entities[r].Y != y0)
+            return Fail("tunnel: an unordered rifle moved on its own, so this gate cannot tell a tunnel from a "
+                        + "unit wandering off");
+    }
+
+    // --- 2. IT MOVES UNITS, and only those within the mouth's own reach.
+    {
+        var (w, veil) = Base(7501);
+        int near = Rifle(w, 0, 12, 10);                    // inside the veil's sight
+        int far = Rifle(w, 0, 30, 10);                     // well outside it
+        Rifle(w, 0, DestX, DestY);                         // the scout that lights the target
+        Fix64 farX = w.Entities[far].X;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, veil,
+                                   Map.CellCentre(DestX), Map.CellCentre(DestY),
+                                   World.TunnelDeploymentPowerId) });
+        int landedCx = Map.CellOf(w.Entities[near].X), landedCy = Map.CellOf(w.Entities[near].Y);
+        if (System.Math.Abs(landedCx - DestX) > 2 || System.Math.Abs(landedCy - DestY) > 2)
+            return Fail($"tunnel: the rifle beside the mouth ended at ({landedCx},{landedCy}) rather than beside "
+                        + $"({DestX},{DestY}) - a tunnel that does not move anybody is not a tunnel");
+        if (w.Entities[far].X != farX)
+            return Fail("tunnel: a rifle far outside the mouth's own sight travelled too. The reach is the "
+                        + "BUILDING'S SIGHT, so a tunnel gathers who is standing at its mouth rather than the "
+                        + "whole map");
+    }
+
+    // --- 3. THE SIGHT RULE, which is this power's counterplay expressed as a
+    //        rule rather than a number: you cannot tunnel where you cannot see.
+    //        Deny the Sodality vision and you deny it the tunnel.
+    {
+        var (w, veil) = Base(7502);
+        int near = Rifle(w, 0, 12, 10);
+        Fix64 x0 = w.Entities[near].X;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        if (w.IsVisible(0, DestX, DestY))
+            return Fail("tunnel: the destination is already lit with no scout there, so stage 3 proves nothing");
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, veil,
+                                   Map.CellCentre(DestX), Map.CellCentre(DestY),
+                                   World.TunnelDeploymentPowerId) });
+        if (w.Entities[near].X != x0)
+            return Fail("tunnel: units travelled to ground the player could not SEE. That rule is the whole "
+                        + "counterplay - deny vision and you deny the tunnel - and without it the power is also "
+                        + "a free scout");
+    }
+
+    // --- 4. IT IS BOUNDED, at one transport's worth. A tunnel that moved an
+    //        unbounded army would not be a trick, it would be teleportation.
+    //        Asserted against the DERIVATION (CarrierCapacity) rather than the
+    //        literal 5, so the bound and the rule that sets it cannot drift.
+    {
+        var (w, veil) = Base(7503);
+        var ids = new List<int>();
+        for (int k = 0; k < World.CarrierCapacity + 3; k++) ids.Add(Rifle(w, 0, 11 + (k % 3), 9 + (k / 3)));
+        Rifle(w, 0, DestX, DestY);
+        var before = ids.Select(i => w.Entities[i].X).ToArray();
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, veil,
+                                   Map.CellCentre(DestX), Map.CellCentre(DestY),
+                                   World.TunnelDeploymentPowerId) });
+        int travelled = 0;
+        for (int k = 0; k < ids.Count; k++) if (w.Entities[ids[k]].X != before[k]) travelled++;
+        if (travelled != World.CarrierCapacity)
+            return Fail($"tunnel: {travelled} units travelled where one transport's worth is "
+                        + $"{World.CarrierCapacity}. The bound is DERIVED from CarrierCapacity, and an unbounded "
+                        + "tunnel is teleportation rather than a trick");
+    }
+
+    // --- 5. ARRIVALS STOP. A unit that kept its old order would turn round at
+    //        the far end and walk the whole map back, which is the failure this
+    //        power's shape invites and no other gate could see.
+    {
+        var (w, veil) = Base(7504);
+        int r = Rifle(w, 0, 12, 10);
+        Rifle(w, 0, DestX, DestY);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        // Send it somewhere first, so it HAS an order when the tunnel takes it.
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.PathMove, r, Map.CellCentre(20), Map.CellCentre(30)) });
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, veil,
+                                   Map.CellCentre(DestX), Map.CellCentre(DestY),
+                                   World.TunnelDeploymentPowerId) });
+        Fix64 ax = w.Entities[r].X, ay = w.Entities[r].Y;
+        for (int t = 0; t < 60; t++) w.Step(default);
+        if (Fix64.DistSq(w.Entities[r].X - ax, w.Entities[r].Y - ay) > Fix64.FromInt(4))
+            return Fail("tunnel: a unit that arrived through the tunnel walked away again - it kept the order it "
+                        + "held before it travelled, so it is marching back across the map to a destination that "
+                        + "meant something only where it used to stand");
+    }
+
+    Console.WriteLine($"tunneldeploymentgate: GDD s3 line 30's TUNNEL DEPLOYMENT, and the first support power that "
+                      + "MOVES ENTITIES. The Veil Projector carries it - the building that hides things is where "
+                      + "concealed transit belongs, and ADR-060 had measured that nobody ever built one. EVERY "
+                      + "NUMBER IS DERIVED and it needed NO new state: who travels is whoever stands within the "
+                      + $"mouth's own sight, how many is CarrierCapacity ({World.CarrierCapacity}, one transport's "
+                      + "worth), where they land is the producers' own spawn ring walked in its committed order, "
+                      + "and it may only aim at ground the player can SEE - which is its counterplay as a rule "
+                      + "rather than a number. Arrivals STOP, because a unit keeping its old order would turn "
+                      + "round and walk the whole map back");
+    return 0;
+}
+
 int RadarJammingGate()
 {
     // P7-24 (ADR-065). GDD s3 line 30's RADAR JAMMING, the first of the
@@ -12295,6 +12437,9 @@ int Match(ulong seed)
     // P7-24: and the first Sodality dirty trick, whose effect lands on a PLAYER.
     int radarJamming = RadarJammingGate();
     if (radarJamming != 0) return radarJamming;
+    // P7-25: and the first power that MOVES ENTITIES.
+    int tunnel = TunnelDeploymentGate();
+    if (tunnel != 0) return tunnel;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -14023,6 +14168,7 @@ return args.Length == 0
         "orbitalscangate" => OrbitalScanGate(),
         "precisionstrikegate" => PrecisionStrikeGate(),
         "radarjamminggate" => RadarJammingGate(),
+        "tunneldeploymentgate" => TunnelDeploymentGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),

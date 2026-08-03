@@ -1305,8 +1305,13 @@ public sealed partial class World
                                    SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId }),
         18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
                                    Tab: BuildTab.Defence),
+        // P7-25: and the Veil carries GDD s3 line 30's TUNNEL DEPLOYMENT. The
+        // building that hides things is where concealed transit belongs, and
+        // ADR-060 measured that no commander ever built one - a persistent aura
+        // was not worth 1500 credits on its own. This gives it a second reason
+        // to exist without changing a single one of its numbers.
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality,
-                                  Tab: BuildTab.Defence),
+                                  Tab: BuildTab.Defence, SupportPowerIds: new[] { TunnelDeploymentPowerId }),
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 },
                                   Tab: BuildTab.Buildings),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
@@ -3215,6 +3220,10 @@ public sealed partial class World
                 // caught: ADR-038's splash rule does not apply here because this
                 // is not splash - it is an effect on a PLAYER, and a trick that
                 // blinded your own team would be played by nobody.
+                // P7-25: GDD s3 line 30's TUNNEL DEPLOYMENT. It needs NO new
+                // state and NO new numbers, which is the whole reason it went
+                // before the decoy army: every part of it already existed.
+                else if (power == TunnelDeploymentPowerId) ApplyTunnelDeployment(in e, c.PlayerId, px, py);
                 else if (power == RadarJammingPowerId)
                 {
                     for (int pl = 0; pl < _players; pl++)
@@ -3537,6 +3546,13 @@ public sealed partial class World
     /// its three dirty tricks. Power id 3.
     /// </summary>
     public const int RadarJammingPowerId = 3;
+
+    /// <summary>
+    /// P7-25: GDD s3 line 30 names the Sodality's TUNNEL DEPLOYMENT, its second
+    /// dirty trick. Power id 4.
+    /// </summary>
+    public const int TunnelDeploymentPowerId = 4;
+
 
     /// <summary>
     /// P7-24: how long a jam blinds its victims, DERIVED as a third of the
@@ -5809,6 +5825,68 @@ public sealed partial class World
     /// it hits whatever stands under it, including the firing player's own.
     /// ADR-038's splash rule, applied unchanged.
     /// </summary>
+    /// <summary>
+    /// P7-25: GDD s3 line 30's TUNNEL DEPLOYMENT. Its own function, like every
+    /// other power's (ADR-044 clause 4, fourth time).
+    ///
+    /// EVERY NUMBER IN IT IS DERIVED FROM SOMETHING ALREADY IN THE GAME, and
+    /// nothing here is new state:
+    ///
+    ///   - WHO travels: the units standing within the tunnel mouth's own
+    ///     SightCells. The same derivation ADR-063 gave the orbital scan's
+    ///     radius - a building reaches as far as it can see.
+    ///   - HOW MANY: CarrierCapacity, one transport's worth. A tunnel that moved
+    ///     an unbounded army would not be a trick, it would be teleportation.
+    ///   - WHERE THEY LAND: the producers' own SpawnOffsets ring, walked in its
+    ///     committed order, which is what the transport unload already uses so
+    ///     two peers set the same units down in the same cells.
+    ///   - WHERE IT MAY AIM: only ground the player can SEE. That is the
+    ///     counterplay GDD s8 asks for, expressed as a rule rather than a number:
+    ///     deny the Sodality vision and you deny it the tunnel.
+    ///
+    /// AIRCRAFT DO NOT TUNNEL, which needs no argument beyond saying it.
+    /// Harvesters do not either: a tunnel is a raiding tool, and moving the
+    /// economy through it is a different power nobody designed.
+    /// </summary>
+    private void ApplyTunnelDeployment(in Entity mouth, int player, Fix64 x, Fix64 y)
+    {
+        int dx0 = Map.CellOf(x), dy0 = Map.CellOf(y);
+        // The vision rule, checked FIRST so a blind aim costs the charge and
+        // moves nobody - which is the honest reading of "you cannot tunnel
+        // somewhere you cannot see", and stops the power doubling as a scout.
+        if (!IsVisible(player, dx0, dy0)) return;
+        Fix64 reachSq = mouth.Sight * mouth.Sight;
+        int moved = 0;
+        for (int i = 0; i < _entities.Count && moved < CarrierCapacity; i++)
+        {
+            var u = _entities[i];
+            if (!u.Alive || !IsOwnedBy(in u, player) || u.Kind != EntityKind.Unit) continue;
+            if (IsAirborne(in u)) continue;
+            if (Fix64.DistSq(u.X - mouth.X, u.Y - mouth.Y) > reachSq) continue;
+            int sx = -1, sy = -1;
+            foreach (var (ox, oy) in SpawnOffsets)
+            {
+                int nx = dx0 + ox, ny = dy0 + oy;
+                if (nx < 0 || ny < 0 || nx >= Map.Width || ny >= Map.Height) continue;
+                if (Map.IsBlocked(nx, ny) || CellOccupied(nx, ny)) continue;
+                sx = nx; sy = ny; break;
+            }
+            if (sx < 0) break;   // no room at the far end: the rest stay put
+            u.X = Map.CellCentre(sx); u.Y = Map.CellCentre(sy);
+            // The arrival is a STOP, not a continuation: an order aimed at where
+            // the unit used to be is meaningless once it is somewhere else, and
+            // a unit that kept walking its old path would immediately turn round
+            // and walk back through the map.
+            u.TargetX = u.X; u.TargetY = u.Y;
+            u.PrevX = u.X; u.PrevY = u.Y;
+            u.Moving = false; u.UseFlow = false; u.AMove = false;
+            u.ExplicitTarget = -1;
+            u.StallTicks = 0; u.NoProgressTicks = 0; u.NearestApproachSq = Fix64.Zero;
+            _entities[i] = u;
+            moved++;
+        }
+    }
+
     private void ApplyPrecisionStrike(Fix64 x, Fix64 y)
     {
         // The orbital cannon's inner radius, squared in the idiom the two
