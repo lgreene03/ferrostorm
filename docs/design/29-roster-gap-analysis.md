@@ -168,6 +168,15 @@ movement but not line of sight, and another that blocked both and resisted
 crushing. The cheap tier's real function is a *tempo tool*: fast, uncommitted,
 placeable mid-fight.
 
+> **CONFIRMED AND CLOSED 2026-08-03 by ADR-061 (P7-19)**, which re-derived this
+> rather than deferring to it - and found this section had understated its own
+> case and misquoted one number. The decisive fact is not the measurement but
+> that **the GDD contains no sentence about walls at all**. The measured figure
+> is **229 ticks**, not 235. And the table's most interesting row is not the
+> artillery one: against RIFLE SQUADS a gapped wall makes the yard fall 324
+> ticks SOONER than no wall at all. The balance tool now carries a signed
+> `Ticks bought` column so that is visible without arithmetic.
+
 **Recommendation: refuse wall tiers as specified.** If a second barrier is
 wanted, differentiate it by rule - a cheap, fast, low-HP barrier that blocks
 infantry but not vehicles, placeable mid-fight - not by cost and hit points.

@@ -162,6 +162,28 @@ mechanic, and no design behind it.
 **B7. One wall type at a flat 100 credits**, where the benchmarks tiered
 barriers by cost and durability - and gates are still deferred (C6b).
 
+> **B7 CLOSED AS REFUSED 2026-08-03** (P7-19, ADR-061); C6b's gates shipped in
+> P7-10. The refusal was re-derived rather than inherited from doc 29, and the
+> decisive fact turned out not to be a measurement: **the GDD contains no
+> sentence about walls at all**, so every property of a tier would be invention
+> on top of a feature that already works. The measurement then says durability
+> is the wrong lever anyway - a wall's worth is dominated by TOPOLOGY and by the
+> attacker's weapon. Against artillery a gapped wall buys exactly zero ticks,
+> because range 9 beats range 5 and the howitzer never touches masonry. A
+> tougher wall the enemy still never shoots is still worth nothing. Overturning
+> conditions are recorded in the ADR; the shape to build if a second barrier is
+> ever wanted is a RULE difference, not a durability tier.
+>
+> **The row's real find was in this project's own report.** The siege table had
+> been printing, for many waves, that against rifle squads a gapped wall makes
+> the yard fall 324 ticks SOONER than no wall at all - a fortification helping
+> the attacker - and nobody saw it, because only the howitzer had a derived
+> figure and seeing the rest meant subtracting two non-adjacent rows by eye. The
+> tool now carries a signed `Ticks bought` column for every besieger. The cause
+> is hypothesised (army retained rises from 73% to 86%, so the doorway looks
+> safer than the open field) and **explicitly unverified**, which is the habit
+> ADR-059 paid for: a measured symptom is not a measured cause.
+
 ## Tier C: faction identity, the thinnest part of the game
 
 The Sodality has **two** unique units and **one** unique structure; the
