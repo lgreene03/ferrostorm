@@ -9373,6 +9373,155 @@ int AiDefenceLadderGate()
     return 0;
 }
 
+int PrecisionStrikeGate()
+{
+    // P7-23 (ADR-064). GDD s3 line 25's PRECISION STRIKE, completing the
+    // Directorate's surgical pair.
+    //
+    // What this catches that no existing gate does: orbitalscangate proves a
+    // power that REVEALS and asserts nothing about damage; supportpowergate
+    // proves the machinery with a power that does nothing at all. Neither can
+    // see a strike. And nothing anywhere asserted that a building may hold MORE
+    // THAN ONE power, which is this row's other half.
+    const int Bastion = 17, Refinery = 3;
+
+    (World w, int bas) Base(ulong seed)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int bas = w.SpawnFactionDefence(0, Bastion, 8, 8);
+        return (w, bas);
+    }
+
+    // --- 1. THE CONTROL, FIRST: an untouched target must survive the same span
+    //        of ticks at full health, or every assertion below passes on a
+    //        building that was dying of something else.
+    {
+        var (w, _) = Base(7300);
+        int vic = w.SpawnRefinery(1, 30, 30);
+        int full = w.Entities[vic].Hp;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 10; t++) w.Step(default);
+        if (w.Entities[vic].Hp != full)
+            return Fail($"precision strike: an unstruck refinery lost health on its own ({full} -> "
+                        + $"{w.Entities[vic].Hp}), so this gate cannot tell a strike from the weather");
+    }
+
+    // --- 2. A strike HURTS what it lands on, by the derived amount.
+    //        Asserted against the DERIVATION (a third of the orbital cannon's
+    //        damage) rather than against the literal 300, so the number and the
+    //        rule that produces it cannot drift apart.
+    {
+        var (w, bas) = Base(7301);
+        int vic = w.SpawnRefinery(1, 30, 30);
+        int full = w.Entities[vic].Hp;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), World.PrecisionStrikePowerId) });
+        int lost = full - w.Entities[vic].Hp;
+        if (lost <= 0)
+            return Fail("precision strike: a charged strike landed on a refinery and took nothing off it");
+        // The LIVE matrix, read from the world rather than the compiled static:
+        // /data drives it since ADR-057, so this asserts what the match plays.
+        int pct = w.DamageMatrixSnapshot()[(int)Warhead.Omni * DamageMatrix.ArmourClasses + (int)ArmourClass.Structure];
+        int expected = World.PrecisionStrikeDamage * pct / 100;
+        if (lost != expected)
+            return Fail($"precision strike: took {lost} off a structure where the damage matrix and a third of the "
+                        + $"orbital cannon's {World.OrbitalCannonDamage} give {expected}");
+    }
+
+    // --- 3. It is SURGICAL: one band, no falloff ring. A target outside the
+    //        core takes NOTHING. This is the stage that separates a precision
+    //        strike from a smaller superweapon, which GDD s8 says a minor power
+    //        must not be.
+    {
+        var (w, bas) = Base(7302);
+        int near = w.SpawnRefinery(1, 30, 30);
+        int far = w.SpawnRefinery(1, 36, 30);   // 6 cells away, well outside the core
+        int farFull = w.Entities[far].Hp;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), World.PrecisionStrikePowerId) });
+        if (w.Entities[near].Hp == w.Entities[near].MaxHp)
+            return Fail("precision strike: the target at ground zero was untouched, so stage 3 proves nothing");
+        if (w.Entities[far].Hp != farFull)
+            return Fail($"precision strike: a refinery 6 cells from the aim point lost {farFull - w.Entities[far].Hp} "
+                        + "health. The strike is ONE BAND with no falloff - a ring of half damage would make it a "
+                        + "smaller superweapon, which is the one thing GDD s8 says a minor power is not");
+    }
+
+    // --- 4. It does NOT touch ferrite fields, and that line is the Sodality's
+    //        identity rather than an implementation detail. GDD s8 gives
+    //        "destroys resource fields" to the seismic charge ALONE as its
+    //        economic-warfare flavour.
+    {
+        var (w, bas) = Base(7303);
+        int field = w.SpawnFerriteField(Fix64.FromInt(30), Fix64.FromInt(30), 5000);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), World.PrecisionStrikePowerId) });
+        if (!w.Entities[field].Alive || w.Entities[field].FerriteAmount != 5000)
+            return Fail("precision strike: a Directorate strike damaged a ferrite field. GDD s8 gives field "
+                        + "destruction to the Sodality's seismic charge alone, as its economic-warfare identity - "
+                        + "a Directorate power that quietly did it too would take that identity away");
+    }
+
+    // --- 5. ONE BUILDING, BOTH POWERS, SHARING ONE CHARGE. This is the row's
+    //        other half and nothing before it asserted any of it: that the
+    //        Bastion grants two powers, that firing either spends the charge,
+    //        and that the second is therefore refused until it recharges.
+    {
+        var (w, bas) = Base(7304);
+        int vic = w.SpawnRefinery(1, 30, 30);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        // Fire the SCAN first...
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(40), Map.CellCentre(40), World.OrbitalScanPowerId) });
+        if (!w.IsVisible(0, 40, 40))
+            return Fail("precision strike: the Bastion could not fire the scan, so it does not grant both powers");
+        int fullAfterScan = w.Entities[vic].Hp;
+        // ...and the STRIKE must now be refused, because they share the charge.
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), World.PrecisionStrikePowerId) });
+        if (w.Entities[vic].Hp != fullAfterScan)
+            return Fail("precision strike: the strike fired on the same charge the scan had just spent. A "
+                        + "building's powers SHARE its charge, so it holds one of them ready at a time - "
+                        + "otherwise the choice between them is not a choice");
+        // ...and it works again once recharged, or the sharing is just a ban.
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), World.PrecisionStrikePowerId) });
+        if (w.Entities[vic].Hp == fullAfterScan)
+            return Fail("precision strike: the strike never fired even after recharging - a shared charge must "
+                        + "make the powers alternate, not disable one of them");
+    }
+
+    // --- 6. A power the building does NOT grant is refused. The list is the
+    //        permission, exactly as the single id was.
+    {
+        var (w, bas) = Base(7305);
+        int vic = w.SpawnRefinery(1, 30, 30);
+        int full = w.Entities[vic].Hp;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Map.CellCentre(30), Map.CellCentre(30), 99) });
+        if (w.Entities[vic].Hp != full)
+            return Fail("precision strike: a building fired a power id it does not grant - the list is the "
+                        + "permission, and an unknown id must be refused rather than falling through to a default");
+    }
+
+    Console.WriteLine($"precisionstrikegate: GDD s3 line 25's PRECISION STRIKE, {World.PrecisionStrikeDamage} damage "
+                      + $"- a THIRD of the orbital cannon's {World.OrbitalCannonDamage}, the same ratio ADR-062 gave "
+                      + "the charge, so a minor power does a third of the major one's damage on a third of its clock "
+                      + "- inside the cannon's own 1.5-cell core with NO falloff ring, which is what makes it "
+                      + "surgical rather than merely small. It leaves ferrite fields alone, because GDD s8 gives "
+                      + "field destruction to the Sodality's seismic charge as its identity. And the Bastion now "
+                      + "grants BOTH Directorate powers sharing ONE charge, because one power per building could "
+                      + "never satisfy s8's \"3-4 per faction\" when the Directorate owns three exclusive buildings");
+    return 0;
+}
+
 int OrbitalScanGate()
 {
     // P7-22 (ADR-063). The first support power with an EFFECT: GDD s3 line 25's
@@ -9416,7 +9565,7 @@ int OrbitalScanGate()
         var (w, bas) = Base(7201);
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
-                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
         if (!w.IsVisible(0, FarX, FarY))
             return Fail($"orbital scan: a charged scan aimed at ({FarX},{FarY}) did not reveal it. GDD s3 line 25 "
                         + "gives the Directorate an orbital scan and this is the whole of what it does");
@@ -9433,7 +9582,7 @@ int OrbitalScanGate()
         var (w, bas) = Base(7202);
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
-                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
         if (w.IsVisible(1, FarX, FarY))
             return Fail("orbital scan: player 0's scan revealed the ground to player 1 as well - a scan lights the "
                         + "map for the side that paid for it");
@@ -9446,7 +9595,7 @@ int OrbitalScanGate()
         var (w, bas) = Base(7203);
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
-                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
         for (int t = 0; t < World.OrbitalScanRevealTicks + 5; t++) w.Step(default);
         if (w.IsVisible(0, FarX, FarY))
             return Fail($"orbital scan: the reveal was still lit {World.OrbitalScanRevealTicks + 5} ticks after "
@@ -9466,7 +9615,7 @@ int OrbitalScanGate()
         int sight = w.GetStructureType(Bastion).SightCells;
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
-                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
         // Just inside the building's own sight radius must be lit...
         if (!w.IsVisible(0, FarX + sight - 1, FarY))
             return Fail($"orbital scan: a cell {sight - 1} from the aim point is dark, but the scan's radius is the "
@@ -9487,7 +9636,7 @@ int OrbitalScanGate()
         var (w, bas) = Base(7205);
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
-                                   Map.CellCentre(FarX), Map.CellCentre(FarY)) });
+                                   Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
         if (!w.IsVisible(0, FarX, FarY))
             return Fail("orbital scan: the scan was not lit before the save, so stage 6 would prove nothing");
         ulong before = w.ComputeStateHash();
@@ -9547,7 +9696,7 @@ int SupportPowerGate()
     {
         var w = new World(seed, 64, 64, players: 2);
         var stock = w.GetStructureType(Carrier);
-        w.RegisterStructureType(Carrier, stock with { SupportPowerId = TestPower });
+        w.RegisterStructureType(Carrier, stock with { SupportPowerIds = new[] { TestPower } });
         w.SpawnPowerPlant(0, 4, 4, supply: 5000);
         bld = w.SpawnRadarUplink(0, 20, 20);
         return w;
@@ -9574,7 +9723,7 @@ int SupportPowerGate()
         {
             var w = new World(7050, 64, 64, players: 2);
             if (!superweapon)
-                w.RegisterStructureType(Carrier, w.GetStructureType(Carrier) with { SupportPowerId = TestPower });
+                w.RegisterStructureType(Carrier, w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
             w.SpawnPowerPlant(0, 4, 4, supply: 5000);
             _ = superweapon ? w.SpawnSuperweapon(0, 20, 20) : w.SpawnRadarUplink(0, 20, 20);
             var want = superweapon ? GameEventType.SuperweaponReady : GameEventType.SupportPowerReady;
@@ -9603,7 +9752,7 @@ int SupportPowerGate()
         // nothing. This is the stage that would pass vacuously if the command
         // did not check ChargeTicks.
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
-                                   Map.CellCentre(30), Map.CellCentre(30)) });
+                                   Map.CellCentre(30), Map.CellCentre(30), TestPower) });
         if (w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
             return Fail("support power: a power fired while still charging - the timer decides nothing");
 
@@ -9628,7 +9777,7 @@ int SupportPowerGate()
         // that never works at all - which is a different bug wearing the same
         // passing test (ADR-059 stage 2's rule).
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
-                                   Map.CellCentre(30), Map.CellCentre(30)) });
+                                   Map.CellCentre(30), Map.CellCentre(30), TestPower) });
         if (!w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
             return Fail("support power: a charged power on a LIVING structure did not fire, so stage 3's kill test "
                         + "would prove nothing - a power that never works passes any counterplay assertion");
@@ -9644,7 +9793,7 @@ int SupportPowerGate()
         dead.Hp = 0;
         w2.SetEntityForTest(bld2, dead);
         w2.Step(new[] { new Command(w2.Tick, 0, CommandType.UseSupportPower, bld2,
-                                    Map.CellCentre(30), Map.CellCentre(30)) });
+                                    Map.CellCentre(30), Map.CellCentre(30), TestPower) });
         if (w2.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
             return Fail("support power: the unlocking structure was destroyed and its power still fired. GDD s8's "
                         + "design rule is that every power has counterplay - \"scout the structure, kill it\" - and "
@@ -9661,7 +9810,7 @@ int SupportPowerGate()
         var b = new World(7103, 32, 32, players: 2);
         if (a.CatalogueChecksum != b.CatalogueChecksum)
             return Fail("support power: two identical bare worlds disagree on the catalogue checksum");
-        b.RegisterStructureType(Carrier, b.GetStructureType(Carrier) with { SupportPowerId = TestPower });
+        b.RegisterStructureType(Carrier, b.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
         if (a.CatalogueChecksum == b.CatalogueChecksum)
             return Fail("support power: granting a building a support power did NOT move the catalogue checksum, so "
                         + "two peers could hold different powers and the LAN hello would let them play");
@@ -12007,6 +12156,9 @@ int Match(ulong seed)
     // P7-22: and the first power with an effect actually SEES.
     int orbitalScan = OrbitalScanGate();
     if (orbitalScan != 0) return orbitalScan;
+    // P7-23: and the Directorate's second power, on a building that grants two.
+    int precisionStrike = PrecisionStrikeGate();
+    if (precisionStrike != 0) return precisionStrike;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -13733,6 +13885,7 @@ return args.Length == 0
         "comebackgate" => ComebackGate(),
         "supportpowergate" => SupportPowerGate(),
         "orbitalscangate" => OrbitalScanGate(),
+        "precisionstrikegate" => PrecisionStrikeGate(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),

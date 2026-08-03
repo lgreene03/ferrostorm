@@ -27,9 +27,11 @@ public static class DataLoader
         int MaxAlive = 0,          // P7-11c: 0 means unlimited, which is every building but the mine
         bool Detector = false,     // P7-5b: reveals cloak within sight_range, which only a unit could do before
         bool DestroysFields = false, // P7-5e: this building's strike deletes ferrite fields (GDD s8's seismic charge)
-        // P7-22: which support power this building unlocks, by /data id. Empty
-        // means none, which is every building but the Bastion.
-        string SupportPower = "",
+        // P7-22: which support powers this building unlocks, by /data id.
+        // P7-23 made it a LIST: GDD s8 asks for 3-4 per faction and the
+        // Directorate owns three exclusive buildings, so one each could never
+        // satisfy it. Empty means none, which is every building but the Bastion.
+        IReadOnlyList<string>? SupportPowers = null,
         // Which build tab offers this building: "buildings", "defence" or
         // "none". REQUIRED by the schema on every file, so a new building
         // cannot arrive without an answer; "none" is the three map-placed
@@ -230,8 +232,10 @@ public static class DataLoader
             // P7-22: absent means no power, which is every building but the
             // Bastion. Named rather than numbered in the file for the reason
             // every /data cross-reference is: `orbital_scan` says what it is,
-            // and 1 does not.
-            SupportPower: m.TryGetValue("support_power", out var spw) ? spw : "",
+            // and 1 does not. P7-23: parsed as an inline list, the shape
+            // prerequisites and weapon_ids already use.
+            SupportPowers: m.TryGetValue("support_powers", out var spw)
+                ? ParseInlineList(spw) : new List<string>(),
             BuildTab: buildTab,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
@@ -775,7 +779,7 @@ public static class StructureCatalogue
                // Parsed-and-dropped here would be the loudest instance yet of
                // this project's most-repeated defect: a building advertising an
                // ability in its file that the sim never granted.
-               SupportPowerIdOf(s.SupportPower));
+               SupportPowerIdsOf(s.SupportPowers));
     }
 
     /// <summary>
@@ -791,10 +795,21 @@ public static class StructureCatalogue
     /// </summary>
     public static int SupportPowerIdOf(string name) => name switch
     {
-        "" => 0,
         "orbital_scan" => World.OrbitalScanPowerId,
+        "precision_strike" => World.PrecisionStrikePowerId,
         _ => throw new FormatException($"unknown support_power '{name}'"),
     };
+
+    /// <summary>P7-23: the whole authored list, or null for none. Null rather
+    /// than an empty array so a building with no powers contributes nothing to
+    /// the checksum fold and to Equals, exactly as a null Prereqs does.</summary>
+    public static int[]? SupportPowerIdsOf(IReadOnlyList<string>? names)
+    {
+        if (names is null || names.Count == 0) return null;
+        var ids = new int[names.Count];
+        for (int i = 0; i < names.Count; i++) ids[i] = SupportPowerIdOf(names[i]);
+        return ids;
+    }
 }
 
 /// <summary>

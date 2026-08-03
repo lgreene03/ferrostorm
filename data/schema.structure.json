@@ -111,12 +111,18 @@
       "type": "string",
       "description": "Design intent and GDD traceback."
     },
-    "support_power": {
-      "type": "string",
-      "enum": [
-        "orbital_scan"
-      ],
-      "description": "P7-22. Which support power this building UNLOCKS (GDD s8: \"3-4 minor support powers per faction on shorter timers, unlocked by structures\"). Absent means none, which is every building but the Bastion. An ENUM rather than a free string, so a typo is refused by the schema before the loader has to throw. The unlocking building is also the power's counterplay - GDD s8's design rule is \"scout the structure, kill it\" - so this key decides how the power is answered as well as how it is gained."
+    "support_powers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "orbital_scan",
+          "precision_strike"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "P7-22, made a list by P7-23. Which support powers this building UNLOCKS (GDD s8: \"3-4 minor support powers per faction on shorter timers, unlocked by structures\"). A LIST because one power per building could never satisfy that sentence: the Directorate owns three faction-exclusive buildings, one of which already uses its charge for a superweapon and one of which is the first building anyone raises. Absent means none, which is every building but the Bastion. The powers on a building SHARE its charge, so it holds one of them ready at a time. An enum, so a typo is refused by the schema before the loader has to throw; uniqueItems, because listing a power twice would say nothing and mean nothing."
     }
   }
 }

@@ -28,4 +28,11 @@ build_tab: defence
 # The scan's RADIUS is this building's own sight_range, not a separate number:
 # the scan shows what its sensors would see, projected anywhere on the map.
 # Change sight_range and the scan changes with it, deliberately.
-support_power: orbital_scan
+#
+# P7-23 added the PRECISION STRIKE beside it, and made this a LIST because it
+# had to be: GDD s8 asks for 3-4 powers per faction and the Directorate owns
+# three exclusive buildings, one of which cannot carry a power and one of which
+# is the first thing anyone builds. The two SHARE this building's charge, so a
+# Bastion holds a scan OR a strike ready and never both - the choice is the
+# player's, which is what "surgical" should feel like.
+support_powers: [orbital_scan, precision_strike]

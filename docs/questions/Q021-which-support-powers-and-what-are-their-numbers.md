@@ -41,6 +41,19 @@ Each needs the same three answers, and none of them is written anywhere:
 | decoy army | Sodality | dirty trick | fake units | count, lifetime, and whether they can be shot |
 | tunnel deployment | Sodality | dirty trick | move units somewhere | range, how many, and where they may arrive |
 
+## Progress
+
+- **orbital scan** - ANSWERED and shipped 2026-08-03 (ADR-063). Bastion; radius
+  = the building's own sight; duration = the superweapon's warning window.
+- **precision strike** - ANSWERED and shipped 2026-08-03 (ADR-064). Bastion,
+  beside the scan and sharing its charge; damage = a third of the orbital
+  cannon's; radius = the cannon's own core, one band, no falloff.
+
+ADR-064 also removed the blocker the rest of this question would have hit: a
+building now unlocks a LIST of powers, because the Directorate owns only three
+exclusive buildings and one power each could never reach s8's "3-4 per faction".
+The Sodality's five exclusive buildings can carry the three remaining tricks.
+
 ## Recommended first, and why
 
 **Orbital scan.** It is the only one of the five whose effect needs no new
