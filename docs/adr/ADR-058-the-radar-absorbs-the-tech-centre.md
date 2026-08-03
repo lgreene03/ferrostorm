@@ -100,6 +100,16 @@ absent: **zero**, forever).
 The guard is kept because it is correct, free and reads as the rule it means.
 It is not claimed to be tested.
 
+> **CORRECTED 2026-08-03 by ADR-059.** Two things above are wrong. The filed
+> defect's DIAGNOSIS was wrong - `Act` returns at `if (cy < 0)` a hundred lines
+> before the army block, into DR-10's deliberate last stand, and the measured
+> silence was a fixture with no enemy structures rather than a freeze. And the
+> claim that the guard cannot be observed to bite was too strong: a fifth state,
+> the tier gate destroyed while the yard survives, does discriminate (guard on,
+> 9 units; guard off, 10). The guard is reachable; it is still not carrying
+> much. The real defect that state was hiding is ADR-059's: DR-10 fire-sales
+> without ever asking whether it could BUY an MCV.
+
 ## Hash and format
 
 **One golden moved, measured:** `expansion 2026`, `0x7A6AA4D3238DF294` ->

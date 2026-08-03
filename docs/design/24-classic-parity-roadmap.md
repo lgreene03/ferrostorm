@@ -499,6 +499,47 @@ that had just been written, *what state would make this matter* - and refusing
 to accept a fixture that could not answer. The four failed fixtures were not
 wasted work; the fourth one was the defect.
 
+### And the very next row proved that paragraph half wrong (P7-17, ADR-059)
+
+The fourth fixture was **not** the defect. It was a fixture artefact, and P7-17
+had to correct the ticket P7-16 filed from it before it could do anything else.
+
+`SkirmishAI.Act` returns at `if (cy < 0)` a hundred lines before the army block
+P7-16 blamed, into DR-10's deliberate last stand. The silence measured - no
+commands at all, credits untouched - was that fixture having **no enemy
+structures on the map**, because the Fire Sale is guarded on having something to
+throw a final wave at. The recommended fix would have changed nothing while
+appearing to fix something.
+
+**"Measure before diagnosing" does not mean measuring the symptom.** P7-16
+measured the symptom correctly and then guessed the cause by reading the source,
+which is the exact failure mode the rule was written against. The missing column
+was *which branch returned*. A fixture that cannot distinguish deliberately
+silent from stuck reports a freeze either way, and a freeze is a persuasive
+thing to be shown.
+
+**Underneath it was a real and worse defect**, found by re-measuring with
+columns. DR-10's comeback keyed on **owning** an MCV and never asked whether one
+could be **bought**. A commander holding a Factory, the Radar Uplink gating the
+MCV and twenty thousand credits against a three thousand credit unit sold its
+entire base, radar included, for a 2,850 credit consolation - one production
+order from a full rebuild. The seventeenth instance of the phase's signature
+defect: *a rule keyed on an instance where it means a capability.*
+
+ADR-058 had made it worse without noticing. While the MCV's prerequisite was the
+factory it is produced at, "has one" and "can buy one" nearly coincided; putting
+it behind the radar made them genuinely different states.
+
+**And the fix failed its own first measurement**, which is the habit working
+rather than failing. The order went out and the sale count did not move: on the
+next beat the producer's queue was no longer empty, so the search skipped it and
+fell through to the sale, **selling the factory that was building the comeback**.
+
+The running lesson for this phase now reads: *a defect filed from a measurement
+is still a defect filed from a guess unless the measurement identifies the
+CAUSE.* Two of P7's filed rows have now been disproved from reading code, and
+one from measuring the wrong thing.
+
 ## Tier D: content volume
 
 **D1. Six campaign missions** against roughly fifteen per side in the

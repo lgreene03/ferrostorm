@@ -9156,6 +9156,165 @@ int FreeHarvesterGate()
     return 0;
 }
 
+int YardLossProbe(int Horizon = 1500)
+{
+    // MEASURING what a yard-less commander does, because P7-16 filed a defect
+    // whose measurement was real and whose DIAGNOSIS was read off the wrong
+    // block. Columns, not a theory.
+    void Run(string label, bool enemy, bool radar, bool mcv)
+    {
+        var w = new World(6000, 64, 64, players: 2);
+        w.GrantCredits(0, 20000);
+        // SPREAD OUT deliberately: a tightly packed base would leave a
+        // produced MCV nowhere legal to deploy, and this probe must not confuse
+        // "the comeback rule is broken" with "this fixture has no room".
+        w.SpawnPowerPlant(0, 6, 6, supply: 5000);
+        int fac = w.SpawnFactory(0, 12, 6);
+        w.SpawnRefinery(0, 6, 12);
+        w.SpawnBarracks(0, 12, 12);
+        w.SpawnHarvester(0, Fix64.FromInt(9), Fix64.FromInt(16));
+        w.SpawnFerriteField(Fix64.FromInt(4), Fix64.FromInt(18), 1500);
+        if (radar) w.SpawnRadarUplink(0, 18, 6);
+        if (mcv)
+        {
+            var md = w.GetUnitType(World.McvUnitType);
+            w.SpawnUnit(0, Fix64.FromInt(30), Fix64.FromInt(30), md.Speed, md.Hp, md.Armour, md.WeaponId,
+                        veterancy: false, unitType: World.McvUnitType);
+        }
+        if (enemy) w.SpawnConstructionYard(1, 50, 50);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        int totalCmds = 0, sells = 0;
+        for (int t = 0; t < Horizon; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            totalCmds += cmds.Count;
+            foreach (var c in cmds) if (c.Type == CommandType.SellStructure) sells++;
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        int structs = 0, units = 0, cys = 0;
+        foreach (var e in w.Entities)
+        {
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (World.IsStructure(e.Kind)) structs++;
+            if (e.Kind == EntityKind.ConstructionYard) cys++;
+            if (e.Kind == EntityKind.Unit) units++;
+        }
+        Console.WriteLine($"{label,-34} cmds={totalCmds,-5} sells={sells,-3} structs={structs,-3} "
+                          + $"cys={cys,-2} units={units,-3} credits={w.Credits(0)}");
+    }
+    Console.WriteLine("yardlossprobe: a commander with NO Construction Yard but a live factory, barracks, "
+                      + "refinery, harvester and 20000 credits, over 1500 ticks");
+    Run("no enemy, no radar, no mcv", false, false, false);
+    Run("ENEMY, no radar, no mcv",    true,  false, false);
+    Run("ENEMY, radar, no mcv",       true,  true,  false);
+    Run("ENEMY, radar, MCV in hand",  true,  true,  true);
+    return 0;
+}
+
+int ComebackGate()
+{
+    // P7-17 (ADR-059). DR-10 gave the AI a last stand: with a rebuild MCV in
+    // hand it deploys and comes back, and otherwise it sells everything and
+    // throws one final wave - the classic Fire Sale.
+    //
+    // The comeback rule keyed on OWNING an MCV and never asked whether one
+    // could be BOUGHT, so a commander holding a Factory, the tier gate the MCV
+    // waits behind, and twenty thousand credits against a three thousand credit
+    // unit sold its whole base - including that tier gate - and called itself
+    // beaten. Measured before the fix: five structures sold for a 2850 credit
+    // consolation.
+    //
+    // The specification is a GDD s7 sentence about the AI, not a constant in
+    // SkirmishAI: a commander is beaten when it CANNOT rebuild, not when it has
+    // not yet built. So both stages below assert an OUTCOME a reader can check
+    // against that sentence - did it sell, and did a base come back - rather
+    // than any number the implementation chose.
+    World Beaten(bool radar, out int enemyCy)
+    {
+        var w = new World(6100, 64, 64, players: 2);
+        w.GrantCredits(0, 20000);
+        // Spread out, so a produced MCV has somewhere legal to deploy. A packed
+        // base is a real thing and a separate question (noted in ADR-059); it
+        // must not be what this gate accidentally measures.
+        w.SpawnPowerPlant(0, 6, 6, supply: 5000);
+        w.SpawnFactory(0, 12, 6);
+        w.SpawnRefinery(0, 6, 12);
+        w.SpawnBarracks(0, 12, 12);
+        w.SpawnHarvester(0, Fix64.FromInt(9), Fix64.FromInt(16));
+        w.SpawnFerriteField(Fix64.FromInt(4), Fix64.FromInt(18), 1500);
+        if (radar) w.SpawnRadarUplink(0, 18, 6);
+        // An enemy structure must exist or the Fire Sale never fires at all
+        // (it is guarded on having something to throw the last wave at). P7-16
+        // filed a defect that was really this fixture condition, so it is
+        // stated here rather than assumed.
+        enemyCy = w.SpawnConstructionYard(1, 50, 50);
+        return w;
+    }
+
+    (int sells, int cys, int structs) RunAi(World w, int ticks)
+    {
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        int sells = 0;
+        for (int t = 0; t < ticks; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            foreach (var c in cmds) if (c.Type == CommandType.SellStructure) sells++;
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        int cys = 0, structs = 0;
+        foreach (var e in w.Entities)
+        {
+            if (!e.Alive || e.PlayerId != 0) continue;
+            if (World.IsStructure(e.Kind)) structs++;
+            if (e.Kind == EntityKind.ConstructionYard) cys++;
+        }
+        return (sells, cys, structs);
+    }
+
+    // --- 1. CAN rebuild: the tier gate stands, so an MCV is one order away.
+    //        The commander must buy it and come back, not sell.
+    {
+        var w = Beaten(radar: true, out _);
+        var (sells, cys, structs) = RunAi(w, 6000);
+        if (sells != 0)
+            return Fail($"comeback: a commander that can BUY an MCV sold {sells} structures instead. It held the "
+                        + "Factory, the tier gate the MCV waits behind and twenty thousand credits against a three "
+                        + "thousand credit unit - it was one production order from a full rebuild and called "
+                        + "itself beaten (GDD s7: beaten means cannot rebuild, not has not yet built)");
+        if (cys != 1)
+            return Fail($"comeback: the commander bought its MCV but never founded a yard with it ({cys} yards, "
+                        + $"{structs} structures) - the comeback has to actually complete, or this is a slower "
+                        + "way to lose");
+    }
+
+    // --- 2. CANNOT rebuild: no tier gate, so no MCV is reachable at any price.
+    //        The Fire Sale MUST still fire. Without this stage the row would be
+    //        satisfied by simply deleting the last stand, which is a different
+    //        bug wearing the same passing test - DR-10 added the Fire Sale on
+    //        purpose and it is a good ending.
+    {
+        var w = Beaten(radar: false, out _);
+        var (sells, _, structs) = RunAi(w, 6000);
+        if (sells == 0)
+            return Fail($"comeback: a commander that genuinely CANNOT reach an MCV must still fire-sale ({structs} "
+                        + "structures left standing, nothing sold). DR-10's last stand is the ending the design "
+                        + "wants; this row narrows WHEN it fires, and must not remove it");
+    }
+
+    Console.WriteLine("comebackgate: DR-10's comeback rule keyed on OWNING an MCV and never asked whether one could "
+                      + "be BOUGHT, so a commander with a Factory, the tier gate the MCV waits behind and twenty "
+                      + "thousand credits sold its whole base - that tier gate included - for a 2850 credit "
+                      + "consolation, one production order from a full rebuild. It now buys and rebuilds; a "
+                      + "commander that genuinely cannot reach an MCV still fire-sales, so the ending DR-10 added "
+                      + "is narrowed rather than removed. The seventeenth instance of one defect class: a rule "
+                      + "keyed on an INSTANCE where it means a CAPABILITY");
+    return 0;
+}
+
 int McvTechGate()
 {
     // P7-16 (ADR-058), answering Q006, open since 2026-07-17.
@@ -11369,6 +11528,10 @@ int Match(ulong seed)
     // asked for since the design doc and no code had ever enforced.
     int mcvTech = McvTechGate();
     if (mcvTech != 0) return mcvTech;
+    // P7-17: and a commander that CAN rebuild does, instead of selling the tier
+    // gate it needs and calling itself beaten.
+    int comeback = ComebackGate();
+    if (comeback != 0) return comeback;
     // P7-8: and the base it builds with all that income is a base rather than a
     // trail of buildings walking off the map.
     int baseShape = BaseShapeGate();
@@ -13084,7 +13247,9 @@ return args.Length == 0
         "seismicaimgate" => SeismicAimGate(),
         "economyfloatgate" => EconomyFloatGate(),
         "freeharvestergate" => FreeHarvesterGate(),
+        "yardlossprobe" => YardLossProbe(args.Length > 1 ? int.Parse(args[1]) : 1500),
         "mcvtechgate" => McvTechGate(),
+        "comebackgate" => ComebackGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),
