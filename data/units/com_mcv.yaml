@@ -15,10 +15,16 @@ sight_range: 5
 stealth: false
 detector: false
 produced_at: com_factory
-# Under produced_at this prerequisite is a tautology; GDD line 47 wants a Tech
-# Centre that does not exist. Resolving it (candidate: the Radar Uplink) is a
-# Game Designer decision on file, not this ticket's to make (doc 23 s4.3).
-prerequisites: [com_factory]
+# P7-16 answers Q006, which had been open since 2026-07-17 and blocked two
+# things. GDD line 47 says "replacement MCVs at the Factory once a Tech Centre
+# exists"; no Tech Centre exists anywhere in the project beyond that sentence.
+# The answer taken is Q006's own recorded candidate (doc 22 BD-17 clause 7, doc
+# 23 s4.3): the intent is "MCV replacement is TIER-GATED", not "a building
+# literally named Tech Centre must exist", and the Radar Uplink is the tier gate
+# the shipped tree already has - the superweapon, the airfield and five units
+# all wait behind it. Inventing a second tier building to satisfy a name would
+# add a structure whose only job is to be a prerequisite.
+prerequisites: [com_radar_uplink]
 veterancy_enabled: false
 notes: >
   The seed of every base. Deploy consumes the vehicle; there is no

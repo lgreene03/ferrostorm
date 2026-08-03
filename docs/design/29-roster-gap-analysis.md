@@ -97,6 +97,18 @@ is scoutable ([Supreme Commander Wiki, game ender](https://supcom.fandom.com/wik
 
 ### 2.5 The Tech Centre is named in the GDD and does not exist
 
+> **CORRECTED 2026-08-03 by ADR-058 (P7-16). This section was wrong**, and the
+> correction is worth more than the section. It read GDD line 47 as requiring a
+> building called a Tech Centre, and listed it as the fifth-priority missing
+> building. Q006 - which this analysis did not consult, and should have - had
+> already recorded the cheaper reading: line 47's intent is that MCV
+> replacement is TIER-GATED, and the Radar Uplink is the tier gate the tree
+> already has. The row shipped as one prerequisite change with no new building.
+> **The Tech Centre is not a missing building and should not be built.** The
+> lesson: check the open questions before filing a gap, because a gap already
+> under discussion has usually been thought about harder than a fresh audit
+> will manage.
+
 GDD s5 line 47: "Both factions can build replacement MCVs at the Factory once a
 **Tech Centre** exists." There is no Tech Centre. `com_mcv.yaml` names the hole
 itself and leaves the prerequisite as `[com_factory]`, which is a tautology under
@@ -207,7 +219,7 @@ that is measurable today, and each is already written down somewhere.
 | # | Item | Why |
 |---|---|---|
 | 4 | **Support-power machinery plus 2 powers per side** | GDD s8 promises 3 to 4 per faction and **no machinery exists**. Research gives a clear spec: anchor to a destroyable structure, visible countdown and target, a **second dependency** such as power so there are two ways to deny it, and cost the main resource so firing delays units ([Wayward Strategy](https://waywardstrategy.com/2021/01/14/ion-cannon-online-how-do-we-improve-support-powers-in-rts/)). The Sodality's written powers - jamming, decoys - are *positional*, which is what short-timer powers should be |
-| 5 | **Tech Centre** | The only GDD-named building with no file; unblocks MCV rebuilds and gives the tree its first two-deep prerequisite |
+| 5 | ~~**Tech Centre**~~ | **WITHDRAWN 2026-08-03 (ADR-058).** Not a missing building: GDD line 47 wanted MCV replacement tier-gated, and the Radar Uplink absorbed the role. Shipped as one prerequisite change. See s2.5 |
 | 6 | **Anti-infantry vehicle** | Sodality | GDD s6 promises "anti-infantry vehicles beat infantry" and only the Directorate has one |
 
 ### Tier 3 - only with a playtest behind it

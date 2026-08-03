@@ -645,20 +645,38 @@ public sealed partial class World
         // Prereqs/ProducedAt mirror the /data files verbatim (the round-trip
         // selftest proves it) and are ENFORCED since ADR-009: the infantry
         // trio names the barracks (struct type 11) as producer, everything
-        // else takes the factory default. The four [com_factory] entries that
-        // are tautologies under produced_at (mcv, howitzer, bulwark, phantom)
-        // are left AS AUTHORED and enforced honestly - they are trivially
-        // satisfied at the factory the unit already comes out of, so no
-        // behaviour hides behind them - because rewriting them is the Q006
-        // and Q007 curation ADR-009's gates clause holds for the Game
-        // Designer.
+        // else takes the factory default. There were FOUR [com_factory] entries
+        // that are tautologies under produced_at - trivially satisfied at the
+        // factory the unit already comes out of, so no behaviour hides behind
+        // them - held for the Game Designer as the Q006 and Q007 curation
+        // ADR-009's gates clause reserves.
+        //
+        // P7-16 answered Q006 and moved ONE of them, the MCV. The rest are a
+        // Game Designer's tier curation and NOT that row's to take: taking them
+        // because they share a SHAPE with the one that was answered is the
+        // scope creep ADR-009 reserved against. They are now Q018.
+        //
+        // TWO THINGS THIS COMMENT USED TO SAY WERE WRONG, left visible because
+        // the correction is the useful part. It said the tautologies were the
+        // "four" listed above, which was true when written and stopped being
+        // true when ADR-028's air layer added the STRIKE FLYER (`Prereqs: [16],
+        // ProducedAt: 16` - produced at the airfield, gated on the airfield).
+        // And it said Q007 owned them; Q007 is about where the ENGINEER is
+        // built, and nothing owned them at all. A comment describing the
+        // hand-maintained-list-lags-its-catalogue defect had quietly become an
+        // instance of it. McvTechGate now DERIVES the list, so this comment is
+        // no longer the count and a new one cannot appear unnoticed.
         { 1, new UnitTypeDef(600, 150, 300, ArmourClass.Heavy, 1, Fix64.FromFraction(1, 5), Faction: FactionDirectorate) },   // dir_cannon_tank
         { 2, new UnitTypeDef(200, 75, 100, ArmourClass.None, 2, Fix64.FromFraction(1, 4), ProducedAt: 11) },     // com_rifle_squad (common)
         { 3, new UnitTypeDef(300, 100, 80, ArmourClass.None, 3, Fix64.FromFraction(11, 50), ProducedAt: 11) },   // com_rocket_squad (common: the counter-triangle is shared, identity lives in the specials)
         { 4, new UnitTypeDef(1400, 300, 700, ArmourClass.Heavy, 0, Fix64.FromFraction(9, 50), EntityKind.Harvester, Veterancy: false, Prereqs: new[] { 3 }) }, // com_harvester
         { 5, new UnitTypeDef(500, 100, 150, ArmourClass.Light, 2, Fix64.FromFraction(7, 25), Stealth: true, Faction: FactionSodality) },            // sod_shade_raider
         { 6, new UnitTypeDef(400, 75, 90, ArmourClass.None, 0, Fix64.FromFraction(3, 10), Detector: true, SightCells: 7, Faction: FactionDirectorate) }, // dir_sentinel_scout
-        { 7, new UnitTypeDef(3000, 400, 600, ArmourClass.Heavy, 0, Fix64.FromFraction(3, 20), Veterancy: false, Prereqs: new[] { 2 }) },        // com_mcv
+        // P7-16 (Q006 answered): the MCV waits on the RADAR UPLINK (12), not on the
+        // factory it is produced at. The old [2] was a tautology under produced_at
+        // and said nothing; GDD line 47 asks for MCV replacement to be tier-gated
+        // and the radar is the tier gate the shipped tree already has.
+        { 7, new UnitTypeDef(3000, 400, 600, ArmourClass.Heavy, 0, Fix64.FromFraction(3, 20), Veterancy: false, Prereqs: new[] { 12 }) },        // com_mcv
         { 8, new UnitTypeDef(900, 200, 160, ArmourClass.Light, 5, Fix64.FromFraction(3, 20), SightCells: 7, Faction: FactionDirectorate, Prereqs: new[] { 2 }) },            // dir_howitzer
         // Signature units (TICKET-P3-FAC-02): the personality pieces.
         // Phantom: the Sodality stealth tank - rockets from nowhere.

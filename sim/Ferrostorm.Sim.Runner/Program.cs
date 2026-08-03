@@ -9156,6 +9156,170 @@ int FreeHarvesterGate()
     return 0;
 }
 
+int McvTechGate()
+{
+    // P7-16 (ADR-058), answering Q006, open since 2026-07-17.
+    //
+    // GDD s5 line 47: "Both factions can build replacement MCVs at the Factory
+    // ONCE A TECH CENTRE EXISTS."
+    //
+    // No Tech Centre exists anywhere in the project beyond that sentence, so
+    // the clause had never been enforced: com_mcv.yaml read
+    // `prerequisites: [com_factory]`, which under produced_at is a TAUTOLOGY -
+    // the MCV comes out of the factory, so a rule saying "you need a factory"
+    // can never refuse anything. Line 47 was decorative.
+    //
+    // The specification this gate asserts against is line 47's PROPERTY -
+    // MCV replacement is TIER-GATED - not the type id the answer happened to
+    // pick. Stage 1 and 2 would pass unchanged had Q006 resolved to a
+    // purpose-built Tech Centre instead; they would fail if the prerequisite
+    // were moved back to anything the factory already implies. That is the
+    // ADR-047 rule: assert the game's rule, never the implementation's
+    // constant.
+    const int Factory = 2, Radar = 12, PowerPlant = 1;
+
+    // The tier gate itself. Named as the ANSWER to Q006 rather than inlined,
+    // so the one place a reader must look to see what "Tech Centre" resolved to
+    // is beside the sentence explaining it.
+    const int TechGate = Radar;
+
+    World Base(ulong seed, out int cy, out int factory)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        cy = w.SpawnConstructionYard(0, 20, 20);
+        w.SpawnPowerPlant(0, 16, 20, supply: 5000);
+        factory = w.SpawnFactory(0, 24, 20);
+        w.GrantCredits(0, 100000);
+        return w;
+    }
+
+    // --- 1. A factory, all the credits in the world, and NO tech gate: the
+    //        MCV must be REFUSED. This is the stage that was impossible to fail
+    //        before this row, because the only prerequisite was the factory
+    //        standing right there.
+    {
+        var w = Base(5100, out _, out int factory);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Produce, factory,
+                                   Fix64.Zero, Fix64.Zero, World.McvUnitType) });
+        if (w.QueueLength(factory) != 0)
+            return Fail("mcv tech: a player with a Factory but no tech gate must NOT be able to order an MCV. "
+                        + "GDD s5 line 47 gates MCV replacement behind a tier building; a prerequisite naming "
+                        + "the factory the MCV is produced AT is a tautology and gates nothing");
+    }
+
+    // --- 2. Same world, plus the tech gate: now it must be ACCEPTED. Without
+    //        this stage, stage 1 would also pass if MCVs were simply
+    //        unbuildable, which is a different bug wearing the same result.
+    {
+        var w = Base(5101, out _, out int factory);
+        w.SpawnRadarUplink(0, 28, 20);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Produce, factory,
+                                   Fix64.Zero, Fix64.Zero, World.McvUnitType) });
+        if (w.QueueLength(factory) != 1)
+            return Fail("mcv tech: with the tech gate standing the MCV must be orderable - stage 1 passing on its "
+                        + "own would be satisfied by an MCV nothing can ever build");
+    }
+
+    // --- 3. The tautology INVENTORY. A prerequisite that names the building a
+    //        unit is produced at can never refuse anything, so it is a rule
+    //        that reads as a gate and is not one. Q006 owned the MCV and
+    //        answered it; the REST are a Game Designer's tier curation and not
+    //        this row's to take, so this stage counts them rather than fixing
+    //        them.
+    //
+    //        THE COUNT IS FOUR, AND FINDING THAT OUT IS WHY THE STAGE EXISTS.
+    //        World.cs had a comment naming the tautologies as exactly four
+    //        INCLUDING the MCV - "mcv, howitzer, bulwark, phantom" - which was
+    //        true when written and silently stopped being true when ADR-028's
+    //        air layer added the STRIKE FLYER, authored `Prereqs: [16],
+    //        ProducedAt: 16`: produced at the airfield, gated on the airfield.
+    //        Nobody updated the comment, so the fifth instance of this project's
+    //        most-repeated defect - a hand-maintained list lagging the catalogue
+    //        it mirrors - was sitting inside the comment that documented the
+    //        defect class. The list is now DERIVED and this is the only count.
+    //
+    //        That same comment also said Q007 owned them. Q007 is about where
+    //        the ENGINEER is built. Nothing owns these four, which is now
+    //        Q018.
+    {
+        var w = new World(5102, 64, 64, players: 2);
+        var taut = new List<int>();
+        for (int id = 1; id <= 20; id++)
+        {
+            var d = w.GetUnitType(id);
+            if (d.Prereqs is null) continue;
+            foreach (int p in d.Prereqs) if (p == d.ProducedAt) { taut.Add(id); break; }
+        }
+        if (taut.Contains(World.McvUnitType))
+            return Fail("mcv tech: the MCV's prerequisite names the factory it is produced at again - that is the "
+                        + "tautology Q006 answered, and it gates nothing");
+        if (taut.Count != 4)
+            return Fail($"mcv tech: expected exactly FOUR remaining produced-at tautologies (howitzer 8, phantom 9, "
+                        + $"bulwark 10, strike flyer 15 - Q018's curation, not this row's), found {taut.Count}: "
+                        + $"[{string.Join(", ", taut)}]. A NEW one means a prerequisite was written that cannot "
+                        + "refuse anything; a FEWER one means Q018 was answered and this count should be retired "
+                        + "with it rather than quietly following it down");
+    }
+
+    // --- 4. And the commander must KNOW. ADR-009 clause 7's subtlest failure is
+    //        an AI that saves 3500 credits for a unit it cannot buy and
+    //        therefore never expands - and moving the MCV behind a tier gate is
+    //        precisely the change that arms it. Q006 said so in as many words:
+    //        "whatever the MCV waits on, the AI must know to build it first".
+    //
+    //        Measured on the expansion scenario's own shape rather than
+    //        asserted from the AI's source, because reading code has been
+    //        disproved twice in this phase.
+    {
+        var w = new World(2026, 96, 64, players: 2);
+        w.GrantCredits(0, 9000);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(28), 2500);
+        w.SpawnFerriteField(Fix64.FromInt(60), Fix64.FromInt(30), 12000);
+        var ai = SkirmishAI.Standard(0);
+        var cmds = new List<Command>();
+        int radarTick = -1, mcvTick = -1;
+        for (int t = 0; t < 7000; t++)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            if (radarTick < 0 || mcvTick < 0)
+                foreach (var e in w.Entities)
+                {
+                    if (!e.Alive || e.PlayerId != 0) continue;
+                    if (radarTick < 0 && e.Kind == EntityKind.RadarUplink) radarTick = t;
+                    if (mcvTick < 0 && e.Kind == EntityKind.Unit && e.UnitType == World.McvUnitType) mcvTick = t;
+                }
+        }
+        if (radarTick < 0)
+            return Fail("mcv tech: the commander never built the tech gate, so it can never buy an MCV and will "
+                        + "sit on the saved credits forever - ADR-009 clause 7's failure, armed by this row");
+        if (mcvTick < 0)
+            return Fail("mcv tech: the commander built the tech gate but never reached an MCV");
+        if (mcvTick < radarTick)
+            return Fail($"mcv tech: an MCV existed at tick {mcvTick}, BEFORE the tech gate at {radarTick} - the "
+                        + "prerequisite is not being enforced on the production path the AI uses");
+        Console.WriteLine($"mcvtechgate: commander reached its tech gate at tick {radarTick} and its MCV at tick "
+                          + $"{mcvTick}, a {mcvTick - radarTick}-tick gap ({(mcvTick - radarTick) / 15}s), so the "
+                          + "expansion is tier-gated rather than blocked");
+    }
+
+    Console.WriteLine("mcvtechgate: GDD s5 line 47 gates replacement MCVs behind a tier building and the sim had "
+                      + "never enforced it - com_mcv named the FACTORY IT IS PRODUCED AT, a prerequisite that "
+                      + "cannot refuse anything, so the clause was decorative. Q006 asked whether to invent a Tech "
+                      + "Centre or let the Radar Uplink absorb the role, and the answer taken is the radar: the "
+                      + "tier gate the tree already has, which the superweapon, the airfield and five units "
+                      + "already wait behind. A Factory alone now REFUSES an MCV and a Factory plus radar accepts "
+                      + "one; the commander reaches the radar first, so it never saves 3500 credits for a unit it "
+                      + "cannot buy; and the FOUR remaining produced-at tautologies are COUNTED rather than "
+                      + "quietly fixed, because curating a unit's tier is a Game Designer call (now Q018). That "
+                      + "count found its own defect on first run: World.cs named four INCLUDING the MCV and had "
+                      + "never been updated when ADR-028's strike flyer added a fifth, so the comment documenting "
+                      + "this defect class had itself become an instance of it");
+    return 0;
+}
+
 int EconomyFloatGate()
 {
     // P7-7a (ADR-047). Additive, the airgate pattern: a standalone mode and a
@@ -11201,6 +11365,10 @@ int Match(ulong seed)
     // it, which is what carries the commander to s4's stated 3.
     int freeHarvester = FreeHarvesterGate();
     if (freeHarvester != 0) return freeHarvester;
+    // P7-16: and the MCV it saves for is TIER-GATED, which GDD s5 line 47 has
+    // asked for since the design doc and no code had ever enforced.
+    int mcvTech = McvTechGate();
+    if (mcvTech != 0) return mcvTech;
     // P7-8: and the base it builds with all that income is a base rather than a
     // trail of buildings walking off the map.
     int baseShape = BaseShapeGate();
@@ -12916,6 +13084,7 @@ return args.Length == 0
         "seismicaimgate" => SeismicAimGate(),
         "economyfloatgate" => EconomyFloatGate(),
         "freeharvestergate" => FreeHarvesterGate(),
+        "mcvtechgate" => McvTechGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
         "churnprobe" => ChurnProbe(),
