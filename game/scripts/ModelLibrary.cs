@@ -38,6 +38,10 @@ public partial class ModelLibrary : Node
     private static readonly Dictionary<int, string> StructModel = new()
     {
         { 20, "sod_generator" },        // P7-31's mesh, previously unreachable
+        // P7-33: the Shroud Nest shares EntityKind.Emplacement with the common
+        // one, so it is the second building that could only ever be reached by
+        // struct type - exactly the case P7-32 opened up.
+        { 18, "sod_shroud_nest" },
         { 22, "sod_seismic_charge" },   // was rendering as dir_superweapon
     };
 
@@ -48,13 +52,18 @@ public partial class ModelLibrary : Node
         { 8, "dir_superweapon" }, { 9, "sod_veil_projector" }, { 10, "com_service_depot" },
         // P7-2: EntityKind.Emplacement (15) takes the turret model as an
         // interim, the ADR-019 precedent; a bespoke model is owed to art.
-        { 15, "dir_turret" },
+        // P7-33: bespoke emplacement - a sandbagged ring, deliberately a PIT
+        // rather than the tower the turret interim made of it.
+        { 15, "com_emplacement" },
         // P7-31: the Bastion has its own mesh now - a squat armoured blockhouse
         // with a tapered glacis and an embrasure, built from doc 31. The turret
         // interim badly under-read a 1400-credit building.
         { 16, "dir_bastion" },
         // ADR-028: interim models, the ADR-019 precedent. Bespoke ones owed to art.
-        { 14, "com_factory" },
+        // P7-33: bespoke airfield. The factory interim was a tall shed where
+        // this must be almost entirely horizontal, so the aircraft standing on
+        // it reads as the tall element.
+        { 14, "com_airfield" },
         { 3, "ferrite_cluster" },
         // 12 = Barracks (ADR-009 clause 5). No com_barracks.glb exists yet, so
         // it takes the established interim: the service depot, chosen over the
@@ -99,14 +108,18 @@ public partial class ModelLibrary : Node
         // com_bridge_deck.glb exists yet, so it takes the straight wall
         // segment, a low slab that reads as decking; the bespoke model is owed
         // to art-pipeline.
-        { 18, "com_wall_straight" },
+        // P7-33: a bridge is a SPAN, not a wall segment. Deck, kerbs, and the
+        // truss girders underneath that make felling it feel structural.
+        { 18, "com_bridge" },
         // 19 = Mine (P7-11c). No com_mine.glb exists yet; it takes the straight
         // wall segment, the lowest slab in the library, which is the closest
         // thing to something laid flat on the ground. The bespoke model is owed
         // to art-pipeline. Note that this actor is only ever DRAWN for its owner
         // or for a player whose detector has found it - the sim's stealth rules
         // decide that, not this table.
-        { 19, "com_wall_straight" },
+        // P7-33: a mine rendered as a WALL SEGMENT, which is about as wrong as
+        // this map could be - the whole design is "barely a silhouette".
+        { 19, "com_mine" },
         // 20 = Gate (P7-10). It is a barrier, but it is NOT one of the six
         // neighbour-mask wall meshes below: those are chosen by which sides a
         // wall run continues on, and a gate is a fixed piece in that run rather
@@ -114,7 +127,9 @@ public partial class ModelLibrary : Node
         // reads as a shut gate; no com_gate.glb exists yet and one that shows the
         // OPEN state is owed to art-pipeline, since World.IsGateOpen is the read
         // that would drive it.
-        { 20, "com_wall_straight" },
+        // P7-33: a gate is a wall segment WITH A MOVING PART, and it has to be
+        // distinguishable from a plain wall at 40px. Now it is.
+        { 20, "com_gate" },
     };
 
     // TICKET-P5-DEF-08: a barrier is one of six meshes chosen by its 4-bit

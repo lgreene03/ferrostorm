@@ -524,6 +524,7 @@ public partial class VerifyRunner : Node
         // A bare World is enough: this asks the CATALOGUE what kind each
         // building is, not what any match is doing.
         var cat = new World(1, 8, 8, players: 2);
+        World.StructureTypeDef _catFor(int t) => cat.GetStructureType(t);
         var dirSuper = cat.GetStructureType(6);
         var sodSuper = cat.GetStructureType(22);
         Check(dirSuper.Kind == sodSuper.Kind,
@@ -541,6 +542,25 @@ public partial class VerifyRunner : Node
               "the Sodality generator reaches its own mesh at last");
         Check(ModelLibrary.NameForTest((int)dirPlant.Kind, 0, 1) == "com_power_plant",
               "and the Directorate plant is unmoved, so the fallback still works");
+        // P7-33: the SHROUD NEST is the second faction variant that can only be
+        // reached by struct type - it shares EntityKind.Emplacement with the
+        // common one, exactly as the superweapons share theirs.
+        var sodNest = _catFor(18);
+        var comEmp = _catFor(15);
+        Check(sodNest.Kind == comEmp.Kind,
+              $"the Shroud Nest and the common emplacement SHARE a kind ({sodNest.Kind})");
+        Check(ModelLibrary.NameForTest((int)sodNest.Kind, 0, 18) == "sod_shroud_nest",
+              "the Sodality Shroud Nest renders as its own lean-to, not the common emplacement");
+        Check(ModelLibrary.NameForTest((int)comEmp.Kind, 0, 15) == "com_emplacement",
+              "and the common emplacement is unmoved");
+        // P7-33: three buildings that all rendered as a WALL SEGMENT.
+        Check(ModelLibrary.NameForTest((int)EntityKind.Mine, 0, 19) == "com_mine",
+              "a mine no longer renders as a wall segment");
+        Check(ModelLibrary.NameForTest((int)EntityKind.Gate, 0, 21) == "com_gate",
+              "a gate renders as a gate rather than the wall it sits in");
+        Check(ModelLibrary.NameForTest((int)EntityKind.Bridge, 0, 16) == "com_bridge",
+              "and a bridge renders as a span");
+
         // A struct type with no entry of its own must still resolve by kind.
         Check(ModelLibrary.NameForTest((int)EntityKind.Refinery, 0, 3) == "com_refinery",
               "a building with no struct-type entry falls back to its kind rather than throwing");

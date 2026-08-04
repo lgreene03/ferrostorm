@@ -930,7 +930,166 @@ def sod_generator():
     return join(parts, 'sod_generator')
 
 
+def com_emplacement():
+    """Doc 31: cheaper and lower than the turret - a SANDBAGGED RING with a short
+    weapon on a pintle, mostly horizontal. Reads as a pit, not a tower."""
+    parts = [pad()]
+    # Sandbag ring: staggered blocks around a circle, two courses.
+    for course, (rad, z, n) in enumerate(((0.62, 0.14, 14), (0.58, 0.26, 12))):
+        for i in range(n):
+            a = (i + course * 0.5) * (2 * math.pi / n)
+            b = box(f'sb{course}_{i}', 0.20, 0.13, 0.12,
+                    math.cos(a) * rad, math.sin(a) * rad, z, 'olived', 0.03)
+            b.rotation_euler = (0, 0, a)
+            parts.append(b)
+    parts.append(cyl('floor', 0.52, 0.06, 0, 0, 0.11, 'cinder', vs=14))
+    parts.append(cyl('pintle', 0.10, 0.20, 0, 0, 0.22, 'gundark', vs=10))
+    parts.append(box('gunbox', 0.20, 0.24, 0.14, 0, 0.02, 0.36, 'olived', 0.02))
+    parts.append(cyl('barrel', 0.035, 0.44, 0, -0.28, 0.38, 'gundark', vs=8, rx=math.pi/2))
+    parts.append(box('ammo', 0.16, 0.12, 0.10, 0.30, 0.22, 0.20, 'ferrite', 0.02))
+    parts.append(team_band(0.24, -0.66, 0.24, 'orange'))
+    return join(parts, 'com_emplacement')
+
+
+def com_gate():
+    """Doc 31: visibly a wall segment WITH A MOVING PART - two heavy posts, a
+    barred sliding leaf, a mechanism housing. Open and shut must be
+    distinguishable at 40px, so the leaf must change the silhouette."""
+    parts = []
+    for i, px in enumerate((-0.62, 0.62)):
+        parts.append(box(f'post{i}', 0.26, 0.34, 0.92, px, 0, 0.46, 'olived', 0.03))
+        parts.append(box(f'cap{i}', 0.32, 0.40, 0.07, px, 0, 0.94, 'olive', 0.02))
+    # The leaf: barred, so it reads as a gate rather than a solid wall.
+    parts.append(box('leafT', 1.00, 0.14, 0.10, 0, 0, 0.74, 'gundark', 0.02))
+    parts.append(box('leafB', 1.00, 0.14, 0.10, 0, 0, 0.16, 'gundark', 0.02))
+    for i in range(5):
+        parts.append(box(f'bar{i}', 0.06, 0.10, 0.52, -0.40 + i * 0.20, 0, 0.45, 'gundark', 0.012))
+    parts.append(box('mech', 0.20, 0.22, 0.24, 0.62, 0.30, 0.60, 'gun', 0.03))
+    parts.append(cyl('wheel', 0.10, 0.05, 0.62, 0.44, 0.60, 'ferrite', vs=12, rx=math.pi/2))
+    parts.append(team_band(0.20, -0.20, 0.74, 'orange'))
+    return join(parts, 'com_gate')
+
+
+def com_mine():
+    """Doc 31: small, low, almost FLUSH with the ground - barely a silhouette by
+    design. A single ferrite-gold pressure plate is the only visible feature."""
+    parts = []
+    parts.append(cyl('body', 0.30, 0.08, 0, 0, 0.04, 'olived', vs=14))
+    parts.append(cyl('rim', 0.33, 0.04, 0, 0, 0.02, 'cinder', vs=14))
+    parts.append(cyl('plate', 0.16, 0.05, 0, 0, 0.10, 'ferrite', vs=12, emit=0.9))
+    # Disturbed earth: a few low scattered clods, so it reads as buried.
+    for i, (cx, cy, cs) in enumerate(((0.34, 0.12, 0.10), (-0.28, 0.26, 0.08),
+                                      (0.10, -0.36, 0.09), (-0.32, -0.18, 0.07))):
+        parts.append(box(f'clod{i}', cs, cs, 0.035, cx, cy, 0.02, 'cinder', 0.015))
+    return join(parts, 'com_mine')
+
+
+def com_bridge():
+    """Doc 31: a flat roadway span with VISIBLE TRUSS GIRDERS BENEATH and low kerb
+    rails. No superstructure above deck level, so it reads as terrain rather than
+    building. The underside trusses make felling it feel structural."""
+    parts = []
+    parts.append(box('deck', 1.9, 0.95, 0.09, 0, 0, 0.30, 'olived', 0.02))
+    for i, ky in enumerate((-0.44, 0.44)):
+        parts.append(box(f'kerb{i}', 1.9, 0.08, 0.10, 0, ky, 0.39, 'olive', 0.02))
+    # Trusses underneath: the whole point of the mesh.
+    for i, ty in enumerate((-0.32, 0.32)):
+        parts.append(box(f'gird{i}', 1.86, 0.07, 0.14, 0, ty, 0.19, 'gundark', 0.015))
+        for k in range(5):
+            d = box(f'diag{i}_{k}', 0.30, 0.05, 0.05, -0.72 + k * 0.36, ty, 0.19, 'gundark', 0.01)
+            d.rotation_euler = (0, 0.7 if k % 2 else -0.7, 0)
+            parts.append(d)
+    for i, ax in enumerate((-0.92, 0.92)):
+        parts.append(box(f'abut{i}', 0.22, 1.0, 0.34, ax, 0, 0.17, 'cinder', 0.02))
+    return join(parts, 'com_bridge')
+
+
+def com_airfield():
+    """Doc 31: deliberately HORIZONTAL - a flat pad with ferrite-gold landing
+    markings, a low fuel bowser, and a slim control mast at one corner. Low, so
+    the aircraft standing on it reads as the tall element."""
+    parts = []
+    parts.append(box('pad', 1.9, 1.9, 0.07, 0, 0, 0.03, 'cinder', 0.03))
+    parts.append(box('apron', 1.7, 1.7, 0.03, 0, 0, 0.08, 'olived', 0.02))
+    # Landing markings: the read from directly above, which is this camera.
+    parts.append(box('centreline', 1.30, 0.09, 0.02, 0, 0, 0.10, 'ferrite', 0.005))
+    for i, my in enumerate((-0.34, 0.34)):
+        parts.append(box(f'bar{i}', 0.44, 0.08, 0.02, 0, my, 0.10, 'ferrite', 0.005))
+    for i, (cx, cy) in enumerate(((-0.72, -0.72), (0.72, -0.72), (-0.72, 0.72))):
+        parts.append(box(f'chev{i}', 0.20, 0.20, 0.02, cx, cy, 0.10, 'ferrite', 0.005))
+    # Fuel bowser and control mast: low, at the edges.
+    parts.append(cyl('bowser', 0.16, 0.52, -0.74, 0.30, 0.24, 'olive', vs=12, ry=math.pi/2))
+    parts.append(box('bwheel', 0.40, 0.16, 0.10, -0.74, 0.30, 0.10, 'gundark', 0.02))
+    parts.append(box('mbase', 0.26, 0.26, 0.22, 0.74, 0.74, 0.18, 'olive', 0.03))
+    for i in range(4):
+        parts.append(box(f'mleg{i}', 0.04, 0.04, 0.62, 0.74 + (0.07 if i % 2 else -0.07),
+                         0.74 + (0.07 if i < 2 else -0.07), 0.58, 'olived', 0.006))
+    parts.append(box('cab', 0.32, 0.32, 0.22, 0.74, 0.74, 1.00, 'olive', 0.03))
+    parts.append(box('glass', 0.34, 0.34, 0.10, 0.74, 0.74, 1.04, 'glow', 0.01, emit=0.8))
+    parts.append(team_band(0.30, -0.86, 0.12, 'orange', d=0.05))
+    return join(parts, 'com_airfield')
+
+
+def sod_shroud_nest():
+    """Doc 31: a LEAN-TO of mismatched plate propped at an angle, weapon poking
+    through a gap. Corrugated iron and salvaged panels of different ages.
+    Deliberately temporary against the Bastion's permanence."""
+    parts = [pad('rustd')]
+    parts.append(box('base', 1.15, 1.05, 0.26, 0, 0, 0.10, 'rustd', 0.03))
+    # The lean-to: one big canted sheet, propped. Rotated deliberately here -
+    # unlike the barracks roof, a LEAN-TO is meant to read as a tilted plane.
+    roof = box('lean', 1.25, 1.05, 0.07, 0.02, 0, 0.56, 'rustp', 0.02)
+    roof.rotation_euler = (0, -0.42, 0)
+    parts.append(roof)
+    parts.append(box('prop1', 0.07, 0.07, 0.62, -0.52, -0.42, 0.42, 'rustd', 0.01))
+    parts.append(box('prop2', 0.07, 0.07, 0.62, -0.52, 0.42, 0.42, 'rustd', 0.01))
+    # Mismatched plate: three panels of visibly different ages.
+    parts.append(box('pl1', 0.42, 0.06, 0.34, -0.30, -0.54, 0.36, 'rust', 0.02))
+    parts.append(box('pl2', 0.36, 0.06, 0.26, 0.16, -0.54, 0.32, 'rustp', 0.02))
+    parts.append(box('pl3', 0.30, 0.06, 0.30, 0.48, -0.54, 0.34, 'rustd', 0.02))
+    # The weapon, through a gap rather than on a mount.
+    parts.append(box('gap', 0.22, 0.10, 0.16, 0.04, -0.55, 0.44, 'cinder', 0.01))
+    parts.append(cyl('gun', 0.045, 0.46, 0.04, -0.78, 0.44, 'gundark', vs=8, rx=math.pi/2))
+    for i, (sx, sy) in enumerate(((-0.46, 0.50), (0.46, 0.50))):
+        parts.append(box(f'bag{i}', 0.28, 0.16, 0.14, sx, sy, 0.14, 'rustd', 0.04))
+    parts.append(team_band(0.26, -0.60, 0.60, 'teal'))
+    return join(parts, 'sod_shroud_nest')
+
+
+def sod_seismic_charge():
+    """Doc 31: the deliberate OPPOSITE of the orbital cannon - where that aims up,
+    this DRIVES DOWN. A lattice derrick with a massive piston hammer suspended in
+    it, cables and counterweights, and a concrete collar around the borehole."""
+    parts = [pad('rustd')]
+    parts.append(cyl('collar', 0.44, 0.16, 0, 0, 0.12, 'cinder', vs=16))
+    parts.append(cyl('bore', 0.30, 0.10, 0, 0, 0.20, 'cinder', vs=16))
+    parts.append(cyl('glow', 0.26, 0.03, 0, 0, 0.23, 'ferrite', vs=16, emit=1.3))
+    # The derrick: four splayed legs with cross-bracing, tapering upward.
+    for i, (lx, ly) in enumerate(((-0.42, -0.42), (0.42, -0.42), (-0.42, 0.42), (0.42, 0.42))):
+        l = box(f'leg{i}', 0.07, 0.07, 1.70, lx, ly, 0.88, 'rustd', 0.012)
+        l.rotation_euler = (-ly * 0.16, lx * 0.16, 0)
+        parts.append(l)
+    for i, z in enumerate((0.42, 0.86, 1.30)):
+        w = 0.86 - i * 0.14
+        parts.append(box(f'brc{i}', w, w, 0.04, 0, 0, z, 'rust', 0.008))
+    # The hammer, suspended: heavy, dark, obviously about to fall.
+    parts.append(box('hammer', 0.34, 0.34, 0.52, 0, 0, 1.02, 'gundark', 0.03))
+    parts.append(box('hcap', 0.40, 0.40, 0.08, 0, 0, 1.32, 'gun', 0.02))
+    parts.append(cyl('cable', 0.022, 0.36, 0, 0, 1.54, 'cinder', vs=6))
+    parts.append(box('crown', 0.52, 0.52, 0.12, 0, 0, 1.76, 'rust', 0.02))
+    parts.append(cyl('sheave', 0.14, 0.06, 0, 0, 1.84, 'gundark', vs=12, rx=math.pi/2))
+    # Counterweights either side, on cables.
+    for i, cx in enumerate((-0.56, 0.56)):
+        parts.append(box(f'cw{i}', 0.18, 0.18, 0.30, cx, 0, 0.74, 'gundark', 0.02))
+        parts.append(cyl(f'cwc{i}', 0.014, 0.80, cx, 0, 1.28, 'cinder', vs=6))
+    parts.append(team_band(0.30, -0.50, 0.30, 'teal'))
+    return join(parts, 'sod_seismic_charge')
+
+
 BUILDERS = dict(
+    com_emplacement=com_emplacement, com_gate=com_gate, com_mine=com_mine,
+    com_bridge=com_bridge, com_airfield=com_airfield,
+    sod_shroud_nest=sod_shroud_nest, sod_seismic_charge=sod_seismic_charge,
     com_barracks=com_barracks, com_radar_uplink=com_radar_uplink,
     com_outpost=com_outpost, dir_bastion=dir_bastion,
     sod_watch_post=sod_watch_post, sod_generator=sod_generator,
