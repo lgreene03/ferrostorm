@@ -29,7 +29,14 @@ public sealed class SnapshotInterpolator
     /// </summary>
     public readonly record struct ViewEntity(
         int Id, bool Alive, int PlayerId, EntityKind Kind, double X, double Y, int Hp,
-        int UnitType = 0, int MaxHp = 0, int FerriteAmount = 0, int FerriteCap = 0);
+        int UnitType = 0, int MaxHp = 0, int FerriteAmount = 0, int FerriteCap = 0,
+        // P7-32: the STRUCT type, which this contract carried for units since it
+        // existed and never for buildings. Without it the client could only ask
+        // "what KIND is this", and two faction variants sharing a kind became
+        // indistinguishable: the Sodality seismic charge rendered as the
+        // Directorate orbital cannon, because both are EntityKind.Superweapon.
+        // Optional and defaulted, so every existing caller is unchanged.
+        int StructType = 0);
 
     private readonly Dictionary<int, Entity[]> _snapshots = new();
     private readonly int _window;
@@ -89,12 +96,12 @@ public sealed class SnapshotInterpolator
                 // interpolated: it is a discrete stock, like Hp and Kind above,
                 // and a lerped ore count would render a fractional deposit.
                 output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp, e0.UnitType, e0.MaxHp,
-                    e0.FerriteAmount, e0.FerriteCap));
+                    e0.FerriteAmount, e0.FerriteCap, e0.StructType));
             }
             else
             {
                 output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp, e0.UnitType, e0.MaxHp,
-                    e0.FerriteAmount, e0.FerriteCap));
+                    e0.FerriteAmount, e0.FerriteCap, e0.StructType));
             }
         }
         return true;

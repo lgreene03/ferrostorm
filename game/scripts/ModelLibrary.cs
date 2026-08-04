@@ -21,6 +21,26 @@ public partial class ModelLibrary : Node
         // otherwise hand it. The bespoke model is owed to art-pipeline.
         { 13, "com_mcv" },
     };
+    /// <summary>
+    /// P7-32: models keyed on STRUCT TYPE, consulted before the kind map below.
+    ///
+    /// KindModel answers "what kind of building is this", which is the wrong
+    /// question the moment two factions build different things of the same kind.
+    /// The Sodality seismic charge and the Directorate orbital cannon are both
+    /// EntityKind.Superweapon, so the Sodality superweapon rendered as its
+    /// enemy's - a faction identity ADR-044 shipped, erased at the last step.
+    /// The Sodality generator (EntityKind.PowerPlant) had its own mesh built by
+    /// P7-31 and no way to be shown at all.
+    ///
+    /// This is the unit path's own idiom: UnitModel has always keyed on unit
+    /// TYPE. Only structures asked the coarser question.
+    /// </summary>
+    private static readonly Dictionary<int, string> StructModel = new()
+    {
+        { 20, "sod_generator" },        // P7-31's mesh, previously unreachable
+        { 22, "sod_seismic_charge" },   // was rendering as dir_superweapon
+    };
+
     private static readonly Dictionary<int, string> KindModel = new()
     {
         { 1, "com_harvester" }, { 2, "com_refinery" }, { 4, "com_power_plant" },
@@ -184,13 +204,28 @@ public partial class ModelLibrary : Node
         return scene;
     }
 
-    public Node3D Instantiate(int kind, int unitType)
+    public Node3D Instantiate(int kind, int unitType, int structType = 0)
     {
+        // P7-32: ask the SPECIFIC question first. A struct type that names its
+        // own mesh wins; everything else falls back to the kind map exactly as
+        // before, so this is additive and no existing building moves.
         string name = kind == 0
             ? UnitModel.GetValueOrDefault(unitType, "com_rifle_squad")
-            : KindModel.GetValueOrDefault(kind, "com_power_plant");
+            : StructModel.TryGetValue(structType, out var byType)
+                ? byType
+                : KindModel.GetValueOrDefault(kind, "com_power_plant");
         return Load(name).Instantiate<Node3D>();
     }
+
+    /// <summary>P7-32: the name a given sim identity resolves to, for the gate.
+    /// Exposed rather than inferred, so a test cannot quietly re-implement the
+    /// resolution rule it is meant to be checking.</summary>
+    public static string NameForTest(int kind, int unitType, int structType = 0)
+        => kind == 0
+            ? UnitModel.GetValueOrDefault(unitType, "com_rifle_squad")
+            : StructModel.TryGetValue(structType, out var byType)
+                ? byType
+                : KindModel.GetValueOrDefault(kind, "com_power_plant");
 
     /// <summary>DEF-08: the barrier mesh for a 4-bit neighbour mask, plus the
     /// yaw in degrees that turns its canonical orientation into that mask.</summary>
