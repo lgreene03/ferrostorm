@@ -3211,7 +3211,7 @@ public partial class SkirmishLive : Node3D
                     node = _models.InstantiateWall(_wallMask.GetValueOrDefault(v.Id), out float yawDeg);
                     node.RotationDegrees = new Vector3(0, yawDeg, 0);
                 }
-                else node = _models.Instantiate((int)v.Kind, v.UnitType);
+                else node = _models.Instantiate((int)v.Kind, v.UnitType, v.StructType);
                 node.Position = pos;
                 // V3 (doc 25): presentation up-scale, mobiles only. Set once at
                 // creation and it persists, because the per-frame actor update

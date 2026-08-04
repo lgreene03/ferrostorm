@@ -63,7 +63,13 @@ public partial class ReplayTheater : Node3D
 
     private Node3D Spawn(int id, int kind, int ut, int player, Vector3 at)
     {
-        var node = _models.Instantiate(kind, ut);
+        // P7-32: structType 0, so this falls back to the kind map. NOT an
+        // oversight: the replay JSON's entity tuple is (id, kind, ut, pl, x, z)
+        // and carries no struct type at all, so the theatre cannot know one.
+        // Consequence, recorded rather than hidden: a REPLAY still shows the
+        // Sodality seismic charge as the Directorate orbital cannon. Fixing it
+        // means widening the replay format, which is its own change.
+        var node = _models.Instantiate(kind, ut, 0);
         node.Position = at;
         if (Mobile(kind) && player >= 0)
         {

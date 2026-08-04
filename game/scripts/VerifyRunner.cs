@@ -512,6 +512,39 @@ public partial class VerifyRunner : Node
         Check(_game.UnitNameForTest(World.RepairVehicleType + 1) != "",
               "and a type beyond the table still falls back rather than throwing");
 
+        // --- P7-32: a faction's building renders as ITS OWN --------------------
+        // The model library resolved structures by EntityKind alone, so two
+        // faction variants sharing a kind were indistinguishable at the last
+        // step of the pipeline. This is the client harness's own class of
+        // defect: everything upstream was right and the picture was wrong.
+        //
+        // THE CONTROL FIRST. Both superweapons must share a kind, or the rest of
+        // this proves nothing - it would be asserting a distinction the sim had
+        // already made for us.
+        // A bare World is enough: this asks the CATALOGUE what kind each
+        // building is, not what any match is doing.
+        var cat = new World(1, 8, 8, players: 2);
+        var dirSuper = cat.GetStructureType(6);
+        var sodSuper = cat.GetStructureType(22);
+        Check(dirSuper.Kind == sodSuper.Kind,
+              $"the two superweapons SHARE a kind ({dirSuper.Kind}), which is why kind alone cannot tell them apart");
+        Check(ModelLibrary.NameForTest((int)dirSuper.Kind, 0, 6) == "dir_superweapon",
+              "the Directorate superweapon renders as the orbital cannon");
+        Check(ModelLibrary.NameForTest((int)sodSuper.Kind, 0, 22) == "sod_seismic_charge",
+              "and the SODALITY superweapon renders as its own seismic charge, not its enemy's cannon");
+        // The Sodality generator: a mesh P7-31 built that nothing could reach.
+        var sodGen = cat.GetStructureType(20);
+        var dirPlant = cat.GetStructureType(1);
+        Check(sodGen.Kind == dirPlant.Kind,
+              $"the two power buildings also share a kind ({sodGen.Kind})");
+        Check(ModelLibrary.NameForTest((int)sodGen.Kind, 0, 20) == "sod_generator",
+              "the Sodality generator reaches its own mesh at last");
+        Check(ModelLibrary.NameForTest((int)dirPlant.Kind, 0, 1) == "com_power_plant",
+              "and the Directorate plant is unmoved, so the fallback still works");
+        // A struct type with no entry of its own must still resolve by kind.
+        Check(ModelLibrary.NameForTest((int)EntityKind.Refinery, 0, 3) == "com_refinery",
+              "a building with no struct-type entry falls back to its kind rather than throwing");
+
         // --- The brown-out boundary is where ADR-008 says ---------------------
         // Four implementations of this threshold became one (the client now
         // calls the sim's), so there is nothing left to pin against. What a
