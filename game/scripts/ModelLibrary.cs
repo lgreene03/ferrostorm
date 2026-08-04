@@ -15,11 +15,20 @@ public partial class ModelLibrary : Node
         { 5, "sod_shade_raider" }, { 6, "dir_sentinel_scout" }, { 7, "com_mcv" },
         { 8, "dir_howitzer" }, { 9, "sod_phantom_tank" }, { 10, "dir_bulwark_tank" },
         { 11, "com_engineer" }, { 12, "dir_vanguard_car" },
-        // 13 = Repair Vehicle (ADR-019, P6 Wave C2). No com_repair_vehicle.glb
-        // exists yet; it takes the MCV as its interim, a vehicle silhouette that
-        // reads far better than the rifle-squad default GetValueOrDefault would
-        // otherwise hand it. The bespoke model is owed to art-pipeline.
-        { 13, "com_mcv" },
+        // P7-34: types 13 to 20 all have bespoke meshes now. Before this the
+        // table STOPPED at 12: the repair vehicle borrowed the MCV, and every
+        // type above it fell through GetValueOrDefault to "com_rifle_squad" - so
+        // the strike flyer, the carrier, the flak track, BOTH commandos, the
+        // infiltrator and the saboteur were all drawn as a squad of riflemen.
+        // Seven units and an aircraft wearing the same wrong silhouette.
+        { 13, "com_repair_vehicle" },   // ADR-019
+        { 14, "com_carrier" },          // P7-3, the transport
+        { 15, "com_strike_flyer" },     // ADR-028, the only aircraft
+        { 16, "com_flak_track" },       // ADR-028 clause 4, the anti-air answer
+        { 17, "sod_infiltrator" },      // P7-7
+        { 18, "sod_saboteur" },         // P7-11a
+        { 19, "dir_commando" },         // P7-11b
+        { 20, "sod_shadow_commando" },  // P7-11b
     };
     /// <summary>
     /// P7-32: models keyed on STRUCT TYPE, consulted before the kind map below.
