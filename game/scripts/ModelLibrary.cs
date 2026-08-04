@@ -29,7 +29,10 @@ public partial class ModelLibrary : Node
         // P7-2: EntityKind.Emplacement (15) takes the turret model as an
         // interim, the ADR-019 precedent; a bespoke model is owed to art.
         { 15, "dir_turret" },
-        { 16, "dir_turret" },   // P7-2b: Bastion, interim model
+        // P7-31: the Bastion has its own mesh now - a squat armoured blockhouse
+        // with a tapered glacis and an embrasure, built from doc 31. The turret
+        // interim badly under-read a 1400-credit building.
+        { 16, "dir_bastion" },
         // ADR-028: interim models, the ADR-019 precedent. Bespoke ones owed to art.
         { 14, "com_factory" },
         { 3, "ferrite_cluster" },
@@ -39,13 +42,18 @@ public partial class ModelLibrary : Node
         // apart at a glance, which is the whole point of the split. The
         // bespoke model and the sidebar icon are owed to art-pipeline
         // (TICKET-P6-ART-02).
-        { 12, "com_service_depot" },
+        // P7-31: bespoke barracks. The depot interim was both too large and
+        // flat-roofed, so it read as the factory it must not be confused with.
+        { 12, "com_barracks" },
         // 13 = RadarUplink (ADR-008 clause 4). No com_radar_uplink.glb exists
         // yet; doc 23 s4.2 prescribes the veil projector as the interim stand-in
         // because its `dish` child already spins under ScanRig, which reads as
         // a scanning antenna for free. The bespoke model is owed to
         // art-pipeline (raised in the wave's delivery notes).
-        { 13, "sod_veil_projector" },
+        // P7-31: bespoke radar uplink - the tallest thin silhouette in the game.
+        // The veil interim put a SODALITY building on a common one, which broke
+        // the faction read outright.
+        { 13, "com_radar_uplink" },
         // 21 = WatchPost (P7-5b, ADR-043), the Sodality's detector. The veil
         // projector again, and for the same reason it stands in for the radar
         // above rather than for want of imagination: its `dish` child already
@@ -53,13 +61,18 @@ public partial class ModelLibrary : Node
         // like. It is a 1x1 building wearing a 2x2 model until art lands, which
         // is visible and wrong rather than invisibly wrong. Bespoke model and
         // sidebar icon owed to art-pipeline.
-        { 21, "sod_veil_projector" },
+        // P7-31: bespoke Watch Post, and UNARMED by design (GDD line 56) - the
+        // absence of a weapon on the silhouette is the read.
+        { 21, "sod_watch_post" },
         // 17 = Outpost (ADR-021, P6 Wave C4). No com_outpost.glb exists yet; it
         // takes the refinery as its interim, an industrial silhouette that reads
         // as an income building. DressStructure already declines the team strip
         // for a neutral owner (player < 0), so an uncaptured outpost renders
         // unclaimed for free. The bespoke model is owed to art-pipeline.
-        { 17, "com_refinery" },
+        // P7-31: bespoke outpost. The refinery interim misleadingly implied an
+        // economy building; this one is bleached, blank and deliberately carries
+        // NO team colour until it is captured.
+        { 17, "com_outpost" },
         // 18 = destroyable Bridge deck (ADR-025). The terrain beneath is drawn
         // as water and this actor IS the deck, so felling a span removes the
         // actor and open water is what remains - the honest read. No

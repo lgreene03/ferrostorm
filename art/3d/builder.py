@@ -766,7 +766,175 @@ def dir_vanguard_car():
     turret.parent = hull   # identity transforms after join: safe to parent
     return hull
 
+# ---------------------------------------------------------------------------
+# Doc 31 builders. Each is written from that document's physical description,
+# and each replaces an interim mesh ModelLibrary.cs records as owed. The three
+# Sodality entries carry the FIRST teal team bands in the project: every band
+# before them was hardcoded 'orange' or 'ferrite', so the Sodality had none.
+# ---------------------------------------------------------------------------
+
+def com_barracks():
+    """Doc 31: smaller and simpler than the factory, and must not be confused
+    with it - a PITCHED roof against the factory's flat one is the distinction.
+    Personnel door with a covered porch, small windows, kit rack and water butt."""
+    parts = [pad()]
+    parts.append(box('hall', 1.5, 1.1, 0.42, 0, 0.1, 0.08, 'olive', 0.06))
+    # The pitched roof. First version canted two slabs and they read as floating
+    # shelves - the pitch never formed, because they sat above the hall instead
+    # of springing from its eaves. Second version builds the pitch as a STEPPED
+    # WEDGE springing directly off the wall top, which reads as a roof at 40px
+    # and needs no rotation at all. Caught on the render, not in review.
+    for i, (w, z) in enumerate(((1.60, 0.32), (1.30, 0.42), (1.00, 0.51), (0.68, 0.58))):
+        parts.append(box(f'roof{i}', 1.56, w, 0.10, 0, 0.1, z, 'olived', 0.02))
+    parts.append(box('ridge', 1.58, 0.10, 0.08, 0, 0.1, 0.64, 'olived', 0.02))
+    # Personnel door with porch: small, human-sized, unlike the factory's shutters.
+    parts.append(box('door', 0.22, 0.05, 0.34, -0.3, -0.46, 0.25, 'cinder', 0.01))
+    parts.append(box('porch', 0.40, 0.22, 0.05, -0.3, -0.58, 0.42, 'olived', 0.015))
+    for i in range(3):
+        parts.append(box(f'win{i}', 0.16, 0.04, 0.12, 0.05 + i * 0.34, -0.45, 0.34, 'glow', 0.008, emit=1.1))
+    parts.append(box('kit', 0.5, 0.14, 0.16, 0.35, 0.7, 0.16, 'olived', 0.02))
+    parts.append(cyl('butt', 0.11, 0.3, -0.62, 0.66, 0.23, 'rustd', vs=10))
+    parts.append(team_band(0.34, -0.46, 0.20, 'orange'))
+    return join(parts, 'com_barracks')
+
+
+def com_radar_uplink():
+    """Doc 31: the TALLEST THIN structure in the game - a small windowless
+    blockhouse with a lattice mast and a large ferrite-gold dish angled skyward,
+    guy wires to ground anchors. Pure vertical, which nothing else common has."""
+    parts = [pad()]
+    parts.append(box('block', 0.8, 0.8, 0.42, -0.25, 0, 0.08, 'olive', 0.05))
+    parts.append(box('blockr', 0.7, 0.7, 0.05, -0.25, 0, 0.31, 'olived', 0.02))
+    # The mast: four legs plus bracing, so it reads as lattice not as a pole.
+    for i, (mx, my) in enumerate(((-0.09, -0.09), (0.09, -0.09), (-0.09, 0.09), (0.09, 0.09))):
+        parts.append(box(f'leg{i}', 0.035, 0.035, 1.5, 0.35 + mx, my, 0.82, 'olived', 0.005))
+    for i in range(4):
+        z = 0.28 + i * 0.36
+        parts.append(box(f'brc{i}', 0.20, 0.20, 0.025, 0.35, 0, z, 'olived', 0.005))
+    # The dish, angled up: the identifying feature at distance.
+    d = cyl('dish', 0.34, 0.06, 0.35, 0.06, 1.62, 'ferrite', vs=16)
+    d.rotation_euler = (-0.7, 0, 0)
+    parts.append(d)
+    parts.append(cyl('horn', 0.045, 0.26, 0.35, -0.14, 1.72, 'gundark', vs=8, rx=-0.7))
+    for i, gx in enumerate((-0.5, 0.5)):
+        g = cyl(f'guy{i}', 0.012, 1.15, 0.35 + gx * 0.5, 0, 0.85, 'gundark', vs=6)
+        g.rotation_euler = (0, gx * 0.55, 0)
+        parts.append(g)
+    parts.append(team_band(0.26, -0.41, 0.30, 'orange'))
+    return join(parts, 'com_radar_uplink')
+
+
+def com_outpost():
+    """Doc 31: must read as NOBODY'S - weathered concrete, bleached, flat roof,
+    slit windows, a BARE flagpole with nothing on it. No faction plate, no team
+    colour at all until captured. Deliberately the only structure with no band."""
+    parts = [pad('cinder')]
+    parts.append(box('block', 1.15, 1.15, 0.5, 0, 0, 0.08, 'bone', 0.05))
+    parts.append(box('cap', 1.25, 1.25, 0.07, 0, 0, 0.36, 'bone', 0.02))
+    # Slit windows: narrow, high, defensive - not the refinery's big openings.
+    for i, (wx, wy, sx, sy) in enumerate(((0, -0.59, 0.42, 0.04), (0, 0.59, 0.42, 0.04),
+                                          (-0.59, 0, 0.04, 0.42), (0.59, 0, 0.04, 0.42))):
+        parts.append(box(f'slit{i}', sx, sy, 0.07, wx, wy, 0.26, 'cinder', 0.008))
+    parts.append(box('step', 0.4, 0.22, 0.06, 0, -0.66, 0.09, 'bone', 0.015))
+    # The bare pole. Nothing flies from it until somebody claims this.
+    parts.append(cyl('pole', 0.022, 1.0, 0.42, 0.42, 0.6, 'bone', vs=8))
+    parts.append(cyl('finial', 0.04, 0.05, 0.42, 0.42, 1.12, 'bone', vs=8))
+    return join(parts, 'com_outpost')
+
+
+def dir_bastion():
+    """Doc 31: the toughest building per credit and it must look it. A squat
+    armoured blockhouse with steeply SLOPED flanks, a heavy weapon firing through
+    an EMBRASURE rather than a turret on a pole, a stepped parapet, and a dish
+    cluster on the roof earned by its two support powers."""
+    parts = [pad()]
+    parts.append(box('core', 1.25, 1.25, 0.34, 0, 0, 0.10, 'gun', 0.04))
+    # Sloped glacis, built as a TAPERED STACK rather than canted flaps. The
+    # first version rotated four thin plates outward and they read as fins
+    # sticking off the sides, not as armour - seen immediately on the first
+    # render, which is the whole reason to draw a thing before trusting it.
+    for i, (w, z) in enumerate(((1.42, 0.16), (1.30, 0.26), (1.16, 0.35), (1.02, 0.43))):
+        parts.append(box(f'gl{i}', w, w, 0.10, 0, 0, z, 'plate' if i % 2 else 'gun', 0.02))
+    # Stepped parapet, then the embrasure: a slot, not a turret.
+    parts.append(box('para', 0.94, 0.94, 0.13, 0, 0, 0.53, 'gun', 0.03))
+    parts.append(box('para2', 0.74, 0.74, 0.10, 0, 0, 0.64, 'plate', 0.03))
+    parts.append(box('emb', 0.44, 0.09, 0.12, 0, -0.50, 0.47, 'cinder', 0.01))
+    parts.append(cyl('gun', 0.05, 0.55, 0, -0.70, 0.47, 'gundark', vs=10, rx=math.pi/2))
+    parts.append(cyl('mzl', 0.07, 0.09, 0, -0.94, 0.47, 'gundark', vs=10, rx=math.pi/2))
+    # The support-power aerials, earned by ADR-063 and ADR-064.
+    dsh = cyl('sdish', 0.17, 0.04, 0.24, 0.22, 0.76, 'plate', vs=14)
+    dsh.rotation_euler = (-0.6, 0, 0)
+    parts.append(dsh)
+    parts.append(cyl('mast', 0.018, 0.34, -0.26, 0.24, 0.84, 'gundark', vs=6))
+    parts.append(team_band(0.42, -0.48, 0.66, 'orange'))
+    return join(parts, 'dir_bastion')
+
+
+def sod_watch_post():
+    """Doc 31: a thin SCAFFOLD tower with a crow's nest, external ladder,
+    scavenged aerials lashed on. UNARMED by design (GDD line 56) - no weapon
+    anywhere on the silhouette, and that absence is the read."""
+    parts = [pad('rustd')]
+    # Four splayed scaffold legs: spindly and obviously fragile.
+    for i, (lx, ly) in enumerate(((-0.24, -0.24), (0.24, -0.24), (-0.24, 0.24), (0.24, 0.24))):
+        l = box(f'leg{i}', 0.05, 0.05, 1.25, lx, ly, 0.66, 'rustd', 0.008)
+        l.rotation_euler = (-ly * 0.14, lx * 0.14, 0)
+        parts.append(l)
+    for i in range(3):
+        z = 0.36 + i * 0.34
+        parts.append(box(f'ring{i}', 0.50, 0.50, 0.03, 0, 0, z, 'rust', 0.006))
+    # The crow's nest: a small enclosed box, mismatched plate.
+    parts.append(box('nest', 0.62, 0.62, 0.30, 0, 0, 1.42, 'rust', 0.03))
+    parts.append(box('nestp', 0.68, 0.30, 0.20, 0.02, -0.20, 1.44, 'rustp', 0.02))
+    parts.append(box('nestr', 0.70, 0.70, 0.05, 0, 0, 1.60, 'rustd', 0.02))
+    parts.append(box('rail', 0.72, 0.05, 0.10, 0, -0.34, 1.62, 'rustd', 0.01))
+    # Ladder rungs up one leg.
+    for i in range(6):
+        parts.append(box(f'rung{i}', 0.22, 0.02, 0.02, 0, -0.26, 0.30 + i * 0.18, 'rustd', 0.004))
+    # Scavenged aerials, lashed on: the jamming array, and nothing that shoots.
+    parts.append(cyl('aer1', 0.012, 0.44, -0.18, 0.14, 1.80, 'rustd', vs=6))
+    a2 = cyl('aer2', 0.012, 0.34, 0.20, -0.10, 1.74, 'rustd', vs=6)
+    a2.rotation_euler = (0.3, 0.25, 0)
+    parts.append(a2)
+    sd = cyl('sdish', 0.13, 0.03, 0.16, 0.20, 1.70, 'rustp', vs=12)
+    sd.rotation_euler = (-0.8, 0, 0)
+    parts.append(sd)
+    parts.append(team_band(0.30, -0.36, 1.34, 'teal'))
+    return join(parts, 'sod_watch_post')
+
+
+def sod_generator():
+    """Doc 31: the cheapest, flimsiest thing in the game at 130cr/70hp. A single
+    SALVAGED FUEL DRUM stood on end on a pallet, small motor bolted on top, a
+    pull-cord, cables trailing away. Players build a dozen, so it must cluster
+    without becoming noise."""
+    parts = []
+    parts.append(box('pallet', 0.62, 0.62, 0.05, 0, 0, 0.02, 'rustd', 0.01))
+    for i in range(3):
+        parts.append(box(f'slat{i}', 0.58, 0.10, 0.03, 0, -0.2 + i * 0.2, 0.06, 'rustd', 0.006))
+    # The drum: ribbed, dented, obviously second-hand.
+    parts.append(cyl('drum', 0.24, 0.52, 0, 0, 0.34, 'rust', vs=14))
+    for i in range(2):
+        parts.append(cyl(f'rib{i}', 0.255, 0.035, 0, 0, 0.22 + i * 0.24, 'rustd', vs=14))
+    parts.append(cyl('lid', 0.245, 0.03, 0, 0, 0.61, 'rustd', vs=14))
+    # Motor bolted to the top, with a pull-cord handle.
+    parts.append(box('motor', 0.26, 0.20, 0.16, 0.02, 0, 0.70, 'gundark', 0.02))
+    parts.append(cyl('cord', 0.015, 0.12, -0.16, 0, 0.72, 'bone', vs=6, ry=math.pi/2))
+    parts.append(cyl('exh', 0.028, 0.18, 0.14, 0.06, 0.86, 'gundark', vs=8))
+    # Cables trailing off across the ground - the decentralised grid, visibly.
+    for i, (cx, cy, rot) in enumerate(((0.34, 0.20, 0.5), (0.30, -0.26, -0.7))):
+        c = cyl(f'cab{i}', 0.016, 0.44, cx, cy, 0.03, 'cinder', vs=6, ry=math.pi/2)
+        c.rotation_euler = (0, math.pi/2, rot)
+        parts.append(c)
+    parts.append(team_band(0.16, -0.25, 0.44, 'teal', d=0.04))
+    return join(parts, 'sod_generator')
+
+
 BUILDERS = dict(
+    com_barracks=com_barracks, com_radar_uplink=com_radar_uplink,
+    com_outpost=com_outpost, dir_bastion=dir_bastion,
+    sod_watch_post=sod_watch_post, sod_generator=sod_generator,
+
     dir_cannon_tank=dir_cannon_tank, dir_bulwark_tank=dir_bulwark_tank,
     dir_howitzer=dir_howitzer, dir_sentinel_scout=dir_sentinel_scout,
     sod_phantom_tank=sod_phantom_tank, sod_shade_raider=sod_shade_raider,
