@@ -1086,7 +1086,205 @@ def sod_seismic_charge():
     return join(parts, 'sod_seismic_charge')
 
 
+def _single(name, coat='olive', head='bone', hood=False, armour=False,
+            satchel=False, rifle=False, tall=1.0, band=None):
+    """Doc 31's four single figures share a skeleton so they read as the same
+    SCALE of thing, and differ only where the brief says they differ. Built from
+    infantry()'s proportions rather than new ones, so a lone figure and a squad
+    member are recognisably the same army."""
+    parts = []
+    bh = 0.22 * tall
+    parts.append(cyl('body', 0.075 if armour else 0.065, bh, 0, 0, bh / 2, coat, vs=8))
+    if armour:
+        # Segmented plate over chest and shoulders: the hero read.
+        parts.append(box('chest', 0.19, 0.13, 0.11, 0, 0, bh * 0.72, coat, 0.02))
+        for i, sx in enumerate((-0.11, 0.11)):
+            parts.append(box(f'pauld{i}', 0.09, 0.11, 0.07,
+                             sx, 0, bh * 0.92, coat, 0.02))
+    parts.append(cyl('head', 0.05, 0.075, 0, 0, bh + 0.045, head, vs=8))
+    if hood:
+        # Asymmetric hood: the Sodality hero, assembled rather than issued.
+        hd = cyl('hood', 0.068, 0.10, 0.012, -0.01, bh + 0.055, coat, vs=8)
+        hd.rotation_euler = (0.2, 0.15, 0)
+        parts.append(hd)
+    if rifle:
+        r = box('rifle', 0.022, 0.30 * tall, 0.022, 0.055, 0.01, bh * 0.7, 'gundark', 0.004)
+        r.rotation_euler = (0, 0, 0.45)
+        parts.append(r)
+    if satchel:
+        # Carried LOW at the hip - the one geometric addition over the
+        # infiltrator, and the only thing separating them on a second look.
+        parts.append(box('satchel', 0.10, 0.07, 0.09, 0.085, -0.02, bh * 0.42, 'rustd', 0.015))
+        st = box('strap', 0.015, 0.05, 0.20, 0.03, -0.02, bh * 0.68, 'rustd', 0.004)
+        st.rotation_euler = (0, 0.5, 0)
+        parts.append(st)
+    if band is not None:
+        # Doc 16's law: one team-colour place per silhouette, ALWAYS. The first
+        # render of this batch caught dir_commando carrying none while its
+        # Sodality twin did, which is the law broken and the pair asymmetric.
+        parts.append(team_band(0.09, -0.055, bh * 0.80, band, d=0.03))
+    parts.append(cyl('base', 0.22, 0.02, 0, 0, 0.01, 'olived', vs=14))
+    return join(parts, name)
+
+
+def dir_commando():
+    """Doc 31: larger than any other infantry - hero scale is intended. Segmented
+    plate, full helmet, long rifle held across the body, fully UPRIGHT where line
+    infantry hunch. Signal orange generous: never lose track of it."""
+    o = _single('dir_commando', coat='gun', head='gundark',
+                armour=True, rifle=True, tall=1.35, band='orange')
+    return o
+
+
+def sod_shadow_commando():
+    """Doc 31: the Sodality hero. Mismatched scavenged plate, deliberately
+    asymmetric - a heavy pauldron on ONE shoulder, a hood over a partial mask.
+    Assembled from what was available, against the Directorate's issued twin."""
+    parts = []
+    bh = 0.22 * 1.35
+    parts.append(cyl('body', 0.075, bh, 0, 0, bh / 2, 'rust', vs=8))
+    parts.append(box('chest', 0.18, 0.12, 0.11, 0.008, 0, bh * 0.72, 'rustp', 0.02))
+    # ONE pauldron, not two: the asymmetry is the faction language.
+    parts.append(box('pauld', 0.11, 0.12, 0.09, -0.115, 0, bh * 0.93, 'rustd', 0.02))
+    parts.append(cyl('head', 0.05, 0.075, 0, 0, bh + 0.045, 'rustd', vs=8))
+    hd = cyl('hood', 0.07, 0.10, 0.012, -0.012, bh + 0.058, 'rust', vs=8)
+    hd.rotation_euler = (0.22, 0.16, 0)
+    parts.append(hd)
+    r = box('rifle', 0.022, 0.40, 0.022, 0.06, 0.01, bh * 0.7, 'gundark', 0.004)
+    r.rotation_euler = (0, 0, 0.45)
+    parts.append(r)
+    # Wrapped cloth at the forearms, per the brief.
+    for i, wx in enumerate((-0.06, 0.07)):
+        parts.append(cyl(f'wrap{i}', 0.026, 0.07, wx, 0.02, bh * 0.55, 'rustd', vs=6))
+    parts.append(team_band(0.09, -0.055, bh * 0.80, 'teal', d=0.03))
+    parts.append(cyl('base', 0.22, 0.02, 0, 0, 0.01, 'olived', vs=14))
+    return join(parts, 'sod_shadow_commando')
+
+
+def sod_infiltrator():
+    """Doc 31: a long CIVILIAN COAT, no visible weapon at all, hands at the sides,
+    head bare or lightly hooded. It reads as a person rather than a soldier,
+    which is what makes it unnerving among welded machines."""
+    return _single('sod_infiltrator', coat='rustd', head='bone', tall=1.0)
+
+
+def sod_saboteur():
+    """Doc 31: the same coat and posture, distinguished ONLY by a satchel carried
+    low at the hip. Confusable at a glance and separable on a second look - which
+    is the doctrine, not an accident."""
+    return _single('sod_saboteur', coat='rustd', head='bone', satchel=True, tall=1.0)
+
+
+def com_repair_vehicle():
+    """Doc 31: small boxy unarmed tracked utility, roughly a third of the MCV. The
+    defining feature is a FOLDED ARTICULATED ARM along the roof with a claw and
+    visible hydraulics. Gold hazard striping. Toolboxes on the flanks."""
+    parts = []
+    parts += tracks(0.30, 0.62, wheel_r=0.055, wheels=4)
+    parts.append(box('hull', 0.46, 0.62, 0.20, 0, 0, 0.20, 'olive', 0.03))
+    parts.append(box('cab', 0.34, 0.24, 0.16, 0, -0.16, 0.36, 'olive', 0.03))
+    parts.append(box('glass', 0.28, 0.05, 0.09, 0, -0.28, 0.38, 'glow', 0.01, emit=0.6))
+    # The folded arm: the whole read, because there is no turret.
+    parts.append(box('armb', 0.10, 0.12, 0.09, 0, 0.16, 0.35, 'olived', 0.02))
+    parts.append(box('arm1', 0.07, 0.34, 0.06, 0, 0.06, 0.42, 'olived', 0.015))
+    a2 = box('arm2', 0.06, 0.26, 0.05, 0, -0.10, 0.47, 'olived', 0.012)
+    a2.rotation_euler = (0.35, 0, 0)
+    parts.append(a2)
+    parts.append(box('claw', 0.08, 0.07, 0.05, 0, -0.24, 0.51, 'gundark', 0.01))
+    for i, hx in enumerate((-0.045, 0.045)):
+        parts.append(cyl(f'hyd{i}', 0.014, 0.20, hx, 0.06, 0.38, 'gundark', vs=6, rx=math.pi/2))
+    # Gold hazard striping, and stowage.
+    for i in range(3):
+        parts.append(box(f'haz{i}', 0.05, 0.03, 0.021, -0.10 + i * 0.10, 0.24, 0.31, 'ferrite', 0.004))
+    parts.append(box('tools', 0.09, 0.16, 0.09, 0.27, 0.08, 0.24, 'olived', 0.02))
+    parts.append(cyl('drum', 0.055, 0.10, -0.27, 0.14, 0.25, 'rustd', vs=8, ry=math.pi/2))
+    parts.append(team_band(0.22, -0.32, 0.24, 'orange'))
+    return join(parts, 'com_repair_vehicle')
+
+
+def com_carrier():
+    """Doc 31: a long low UNARMED transport with a flat open deck over two thirds
+    of its length, shallow drop-sides, tie-down rails and a fold-down rear ramp.
+    SIX WHEELS, not tracks - a lighter, more civilian look than anything armed."""
+    parts = []
+    parts.append(box('chassis', 0.44, 1.06, 0.10, 0, 0, 0.14, 'olived', 0.02))
+    # Six wheels: the civilian read.
+    for i, (wx, wy) in enumerate([(sx, sy) for sx in (-0.25, 0.25)
+                                  for sy in (-0.34, 0.06, 0.38)]):
+        parts.append(cyl(f'w{i}', 0.095, 0.07, wx, wy, 0.095, 'gundark', vs=10, ry=math.pi/2))
+    parts.append(box('cab', 0.40, 0.28, 0.22, 0, -0.38, 0.30, 'olive', 0.03))
+    parts.append(box('grille', 0.34, 0.05, 0.12, 0, -0.53, 0.26, 'gundark', 0.015))
+    parts.append(box('wind', 0.32, 0.04, 0.10, 0, -0.25, 0.38, 'glow', 0.01, emit=0.5))
+    # The deck: deliberately EMPTY on top so cargo reads when loaded.
+    parts.append(box('deck', 0.44, 0.66, 0.05, 0, 0.20, 0.22, 'olived', 0.015))
+    for i, sx in enumerate((-0.21, 0.21)):
+        parts.append(box(f'side{i}', 0.04, 0.66, 0.10, sx, 0.20, 0.28, 'olive', 0.015))
+    for i in range(4):
+        parts.append(box(f'rail{i}', 0.03, 0.03, 0.05, -0.19 + (i % 2) * 0.38,
+                         0.02 + (i // 2) * 0.34, 0.33, 'gundark', 0.006))
+    ramp = box('ramp', 0.42, 0.20, 0.04, 0, 0.60, 0.20, 'olived', 0.012)
+    ramp.rotation_euler = (-0.5, 0, 0)
+    parts.append(ramp)
+    parts.append(team_band(0.26, -0.53, 0.34, 'orange'))
+    return join(parts, 'com_carrier')
+
+
+def com_flak_track():
+    """Doc 31: a light HALF-TRACKED chassis with an open-topped mount carrying
+    four short fat barrels angled steeply UPWARD - the only ground unit whose
+    silhouette points at the sky. Ammo boxes, exposed seat, traverse wheel."""
+    parts = []
+    parts.append(box('hull', 0.42, 0.86, 0.16, 0, 0, 0.18, 'olive', 0.03))
+    # Half-track: wheels at the front, track at the back.
+    for i, wx in enumerate((-0.23, 0.23)):
+        parts.append(cyl(f'fw{i}', 0.085, 0.06, wx, -0.32, 0.085, 'gundark', vs=10, ry=math.pi/2))
+    parts += tracks(0.23, 0.40, wheel_r=0.065, wheels=3)
+    parts.append(box('cab', 0.38, 0.24, 0.18, 0, -0.24, 0.29, 'olive', 0.03))
+    parts.append(box('wind', 0.30, 0.04, 0.09, 0, -0.36, 0.34, 'glow', 0.01, emit=0.5))
+    # The mount: open, exposed, obviously converted.
+    parts.append(cyl('ring', 0.17, 0.05, 0, 0.20, 0.28, 'olived', vs=12))
+    parts.append(box('mount', 0.16, 0.16, 0.10, 0, 0.20, 0.34, 'gundark', 0.02))
+    for i, (bx, bz) in enumerate(((-0.045, 0), (0.045, 0), (-0.045, 0.05), (0.045, 0.05))):
+        b = cyl(f'bar{i}', 0.022, 0.30, bx, 0.16, 0.50 + bz, 'gundark', vs=8)
+        b.rotation_euler = (-0.55, 0, 0)
+        parts.append(b)
+    parts.append(box('seat', 0.09, 0.09, 0.07, 0.13, 0.24, 0.34, 'olived', 0.015))
+    parts.append(cyl('trav', 0.05, 0.02, -0.14, 0.24, 0.34, 'ferrite', vs=10, ry=math.pi/2))
+    for i, ax in enumerate((-0.20, 0.20)):
+        parts.append(box(f'ammo{i}', 0.08, 0.14, 0.08, ax, 0.36, 0.26, 'ferrite', 0.015))
+    parts.append(team_band(0.22, -0.39, 0.24, 'orange'))
+    return join(parts, 'com_flak_track')
+
+
+def com_strike_flyer():
+    """Doc 31: a small single-seat aircraft with FORWARD-SWEPT wings, a slim
+    tapering fuselage, a bubble canopy set well forward, twin tail fins and an
+    underslung rocket pod beneath each wing. Fast and fragile - keep it spare."""
+    parts = []
+    parts.append(cyl('fuse', 0.075, 0.86, 0, 0, 0.42, 'olive', vs=10, rx=math.pi/2))
+    parts.append(cyl('nose', 0.05, 0.18, 0, -0.48, 0.42, 'olived', vs=10, rx=math.pi/2))
+    parts.append(box('canopy', 0.11, 0.22, 0.08, 0, -0.20, 0.50, 'glow', 0.02, emit=0.7))
+    # Forward-swept wings: the identifying feature, so the sweep must be visible.
+    for i, sx in enumerate((-1, 1)):
+        w = box(f'wing{i}', 0.44, 0.20, 0.03, sx * 0.28, 0.02, 0.40, 'olive', 0.012)
+        w.rotation_euler = (0, 0, sx * -0.42)
+        parts.append(w)
+        parts.append(cyl(f'pod{i}', 0.035, 0.22, sx * 0.34, 0.02, 0.34, 'gundark', vs=8, rx=math.pi/2))
+    # Twin tail fins.
+    for i, sx in enumerate((-1, 1)):
+        f = box(f'fin{i}', 0.03, 0.16, 0.16, sx * 0.09, 0.38, 0.50, 'olived', 0.01)
+        f.rotation_euler = (0, sx * 0.25, 0)
+        parts.append(f)
+    parts.append(box('tplane', 0.28, 0.12, 0.025, 0, 0.40, 0.42, 'olived', 0.01))
+    parts.append(team_band(0.14, 0.30, 0.56, 'orange', d=0.035))
+    return join(parts, 'com_strike_flyer')
+
+
 BUILDERS = dict(
+    dir_commando=dir_commando, sod_shadow_commando=sod_shadow_commando,
+    sod_infiltrator=sod_infiltrator, sod_saboteur=sod_saboteur,
+    com_repair_vehicle=com_repair_vehicle, com_carrier=com_carrier,
+    com_flak_track=com_flak_track, com_strike_flyer=com_strike_flyer,
     com_emplacement=com_emplacement, com_gate=com_gate, com_mine=com_mine,
     com_bridge=com_bridge, com_airfield=com_airfield,
     sod_shroud_nest=sod_shroud_nest, sod_seismic_charge=sod_seismic_charge,

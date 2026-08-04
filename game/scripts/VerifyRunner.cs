@@ -561,6 +561,23 @@ public partial class VerifyRunner : Node
         Check(ModelLibrary.NameForTest((int)EntityKind.Bridge, 0, 16) == "com_bridge",
               "and a bridge renders as a span");
 
+        // P7-34: every unit type has its own mesh. The table used to stop at 12,
+        // so eight distinct units - including the game's only AIRCRAFT - all
+        // fell through to the rifle-squad default and drew as infantry.
+        //
+        // THE CONTROL FIRST: an unknown type must still fall back, or this is
+        // asserting that the fallback was removed rather than that the table
+        // was filled.
+        Check(ModelLibrary.NameForTest(0, 999) == "com_rifle_squad",
+              "an unknown unit type still falls back to the rifle squad rather than throwing");
+        foreach (var (ut, want) in new[] {
+                     (13, "com_repair_vehicle"), (14, "com_carrier"),
+                     (15, "com_strike_flyer"), (16, "com_flak_track"),
+                     (17, "sod_infiltrator"), (18, "sod_saboteur"),
+                     (19, "dir_commando"), (20, "sod_shadow_commando") })
+            Check(ModelLibrary.NameForTest(0, ut) == want,
+                  $"unit type {ut} renders as {want}, not as a squad of riflemen");
+
         // A struct type with no entry of its own must still resolve by kind.
         Check(ModelLibrary.NameForTest((int)EntityKind.Refinery, 0, 3) == "com_refinery",
               "a building with no struct-type entry falls back to its kind rather than throwing");
