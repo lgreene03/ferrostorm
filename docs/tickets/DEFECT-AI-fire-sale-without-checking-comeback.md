@@ -5,6 +5,18 @@ Found: 2026-08-03, P7-16 (ADR-058) - **filed wrong**, corrected 2026-08-03 by P7
 Severity: **high**
 Confidence: **measured**, four fixtures with columns (below)
 
+> **RESOLVED 2026-08-03 by P7-17 (ADR-059), verified still fixed 2026-08-07.**
+> `SkirmishAI.Act` now takes the exact fix "The fix" prescribes below: before the
+> Fire Sale it asks whether an MCV is BUILDABLE - prerequisites met
+> (`w.HasPrereqs(_player, mcvDef.Prereqs)`), a producer of the right kind alive
+> (keyed on `mcvDef.ProducedAt`, not the factory by name), and the credits to pay
+> - and orders one and returns rather than selling. An MCV already on order also
+> counts, so the order does not get fire-sold on the next beat. `comebackgate`
+> (sim battery) proves it bites, and the full local gate passes green at
+> catalogue checksum 0xFA2DFE52192660BA. Left in place as history because the
+> "filed wrong" lesson below is worth more than the ticket. The record below is
+> the state BEFORE the fix.
+
 ## THIS TICKET WAS FILED WRONG, AND THAT IS THE FIRST THING IN IT
 
 P7-16 filed this as *"a commander that loses its Construction Yard stops playing

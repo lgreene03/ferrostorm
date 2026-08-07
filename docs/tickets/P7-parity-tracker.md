@@ -951,3 +951,40 @@ P6's tracker stays authoritative for its own rows.
 defect or intent; does the air layer or transport lead Tier A; and is D2's
 player-count promise kept or the GDD amended to match what shipped. The first
 unblocks a small fix immediately; the other two decide the shape of the phase.
+
+## Post-completion question closures, 2026-08-07
+
+P7 was code-complete on 2026-08-03 (ADR-068). The two open items that were
+Game Designer calls rather than engineering rows are now answered by Luke, and
+recorded here so the tracker stays the resume point.
+
+- **Q020 (produced-at tautology prerequisites) - CLOSED, ADR-069.** All four
+  emptied: dir_howitzer, sod_phantom_tank, dir_bulwark_tank and com_strike_flyer
+  each named the building they are produced AT as a prerequisite, a clause that
+  can never refuse anything. The reading taken is that a rule which never bites
+  is a fake gate, not a tier the designer kept, so the four units are available
+  as soon as their producer stands - which is what the sim already did. Goldens
+  BYTE-IDENTICAL across all 24 (measured), catalogue checksum moved by
+  construction `0xFA2DFE52192660BA -> 0xB4E6F043C4A872CC`. `mcvtechgate` stage 3
+  retired its count of four to assert ZERO, so it now guards the closed class -
+  any new tautology, or the MCV regressing, fails by name - which is strictly
+  stronger than the magic number it replaced.
+- **Q022 (the Directorate's third support power) - CLOSED, ADR-070.** The
+  asymmetry is RATIFIED, not filled. GDD s3 names two Directorate powers
+  (surgical) and three Sodality (dirty tricks); it is the more specific document
+  and is authoritative over s8's looser "3-4 per faction". GDD s8 line 71 is
+  amended to state the asymmetry rather than assert a count the design
+  deliberately does not meet - the same stale-claim class P7-27 spent a wave
+  correcting. Docs only: no sim, data or hash change. Overturned only by a
+  playtest reading the two-power kit as a shortfall, in which case a sixth power
+  is named first and derived as the other five were.
+- **Also closed on the way:** `DEFECT-AI-fire-sale-without-checking-comeback`
+  was still on disk unmarked though P7-17 (ADR-059) had fixed it; verified still
+  fixed in `SkirmishAI.Act` and the ticket marked resolved. A stale
+  open-looking ticket, the same class this phase kept finding.
+
+**What now genuinely needs a human, and only a human:** the PLAYTEST
+(`docs/tickets/P7-playtest-brief-2026-08-03.md`), Q014 (second resource, unrelated
+to parity), and the A11 balance ticket `BALANCE-bastion-value-vs-shroud-nest`.
+Every engineering and design-decision row in P7 is now DONE or REFUSED with its
+overturning argument recorded.

@@ -733,12 +733,12 @@ public sealed partial class World
         // and said nothing; GDD line 47 asks for MCV replacement to be tier-gated
         // and the radar is the tier gate the shipped tree already has.
         { 7, new UnitTypeDef(3000, 400, 600, ArmourClass.Heavy, 0, Fix64.FromFraction(3, 20), Veterancy: false, Prereqs: new[] { 12 }) },        // com_mcv
-        { 8, new UnitTypeDef(900, 200, 160, ArmourClass.Light, 5, Fix64.FromFraction(3, 20), SightCells: 7, Faction: FactionDirectorate, Prereqs: new[] { 2 }) },            // dir_howitzer
+        { 8, new UnitTypeDef(900, 200, 160, ArmourClass.Light, 5, Fix64.FromFraction(3, 20), SightCells: 7, Faction: FactionDirectorate) },            // dir_howitzer (Q020/ADR-069: prereq was the factory it is produced AT, a tautology; emptied)
         // Signature units (TICKET-P3-FAC-02): the personality pieces.
         // Phantom: the Sodality stealth tank - rockets from nowhere.
-        { 9, new UnitTypeDef(900, 210, 200, ArmourClass.Light, 3, Fix64.FromFraction(6, 25), Stealth: true, Faction: FactionSodality, Prereqs: new[] { 2 }) },  // sod_phantom_tank
+        { 9, new UnitTypeDef(900, 210, 200, ArmourClass.Light, 3, Fix64.FromFraction(6, 25), Stealth: true, Faction: FactionSodality) },  // sod_phantom_tank (Q020/ADR-069: produced-at tautology prereq emptied)
         // Bulwark: the Directorate wall that walks. Slow, vast, undeniable.
-        { 10, new UnitTypeDef(1600, 350, 550, ArmourClass.Heavy, 6, Fix64.FromFraction(3, 25), Faction: FactionDirectorate, Prereqs: new[] { 2 }) },            // dir_bulwark_tank
+        { 10, new UnitTypeDef(1600, 350, 550, ArmourClass.Heavy, 6, Fix64.FromFraction(3, 25), Faction: FactionDirectorate) },            // dir_bulwark_tank (Q020/ADR-069: produced-at tautology prereq emptied)
         // Engineer: captures enemy structures on contact; consumed by the act.
         { 11, new UnitTypeDef(500, 120, 60, ArmourClass.None, 0, Fix64.FromFraction(1, 5), Veterancy: false, ProducedAt: 11) },                           // com_engineer
         // Vanguard: the Directorate harasser - the raider trade, armour for
@@ -759,7 +759,7 @@ public sealed partial class World
         // ADR-028: the strike aircraft. Air true is what takes it off the flow
         // field and out of reach of every ground weapon; produced at the
         // airfield (struct type 16), which is its own prerequisite.
-        { 15, new UnitTypeDef(1100, 200, 180, ArmourClass.Light, 1, Fix64.FromFraction(45, 100), SightCells: 8, Prereqs: new[] { 16 }, ProducedAt: 16, Air: true) }, // com_strike_flyer
+        { 15, new UnitTypeDef(1100, 200, 180, ArmourClass.Light, 1, Fix64.FromFraction(45, 100), SightCells: 8, ProducedAt: 16, Air: true) }, // com_strike_flyer (Q020/ADR-069: prereq was com_airfield, the building it is produced AT - a tautology; emptied, the airfield's only unit)
         // ADR-028 clause 4: the answer, and it ships in the same wave by the
         // ADR's own binding. Mobile, because what air threatens most is the
         // army in the field rather than the base.

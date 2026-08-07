@@ -12,6 +12,19 @@ Owner: game-designer
 Raised by: P7-16 (ADR-058), 2026-08-03, while answering Q006
 Decide by: unset (not blocking; the gate holds the line meanwhile)
 
+> **ANSWERED AND CLOSED 2026-08-07 (Luke, Game Designer authority; ADR-069).**
+> ALL FOUR emptied. The reading taken: a prerequisite that names the building a
+> unit is produced AT can never refuse anything, so it is not a tier gate the
+> Game Designer chose to keep - it is a fake gate, and removing it removes a rule
+> that misleads a reader into thinking the tier is gated when it is not. The four
+> units (howitzer, phantom, bulwark, strike flyer) are available as soon as their
+> producer stands, which is what the sim already did. Goldens byte-identical
+> (the clause never refused an order), catalogue checksum moved by construction.
+> `mcvtechgate` stage 3's count is retired to ZERO and now guards the CLOSED
+> class: any new produced-at tautology, or the MCV regressing into one, fails by
+> name. The schema's own note already said "the producer IS a prerequisite; do
+> not repeat it" - the data was authored against its own advice.
+
 ## The question
 
 A unit's `prerequisites` list names structures that must stand before it can be

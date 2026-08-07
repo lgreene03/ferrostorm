@@ -68,7 +68,7 @@ Full stat sheets live in `/data/units/*.yaml` once the data format exists; the G
 ## 8. Superweapons and Support Powers
 
 - One superweapon per faction, ~6 minute charge, global map ping and audio warning at launch: Directorate orbital cannon (huge single-point damage), Sodality seismic charge (wide, lower-damage area denial that also destroys resource fields - economic warfare flavour).
-- 3-4 minor support powers per faction on shorter timers, unlocked by structures.
+- Minor support powers on shorter timers than the superweapon, unlocked by structures. The roster is asymmetric BY DESIGN and s3 is authoritative on it: the Sodality fields THREE (radar jamming, tunnel deployment, decoy army - its "dirty tricks" doctrine), the Directorate TWO (orbital scan, precision strike - its "surgical" doctrine). This once read "3-4 per faction"; amended 2026-08-07 (Q022, ADR-070) once s3 had named only two Directorate powers, because a written count the design deliberately does not meet is how stale specification claims get started. The Directorate is paid for the shorter list elsewhere (heaviest armour, the only Bastion). Reopen with a named sixth power if a playtest says the asymmetry reads as a shortfall rather than a doctrine.
 - Design rule: every power has counterplay (spread out, scout the structure, kill it).
 
 ## 9. Modes

@@ -32,10 +32,16 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
   only a human can do either.** First, **a PLAYTEST** - `docs/tickets/P7-playtest-brief-2026-08-03.md`
   is four matches and about ninety minutes, derived from the seventeen ADRs whose
   own overturning clauses name one, and `tools/playtest-index.sh` flags any
-  decision the brief has fallen behind. Second, **Q022**: one sentence naming the
-  Directorate's third support power, or ruling that two against the Sodality's
-  three is the correct asymmetry and GDD s8's "3-4" should be amended. Q020 and
-  the A11 balance tickets are also open and also human calls.
+  decision the brief has fallen behind. **Q022 and Q020 are now CLOSED
+  (2026-08-07, Luke's calls).** Q022 (ADR-070): the 2-vs-3 support-power split is
+  RATIFIED as intended asymmetry and GDD s8 line 71 is amended, because GDD s3 -
+  the more specific document - names only two Directorate powers; no sixth power
+  invented. Q020 (ADR-069): the four produced-at tautology prerequisites are
+  emptied, goldens byte-identical, catalogue checksum
+  `0xFA2DFE52192660BA -> 0xB4E6F043C4A872CC`, and `mcvtechgate` now asserts ZERO
+  tautologies rather than counting four. **What still needs a human: the
+  PLAYTEST, Q014 (second resource, not a parity item), and the A11 balance
+  ticket `BALANCE-bastion-value-vs-shroud-nest`.**
 - **A SECOND claim this file carried and that was measurably false, corrected
   2026-08-03.** The bullet below said "**no row has yet needed a regeneration** -
   eleven consecutive rows landed byte-identical". Derived from the history of
