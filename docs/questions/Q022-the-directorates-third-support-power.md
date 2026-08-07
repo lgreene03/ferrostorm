@@ -5,6 +5,19 @@ Raised by: P7-27 (ADR-068), 2026-08-03, on auditing P7 for completion
 Decide by: unset (not blocking; it is the last parity gap in P7 and it needs a
 name nobody has written)
 
+> **ANSWERED AND CLOSED 2026-08-07 (Luke, Game Designer authority; ADR-070).**
+> The asymmetry is RATIFIED, not filled: the Sodality's three surgical-versus-
+> dirty-tricks split against the Directorate's two is intended, and GDD s3 - the
+> more specific document, which names exactly two Directorate powers and three
+> Sodality - is authoritative over s8's looser "3-4 per faction". GDD s8 line 71
+> is amended so the specification and the game agree (the "Candidate directions"
+> below record the third option, "Nothing at all", which was the one taken and is
+> argued there as legitimate). The Directorate is paid for the shorter list in
+> armour and the Bastion. `parityprobe` still measures 2 vs 3; that reading is now
+> the intended state, not a shortfall. Overturned only by a playtest saying the
+> asymmetry reads as a gap - then a named sixth power, derived as the other five
+> were.
+
 ## The gap, measured
 
 GDD s8 line 71: *"**3-4** minor support powers **per faction** on shorter timers,

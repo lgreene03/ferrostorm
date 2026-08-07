@@ -15,7 +15,7 @@ sight_range: 5
 stealth: true
 detector: false
 produced_at: com_factory
-prerequisites: [com_factory]
+prerequisites: []
 veterancy_enabled: true
 notes: >
   First volley free, every volley after that a negotiation. Firing breaks

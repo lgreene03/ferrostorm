@@ -18,6 +18,6 @@ sight_range: 8
 stealth: false
 detector: false
 produced_at: com_airfield
-prerequisites: [com_airfield]
+prerequisites: []
 veterancy_enabled: true
 air: true

@@ -10472,27 +10472,25 @@ int McvTechGate()
                         + "own would be satisfied by an MCV nothing can ever build");
     }
 
-    // --- 3. The tautology INVENTORY. A prerequisite that names the building a
-    //        unit is produced at can never refuse anything, so it is a rule
-    //        that reads as a gate and is not one. Q006 owned the MCV and
-    //        answered it; the REST are a Game Designer's tier curation and not
-    //        this row's to take, so this stage counts them rather than fixing
-    //        them.
+    // --- 3. NO produced-at tautology may exist. A prerequisite that names the
+    //        building a unit is produced at can never refuse anything, so it is
+    //        a rule that reads as a gate and is not one.
     //
-    //        THE COUNT IS FOUR, AND FINDING THAT OUT IS WHY THE STAGE EXISTS.
-    //        World.cs had a comment naming the tautologies as exactly four
-    //        INCLUDING the MCV - "mcv, howitzer, bulwark, phantom" - which was
-    //        true when written and silently stopped being true when ADR-028's
-    //        air layer added the STRIKE FLYER, authored `Prereqs: [16],
-    //        ProducedAt: 16`: produced at the airfield, gated on the airfield.
-    //        Nobody updated the comment, so the fifth instance of this project's
-    //        most-repeated defect - a hand-maintained list lagging the catalogue
-    //        it mirrors - was sitting inside the comment that documented the
-    //        defect class. The list is now DERIVED and this is the only count.
+    //        This stage counted FOUR when P7-16 wrote it - howitzer 8, phantom
+    //        9, bulwark 10 and strike flyer 15 - because Q006 owned only the
+    //        MCV and the rest were a Game Designer's tier curation not that
+    //        row's to take. Q020 has since answered them (ADR-069, 2026-08-07):
+    //        all four emptied, on the reading that a rule which never refuses is
+    //        not a tier gate but a fake one, and the four are units available as
+    //        soon as their producer stands. So the count is now ZERO, and the
+    //        stage guards the CLOSED class rather than a magic number: any new
+    //        tautology - a fifth appearing, or the MCV regressing into the shape
+    //        it left - fails here by name.
     //
-    //        That same comment also said Q007 owned them. Q007 is about where
-    //        the ENGINEER is built. Nothing owns these four, which is now
-    //        Q020.
+    //        Why this matters historically: World.cs once carried a hand-written
+    //        comment naming the tautologies, which silently went stale when
+    //        ADR-028's air layer added the strike flyer. The list is DERIVED
+    //        here so it cannot lag the catalogue it mirrors.
     {
         var w = new World(5102, 64, 64, players: 2);
         var taut = new List<int>();
@@ -10502,15 +10500,12 @@ int McvTechGate()
             if (d.Prereqs is null) continue;
             foreach (int p in d.Prereqs) if (p == d.ProducedAt) { taut.Add(id); break; }
         }
-        if (taut.Contains(World.McvUnitType))
-            return Fail("mcv tech: the MCV's prerequisite names the factory it is produced at again - that is the "
-                        + "tautology Q006 answered, and it gates nothing");
-        if (taut.Count != 4)
-            return Fail($"mcv tech: expected exactly FOUR remaining produced-at tautologies (howitzer 8, phantom 9, "
-                        + $"bulwark 10, strike flyer 15 - Q020's curation, not this row's), found {taut.Count}: "
-                        + $"[{string.Join(", ", taut)}]. A NEW one means a prerequisite was written that cannot "
-                        + "refuse anything; a FEWER one means Q020 was answered and this count should be retired "
-                        + "with it rather than quietly following it down");
+        if (taut.Count != 0)
+            return Fail($"mcv tech: expected ZERO produced-at tautologies (Q020/ADR-069 emptied the four that "
+                        + $"existed - howitzer 8, phantom 9, bulwark 10, strike flyer 15), found {taut.Count}: "
+                        + $"[{string.Join(", ", taut)}]. A prerequisite that names the building a unit is produced "
+                        + "AT can never refuse anything - it reads as a tier gate and is not one. If the MCV is in "
+                        + "that list it has regressed into the shape Q006 removed");
     }
 
     // --- 4. And the commander must KNOW. ADR-009 clause 7's subtlest failure is
@@ -10564,9 +10559,10 @@ int McvTechGate()
                       + "tier gate the tree already has, which the superweapon, the airfield and five units "
                       + "already wait behind. A Factory alone now REFUSES an MCV and a Factory plus radar accepts "
                       + "one; the commander reaches the radar first, so it never saves 3500 credits for a unit it "
-                      + "cannot buy; and the FOUR remaining produced-at tautologies are COUNTED rather than "
-                      + "quietly fixed, because curating a unit's tier is a Game Designer call (now Q020). That "
-                      + "count found its own defect on first run: World.cs named four INCLUDING the MCV and had "
+                      + "cannot buy; and produced-at tautologies are now asserted to be ZERO - Q020/ADR-069 "
+                      + "emptied the four this gate once counted (howitzer, phantom, bulwark, strike flyer), on "
+                      + "the reading that a prerequisite which never refuses is a fake gate, not a tier. The "
+                      + "stage found its own defect on first run: World.cs named four INCLUDING the MCV and had "
                       + "never been updated when ADR-028's strike flyer added a fifth, so the comment documenting "
                       + "this defect class had itself become an instance of it");
     return 0;
