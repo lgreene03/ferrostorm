@@ -112,7 +112,30 @@ def wedge(name, pts, h, z=0, m='rust'):
     o.data.materials.append(mat(m))
     return o
 
+def assert_common_band(objs, name):
+    """A com_ mesh may not carry a faction's team colour.
+
+    Checked HERE because join() is the one funnel every model passes through,
+    so the rule is enforced on the mesh being assembled rather than trusted to
+    whoever next edits a builder. Nine com_ meshes were authored with the
+    Directorate's orange while this rule sat written in a comment a few hundred
+    lines away; a comment is not a check.
+    """
+    if not name.startswith('com_'):
+        return
+    for o in objs:
+        colour = o.get('band_colour')
+        if colour in FACTION_MARKS:
+            raise ValueError(
+                f"{name} is com_ shared hardware - one mesh serves BOTH players - "
+                f"but its team band is {FACTION_MARKS[colour]} ('{colour}'). That "
+                f"paints a faction stripe on the other side's hardware, and the "
+                f"player whose colour it is not never sees their own. Use "
+                f"COMMON_MARK ('{COMMON_MARK}'). Only dir_ and sod_ meshes, which "
+                f"one side alone can place, carry a faction mark.")
+
 def join(objs, name):
+    assert_common_band(objs, name)
     # Blender 5.x headless defers depsgraph evaluation: rotation_euler set
     # after creation is not yet in matrix_world when join() bakes vertices,
     # so rotated parts (gun barrels etc.) join unrotated. Force the update.
@@ -128,9 +151,19 @@ def join(objs, name):
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     return obj
 
+# The two faction marks, by doc 16: signal orange is the Directorate and
+# corroded teal the Sodality. A com_ mesh may carry NEITHER, because one mesh
+# serves both players - see COMMON_MARK below for the argument and the nine
+# meshes that broke it.
+FACTION_MARKS = {'orange': 'Directorate signal orange', 'teal': 'Sodality corroded teal'}
+
 def team_band(w, y, z, colour, d=0.06):
     # W4-02: the one team-colour place is now self-lit (night identification)
-    return box('band', w, d, 0.06, 0, y, z, colour, bevel=0.012, emit=1.2)
+    o = box('band', w, d, 0.06, 0, y, z, colour, bevel=0.012, emit=1.2)
+    # Tag the part with what it was asked for, so join() can check the mesh
+    # actually being assembled rather than anyone re-reading this file.
+    o['band_colour'] = colour
+    return o
 
 def tracks(x, length, wheel_r=0.082, wheels=4, band_w=0.15, m_band='gundark', m_skirt='gun'):
     """Detailed track unit for one side: upper tread run + top skirt, road
@@ -569,12 +602,28 @@ def com_service_depot():
 
 # Doc 16 as it currently stands, and it is the CURRENT text that governs here:
 # "team colour appears in exactly one place per silhouette (the band/slash),
-# always", and "COMMON hardware: field olive with ferrite-gold marks". A
-# barrier is com_ shared hardware - one mesh serves both players - so the mark
-# is ferrite gold, matching the only other com_ team band in the roster
-# (com_harvester). Signal orange on a mesh both factions place would paint a
-# Directorate stripe on a Sodality wall.
-BARRIER_MARK = 'ferrite'
+# always", and "COMMON hardware: field olive with ferrite-gold marks".
+#
+# THE RULE, AND IT IS ABOUT EVERY com_ MESH RATHER THAN ONLY BARRIERS. One
+# mesh serves BOTH players, so its band cannot carry a faction's colour:
+# signal orange on shared hardware paints a Directorate stripe on a Sodality
+# wall, and the Sodality player is the one who never sees their own colour.
+# Faction-exclusive meshes are the opposite case and keep their side's mark,
+# dir_ signal orange and sod_ teal.
+#
+# This constant existed as BARRIER_MARK and was stated with exactly the
+# argument above, and NINE com_ meshes were still authored 'orange' anyway -
+# barracks, radar uplink, emplacement, gate, airfield, repair vehicle,
+# carrier, flak track and strike flyer - against com_harvester, which was the
+# single one that obeyed it. The rule was written down and then not enforced,
+# which is this project's most-repeated defect, so the fix is the NAME and the
+# CHECK rather than nine edits: every com_ builder now passes COMMON_MARK, and
+# assert_common_band() refuses one at join(), the single funnel every model is
+# assembled through, so a tenth cannot be authored quietly.
+COMMON_MARK = 'ferrite'
+# Kept as the barrier-specific alias so doc 22 and wall-yaw-gate.py still read
+# in their own terms, but it is no longer a separate decision.
+BARRIER_MARK = COMMON_MARK
 # Doc 22 section 5 PROPOSES marking only where the neighbour count is not 2,
 # i.e. no mark on a straight mid-run segment. That amendment is PROPOSED and
 # blocked on Luke, and section 5.3 makes this ticket's band rule contingent on
@@ -794,7 +843,7 @@ def com_barracks():
         parts.append(box(f'win{i}', 0.16, 0.04, 0.12, 0.05 + i * 0.34, -0.45, 0.34, 'glow', 0.008, emit=1.1))
     parts.append(box('kit', 0.5, 0.14, 0.16, 0.35, 0.7, 0.16, 'olived', 0.02))
     parts.append(cyl('butt', 0.11, 0.3, -0.62, 0.66, 0.23, 'rustd', vs=10))
-    parts.append(team_band(0.34, -0.46, 0.20, 'orange'))
+    parts.append(team_band(0.34, -0.46, 0.20, COMMON_MARK))
     return join(parts, 'com_barracks')
 
 
@@ -820,7 +869,7 @@ def com_radar_uplink():
         g = cyl(f'guy{i}', 0.012, 1.15, 0.35 + gx * 0.5, 0, 0.85, 'gundark', vs=6)
         g.rotation_euler = (0, gx * 0.55, 0)
         parts.append(g)
-    parts.append(team_band(0.26, -0.41, 0.30, 'orange'))
+    parts.append(team_band(0.26, -0.41, 0.30, COMMON_MARK))
     return join(parts, 'com_radar_uplink')
 
 
@@ -947,7 +996,7 @@ def com_emplacement():
     parts.append(box('gunbox', 0.20, 0.24, 0.14, 0, 0.02, 0.36, 'olived', 0.02))
     parts.append(cyl('barrel', 0.035, 0.44, 0, -0.28, 0.38, 'gundark', vs=8, rx=math.pi/2))
     parts.append(box('ammo', 0.16, 0.12, 0.10, 0.30, 0.22, 0.20, 'ferrite', 0.02))
-    parts.append(team_band(0.24, -0.66, 0.24, 'orange'))
+    parts.append(team_band(0.24, -0.66, 0.24, COMMON_MARK))
     return join(parts, 'com_emplacement')
 
 
@@ -966,7 +1015,7 @@ def com_gate():
         parts.append(box(f'bar{i}', 0.06, 0.10, 0.52, -0.40 + i * 0.20, 0, 0.45, 'gundark', 0.012))
     parts.append(box('mech', 0.20, 0.22, 0.24, 0.62, 0.30, 0.60, 'gun', 0.03))
     parts.append(cyl('wheel', 0.10, 0.05, 0.62, 0.44, 0.60, 'ferrite', vs=12, rx=math.pi/2))
-    parts.append(team_band(0.20, -0.20, 0.74, 'orange'))
+    parts.append(team_band(0.20, -0.20, 0.74, COMMON_MARK))
     return join(parts, 'com_gate')
 
 
@@ -1026,7 +1075,7 @@ def com_airfield():
                          0.74 + (0.07 if i < 2 else -0.07), 0.58, 'olived', 0.006))
     parts.append(box('cab', 0.32, 0.32, 0.22, 0.74, 0.74, 1.00, 'olive', 0.03))
     parts.append(box('glass', 0.34, 0.34, 0.10, 0.74, 0.74, 1.04, 'glow', 0.01, emit=0.8))
-    parts.append(team_band(0.30, -0.86, 0.12, 'orange', d=0.05))
+    parts.append(team_band(0.30, -0.86, 0.12, COMMON_MARK, d=0.05))
     return join(parts, 'com_airfield')
 
 
@@ -1198,7 +1247,7 @@ def com_repair_vehicle():
         parts.append(box(f'haz{i}', 0.05, 0.03, 0.021, -0.10 + i * 0.10, 0.24, 0.31, 'ferrite', 0.004))
     parts.append(box('tools', 0.09, 0.16, 0.09, 0.27, 0.08, 0.24, 'olived', 0.02))
     parts.append(cyl('drum', 0.055, 0.10, -0.27, 0.14, 0.25, 'rustd', vs=8, ry=math.pi/2))
-    parts.append(team_band(0.22, -0.32, 0.24, 'orange'))
+    parts.append(team_band(0.22, -0.32, 0.24, COMMON_MARK))
     return join(parts, 'com_repair_vehicle')
 
 
@@ -1225,7 +1274,7 @@ def com_carrier():
     ramp = box('ramp', 0.42, 0.20, 0.04, 0, 0.60, 0.20, 'olived', 0.012)
     ramp.rotation_euler = (-0.5, 0, 0)
     parts.append(ramp)
-    parts.append(team_band(0.26, -0.53, 0.34, 'orange'))
+    parts.append(team_band(0.26, -0.53, 0.34, COMMON_MARK))
     return join(parts, 'com_carrier')
 
 
@@ -1252,7 +1301,7 @@ def com_flak_track():
     parts.append(cyl('trav', 0.05, 0.02, -0.14, 0.24, 0.34, 'ferrite', vs=10, ry=math.pi/2))
     for i, ax in enumerate((-0.20, 0.20)):
         parts.append(box(f'ammo{i}', 0.08, 0.14, 0.08, ax, 0.36, 0.26, 'ferrite', 0.015))
-    parts.append(team_band(0.22, -0.39, 0.24, 'orange'))
+    parts.append(team_band(0.22, -0.39, 0.24, COMMON_MARK))
     return join(parts, 'com_flak_track')
 
 
@@ -1276,7 +1325,7 @@ def com_strike_flyer():
         f.rotation_euler = (0, sx * 0.25, 0)
         parts.append(f)
     parts.append(box('tplane', 0.28, 0.12, 0.025, 0, 0.40, 0.42, 'olived', 0.01))
-    parts.append(team_band(0.14, 0.30, 0.56, 'orange', d=0.035))
+    parts.append(team_band(0.14, 0.30, 0.56, COMMON_MARK, d=0.035))
     return join(parts, 'com_strike_flyer')
 
 
