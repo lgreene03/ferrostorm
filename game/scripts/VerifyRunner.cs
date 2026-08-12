@@ -582,6 +582,65 @@ public partial class VerifyRunner : Node
         Check(ModelLibrary.NameForTest((int)EntityKind.Refinery, 0, 3) == "com_refinery",
               "a building with no struct-type entry falls back to its kind rather than throwing");
 
+        // --- Doc 16's band, on the SILHOUETTE, in the OWNER'S colour ----------
+        // "Team colour appears in exactly one place per silhouette (the
+        // band/slash), always." The client rendered team colour only on the
+        // GROUND, and every model's band was a fixed faction colour, so two
+        // seats of the same side were identical and the mark on the model said
+        // nothing about who owned it. Doc 31 filed that as a discrepancy and
+        // recorded that doc 16 had required it all along.
+        //
+        // Asserted HERE rather than in the sim battery because it is a pure
+        // presentation rule: no hash, no command, nothing the sim can see.
+        {
+            Color Band(string model, int player)
+            {
+                var n = GD.Load<PackedScene>($"res://assets/models/{model}.glb")
+                          .Instantiate<Node3D>();
+                BattlefieldView.TintTeamBand(n, player);
+                var c = BattlefieldView.BandColourForTest(n) ?? default;
+                n.QueueFree();
+                return c;
+            }
+
+            // THE CONTROL FIRST, twice over, or the rest of this asserts only
+            // that something was written rather than that the RIGHT thing was.
+            var untinted = GD.Load<PackedScene>("res://assets/models/com_barracks.glb")
+                             .Instantiate<Node3D>();
+            var authored = BattlefieldView.BandColourForTest(untinted) ?? default;
+            untinted.QueueFree();
+            Check(authored != BattlefieldView.MarkFor(0) && authored != BattlefieldView.MarkFor(1),
+                  "control: an UNDRESSED model's band wears its authored colour, not a seat's");
+
+            var squad = GD.Load<PackedScene>("res://assets/models/com_rifle_squad.glb")
+                          .Instantiate<Node3D>();
+            BattlefieldView.TintTeamBand(squad, 0);
+            bool squadHasNoBand = BattlefieldView.BandColourForTest(squad) is null;
+            squad.QueueFree();
+            Check(squadHasNoBand,
+                  "control: a texture-baked model has no band surface, and tinting it is a no-op rather than a crash");
+
+            var seat0 = Band("com_barracks", 0);
+            var seat1 = Band("com_barracks", 1);
+            Check(seat0 == BattlefieldView.MarkFor(0),
+                  "a dressed model's band wears seat 0's team colour");
+            Check(seat1 == BattlefieldView.MarkFor(1),
+                  "...and seat 1's, on the same shared mesh");
+            Check(seat0 != seat1,
+                  "TWO SEATS OF THE SAME MESH DIFFER on the silhouette, which is the whole of doc 16's law");
+
+            // A faction-exclusive mesh must recolour too. Its band is authored
+            // in its side's colour, so this is the case most likely to be left
+            // behind by a rule written as "recolour the common ones".
+            Check(Band("sod_watch_post", 1) == BattlefieldView.MarkFor(1),
+                  "a faction-exclusive model's band takes its OWNER's colour, not its faction's");
+
+            // Neutral owns no side, so it must not be painted into one.
+            var neutral = Band("com_barracks", -1);
+            Check(neutral == authored,
+                  "a neutral (unowned) model keeps its authored band rather than taking a seat's colour");
+        }
+
         // --- The brown-out boundary is where ADR-008 says ---------------------
         // Four implementations of this threshold became one (the client now
         // calls the sim's), so there is nothing left to pin against. What a

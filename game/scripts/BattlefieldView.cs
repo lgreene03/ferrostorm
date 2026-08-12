@@ -2096,6 +2096,121 @@ public static class BattlefieldView
     {
         AddContactBlob(node, span);
         ApplyTeamStrip(node, player, span);
+        TintTeamBand(node, player);
+    }
+
+    /// <summary>The glTF material name of a team band, which is
+    /// `&lt;palette key&gt;_&lt;emission&gt;` and is DERIVED, not decorative: builder.py's
+    /// `mat()` names every material `f"{name}_{emit}"`, and `team_band()` is the
+    /// only thing in the roster that emits at 1.2. Measured across all 48
+    /// exported models: exactly 16 carry one match and NONE carries two, so the
+    /// name identifies the band unambiguously.</summary>
+    /// Parsed rather than string-matched, and deliberately: Godot's importer is
+    /// free to sanitise a resource name, and "ferrite_1.2" arriving as
+    /// "ferrite_1_2" would silently match nothing - the failure mode being a
+    /// feature that is simply absent, which no crash would announce. The
+    /// emission value is compared numerically for the same reason.
+    private static bool IsTeamBandMaterial(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        int cut = name.IndexOf('_');
+        if (cut <= 0) return false;
+        string key = name[..cut].ToLowerInvariant();
+        if (key is not ("ferrite" or "orange" or "teal")) return false;
+        // team_band() is the only thing in the roster that emits at 1.2, which
+        // is what separates a band from com_mine's ferrite_0.9 glow.
+        var tail = name[(cut + 1)..].Replace('_', '.');
+        return float.TryParse(tail, System.Globalization.NumberStyles.Float,
+                              System.Globalization.CultureInfo.InvariantCulture, out var emit)
+               && Mathf.Abs(emit - 1.2f) < 0.001f;
+    }
+
+    /// <summary>Doc 16's actual law, finally applied to the thing it names:
+    /// "team colour appears in exactly one place per silhouette (the
+    /// band/slash), always".
+    ///
+    /// Until now the client rendered team colour ONLY as a ring or strip on the
+    /// GROUND, and the models carried a band in a fixed faction colour, so every
+    /// seat of a side looked alike and the mark on the silhouette said nothing
+    /// about who owned it. Doc 31 flagged this as a discrepancy and doc 30
+    /// arrived at the same place from research; both record that doc 16 required
+    /// it from the start, so this is an UNBUILT requirement rather than a new
+    /// idea.
+    ///
+    /// The band is its own SURFACE, because Blender's join() gives every
+    /// material its own primitive, so the tint is a surface override and needs
+    /// no shader, no mask and no MultiMesh. Doc 30 s6 recommended INSTANCE_CUSTOM
+    /// on the assumption the client drew units through a MultiMesh; it does not
+    /// (MultiMesh here is terrain scatter), and per-entity nodes make the
+    /// override both simpler and cheaper than the packing it proposed.
+    ///
+    /// The original material is DUPLICATED rather than replaced, so roughness,
+    /// metallic and emission energy survive and only the two colour channels
+    /// move. Building a fresh StandardMaterial3D would silently flatten the
+    /// surface response of every band in the game.
+    ///
+    /// **This reaches 16 of the 48 models, and that is a measurement, not an
+    /// oversight.** The other 27 are TEXTURE-BAKED: bake.py folds every material
+    /// into one atlas, so their band is pixels in a baseColorTexture and no
+    /// surface override can reach it (5 more carry no band at all). Those 27
+    /// keep the ground ring exactly as before, so nothing regresses and no
+    /// player loses their mark; they gain the silhouette band the moment the
+    /// bake is reconciled to leave the band on its own slot, with no change
+    /// needed here. Recorded in the wave's ticket with the per-model split.</summary>
+    public static void TintTeamBand(Node3D node, int player)
+    {
+        if (player < 0) return;          // neutral: an outpost or a bridge owns no side
+        var mark = MarkFor(player);
+        foreach (var mi in FindMeshInstances(node))
+        {
+            var mesh = mi.Mesh;
+            if (mesh == null) continue;
+            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
+            {
+                // The IMPORTED material carries the glTF name; an override set
+                // on a previous pass does not, which is what keeps a re-dress
+                // (an owner change) from matching nothing the second time.
+                if (mesh.SurfaceGetMaterial(s) is not BaseMaterial3D src) continue;
+                if (!IsTeamBandMaterial(src.ResourceName)) continue;
+                var tinted = (BaseMaterial3D)src.Duplicate();
+                tinted.AlbedoColor = mark;
+                if (tinted.EmissionEnabled) tinted.Emission = mark;
+                mi.SetSurfaceOverrideMaterial(s, tinted);
+            }
+        }
+    }
+
+    /// <summary>Test seam: the colour a model's team band is actually WEARING,
+    /// or null if the model carries no band. Returns the override when one has
+    /// been applied and the imported colour otherwise, so a harness can tell
+    /// "tinted to this seat" from "never tinted" rather than inferring it.</summary>
+    public static Color? BandColourForTest(Node3D node)
+    {
+        foreach (var mi in FindMeshInstances(node))
+        {
+            var mesh = mi.Mesh;
+            if (mesh == null) continue;
+            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
+            {
+                if (mesh.SurfaceGetMaterial(s) is not BaseMaterial3D src) continue;
+                if (!IsTeamBandMaterial(src.ResourceName)) continue;
+                return mi.GetSurfaceOverrideMaterial(s) is BaseMaterial3D ov
+                    ? ov.AlbedoColor : src.AlbedoColor;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Every MeshInstance3D at or under a node. A .glb scene nests its
+    /// meshes under the imported root, and some models (the cannon tank's
+    /// turret) carry more than one, so the walk is recursive rather than a
+    /// direct-children scan.</summary>
+    private static IEnumerable<MeshInstance3D> FindMeshInstances(Node node)
+    {
+        if (node is MeshInstance3D mi) yield return mi;
+        foreach (var child in node.GetChildren())
+            foreach (var found in FindMeshInstances(child))
+                yield return found;
     }
 
     /// <summary>
@@ -2156,6 +2271,7 @@ public static class BattlefieldView
     public static void DressMobile(Node3D node, int player, float blobDiameter = 1.15f)
     {
         AddContactBlob(node, blobDiameter);
+        TintTeamBand(node, player);
         var mark = MarkFor(player);
         node.AddChild(new MeshInstance3D
         {
