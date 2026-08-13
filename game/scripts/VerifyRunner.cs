@@ -582,6 +582,29 @@ public partial class VerifyRunner : Node
         Check(ModelLibrary.NameForTest((int)EntityKind.Refinery, 0, 3) == "com_refinery",
               "a building with no struct-type entry falls back to its kind rather than throwing");
 
+        // --- A placeholder icon must point at art that EXISTS -----------------
+        // Three entries pointed at "com_wall_straight", which has never been
+        // cut. They were INERT - the Exists guard failed on the target exactly
+        // as it failed on the id - so the workaround silently did nothing and
+        // nobody could tell, because the symptom (a button with no icon) is
+        // identical either way. Derived from Sidebar.PlaceholderIds so a fifth
+        // mapping cannot be added pointing at nothing.
+        foreach (var id in Sidebar.PlaceholderIds)
+        {
+            var icon = Sidebar.PlaceholderIconForTest(id);
+            Check(icon != id,
+                  $"{id} is listed as wearing a placeholder, so it must actually re-point");
+            Check(ResourceLoader.Exists($"res://ui/icons/{icon}.png"),
+                  $"{id}'s placeholder icon '{icon}' is art that EXISTS, not a name nobody cut");
+        }
+
+        // The two Sodality unit icons owed since P6-wave-a are cut, so the
+        // Exists guard flips on its own. Their absence was the only reason a
+        // Sodality player's factory page read blanker than a Directorate one.
+        foreach (var id in new[] { "sod_phantom_tank", "sod_shade_raider" })
+            Check(ResourceLoader.Exists($"res://ui/icons/{id}.png"),
+                  $"{id} has its own sidebar icon");
+
         // --- The brown-out boundary is where ADR-008 says ---------------------
         // Four implementations of this threshold became one (the client now
         // calls the sim's), so there is nothing left to pin against. What a

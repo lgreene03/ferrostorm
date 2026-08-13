@@ -75,30 +75,47 @@ public partial class Sidebar : PanelContainer
 
     /// <summary>Buildings still wearing another building's art, and the only
     /// reason this is a list rather than a rule: the bespoke PNG has not been cut
-    /// (all six are owed to art-pipeline, the ADR-019 interim precedent). Keyed
+    /// (each is owed to art-pipeline, the ADR-019 interim precedent). Keyed
     /// by /data id so a renumbering cannot re-point one, and deliberately NOT
     /// part of the decision about which buttons exist - a building missing from
     /// here gets no icon, which MakeButton already tolerates, rather than no
-    /// button. Each entry disappears the day its own sprite lands.</summary>
+    /// button. Each entry disappears the day its own sprite lands.
+    ///
+    /// The count is NOT written here any more. It said "all six" while the
+    /// switch held SEVEN, which is this project's hand-maintained-list defect
+    /// sitting inside the comment that documents the workaround. PlaceholderIds
+    /// below is the one list, and the harness derives from it.</summary>
     private static string PlaceholderIcon(string id) => id switch
     {
         // The anti-infantry hardpoint and the Directorate's defence both wear
-        // the turret's model for now.
+        // the turret's sprite for now.
         "com_emplacement" => "dir_turret",
         "dir_bastion" => "dir_turret",
         // The Sodality's nest wears the veil's.
         "sod_shroud_nest" => "sod_veil_projector",
         // ADR-028's airfield wears the factory's.
         "com_airfield" => "com_factory",
-        // The barrier segment, and the mine after it: a low slab that reads as
-        // something laid on the ground.
-        "com_wall" => "com_wall_straight",
-        "com_mine" => "com_wall_straight",
-        // P7-10's gate wears the wall's slab too, which is honest enough for a
-        // segment of wall that moves. Its own sprite is owed to art-pipeline.
-        "com_gate" => "com_wall_straight",
+        //
+        // REMOVED 2026-08-13: com_wall, com_mine and com_gate mapped to
+        // "com_wall_straight", and there has never been a com_wall_straight.png
+        // - the icon set is stylised 2D sprites cut from art/png, and no wall
+        // sprite was ever drawn. All three were INERT: the Exists guard failed
+        // on the target exactly as it failed on the id, so a player saw the same
+        // iconless button either way. Removing them changes nothing on screen
+        // and stops the map claiming to supply art it does not have.
         _ => id,
     };
+
+    /// <summary>The ids PlaceholderIcon re-points, as DATA rather than as a
+    /// shape only the switch above knows. The client harness walks this and
+    /// asserts each target actually resolves, so a mapping to art nobody cut is
+    /// caught rather than silently producing a button with no icon - which is
+    /// exactly how three dead entries survived here.</summary>
+    public static readonly string[] PlaceholderIds =
+        { "com_emplacement", "dir_bastion", "sod_shroud_nest", "com_airfield" };
+
+    /// <summary>Test seam: resolve an id the way MakeButton does.</summary>
+    public static string PlaceholderIconForTest(string id) => PlaceholderIcon(id);
 
     /// <summary>Which page a building's authored tab names, or null for a
     /// building that carries no button at all. BuildTab.None is the three
