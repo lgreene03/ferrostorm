@@ -855,7 +855,25 @@ public static class BattlefieldView
             AlbedoTexture = GrainTex(67, 0.06f,
                 dark: new Color(0.16f, 0.155f, 0.145f),
                 light: new Color(0.28f, 0.27f, 0.25f)),
+            // GFX-01: masonry needs surface relief or it reads as painted
+            // boxes; the ridge material has carried the same grain-normal
+            // treatment since W4 and it is what sells its rock faces.
+            NormalEnabled = true,
+            NormalTexture = GrainTex(68, 0.09f, normalMap: true),
             Roughness = 0.9f,
+        };
+        // GFX-01: burnt interior and collapse debris. Distinct from ruinMat so
+        // a shell's inside reads DARKER than its sunlit masonry - the depth cue
+        // that makes a roofless building read as hollow from an RTS camera.
+        var charMat = new StandardMaterial3D
+        {
+            AlbedoColor = Colors.White,
+            AlbedoTexture = GrainTex(69, 0.07f,
+                dark: new Color(0.045f, 0.042f, 0.040f),
+                light: new Color(0.115f, 0.105f, 0.095f)),
+            NormalEnabled = true,
+            NormalTexture = GrainTex(70, 0.08f, normalMap: true),
+            Roughness = 0.97f,
         };
         var fenceMat = new StandardMaterial3D
         {
@@ -1012,20 +1030,78 @@ public static class BattlefieldView
                         new Vector3(bx + 0.5f, -0.15f, by + 0.5f)));
                     break;
                 case 'r':
-                    // Ruin: broken wall stubs at jittered heights - a dead
-                    // settlement to fight through.
+                {
+                    // GFX-01: a ruin is now a ROOFLESS SHELL, not a solid cube.
+                    // The old dressing filled the cell with one 0.9-wide box,
+                    // which is exactly the "untextured boxes" flaw doc 25
+                    // confirmed by eye: a monolith has no interior, no broken
+                    // top line and no wall thickness, the three things the eye
+                    // uses to read "ruined building" at RTS distance. Four
+                    // perimeter wall slabs at independently broken heights (one
+                    // usually collapsed to a stub, which is the doorway), corner
+                    // stumps above the wall line, a charred floor and collapse
+                    // debris inside give it all three, still as batched boxes.
+                    //
+                    // The shared rng draws are consumed IN THE OLD PATTERN
+                    // (wh, ryaw, the 0.6 test and its two spawns) so every
+                    // dressing decision downstream of this cell lands exactly
+                    // where it used to; all NEW variation comes from a per-cell
+                    // rng, the same trick the ridge case documents above.
                     float wh = 0.35f + (float)rng.NextDouble() * 0.5f;
                     float ryaw = ((float)rng.NextDouble() - 0.5f) * 0.3f;
-                    Emit(ruinMat, new Vector3(0.9f, wh, 0.9f),
-                        new Vector3(bx + 0.5f, wh / 2f, by + 0.5f), new Vector3(0, ryaw, 0));
+                    var rrng = new System.Random(bx * 40503 ^ by * 96001);
+                    float wallH = wh * 1.55f;              // buildings, not kerbs
+                    int doorway = rrng.Next(4);            // the collapsed side
+                    var yawB = Basis.FromEuler(new Vector3(0, ryaw, 0));
+                    Vector3 c = new(bx + 0.5f, 0, by + 0.5f);
+                    for (int side = 0; side < 4; side++)
+                    {
+                        // Per-wall broken height; the doorway side is a stub.
+                        float hf = side == doorway
+                            ? 0.18f + (float)rrng.NextDouble() * 0.12f
+                            : 0.55f + (float)rrng.NextDouble() * 0.75f;
+                        float wh2 = wallH * hf;
+                        bool ns = side < 2;                // 0/1 north-south walls
+                        float off = (side % 2 == 0 ? -1f : 1f) * 0.41f;
+                        var local = ns ? new Vector3(0, wh2 / 2f, off) : new Vector3(off, wh2 / 2f, 0);
+                        Emit(ruinMat,
+                            ns ? new Vector3(0.94f, wh2, 0.12f) : new Vector3(0.12f, wh2, 0.94f),
+                            c + yawB * local, new Vector3(0, ryaw, 0));
+                    }
+                    // Corner stumps: the broken column read above the wall line.
+                    for (int cnr = 0; cnr < 4; cnr++)
+                    {
+                        if (rrng.NextDouble() < 0.35) continue;   // some corners fell
+                        float sh = wallH * (1.0f + (float)rrng.NextDouble() * 0.5f);
+                        var local = new Vector3((cnr % 2 == 0 ? -1f : 1f) * 0.41f, sh / 2f,
+                                                (cnr < 2 ? -1f : 1f) * 0.41f);
+                        Emit(ruinMat, new Vector3(0.16f, sh, 0.16f),
+                            c + yawB * local, new Vector3(0, ryaw, 0));
+                    }
+                    // Charred floor and collapse debris: the hollow interior.
+                    Emit(charMat, new Vector3(0.86f, 0.05f, 0.86f),
+                        c + new Vector3(0, 0.035f, 0), new Vector3(0, ryaw, 0));
+                    int dn = 2 + rrng.Next(2);
+                    for (int d = 0; d < dn; d++)
+                    {
+                        float ds = 0.10f + (float)rrng.NextDouble() * 0.22f;
+                        var local = new Vector3(((float)rrng.NextDouble() - 0.5f) * 0.5f, ds / 2f + 0.05f,
+                                                ((float)rrng.NextDouble() - 0.5f) * 0.5f);
+                        Emit(charMat, new Vector3(ds, ds, ds), c + yawB * local,
+                            new Vector3(0, (float)rrng.NextDouble() * Mathf.Tau, 0));
+                    }
                     if (rng.NextDouble() > 0.6)
                     {
+                        // The old lone pillar, kept: sx/sz still consume their
+                        // shared-rng draws, and a freestanding chimney beside
+                        // the shell is a good silhouette in its own right.
                         float sx = bx + 0.3f + (float)rng.NextDouble() * 0.4f;
                         float sz = by + 0.3f + (float)rng.NextDouble() * 0.4f;
                         Emit(ruinMat, new Vector3(0.4f, wh * 1.6f, 0.3f),
                             new Vector3(sx, wh * 0.8f, sz), Vector3.Zero);
                     }
                     break;
+                }
                 case 'f':
                     // Fence: posts and two rails along the cell.
                     for (int px = 0; px < 2; px++)
