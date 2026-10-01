@@ -201,6 +201,13 @@ public partial class SkirmishLive : Node3D
     // next left click, so the player picks the destination rather than the
     // mouse happening to be somewhere when the key went down.
     private bool _attackMoveArmed;
+    // The superweapon's target picker. CommandType.LaunchSuper has existed
+    // since TICKET-P2-SIM-15, the battery asserts the whole lifecycle, and
+    // SkirmishAI fires one at the player. The client was the only party that
+    // never issued it, so a player could spend 4000 credits, watch the
+    // structure charge, and have no way to use it. Armed like attack-move,
+    // because it is the same two-step shape: press the key, pick the ground.
+    private bool _superArmed;
     // ADR-015: patrol arms the same way attack-move does - the key selects the
     // order and the next left click supplies endpoint B - because a patrol needs
     // its far point chosen, not read off wherever the cursor happens to sit.
@@ -2439,7 +2446,7 @@ public partial class SkirmishLive : Node3D
             return CanPlace(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z), _placingType)
                 ? GameCursor.Select : GameCursor.Invalid;
         }
-        if (_attackMoveArmed || _patrolArmed) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
+        if (_superArmed || _attackMoveArmed || _patrolArmed) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
         bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false;
@@ -3678,6 +3685,11 @@ public partial class SkirmishLive : Node3D
                 if (GroundPoint(wm.Position) is { } wp)
                     CommitWallDragAtCell(Mathf.FloorToInt(wp.X), Mathf.FloorToInt(wp.Z));
                 break;
+            // An armed superweapon consumes the next left click, tested before
+            // attack-move, patrol and the drag-select case that would swallow it.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } sw when _superArmed:
+                CommitSuperweaponStrike(sw.Position);
+                break;
             // TICKET-P5-SET-01: armed attack-move consumes the next left click,
             // and is tested before the drag-select case that would otherwise
             // swallow it. Classic two-step: press the key, pick the ground.
@@ -3748,6 +3760,7 @@ public partial class SkirmishLive : Node3D
             // it is tested first - a player who opened it wants out of it, not
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
+            if (_superArmed) { DisarmSuperweapon("SUPERWEAPON TARGETING CANCELLED"); return true; }
             if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
             if (_patrolArmed) { DisarmPatrol("patrol cancelled"); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
@@ -3755,6 +3768,7 @@ public partial class SkirmishLive : Node3D
             return false;
         }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
+        if (ev.IsActionPressed("launch_super")) { ArmSuperweapon(); return true; }
         if (ev.IsActionPressed("stop")) { IssueStop(); return true; }
         // ADR-015 / TICKET-P6-C1a: the three unit command stances. Each is a
         // presentation-only issue of the one sim SetStance command (ADR-001
@@ -4077,6 +4091,55 @@ public partial class SkirmishLive : Node3D
         _attackMoveArmed = true;
         ShowToast($"ATTACK-MOVE: PICK A DESTINATION   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
+    }
+
+    /// <summary>The superweapon's fire control. Refusals are explained rather
+    /// than silent, because a 4000-credit structure that ignores a keypress
+    /// reads as a bug. The readiness test is the sim's own (World.cs
+    /// LaunchSuper): charged is ChargeTicks == 0, and a strike already in
+    /// flight is StrikeTicks >= 0.</summary>
+    private void ArmSuperweapon()
+    {
+        if (_replay != null) return;               // a spectator issues no orders
+        int id = FindOwnStructure(EntityKind.Superweapon);
+        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        var sw = _world.Entities[id];
+        if (sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON ALREADY LAUNCHED"); return; }
+        if (sw.ChargeTicks > 0)
+        {
+            int secs = Mathf.CeilToInt(sw.ChargeTicks / (float)World.TicksPerSecond);
+            ShowToast($"SUPERWEAPON CHARGING   {secs}s");
+            return;
+        }
+        DisarmAttackMove();
+        _superArmed = true;
+        ShowToast("SUPERWEAPON ARMED: PICK A TARGET");
+        _audio.Play("ui_click", -10);
+    }
+
+    private void DisarmSuperweapon(string? toast = null)
+    {
+        if (!_superArmed) return;
+        _superArmed = false;
+        if (toast != null) ShowToast(toast);
+    }
+
+    /// <summary>Readiness is re-read at the click rather than trusted from the
+    /// arm: the charge can lapse, or the structure die, between the two.</summary>
+    private void CommitSuperweaponStrike(Vector2 screen)
+    {
+        _superArmed = false;
+        if (GroundPoint(screen) is not { } p) return;
+        int id = FindOwnStructure(EntityKind.Superweapon);
+        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        var sw = _world.Entities[id];
+        if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON NOT READY"); return; }
+        var cx = Fix64.FromFraction((int)(p.X * 100), 100);
+        var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
+        _pending.Add(new Command(0, 0, CommandType.LaunchSuper, id, cx, cy));
+        _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
+        _audio.Play("ui_confirm", -6);
+        ShowToast("SUPERWEAPON LAUNCHED");
     }
 
     private void DisarmAttackMove(string? toast = null)
