@@ -1223,6 +1223,40 @@ public partial class VerifyRunner : Node
             }
         }
 
+        // --- The superweapon can actually be fired ---------------------------
+        // CommandType.LaunchSuper has existed since TICKET-P2-SIM-15, the
+        // battery asserts its whole lifecycle and SkirmishAI fires one at the
+        // player; in game/scripts the identifier appeared only inside a
+        // COMMENT, so a player could spend 4000 credits, watch the structure
+        // charge, and have no way to use it. These run LAST among the
+        // live-world checks because the spawn below mutates the shared world.
+        Check(Settings.BindOf("launch_super") != Key.None,
+            "the superweapon has a binding (project.godot and the Bindable table agree)");
+        _game.PressKey(Settings.BindOf("launch_super"));
+        Check(!_game.SuperArmed, "with no superweapon standing, the key refuses rather than arming");
+
+        var lw = _game.LiveWorld;
+        int yx = -1, yy = -1;
+        for (int i = 0; i < lw.EntityCount; i++)
+        {
+            var e = lw.Entities[i];
+            if (e.Alive && e.PlayerId == _game.LocalPlayerId && e.Kind == EntityKind.ConstructionYard)
+            { yx = e.X.ToIntFloor(); yy = e.Y.ToIntFloor(); break; }
+        }
+        Check(yx >= 0, "the seat owns a Construction Yard to site a superweapon beside");
+        lw.SpawnSuperweapon(_game.LocalPlayerId, yx + 3, yy + 3, chargeTicks: 0);
+        // The client resolves its own structures through the INTERPOLATED VIEW,
+        // not the world, and the view is refreshed on the render path. Stepping
+        // ticks advances the sim but cannot refresh the view inside one
+        // synchronous pass, which is what made the first version of this check
+        // fail against a correct implementation. PumpActorsForTest is the
+        // established hook for exactly this (the outpost capture checks use it).
+        _game.PumpActorsForTest();
+        _game.PressKey(Settings.BindOf("launch_super"));
+        Check(_game.SuperArmed, "a CHARGED superweapon ARMS on the key, so the player can finally fire one");
+        _game.PressStop();
+        Check(!_game.SuperArmed, "STOP clears an armed superweapon too, because stop means stop");
+
         RunLanChecks();
     }
 

@@ -34,7 +34,13 @@ if grep -rln --include='*.cs' 'using Godot' sim/ tools/ data/ >/tmp/ci-port.txt 
 else ok; fi
 
 step "hardcoded seat in the battle scene"
-HITS=$(grep -nE 'PlayerId (==|!=) [0-9]+\b|_world\.Credits\([0-9]+\)|UpdateFrom\(_world, [0-9]+\)|IsVisible\([0-9]+,|IsExplored\([0-9]+,|ValidPlacement\([0-9]+,|_winner (==|!=) [0-9]+\b' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+# The command CONSTRUCTOR was missing from this list, which is the one place
+# C7b's ninety-three-site plumbing most had to hold: a Command's second
+# argument IS the seat, and a literal there is refused by World.ApplyCommand
+# at any seat but zero, silently and only in LAN. Measured: all 27 call sites
+# pass LocalPlayerId or c.PlayerId, so this costs nothing and catches the
+# regression the rest of this grep walked straight past.
+HITS=$(grep -nE 'PlayerId (==|!=) [0-9]+\b|_world\.Credits\([0-9]+\)|UpdateFrom\(_world, [0-9]+\)|IsVisible\([0-9]+,|IsExplored\([0-9]+,|ValidPlacement\([0-9]+,|_winner (==|!=) [0-9]+\b|new Command\([^,]+,[[:space:]]*[0-9]+,' game/scripts/SkirmishLive.cs | grep -vE '^[0-9]+:[[:space:]]*//' || true)
 if [ -n "$HITS" ]; then bad; echo "$HITS"; else ok; fi
 
 step "seat inverted by a ternary"

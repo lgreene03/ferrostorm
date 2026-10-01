@@ -7,7 +7,13 @@ namespace Ferrostorm.Client;
 /// from the Blender asset library. One source of visual truth.</summary>
 public partial class ModelLibrary : Node
 {
-    private readonly Dictionary<string, PackedScene> _cache = new();
+    // The value is nullable on purpose: a MISS is cached too. Before this, a
+    // model that failed to load was cached as null and then dereferenced once
+    // per actor per frame, so a single missing or unimported .glb became a
+    // permanent per-frame exception storm (450 of them in one reference
+    // capture) that told the player nothing and cost a stack trace per actor.
+    private readonly Dictionary<string, PackedScene?> _cache = new();
+    private readonly HashSet<string> _reportedMissing = new();
 
     private static readonly Dictionary<int, string> UnitModel = new()
     {
@@ -218,15 +224,34 @@ public partial class ModelLibrary : Node
         0,     // 15 cross, rotationally irrelevant
     };
 
-    private PackedScene Load(string name)
+    private PackedScene? Load(string name)
     {
         if (!_cache.TryGetValue(name, out var scene))
         {
             scene = GD.Load<PackedScene>($"res://assets/models/{name}.glb");
             _cache[name] = scene;
+            if (scene == null && _reportedMissing.Add(name))
+                GD.PushWarning($"ModelLibrary: res://assets/models/{name}.glb did not load; "
+                    + "a placeholder stands in its place. If EVERY model is missing, the Godot "
+                    + "import cache is absent rather than the files: open the project once in the "
+                    + "editor, or run a headless import pass, before trusting a capture.");
         }
         return scene;
     }
+
+    /// <summary>Deliberately ugly and deliberately the right size. A missing
+    /// model must be obvious at the RTS camera rather than leaving a silent
+    /// hole in the battlefield, and the frame must survive to show it.</summary>
+    private static Node3D Placeholder() => new MeshInstance3D
+    {
+        Mesh = new BoxMesh { Size = new Vector3(0.8f, 0.8f, 0.8f) },
+        MaterialOverride = new StandardMaterial3D
+        {
+            AlbedoColor = new Color(1f, 0f, 1f),
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        },
+        Name = "MissingModel",
+    };
 
     public Node3D Instantiate(int kind, int unitType, int structType = 0)
     {
@@ -238,7 +263,7 @@ public partial class ModelLibrary : Node
             : StructModel.TryGetValue(structType, out var byType)
                 ? byType
                 : KindModel.GetValueOrDefault(kind, "com_power_plant");
-        return Load(name).Instantiate<Node3D>();
+        return Load(name)?.Instantiate<Node3D>() ?? Placeholder();
     }
 
     /// <summary>P7-32: the name a given sim identity resolves to, for the gate.
@@ -256,7 +281,7 @@ public partial class ModelLibrary : Node
     public Node3D InstantiateWall(int mask, out float yawDeg)
     {
         yawDeg = WallYaw[mask];
-        return Load(WallVariant[mask]).Instantiate<Node3D>();
+        return Load(WallVariant[mask])?.Instantiate<Node3D>() ?? Placeholder();
     }
 
     /// <summary>Verification reads of the mask tables (DEF-08).</summary>

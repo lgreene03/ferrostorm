@@ -54,6 +54,23 @@ using Ferrostorm.Sim;
 
 int Fail(string msg) { Console.Error.WriteLine($"FAIL: {msg}"); return 1; }
 
+// Resolve the repository root by walking up from the assembly location until a
+// directory carrying the project's own landmarks appears. The previous idiom, a
+// fixed "../../../../.." hop, encoded one build layout; when that hop missed,
+// every /data proof degraded to a reassuring log line and the run still printed
+// "all assertions passed" and returned 0. A gate that cannot tell work done
+// from work skipped is not a gate, so resolution is explicit and a miss fatal.
+string? RepoRoot()
+{
+    var d = new DirectoryInfo(AppContext.BaseDirectory);
+    for (int hops = 0; d != null && hops < 12; d = d.Parent, hops++)
+        if (Directory.Exists(Path.Combine(d.FullName, "data", "units"))
+            && Directory.Exists(Path.Combine(d.FullName, "data", "buildings"))
+            && Directory.Exists(Path.Combine(d.FullName, "data", "maps")))
+            return d.FullName;
+    return null;
+}
+
 // ---------------- Scenarios ----------------
 // Each returns final hash; checkpoint callback fires every 100 ticks.
 
@@ -1903,7 +1920,15 @@ int SelfTest()
     if (c != m.CellIndex(6, 0)) return Fail("flow: never arrived");
 
     // Data loader: the committed example file must round-trip exactly (TICKET-P2-DATA-01).
-    string dataPath = Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units/com_harvester.yaml");
+    // The /data proofs below carry the ADR-006 argument that the shipped files,
+    // not the compiled literals, are the catalogue. None may be skipped
+    // silently, so the root is resolved once and a miss is fatal.
+    string? root = RepoRoot();
+    if (root == null)
+        return Fail($"selftest: repository root not found walking up from {AppContext.BaseDirectory} "
+            + "(looked for data/units, data/buildings and data/maps). The /data proofs must not be skipped.");
+
+    string dataPath = Path.Combine(root, "data/units/com_harvester.yaml");
     if (File.Exists(dataPath))
     {
         var u = DataLoader.LoadUnitFile(Path.GetFullPath(dataPath));
@@ -1917,14 +1942,14 @@ int SelfTest()
         if (!u.Notes.Contains("US2.2")) return Fail("data: folded notes block");
         Console.WriteLine("selftest: data loader round-trips com_harvester.yaml");
     }
-    else Console.WriteLine("selftest: data file not found at expected relative path, loader untested this run");
+    else return Fail("selftest: data file not found at expected relative path, loader; this proof must not be skipped");
 
     // Catalogue wiring (TICKET-P2-DATA-02, walk per TICKET-P5-PROD-02): every
     // /data/units file must convert to exactly its compiled reference def -
     // value equality on the record, produced_at and prerequisites included.
     // A directory walk, not a hand-kept list: the hand-kept list is how
     // dir_vanguard_car.yaml went unverified for a whole phase (PROD-D9).
-    string unitsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/units"));
+    string unitsDir = Path.GetFullPath(Path.Combine(root, "data/units"));
     if (Directory.Exists(unitsDir) && Directory.GetFiles(unitsDir, "*.yaml").Length > 0)
     {
         var refWorld = new World(0);
@@ -1957,14 +1982,14 @@ int SelfTest()
         w.RegisterUnitType(1, UnitCatalogue.ToTypeDef(DataLoader.LoadUnitFile(Path.Combine(unitsDir, "dir_cannon_tank.yaml")))); // legal before tick 0
         Console.WriteLine($"selftest: /data/units reproduces all {unitsSeen} compiled unit defs exactly (produced_at and prerequisites included)");
     }
-    else Console.WriteLine("selftest: data/units not found, catalogue wiring untested this run");
+    else return Fail("selftest: data/units not found, catalogue wiring; this proof must not be skipped");
 
     // Structure catalogue wiring (TICKET-P5-BD-06): /data/buildings must convert
     // to exactly the compiled reference defs. This is the ticket's whole
     // acceptance argument - the golden hashes prove the relocation changed no
     // behaviour, and this proves the files, not the literals, are now the
     // catalogue. Value equality on the record, every field, every type.
-    string buildingsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/buildings"));
+    string buildingsDir = Path.GetFullPath(Path.Combine(root, "data/buildings"));
     if (Directory.Exists(buildingsDir) && Directory.GetFiles(buildingsDir, "*.yaml").Length > 0)
     {
         var refWorld = new World(0);
@@ -2010,7 +2035,7 @@ int SelfTest()
             DataLoader.LoadStructureFile(Path.Combine(buildingsDir, "com_power_plant.yaml"))));
         Console.WriteLine($"selftest: /data/buildings reproduces all {seen} compiled structure defs exactly");
     }
-    else Console.WriteLine("selftest: data/buildings not found, structure catalogue untested this run");
+    else return Fail("selftest: data/buildings not found, structure catalogue; this proof must not be skipped");
 
     // Ferrite field regrowth (ADR-012): the committed /data/fields file must
     // reproduce World's compiled reference twin exactly, the same round-trip
@@ -2018,7 +2043,7 @@ int SelfTest()
     // the goldens rest on: the scenarios build compiled worlds, so if the file
     // and the twin ever drift, the shipped client (which loads the file) and
     // the battery (which loads the twin) would silently play different numbers.
-    string fieldsDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/fields"));
+    string fieldsDir = Path.GetFullPath(Path.Combine(root, "data/fields"));
     if (Directory.Exists(fieldsDir) && Directory.GetFiles(fieldsDir, "*.yaml").Length > 0)
     {
         var fieldFiles = Directory.GetFiles(fieldsDir, "*.yaml");
@@ -2041,10 +2066,10 @@ int SelfTest()
         if (!sawFerrite) return Fail("field: no com_ferrite_field definition in /data/fields");
         Console.WriteLine($"selftest: /data/fields reproduces the compiled ferrite regrowth twin exactly ({World.DefaultRegrowAmount} per {World.DefaultRegrowIntervalTicks} ticks)");
     }
-    else Console.WriteLine("selftest: data/fields not found, regrowth tuning untested this run");
+    else return Fail("selftest: data/fields not found, regrowth tuning; this proof must not be skipped");
 
     // Map loader (TICKET-P2-DATA-03): the committed skirmish map round-trips.
-    string mapFile = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data/maps/skirmish-01.fmap"));
+    string mapFile = Path.GetFullPath(Path.Combine(root, "data/maps/skirmish-01.fmap"));
     if (File.Exists(mapFile))
     {
         var md = MapData.Load(mapFile);
@@ -2061,7 +2086,7 @@ int SelfTest()
         if (mw.EntityCount != 20) return Fail("map: field spawn count");
         Console.WriteLine("selftest: map loader round-trips skirmish-01 (terrain, fields, starts)");
     }
-    else Console.WriteLine("selftest: map file not found, loader untested this run");
+    else return Fail("selftest: map file not found, loader; this proof must not be skipped");
 
     Console.WriteLine("selftest: all assertions passed");
     return 0;
@@ -2192,7 +2217,9 @@ int CatalogueRefuse()
     // 2. The ADR's hash-impact argument, asserted rather than assumed: the
     // /data files register to a catalogue identical to the compiled one, so
     // adoption moves nothing. This is the equality the goldens rest on.
-    string dataRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data"));
+    string? catRoot = RepoRoot();
+    if (catRoot == null) return Fail("catrefuse: repository root not found; the /data equality proof must not be skipped");
+    string dataRoot = Path.GetFullPath(Path.Combine(catRoot, "data"));
     if (Directory.Exists(dataRoot))
     {
         // One call registers every kind: units, structures, fields and weapons.
@@ -2206,7 +2233,7 @@ int CatalogueRefuse()
             return Fail($"catrefuse: /data registers to 0x{wd.CatalogueChecksum:X16} but the compiled catalogue is 0x{good:X16} - the two sources have drifted");
         Console.WriteLine($"catrefuse: /data and the compiled catalogue agree on 0x{good:X16} (ADR-006 hash-impact argument holds)");
     }
-    else Console.WriteLine("catrefuse: data directories not found, /data equality untested this run");
+    else return Fail($"catrefuse: no /data directories at {dataRoot}; the /data equality proof must not be skipped");
 
     // 3. The LAN hello: two lockstep clients, one bumped def, and the game
     // must refuse before tick 0 with BOTH checksums named on both sides.

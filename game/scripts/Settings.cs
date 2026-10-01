@@ -99,6 +99,9 @@ public static class Settings
     public static readonly (string Action, string Label)[] Bindable =
     {
         ("attack_move", "ATTACK-MOVE"),
+        // The superweapon's fire control. Rebindable like everything else
+        // (the SET-01 rule); default F, which was unbound.
+        ("launch_super", "SUPERWEAPON"),
         ("stop", "STOP"),
         // Doc 27 DR-05/DR-06: the selection layer. Rebindable like everything
         // else (the SET-01 rule); defaults E and I.
