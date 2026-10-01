@@ -4112,6 +4112,7 @@ public partial class SkirmishLive : Node3D
             return;
         }
         DisarmAttackMove();
+        DisarmPatrol();
         _superArmed = true;
         ShowToast("SUPERWEAPON ARMED: PICK A TARGET");
         _audio.Play("ui_click", -10);
@@ -4136,7 +4137,7 @@ public partial class SkirmishLive : Node3D
         if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON NOT READY"); return; }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
-        _pending.Add(new Command(0, 0, CommandType.LaunchSuper, id, cx, cy));
+        _pending.Add(new Command(0, LocalPlayerId, CommandType.LaunchSuper, id, cx, cy));
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("ui_confirm", -6);
         ShowToast("SUPERWEAPON LAUNCHED");
@@ -4211,6 +4212,7 @@ public partial class SkirmishLive : Node3D
         if (_replay != null) return;
         DisarmAttackMove();
         DisarmPatrol();
+        DisarmSuperweapon();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
@@ -4281,6 +4283,7 @@ public partial class SkirmishLive : Node3D
         // to the whole selection and marched them straight back out.
         DisarmAttackMove();
         DisarmPatrol();
+        DisarmSuperweapon();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
@@ -4971,6 +4974,8 @@ public partial class SkirmishLive : Node3D
         { ButtonIndex = MouseButton.Left, Pressed = true, Position = at });
 
     public bool AttackMoveArmed => _attackMoveArmed;
+
+    public bool SuperArmed => _superArmed;
     /// <summary>Verification read: is a patrol armed and waiting for its click?
     /// Stop used to leave this standing, so the next click marched the units
     /// the player had just halted.</summary>
