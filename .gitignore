@@ -38,10 +38,15 @@ game/assets/models/*_diff.png
 game/assets/models/*_rough.png
 game/assets/models/*_norm.png
 game/assets/models/*_orm.png
+# The same import pass that writes the three above also writes the EMISSIVE
+# map, and only that one was missing here, so a fresh checkout that runs
+# tools/verify-client.sh came back with fifteen untracked PNGs.
+game/assets/models/*_emit.png
 game/assets/models/*_diff.png.import
 game/assets/models/*_rough.png.import
 game/assets/models/*_norm.png.import
 game/assets/models/*_orm.png.import
+game/assets/models/*_emit.png.import
 
 # Packaged builds (tools/package.sh output)
 build/
