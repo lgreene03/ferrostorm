@@ -1,0 +1,17 @@
+<Project>
+  <!-- P8-47 (SP-11). Every project under sim/ builds with warnings as errors.
+
+       MSBuild reads the nearest Directory.Build.props walking up from each
+       project file, so this covers Ferrostorm.Sim, Ferrostorm.Net,
+       Ferrostorm.Presentation and the runner wherever they are built from,
+       including when the game or the balance tool builds them through a
+       ProjectReference. It does not reach tools/ or game/ themselves.
+
+       Why: two dead constants in the runner (P7-23 and P7-25) raised CS0219
+       on every build from the day they landed and nothing acted on it,
+       because a warning that fails nothing is read by nobody. A new warning now stops the build where it is introduced,
+       which is the only point at which it is cheap to fix. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
