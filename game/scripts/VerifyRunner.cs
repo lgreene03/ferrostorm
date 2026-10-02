@@ -1270,6 +1270,7 @@ public partial class VerifyRunner : Node
         // world, so they run last among the live-world checks.
         RunSupportPowerChecks();
         RunArmedOrderMatrixChecks();
+        RunScoreGate();   // P8-46: the score playlist, on the battle scene's own AudioDirector
         // P8-1: in a scene of its own, so the spawns above cannot reach it and
         // its own cannot reach anything after it.
         RunInputGate();
@@ -1282,6 +1283,131 @@ public partial class VerifyRunner : Node
         // P8-40: the front door, last because it boots a scene of its own that
         // touches no battle and nothing after it reads.
         RunMenuChecks();
+    }
+
+    // ---------------- P8-46: scoregate ----------------
+
+    private void ScoreGate(bool ok, string what) => Check(ok, $"scoregate: {what}");
+
+    /// <summary>
+    /// P8-46 (D26): the interim score is at least six tracks of at least three
+    /// minutes, played as an intensity playlist that never repeats a track
+    /// back to back and crossfades every change. Driven on the battle scene's
+    /// OWN AudioDirector (found among the scene's children, since the scene
+    /// keeps it private), through the calls the scene and the director's own
+    /// frame make: SetCombatIntensity, StepMusic and NextScoreTrack, the last
+    /// being exactly what a track nearing its end calls. Seeded, so the order
+    /// is the same on every run, and over several seeds, so a picker that
+    /// allows a repeat cannot pass by drawing lucky.
+    /// </summary>
+    private void RunScoreGate()
+    {
+        GD.Print("  --    scoregate: six tracks or more, an intensity playlist, no back-to-back repeat");
+        AudioDirector? dir = null;
+        foreach (var child in _game.GetChildren())
+            if (child is AudioDirector found) { dir = found; break; }
+        ScoreGate(dir != null, "the battle scene carries an AudioDirector");
+        if (dir == null) return;
+
+        // --- Registered, loaded, long enough ---------------------------------
+        int calm = 0, combat = 0;
+        var missing = new List<string>();
+        string shortest = "";
+        double shortestSeconds = double.MaxValue;
+        foreach (var (name, intensity) in AudioDirector.Score)
+        {
+            if (intensity == MusicIntensity.Calm) calm++; else combat++;
+            if (!dir.ScoreTrackLoaded(name)) { missing.Add(name); continue; }
+            double s = dir.ScoreTrackSeconds(name);
+            if (s < shortestSeconds) { shortestSeconds = s; shortest = name; }
+        }
+        ScoreGate(AudioDirector.Score.Length >= 6 && calm >= 2 && combat >= 2,
+            $"at least six tracks are registered, at least two per intensity ({AudioDirector.Score.Length}: {calm} calm, {combat} combat)");
+        ScoreGate(missing.Count == 0,
+            missing.Count == 0 ? "every registered track loads" : $"every registered track loads (missing: {string.Join(", ", missing)})");
+        ScoreGate(missing.Count < AudioDirector.Score.Length && shortestSeconds >= 180.0,
+            $"every track is at least 180 s long (shortest: {shortest}, {shortestSeconds:F1} s)");
+
+        // --- The battle opened on the score, calm ----------------------------
+        string? opening = dir.MusicNowPlaying;
+        ScoreGate(dir.MusicState == MusicIntensity.Calm && opening != null
+                  && AudioDirector.IntensityOf(opening) == MusicIntensity.Calm && dir.MusicCalmPlaying,
+            $"the battle opened on a calm track, playing ({opening ?? "none"})");
+
+        // --- Twenty changes per intensity, five seeds, never a repeat --------
+        int repeats = 0, strays = 0;
+        string firstRepeat = "";
+        var heardCalm = new HashSet<string>();
+        var heardCombat = new HashSet<string>();
+        for (int seed = 1; seed <= 5; seed++)
+        {
+            dir.SeedScore(seed);
+            dir.SetCombatIntensity(0f);
+            dir.PlayMusic();
+            foreach (var intensity in new[] { MusicIntensity.Calm, MusicIntensity.Combat })
+            {
+                if (intensity == MusicIntensity.Combat)
+                {
+                    dir.SetCombatIntensity(1f);
+                    for (int i = 0; i < 60 && dir.MusicState != MusicIntensity.Combat; i++) dir.StepMusic(0.05);
+                    dir.StepMusic(AudioDirector.CrossfadeSeconds + 0.1);
+                }
+                var heard = intensity == MusicIntensity.Calm ? heardCalm : heardCombat;
+                string? previous = dir.MusicNowPlaying;
+                for (int change = 0; change < 20; change++)
+                {
+                    dir.NextScoreTrack();
+                    dir.StepMusic(AudioDirector.CrossfadeSeconds + 0.1);
+                    string? now = dir.MusicNowPlaying;
+                    if (now == null || AudioDirector.IntensityOf(now) != intensity) strays++;
+                    if (now != null && now == previous)
+                    {
+                        if (repeats++ == 0) firstRepeat = $"seed {seed}, {intensity}, change {change + 1}: {now}";
+                    }
+                    if (now != null) heard.Add(now);
+                    previous = now;
+                }
+            }
+        }
+        ScoreGate(repeats == 0,
+            repeats == 0
+                ? "twenty track changes per intensity, over five seeds, never play the same track twice in a row"
+                : $"twenty track changes per intensity, over five seeds, never play the same track twice in a row ({repeats} repeats, first at {firstRepeat})");
+        ScoreGate(strays == 0, $"every change stayed within its intensity ({strays} strays)");
+        int calmTotal = calm, combatTotal = combat;
+        ScoreGate(heardCalm.Count == calmTotal && heardCombat.Count == combatTotal,
+            $"the rotation reaches every track ({heardCalm.Count}/{calmTotal} calm, {heardCombat.Count}/{combatTotal} combat)");
+
+        // --- An intensity change switches intensity, crossfaded --------------
+        dir.SeedScore(46);
+        dir.SetCombatIntensity(0f);
+        dir.PlayMusic();
+        string? calmTrack = dir.MusicNowPlaying;
+        dir.SetCombatIntensity(1f);
+        double rise = 0;
+        while (dir.MusicState == MusicIntensity.Calm && rise < 3.0) { dir.StepMusic(0.05); rise += 0.05; }
+        string? combatTrack = dir.MusicNowPlaying;
+        ScoreGate(dir.MusicState == MusicIntensity.Combat && combatTrack != null
+                  && AudioDirector.IntensityOf(combatTrack) == MusicIntensity.Combat && dir.MusicCombatPlaying,
+            $"an intensity rise switches to a combat track ({calmTrack} -> {combatTrack} after {rise:F2} s)");
+        ScoreGate(dir.MusicDecksSounding == 2,
+            $"the switch crossfades: the calm track still sounds under the incoming one ({dir.MusicDecksSounding} decks)");
+        dir.StepMusic(AudioDirector.CrossfadeSeconds);
+        ScoreGate(dir.MusicDecksSounding == 1 && !dir.MusicCalmPlaying
+                  && Mathf.Abs(dir.MusicCombatVolumeDb - AudioDirector.MusicCombatMaxDb) < 0.01f,
+            $"after {AudioDirector.CrossfadeSeconds} s only the combat track sounds, at its resting level ({dir.MusicCombatVolumeDb:F1} dB)");
+        dir.SetCombatIntensity(0f);
+        double fall = 0;
+        while (dir.MusicState == MusicIntensity.Combat && fall < 30.0) { dir.StepMusic(0.1); fall += 0.1; }
+        string? back = dir.MusicNowPlaying;
+        ScoreGate(dir.MusicState == MusicIntensity.Calm && back != null
+                  && AudioDirector.IntensityOf(back) == MusicIntensity.Calm
+                  && fall >= AudioDirector.CombatHoldSeconds,
+            $"an intensity fall returns to a calm track, only after the {AudioDirector.CombatHoldSeconds} s hold ({combatTrack} -> {back} after {fall:F1} s)");
+
+        // Leave the scene's score as a fresh match would have it.
+        dir.SetCombatIntensity(0f);
+        dir.PlayMusic();
     }
 
     /// <summary>
