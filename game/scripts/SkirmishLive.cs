@@ -2448,8 +2448,10 @@ public partial class SkirmishLive : Node3D
     /// <summary>
     /// The one cursor decision, resolved from state this scene already
     /// computes and mirroring what a click at that point would DO, so the
-    /// cursor never promises a verb the click would not deliver. Order: the
-    /// two armed modes own the pointer outright; the confirmation windows show
+    /// cursor never promises a verb the click would not deliver. Order:
+    /// placement mode and the four armed orders (attack-move, patrol, the
+    /// superweapon and the support power) own the pointer outright, each armed
+    /// order on the attack glyph; the confirmation windows show
     /// their verb while live; then the hover test runs the exact picks
     /// IssueOrder runs (same radii, same filters). An all-engineer selection
     /// over an enemy structure reads as the capture verb; any combat presence
@@ -3784,10 +3786,15 @@ public partial class SkirmishLive : Node3D
             // it is tested first - a player who opened it wants out of it, not
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
-            if (_superArmed) { DisarmSuperweapon("SUPERWEAPON TARGETING CANCELLED"); return true; }
-            if (_powerArmed != null) { DisarmSupportPower("SUPPORT POWER TARGETING CANCELLED"); return true; }
-            if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
-            if (_patrolArmed) { DisarmPatrol("patrol cancelled"); return true; }
+            // An armed order is cancelled through the family funnel, so cancel
+            // clears all four by construction. The toast names whichever order
+            // was armed; the funnel guarantees there is only ever one.
+            string? cancelled = _superArmed ? "SUPERWEAPON TARGETING CANCELLED"
+                : _powerArmed != null ? "SUPPORT POWER TARGETING CANCELLED"
+                : _attackMoveArmed ? "attack-move cancelled"
+                : _patrolArmed ? "patrol cancelled"
+                : null;
+            if (cancelled != null) { DisarmAllArmedOrders(); ShowToast(cancelled); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
             if (_matchOver || _replayDone) { QuitToMenu(); return true; }
             return false;
@@ -4116,8 +4123,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit) movers++;
         if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
-        _patrolArmed = false;                      // ADR-015: the armed orders are exclusive
-        DisarmSupportPower();                      // ...and the support power is one of them
+        DisarmAllArmedOrders();                    // ADR-015: the armed orders are exclusive
         _attackMoveArmed = true;
         ShowToast($"ATTACK-MOVE: PICK A DESTINATION   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
@@ -4141,9 +4147,7 @@ public partial class SkirmishLive : Node3D
             ShowToast($"SUPERWEAPON CHARGING   {secs}s");
             return;
         }
-        DisarmAttackMove();
-        DisarmPatrol();
-        DisarmSupportPower();
+        DisarmAllArmedOrders();
         _superArmed = true;
         ShowToast("SUPERWEAPON ARMED: PICK A TARGET");
         _audio.Play("ui_click", -10);
@@ -4155,6 +4159,34 @@ public partial class SkirmishLive : Node3D
         _superArmed = false;
         if (toast != null) ShowToast(toast);
     }
+
+    /// <summary>
+    /// The armed-order family's rule, stated ONCE: attack-move, patrol, the
+    /// superweapon and the support power are exclusive. Every Arm* calls this
+    /// before raising its own flag, and stop, guard and cancel call it too, so
+    /// at most one flag is ever set.
+    ///
+    /// The rule had been written out site by site, and that is how it broke
+    /// twice. Patrol was once the order stop forgot. Then #143 added the
+    /// superweapon and claimed "arming any of the three now clear all three",
+    /// but ArmAttackMove and ArmPatrol never cleared it. Because the click
+    /// switch tests the superweapon first, arming it and then choosing
+    /// attack-move launched the superweapon on the next click. With one
+    /// funnel, the order the player armed LAST is the only one standing, so
+    /// the click commits that order whatever order the switch tests them in.
+    /// </summary>
+    private void DisarmAllArmedOrders()
+    {
+        DisarmAttackMove();
+        DisarmPatrol();
+        DisarmSuperweapon();
+        DisarmSupportPower();
+    }
+
+    /// <summary>How many of the four armed flags are set. The funnel above
+    /// keeps this at 0 or 1; the harness asserts that across every pair.</summary>
+    private int ArmedOrderCount() =>
+        (_attackMoveArmed ? 1 : 0) + (_patrolArmed ? 1 : 0) + (_superArmed ? 1 : 0) + (_powerArmed != null ? 1 : 0);
 
     /// <summary>Readiness is re-read at the click rather than trusted from the
     /// arm: the charge can lapse, or the structure die, between the two.</summary>
@@ -4298,9 +4330,7 @@ public partial class SkirmishLive : Node3D
     private void ArmSupportPower(int structureId, int powerId)
     {
         if (_placingType > 0) ExitPlacement();     // placement would take the click first
-        DisarmAttackMove();                        // the armed orders are exclusive
-        DisarmPatrol();
-        DisarmSuperweapon();
+        DisarmAllArmedOrders();                    // the armed orders are exclusive
         _powerArmed = (structureId, powerId);
         string name = SupportPowerBar.NameOf(powerId);
         ShowToast(SupportPowerBar.IsTargeted(powerId)
@@ -4444,10 +4474,7 @@ public partial class SkirmishLive : Node3D
     private void IssueGuard()
     {
         if (_replay != null) return;
-        DisarmAttackMove();
-        DisarmPatrol();
-        DisarmSuperweapon();
-        DisarmSupportPower();
+        DisarmAllArmedOrders();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
@@ -4471,8 +4498,7 @@ public partial class SkirmishLive : Node3D
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit) movers++;
         if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();
-        _attackMoveArmed = false;                  // the armed orders are exclusive
-        DisarmSupportPower();
+        DisarmAllArmedOrders();                    // the armed orders are exclusive
         _patrolArmed = true;
         ShowToast($"PATROL: PICK THE FAR POINT   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
@@ -4516,13 +4542,10 @@ public partial class SkirmishLive : Node3D
         // and Escape clears both. So arming a patrol, changing your mind and
         // pressing stop left the patrol ARMED - the units halted, the cursor
         // stayed on the attack glyph, and the next left click issued the patrol
-        // to the whole selection and marched them straight back out. The
-        // support power joined the family later and is cleared here for
-        // exactly that reason.
-        DisarmAttackMove();
-        DisarmPatrol();
-        DisarmSuperweapon();
-        DisarmSupportPower();
+        // to the whole selection and marched them straight back out. All four
+        // are now cleared through the one funnel, so the next order to join
+        // the family cannot be missed here the way patrol was.
+        DisarmAllArmedOrders();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
@@ -5215,6 +5238,10 @@ public partial class SkirmishLive : Node3D
     public bool AttackMoveArmed => _attackMoveArmed;
 
     public bool SuperArmed => _superArmed;
+    /// <summary>Verification read: how many armed-order flags are set right
+    /// now. The family rule is "never more than one", and the harness asserts
+    /// that after every ordered pair of arms rather than trusting the funnel.</summary>
+    public int ArmedOrderCountForTest => ArmedOrderCount();
     /// <summary>Verification reads for the support powers: the armed
     /// (structure, power), or null, and the strip itself, read as SHOWN.</summary>
     public (int Structure, int Power)? SupportPowerArmed => _powerArmed;

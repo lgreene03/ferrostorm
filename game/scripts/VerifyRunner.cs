@@ -597,12 +597,21 @@ public partial class VerifyRunner : Node
         // The minimap held a rival copy keyed on "me versus them", so at seat 1
         // a joiner's own army was orange on the minimap and teal on the
         // battlefield. Asserted from the seat that inverts: my own colour must
-        // be the SODALITY mark here, because I am player 1 - if this reads the
-        // Directorate mark, the "me versus them" copy is back.
+        // be seat 1's teal here, because I am player 1. If this reads seat 0's
+        // orange, the "me versus them" copy is back.
+        //
+        // The marks are SEAT colours (BattlefieldView.SeatMarks, indexed by
+        // player id), and SodalityMark and DirectorateMark are only the names
+        // of the teal and the orange. They say nothing about which faction a
+        // seat plays. In this harness seat 1 plays the DIRECTORATE (see
+        // _Ready: MatchConfig.Faction goes to seat 0, the opposition faction
+        // to seat 1, and the faction-gate check below prints "1 and 0") and
+        // still wears the teal.
         Check(BattlefieldView.MarkFor(_game.LocalPlayerId) == BattlefieldView.SodalityMark,
-              "at seat 1 my own mark is Sodality's, not 'whoever is looking' orange");
+              "at seat 1 my own mark is seat 1's teal (SodalityMark, a seat colour, though this seat plays the Directorate), "
+              + "not 'whoever is looking' orange");
         Check(BattlefieldView.MarkFor(_game.EnemyPlayerId) == BattlefieldView.DirectorateMark,
-              "and the opposition at seat 0 wears Directorate's");
+              "and the opposition at seat 0 wears seat 0's orange (DirectorateMark)");
         Check(BattlefieldView.MarkFor(-1) == BattlefieldView.NeutralMark,
               "an unowned entity wears neither side's mark");
         // ...and the same question asked of what the minimap will ACTUALLY
@@ -1260,8 +1269,102 @@ public partial class VerifyRunner : Node
         // After the superweapon, for its reason: these spawn into the shared
         // world, so they run last among the live-world checks.
         RunSupportPowerChecks();
+        RunArmedOrderMatrixChecks();
 
         RunLanChecks();
+    }
+
+    /// <summary>
+    /// The armed-order family, proved as a matrix rather than pair by pair.
+    /// #143 claimed arming any one armed order cleared the others, and it did
+    /// not: ArmAttackMove and ArmPatrol never cleared the superweapon, and
+    /// because the click switch tests the superweapon first, the next click
+    /// launched it. The checks that existed tested the pairs someone thought
+    /// of. These walk all twelve ordered pairs of the four orders, so a missed
+    /// pair names itself, and then prove stop, guard and cancel each leave
+    /// nothing armed.
+    /// </summary>
+    private void RunArmedOrderMatrixChecks()
+    {
+        GD.Print("  --    the armed-order matrix: arming any one clears the other three");
+        var lw = _game.LiveWorld;
+        int me = _game.LocalPlayerId;
+        var (yx, yy) = _game.CellOfForTest(_game.FindEntity(EntityKind.ConstructionYard, me));
+        // Preconditions. Every power building the support-power checks stood
+        // up is now charging, so a fresh Shroud Nest is stood up READY (it
+        // spawns uncharged, World.Add). The superweapon those checks inherited
+        // is still charged, and nothing here launches it. Attack-move and
+        // patrol need the seat's own combat units selected.
+        int nest = lw.SpawnFactionDefence(me, 18, yx - 3, yy + 8);   // 18: the Shroud Nest
+        var ne = lw.Entities[nest];
+        ne.ChargeTicks = 0;
+        lw.SetEntityForTest(nest, ne);
+        _game.PumpActorsForTest();
+        _game.SelectAllOwn();
+
+        var orders = new (string Name, System.Action Arm, System.Func<bool> Armed)[]
+        {
+            ("attack-move", () => _game.PressKey(Settings.BindOf("attack_move")), () => _game.AttackMoveArmed),
+            ("patrol", () => _game.PressKey(Settings.BindOf("patrol")), () => _game.PatrolArmed),
+            ("superweapon", () => _game.PressKey(Settings.BindOf("launch_super")), () => _game.SuperArmed),
+            ("support power", () => _game.PressKey(Settings.BindOf("support_power")), () => _game.SupportPowerArmed != null),
+        };
+        string Standing()
+        {
+            var up = new List<string>();
+            foreach (var o in orders) if (o.Armed()) up.Add(o.Name);
+            return up.Count == 0 ? "nothing" : string.Join(" + ", up);
+        }
+
+        // Each order arms on its own from a clean slate, so a pair that fails
+        // below fails for the pair and not for a missing precondition.
+        string wontArm = "";
+        foreach (var o in orders)
+        {
+            _game.PressStop();
+            o.Arm();
+            if (!o.Armed() || _game.ArmedOrderCountForTest != 1) wontArm += $" {o.Name} ({Standing()});";
+        }
+        Check(wontArm.Length == 0,
+              $"each of the four armed orders arms on its own from a clean slate (the precondition){(wontArm.Length > 0 ? $": failed{wontArm}" : "")}");
+
+        foreach (var a in orders)
+            foreach (var b in orders)
+            {
+                if (a.Name == b.Name) continue;
+                _game.PressStop();
+                a.Arm();
+                bool aUp = a.Armed();
+                b.Arm();
+                int n = _game.ArmedOrderCountForTest;
+                Check(aUp && b.Armed() && n == 1,
+                      $"arm {a.Name}, then {b.Name}: only {b.Name} is armed (standing: {Standing()}; {n} flag(s) set)");
+            }
+
+        // Stop, guard and cancel each clear the whole family, whichever order
+        // happens to be standing.
+        var clearers = new (string Name, System.Action Clear)[]
+        {
+            ("STOP", () => _game.PressStop()),
+            ("GUARD", () => _game.PressKey(Settings.BindOf("guard"))),
+            ("CANCEL", () => _game.PressKey(Settings.BindOf("cancel"))),
+        };
+        foreach (var c in clearers)
+        {
+            string survived = "";
+            foreach (var o in orders)
+            {
+                _game.PressStop();
+                o.Arm();
+                bool up = o.Armed();
+                c.Clear();
+                if (!up || _game.ArmedOrderCountForTest != 0) survived += $" {o.Name}{(up ? "" : " (never armed)")};";
+            }
+            Check(survived.Length == 0,
+                  $"{c.Name} leaves NOTHING armed, whichever of the four was standing{(survived.Length > 0 ? $" (left:{survived})" : "")}");
+        }
+        _game.PressStop();
+        _game.ClearSelectionForTest();
     }
 
     /// <summary>
