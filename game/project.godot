@@ -4,9 +4,24 @@
 config_version=5
 
 [application]
-config/name="Ferrostorm (working title)"
+; P8-40: config/name is the window title (Godot has no separate title setting),
+; so "(working title)" was the first thing a player read. It is ALSO the name
+; of the user:// directory, so renaming it alone would silently orphan every
+; existing settings file, save slot and replay. The custom directory below pins
+; user:// to exactly the path the old name produced: Godot builds the default as
+; <data>/Godot/app_userdata/<name> on macOS and Windows and with a lowercase
+; "godot" on Linux, hence the linuxbsd override. VerifyRunner asserts the title
+; and the resolved directory on whichever platform runs it (Linux in CI).
+config/name="Ferrostorm"
+config/use_custom_user_dir=true
+config/custom_user_dir_name="Godot/app_userdata/Ferrostorm (working title)"
+config/custom_user_dir_name.linuxbsd="godot/app_userdata/Ferrostorm (working title)"
 run/main_scene="res://scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+; The engine's own logo on grey flashed before the menu; the launch now goes
+; straight from the menu's background colour to the menu.
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.055, 0.06, 0.065, 1)
 
 [dotnet]
 project/assembly_name="Ferrostorm.Game"

@@ -1279,6 +1279,9 @@ public partial class VerifyRunner : Node
         // seat 1, and the scene this boots is handed nothing, as a
         // single-player match started from the menu is.
         RunFourSeatHostilityChecks();
+        // P8-40: the front door, last because it boots a scene of its own that
+        // touches no battle and nothing after it reads.
+        RunMenuChecks();
     }
 
     /// <summary>
@@ -3785,5 +3788,240 @@ public partial class VerifyRunner : Node
         {
             Check(false, $"the lobby threw: {ex.Message}");
         }
+    }
+
+    // ===================== INPUTGATE: THE FRONT DOOR (P8-40) =====================
+
+    /// <summary>
+    /// P8-40: the main menu as a newcomer meets it. Nothing in this harness
+    /// reached MainMenu before; this boots the real scene, the one project.godot
+    /// names as the main scene, and drives its pickers the way a click does:
+    /// through the popup's index_pressed, which is the signal OptionButton
+    /// itself listens to. Select() would set an index without emitting
+    /// ItemSelected, and everything downstream of a choice (the opponent
+    /// range, the TEAMS rule, the preview) would never run.
+    /// </summary>
+    private void RunMenuChecks()
+    {
+        GD.Print("  --    inputgate (P8-40): the map picker and the front door");
+        var menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+        AddChild(menu);
+        try
+        {
+            RunMapPickerStages(menu);
+            RunMenuTeamsStages(menu);
+            RunFrontDoorStages(menu);
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"inputgate/map-picker: the menu stages threw: {ex.Message}");
+        }
+        finally
+        {
+            menu.QueueFree();
+        }
+    }
+
+    private static void CollectNodes<T>(Node n, List<T> into) where T : Node
+    {
+        foreach (Node c in n.GetChildren())
+        {
+            if (c is T t) into.Add(t);
+            CollectNodes(c, into);
+        }
+    }
+
+    private static bool SameRgb(Color a, Color b) => a.R8 == b.R8 && a.G8 == b.G8 && a.B8 == b.B8;
+
+    private void RunMapPickerStages(MainMenu menu)
+    {
+        // The pool, derived here independently of MapCatalogue, so a picker
+        // that dropped a map or listed the test fixture fails by name.
+        var files = new List<string>(System.IO.Directory.GetFiles(
+            System.IO.Path.Combine(GameFiles.RepoRoot, "data", "maps"), "skirmish-*.fmap"));
+        files.Sort(System.StringComparer.Ordinal);
+        int n = menu.TheatreCountForTest;
+        bool sameList = n == files.Count && n > 0;
+        for (int i = 0; sameList && i < n; i++) sameList = menu.TheatreCardForTest(i).Path == files[i];
+        Check(sameList,
+              $"inputgate/map-picker: the picker lists every shipped skirmish map ({n} of {files.Count}) in file order, and no test fixture");
+
+        var firstSeen = new Texture2D?[n];
+        int starts = 0, fields = 0, water = 0, blocked = 0, open = 0, wrong = 0;
+        string firstWrong = "";
+        for (int i = 0; i < n; i++)
+        {
+            var card = menu.TheatreCardForTest(i);
+            menu.ChooseTheatreForTest(i);
+            MapData map;
+            try { map = MapData.Load(card.Path); }
+            catch (System.Exception e)
+            {
+                Check(false, $"inputgate/map-picker: {card.Stem} parses (the precondition): {e.Message}");
+                continue;
+            }
+            // The expectations come from the sim's own parser, not from the
+            // card, so a header scan that misread a size or a seat fails here.
+            string item = menu.TheatreItemTextForTest(i);
+            string wantSize = $"SIZE {map.Width} x {map.Height}";
+            string wantSeats = map.Starts.Count == 1 ? "1 SEAT" : $"{map.Starts.Count} SEATS";
+            var thumb = menu.PreviewThumbnailForTest;
+            firstSeen[i] = thumb;
+            // A name that is only the file name upper-cased is the fallback,
+            // exactly the bare file name this row exists to replace.
+            bool named = card.HeaderName.Length > 0 && item == card.HeaderName.ToUpperInvariant()
+                         && item != card.Stem.ToUpperInvariant();
+            bool drawn = thumb != null && thumb.GetWidth() == map.Width && thumb.GetHeight() == map.Height;
+            Check(menu.TheatreSelectedForTest == i && named && menu.PreviewSizeForTest == wantSize
+                  && menu.PreviewSeatsForTest == wantSeats && drawn,
+                  $"inputgate/map-picker: {card.Stem} is listed as \"{item}\" (its header names \"{card.HeaderName}\"), and choosing "
+                  + $"it shows \"{menu.PreviewSizeForTest}\", \"{menu.PreviewSeatsForTest}\" and a "
+                  + $"{(thumb == null ? "MISSING" : $"{thumb.GetWidth()}x{thumb.GetHeight()}")} thumbnail "
+                  + $"(the map declares {map.Width} x {map.Height} and {map.Starts.Count} starts)");
+
+            // What the thumbnail SAYS, cell by cell, against what MapData
+            // declares. A right-sized placeholder would pass the line above.
+            var maybeImg = MapCatalogue.ThumbnailImage(card.Path);
+            if (maybeImg == null) { wrong++; firstWrong = firstWrong.Length > 0 ? firstWrong : $"{card.Stem}: no image"; continue; }
+            Image img = maybeImg;
+            int r = MapCatalogue.StartMarkRadius(map);
+            bool UnderMark(int x, int y)
+            {
+                foreach (var (sx, sy) in map.Starts.Values)
+                    if (System.Math.Abs(x - sx) <= r && System.Math.Abs(y - sy) <= r) return true;
+                return false;
+            }
+            void Expect(int x, int y, Color want, string what)
+            {
+                if (SameRgb(img.GetPixel(x, y), want)) return;
+                wrong++;
+                if (firstWrong.Length == 0) firstWrong = $"{card.Stem} ({x},{y}) should read as {what}";
+            }
+            foreach (var (sx, sy) in map.Starts.Values) { Expect(sx, sy, MapCatalogue.StartMark, "a start"); starts++; }
+            foreach (var (fx, fy) in map.Fields)
+                if (!UnderMark(fx, fy)) { Expect(fx, fy, MapCatalogue.Ferrite, "ferrite"); fields++; }
+            foreach (var (bx, by) in map.Blocked)
+            {
+                if (UnderMark(bx, by)) continue;
+                bool isWater = map.Visual.TryGetValue((bx, by), out char ch) && ch == 'w';
+                Expect(bx, by, isWater ? MapCatalogue.Water : MapCatalogue.BlockedGround, isWater ? "water" : "blocked");
+                if (isWater) water++; else blocked++;
+            }
+            // Bridges are crossings while they stand, so they read as open.
+            foreach (var (bx, by) in map.Spans)
+                if (!UnderMark(bx, by)) { Expect(bx, by, MapCatalogue.OpenGround, "an open crossing"); open++; }
+            // And one plain open cell, so an image painted all one class fails.
+            var taken = new HashSet<(int, int)>(map.Blocked);
+            foreach (var f in map.Fields) taken.Add(f);
+            bool foundOpen = false;
+            for (int y = 0; y < map.Height && !foundOpen; y++)
+                for (int x = 0; x < map.Width && !foundOpen; x++)
+                    if (!taken.Contains((x, y)) && !UnderMark(x, y))
+                    { Expect(x, y, MapCatalogue.OpenGround, "open ground"); open++; foundOpen = true; }
+        }
+        Check(wrong == 0 && starts > 0 && fields > 0 && water > 0,
+              $"inputgate/map-picker: every thumbnail is drawn from its own map's grid: {starts} start squares, {fields} ferrite cells, "
+              + $"{water} water cells, {blocked} blocked cells and {open} open cells all read as MapData declares them "
+              + $"({wrong} wrong{(firstWrong.Length > 0 ? $", first: {firstWrong}" : "")})");
+
+        // Cached per map: going back to the first theatre shows the texture it
+        // was first given, not a rebuilt copy.
+        if (n > 1)
+        {
+            menu.ChooseTheatreForTest(0);
+            var again = menu.PreviewThumbnailForTest;
+            Check(again != null && ReferenceEquals(again, firstSeen[0])
+                  && ReferenceEquals(again, MapCatalogue.Thumbnail(menu.TheatreCardForTest(0).Path)),
+                  "inputgate/map-picker: a thumbnail is built once per map and cached: choosing the first theatre again shows the same texture");
+        }
+    }
+
+    private void RunMenuTeamsStages(MainMenu menu)
+    {
+        int four = -1, two = -1;
+        for (int i = 0; i < menu.TheatreCountForTest; i++)
+        {
+            var c = menu.TheatreCardForTest(i);
+            if (c.Stem == "skirmish-09") four = i;
+            if (two < 0 && c.Seats == 2) two = i;
+        }
+        if (four < 0 || two < 0)
+        {
+            Check(false, $"inputgate/teams: skirmish-09 and a two-seat theatre are both listed (the precondition; {four}, {two})");
+            return;
+        }
+        string duelMap = menu.TheatreCardForTest(two).Stem;
+
+        menu.ChooseTheatreForTest(four);
+        Check(!menu.TeamsDisabledForTest && menu.OpponentChoicesForTest == 3,
+              $"inputgate/teams: on skirmish-09 (four seats, defaulting to {menu.OpponentChoicesForTest} opponents) TEAMS is enabled");
+
+        // A choice made on the big map must not be left standing over a duel.
+        menu.ChooseTeamsForTest(MatchSetup.TeamsEvenSides);
+        bool evenTaken = menu.TeamsSelectedForTest == MatchSetup.TeamsEvenSides;
+        menu.ChooseTheatreForTest(two);
+        Check(evenTaken && menu.TeamsDisabledForTest
+              && menu.TeamsSelectedForTest == MatchSetup.TeamsFreeForAll
+              && menu.TeamsTooltipForTest.Contains("three or more seats"),
+              $"inputgate/teams: on a two-seat theatre ({duelMap}) TEAMS is disabled, back on FREE FOR ALL after EVEN SIDES was "
+              + $"chosen on skirmish-09, and its tooltip says why (\"{menu.TeamsTooltipForTest}\")");
+
+        // The rule is the match's seats, not the map's ceiling.
+        menu.ChooseTheatreForTest(four);
+        bool backOn = !menu.TeamsDisabledForTest;
+        menu.ChooseOpponentsForTest(0);
+        bool duelOff = menu.TeamsDisabledForTest && menu.TeamsSelectedForTest == MatchSetup.TeamsFreeForAll;
+        menu.ChooseOpponentsForTest(2);
+        bool fullOn = !menu.TeamsDisabledForTest;
+        Check(backOn && duelOff && fullOn,
+              $"inputgate/teams: skirmish-09 cut to one opponent is a duel too, so TEAMS is disabled there, and three opponents "
+              + $"enable it again (back {backOn}, duel {duelOff}, full {fullOn})");
+    }
+
+    private void RunFrontDoorStages(MainMenu menu)
+    {
+        // The smoke test is a developer's tool, behind --dev.
+        var lan = menu.OpenLanForTest();
+        var buttons = new List<Button>();
+        CollectNodes(lan, buttons);
+        bool host = false, smoke = false;
+        Button? back = null;
+        foreach (var b in buttons)
+        {
+            if (b.Text == "HOST GAME") host = true;
+            if (b.Text.Contains("SMOKE")) smoke = true;
+            if (b.Text == "BACK") back = b;
+        }
+        Check(!MainMenu.DevTools && host && !smoke,
+              $"inputgate/front-door: the LAN screen offers HOST GAME and no smoke test to a player launched without --dev ({buttons.Count} buttons read)");
+        back?.EmitSignal(BaseButton.SignalName.Pressed);
+
+        string title = ProjectSettings.GetSetting("application/config/name").AsString();
+        Check(title == "Ferrostorm", $"inputgate/front-door: the window title is \"{title}\", with no working-title tag");
+        // The title IS the user:// directory name unless pinned, so a rename
+        // without the pin would have orphaned every save, replay and setting.
+        string userDir = OS.GetUserDataDir().Replace('\\', '/');
+        Check(userDir.EndsWith("/app_userdata/Ferrostorm (working title)", System.StringComparison.Ordinal),
+              $"inputgate/front-door: user:// is still the directory the old project name made, so the rename orphaned no save, "
+              + $"replay or setting ({userDir})");
+
+        var rows = new List<OptionButton>();
+        CollectNodes(menu, rows);
+        int tipped = 0;
+        foreach (var o in rows) if (o.TooltipText.Length > 0) tipped++;
+        Check(rows.Count == 7 && tipped == rows.Count,
+              $"inputgate/front-door: all {rows.Count} setup rows carry a tooltip saying what they do ({tipped} do)");
+
+        // Measured, because the box was hand-bumped "by that row's height" for
+        // four waves and had fallen 130 px behind its content without anyone
+        // seeing it: the panel grew off centre and off the bottom of the
+        // default 900 px window.
+        var panel = menu.SetupPanelForTest;
+        var need = panel.GetCombinedMinimumSize();
+        float boxW = panel.OffsetRight - panel.OffsetLeft, boxH = panel.OffsetBottom - panel.OffsetTop;
+        int windowH = ProjectSettings.GetSetting("display/window/size/viewport_height").AsInt32();
+        Check(need.X <= boxW && need.Y <= boxH && boxH <= windowH,
+              $"inputgate/front-door: the setup panel holds every row ({need.X:0} x {need.Y:0} px of content in a {boxW:0} x {boxH:0} "
+              + $"px box, inside the {windowH} px default window), so it stays centred rather than growing off the screen");
     }
 }
