@@ -18,3 +18,15 @@ name: Standard
 kind: personality
 act_every_ticks: 15
 wave_size: 6
+# P8-17 (ADR-072, decision D10): the answer to air. These two numbers do nothing
+# until the commander has SEEN an enemy aircraft with its own eyes; from then on
+# it keeps one anti-air unit more than the most enemy flyers it has seen at once,
+# never more than anti_air_cap.
+# anti_air_cap 6 is this personality's own wave size, derived rather than
+# chosen: no commander holds more anti-air than one wave's worth of army, since
+# anti-air cannot shoot the ground and every unit of it is a unit not fighting.
+# anti_air_garrison 2 is the floor the ground garrison already keeps. Those two
+# stay at home and guard the base; every anti-air unit beyond them escorts the
+# harvesters, which is where AI-01's raid struck.
+anti_air_cap: 6
+anti_air_garrison: 2

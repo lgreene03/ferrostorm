@@ -1844,6 +1844,12 @@ public sealed partial class World
                 h.Add(id); h.Add((int)d.Kind); h.Add(d.ActEvery); h.Add(d.WaveSize);
                 h.Add(d.BeatNumerator); h.Add(d.BeatDenominator);
                 h.Add(d.HarvestersPerRefinery); h.Add(d.StartingCreditHandicap);
+                // P8-17 (ADR-072): the air answer's cap and garrison, on ADR-032
+                // clause 2's argument unchanged. They decide which Produce and
+                // move orders a commander issues once it sees enemy aircraft, so
+                // two LAN peers holding different files would fight the same air
+                // raid with different armies while every def matched.
+                h.Add(d.AntiAirCap); h.Add(d.AntiAirGarrison);
             }
             return h.Value;
         }

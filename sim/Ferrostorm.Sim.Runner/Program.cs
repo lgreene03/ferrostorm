@@ -52,10 +52,10 @@ using Ferrostorm.Sim;
 //   decorgate          - decorative terrain (, : = ~): drawn, never blocking, outside the density budget
 //   ladderprobe        - P8-13: the difficulty ladder, rung against rung in both seat orders on every map and faction pairing, with the win, loss and undecided tally per pairing (not a gate; nothing asserts)
 //   laddergate         - P8-13, F4: each rung beats the rung below in at least 70 per cent of decided games from both seats (registered non-binding until P8-26)
-//   aiairgate          - P8-13, F3: three Strike Flyers raiding harvesters from t=4500 on skirmish-01 die and an AI harvester survives, Normal and Hard, both factions (non-binding until P8-17)
+//   aiairgate          - P8-13, F3: three Strike Flyers raiding harvesters from t=4500 on skirmish-01 die and an AI harvester survives them, Normal and Hard, both factions, each beside a printed no-raid control (binding since P8-17)
 //   seatfairgate       - P8-13, F5: Normal mirrors on every two-seat map with starts swapped keep each seat's income within 15 per cent and the win split within 60/40 by seat and by start (non-binding until P8-21)
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
-//   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (non-binding until P8-17)
+//   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
@@ -5797,6 +5797,10 @@ int AiTuningGate()
             return Fail(Drift("harvesters_per_refinery", got.HarvestersPerRefinery, want.HarvestersPerRefinery));
         if (got.StartingCreditHandicap != want.StartingCreditHandicap)
             return Fail(Drift("starting_credit_handicap", got.StartingCreditHandicap, want.StartingCreditHandicap));
+        // P8-17 (ADR-072): the air answer's two personality numbers.
+        if (got.AntiAirCap != want.AntiAirCap) return Fail(Drift("anti_air_cap", got.AntiAirCap, want.AntiAirCap));
+        if (got.AntiAirGarrison != want.AntiAirGarrison)
+            return Fail(Drift("anti_air_garrison", got.AntiAirGarrison, want.AntiAirGarrison));
     }
 
     // --- 2. The runtime reads the REGISTERED table, not the compiled one.
@@ -5884,6 +5888,72 @@ int AiTuningGate()
         return Fail("aituning: a Hard rung REGISTERED at four harvesters per refinery must buy a third, and it bought "
                     + "none - the commander is reading the compiled economy knob rather than the registered one");
 
+    //        2c, P8-17's two anti-air numbers (ADR-072), each REGISTERED away
+    //        from the authored value and measured as orders. One enemy Strike
+    //        Flyer hovers three cells from a base that owns a factory and a
+    //        radar, inside the yard's sight, so the commander sees it on its
+    //        first beat. anti_air_cap: the authored 6 orders a Flak Track and a
+    //        registered 0 orders none. anti_air_garrison: two idle Flak Tracks
+    //        stand far from home with no harvester alive; the authored garrison
+    //        of 2 sends both at the flyer, and a registered 0 makes both
+    //        escorts, which with no harvester to shadow guard the refinery.
+    (int Flak, int AtFlyer, int ToRefinery) AirAnswer(AiTuningDef standard, bool flakStanding)
+    {
+        var w = new World(4313, 64, 64, players: 2);
+        w.RegisterAiTuning(AiTuning.StandardId, standard);
+        w.SpawnConstructionYard(1, 8, 8);
+        w.SpawnConstructionYard(0, 40, 30);
+        w.SpawnPowerPlant(0, 44, 30);
+        w.SpawnPowerPlant(0, 48, 30);
+        int refinery = w.SpawnRefinery(0, 36, 30);
+        w.SpawnFactory(0, 40, 34);
+        w.SpawnRadarUplink(0, 44, 34);
+        var flyer = w.GetUnitType(15);
+        w.SpawnUnit(1, Fix64.FromInt(41), Fix64.FromInt(28), flyer.Speed, flyer.Hp, flyer.Armour, flyer.WeaponId,
+                    flyer.SightCells, unitType: 15);
+        var guns = new List<int>();
+        if (flakStanding)
+        {
+            var flak = w.GetUnitType(16);
+            for (int k = 0; k < 2; k++)
+                guns.Add(w.SpawnUnit(0, Fix64.FromInt(14 + k), Fix64.FromInt(54), flak.Speed, flak.Hp, flak.Armour,
+                                     flak.WeaponId, flak.SightCells, unitType: 16));
+        }
+        w.GrantCredits(0, 4000);
+        // Fifteen idle ticks: the fog pass has lit the yard's sight, and tick
+        // 15 is a decision beat at the authored beat of 15.
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        int produced = 0, atFlyer = 0, toRefinery = 0;
+        var r = w.Entities[refinery];
+        foreach (var c in cmds)
+        {
+            if (c.Type == CommandType.Produce && c.AuxId == 16) produced++;
+            if (guns.Contains(c.EntityId) && c.Type == CommandType.AttackMove) atFlyer++;
+            if (guns.Contains(c.EntityId) && c.Type == CommandType.PathMove && c.X == r.X && c.Y == r.Y) toRefinery++;
+        }
+        return (produced, atFlyer, toRefinery);
+    }
+    var authoredAir = AirAnswer(AiTuning.Standard, flakStanding: false);
+    var cappedAir = AirAnswer(AiTuning.Standard with { AntiAirCap = 0 }, flakStanding: false);
+    if (authoredAir.Flak != 1)
+        return Fail($"aituning control: a commander that sees an enemy flyer with a factory and a radar standing must "
+                    + $"order one Flak Track on the beat, and it ordered {authoredAir.Flak}");
+    if (cappedAir.Flak != 0)
+        return Fail($"aituning: a Standard personality REGISTERED at anti_air_cap 0 must order no Flak Track, and it "
+                    + $"ordered {cappedAir.Flak} - the commander is reading the compiled cap rather than the registered one");
+    var garrisonAir = AirAnswer(AiTuning.Standard, flakStanding: true);
+    var escortAir = AirAnswer(AiTuning.Standard with { AntiAirGarrison = 0 }, flakStanding: true);
+    if (garrisonAir.AtFlyer != 2 || garrisonAir.ToRefinery != 0)
+        return Fail($"aituning control: with the authored anti-air garrison of 2, both idle Flak Tracks must close on the "
+                    + $"flyer over the base ({garrisonAir.AtFlyer} did) and neither guard the refinery ({garrisonAir.ToRefinery} did)");
+    if (escortAir.AtFlyer != 0 || escortAir.ToRefinery != 2)
+        return Fail($"aituning: a Standard personality REGISTERED at anti_air_garrison 0 must make both Flak Tracks "
+                    + $"escorts, guarding the refinery with no harvester alive ({escortAir.ToRefinery} did, "
+                    + $"{escortAir.AtFlyer} went for the flyer) - the commander is reading the compiled garrison");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -5906,6 +5976,14 @@ int AiTuningGate()
     bumpedRung.RegisterAiTuning(AiTuning.BrutalId, AiTuning.Brutal with { StartingCreditHandicap = 5001 });
     if (bumpedRung.CatalogueChecksum == stock1)
         return Fail("aituning: a one-credit change to Brutal's declared handicap must change the catalogue checksum");
+    // P8-17 (ADR-072): and the air answer's two numbers, each by one.
+    var bumpedCap = new World(4314);
+    bumpedCap.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard with { AntiAirCap = AiTuning.Standard.AntiAirCap + 1 });
+    var bumpedGarrison = new World(4315);
+    bumpedGarrison.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard with { AntiAirGarrison = AiTuning.Standard.AntiAirGarrison + 1 });
+    if (bumpedCap.CatalogueChecksum == stock1 || bumpedGarrison.CatalogueChecksum == stock1)
+        return Fail("aituning: a one-unit change to a personality's anti_air_cap or anti_air_garrison must change the "
+                    + "catalogue checksum, or two peers can answer the same air raid with different armies");
 
     // --- 4. Registration after tick 0 is refused, matching units, structures
     //        and weapons. A commander re-tuned mid-match is a silent replay
@@ -5964,11 +6042,16 @@ int AiTuningGate()
                       + $"its six fighters home where the stock commander sent {stockWave}, and registering data/ai over "
                       + $"that poison sent {revivedWave} again; an Easy rung REGISTERED at a five-fold ratio thinks every "
                       + $"{drivenEasyBeat} ticks against the authored {authoredEasyBeat}, and a Hard rung registered at "
-                      + "four harvesters per refinery buys a third where the authored two does not; Brutal's 2/3 still "
+                      + "four harvesters per refinery buys a third where the authored two does not; a commander that sees "
+                      + $"a flyer orders {authoredAir.Flak} Flak Track at the authored anti_air_cap and {cappedAir.Flak} "
+                      + $"at a registered 0, and its two idle Flak Tracks go for the flyer ({garrisonAir.AtFlyer}) at the "
+                      + $"authored anti_air_garrison of 2 and guard the refinery ({escortAir.ToRefinery}) at a registered "
+                      + "0; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused; and the catalogue checksum sits at "
-                      + $"0x{stock1:X16} from both sources and moves on one unit of wave size or one credit of Brutal's "
-                      + "handicap, which is what stops two LAN peers playing different commanders and calling it agreement");
+                      + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
+                      + "handicap or one unit of either anti-air number, which is what stops two LAN peers playing "
+                      + "different commanders and calling it agreement");
     return 0;
 }
 
@@ -13014,6 +13097,13 @@ int Match(ulong seed)
     // open, which ML-01 found they could not.
     int dockFace = DockFaceGate();
     if (dockFace != 0) return dockFace;
+    // P8-17: and the commander answers air (F3, ADR-072) and the cheap cheeses,
+    // which bind from that row. Run here, at their defaults, so a regression
+    // turns CI red rather than waiting for somebody to run the mode by hand.
+    int aiAir = Measured(AiAirGate);
+    if (aiAir != 0) return aiAir;
+    int cheese = Measured(CheeseGate);
+    if (cheese != 0) return cheese;
     // P7-16: and the MCV it saves for is TIER-GATED, which GDD s5 line 47 has
     // asked for since the design doc and no code had ever enforced.
     int mcvTech = McvTechGate();
@@ -14735,7 +14825,9 @@ int Bench()
 // bites before flipping it.
 //
 // None of these is in golden, match, determinism, the default battery,
-// tools/ci-local.sh or CI. They are sweeps of whole AI matches and the full
+// tools/ci-local.sh or CI, with one exception: a gate whose row makes it
+// binding and which runs in seconds joins `match` in that row (aiairgate and
+// cheesegate, P8-17). The rest are sweeps of whole AI matches and the full
 // ones take minutes. Every mode takes key=value options to run a short subset
 // (maps=01 orient=0 and so on) and prints its elapsed time.
 //
@@ -14767,9 +14859,14 @@ int Measured(Func<int> mode)
 // --bind for the gates. An unknown key is REFUSED by name, because a typo that
 // quietly ran the full default sweep would cost many minutes and read as a
 // result.
+//
+// The options belong to the mode that was INVOKED. A gate that a binding row
+// has moved into `match` (P8-17's aiairgate and cheesegate) runs there with its
+// defaults, so `match 2026`'s seed is not read as one of its options.
 Dictionary<string, string> MeasureOptions(string mode, bool gate, params string[] keys)
 {
     var o = new Dictionary<string, string>(StringComparer.Ordinal);
+    if (args.Length == 0 || args[0] != mode) return o;
     for (int i = 1; i < args.Length; i++)
     {
         string a = args[i];
@@ -15266,6 +15363,8 @@ RaidOutcome PlayRaid(string root, AiDifficulty rung, int faction, bool opponent,
     var seenHarvesters = new HashSet<int>();
     var cmds = new List<Command>();
     int structsAtRaid = 0;
+    // P8-17: the tick the last raider fell, and the harvesters standing then.
+    int answerTick = -1, harvestersAtAnswer = 0;
     int Standing() => raiders.Count(id => w.Entities[id].Alive);
     int Lost() => seenHarvesters.Count(id => !w.Entities[id].Alive);
     for (int t = 0; t < from + window && !MatchOver(w); t++)
@@ -15330,6 +15429,11 @@ RaidOutcome PlayRaid(string root, AiDifficulty rung, int faction, bool opponent,
         for (int i = 0; i < w.EntityCount; i++)
             if (w.Entities[i].PlayerId == 0 && w.Entities[i].Kind == EntityKind.Harvester) seenHarvesters.Add(i);
         w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        if (answerTick < 0 && raiders.Count > 0 && Standing() == 0)
+        {
+            answerTick = w.Tick;
+            harvestersAtAnswer = CountOwned(w, 0, e => e.Kind == EntityKind.Harvester);
+        }
         if (t > from && (t - from) % reportEvery == 0)
             log.Add($"    t={t} raiders alive {Standing()}/{count}  AI harvesters alive {CountOwned(w, 0, e => e.Kind == EntityKind.Harvester)} "
                 + $"lost {Lost()}  AI structs {CountOwned(w, 0, e => World.IsStructure(e.Kind))} (had {structsAtRaid})  "
@@ -15338,7 +15442,7 @@ RaidOutcome PlayRaid(string root, AiDifficulty rung, int faction, bool opponent,
     }
     return new RaidOutcome(w.Winner, w.Tick, raiders.Count, Standing(), CountOwned(w, 0, e => e.Kind == EntityKind.Harvester), Lost(),
         structsAtRaid, CountOwned(w, 0, e => World.IsStructure(e.Kind)), CountOwned(w, 0, e => e.Kind == EntityKind.Unit),
-        w.Credits(0), CountOwned(w, 0, e => e.Kind == EntityKind.Unit && e.UnitType == flakType));
+        w.Credits(0), CountOwned(w, 0, e => e.Kind == EntityKind.Unit && e.UnitType == flakType), answerTick, harvestersAtAnswer);
 }
 
 // A raid is ANSWERED when every raider is dead or when the commander under
@@ -15348,6 +15452,17 @@ RaidOutcome PlayRaid(string root, AiDifficulty rung, int faction, bool opponent,
 // the stage also protects the economy, a harvester must still be alive. A
 // match that was over before the raid tick spawned no raiders, and that FAILS:
 // a stage that passes without the raid having happened has measured nothing.
+//
+// P8-17 (ADR-072): the harvester is counted WHEN THE RAID IS ANSWERED, the
+// tick the last raider falls (at the match's end if the commander won with
+// raiders standing), and no longer at the end of the window. The window's end
+// counted every harvester the rest of the match took as well, and the proof
+// that it measured the ground war rather than the raid is aiairgate's own
+// no-raid control: a Normal Sodality commander against seat 1's Normal
+// Directorate ends the window with NO harvester and no raid at all, to ground
+// fire and the orbital cannon. F3 says the flyers die "and at least one AI
+// harvester survives" them, so that is what is counted. The window's end is
+// still printed beside it, so nothing it showed is hidden.
 (bool Pass, List<string> Lines) RaidStage(string root, AiDifficulty rung, int faction, bool opponent, int from,
                                           string raider, int count, int window, int reportEvery, Func<Entity, bool> prey,
                                           bool needHarvester)
@@ -15360,8 +15475,12 @@ RaidOutcome PlayRaid(string root, AiDifficulty rung, int faction, bool opponent,
         return (false, lines);
     }
     bool answered = r.RaidersAlive == 0 || r.Winner == 0;
-    bool pass = answered && (!needHarvester || r.HarvestersAlive >= 1);
-    lines.Add($"    end t={r.EndTick}: raiders alive {r.RaidersAlive}/{r.Raiders}, AI harvesters alive {r.HarvestersAlive} "
+    int survivors = r.AnswerTick >= 0 ? r.HarvestersAtAnswer : r.HarvestersAlive;
+    bool pass = answered && (!needHarvester || survivors >= 1);
+    string atAnswer = r.AnswerTick >= 0
+        ? $"the last raider fell at t={r.AnswerTick} with {r.HarvestersAtAnswer} AI harvesters alive; "
+        : "";
+    lines.Add($"    end t={r.EndTick}: {atAnswer}raiders alive {r.RaidersAlive}/{r.Raiders}, AI harvesters alive {r.HarvestersAlive} "
         + $"(lost {r.HarvestersLost}), AI structures {r.Structs} (had {r.StructsAtRaid} at the raid), AI army {r.Army}, "
         + $"AI flak tracks {r.FlakTracks}, AI credits {r.Credits}, {(r.Winner < 0 ? "no winner" : $"seat {r.Winner} won")} "
         + $"-> {(pass ? "answered" : "NOT answered")}");
@@ -15377,8 +15496,12 @@ int AiAirGate()
     // seat 1, and from= moves the raid, which together reproduce its Sodality
     // run from t=2400 against a passive foe). The raid window is 6000 ticks.
     //
-    // NON-BINDING until P8-17, the row that makes the commander answer air
-    // (D10: Flak Tracks into the cycle, a garrison pair, a harvester escort).
+    // BINDING since P8-17 (ADR-072), the row that makes the commander answer
+    // air (D10: Flak Tracks into the cycle, a garrison pair, a harvester
+    // escort, the radar pulled forward). A surviving harvester is counted when
+    // the raid is answered (see RaidStage). Each cell also plays the SAME match
+    // with no raid and prints it, asserting nothing: the control is what shows
+    // which harvester losses belong to the raid and which to the ground war.
     string root = MeasureRoot();
     var o = MeasureOptions("aiairgate", true, "from", "opp", "jobs");
     bool binding = MeasurementHarness.AiAirGateBinding || o.ContainsKey("bind");
@@ -15399,8 +15522,17 @@ int AiAirGate()
         + $"seat 1 {(opponent ? "played by a Normal commander" : "idle")}; the commander under test holds seat 0.");
     var sw = Stopwatch.StartNew();
     var results = RunOrdered(cases.Length, jobs,
-        i => RaidStage(root, cases[i].Item1, cases[i].Item2, opponent, from, "com_strike_flyer", 3, 6000, 1000,
-                       e => e.Kind == EntityKind.Harvester, needHarvester: true),
+        i =>
+        {
+            var stage = RaidStage(root, cases[i].Item1, cases[i].Item2, opponent, from, "com_strike_flyer", 3, 6000, 1000,
+                                  e => e.Kind == EntityKind.Harvester, needHarvester: true);
+            var control = PlayRaid(root, cases[i].Item1, cases[i].Item2, opponent, from, "com_strike_flyer", 0, 6000, 1000,
+                                   e => e.Kind == EntityKind.Harvester, new List<string>());
+            stage.Lines.Add($"    control, the same match with no raid: AI harvesters alive {control.HarvestersAlive} "
+                + $"(lost {control.HarvestersLost}) at t={control.EndTick}, AI credits {control.Credits}, "
+                + $"{(control.Winner < 0 ? "no winner" : $"seat {control.Winner} won")} (printed, not asserted)");
+            return stage;
+        },
         (i, r) =>
         {
             Console.WriteLine($"  {cases[i].Item1} {FactionName(cases[i].Item2)}:");
@@ -15413,7 +15545,7 @@ int AiAirGate()
     Console.WriteLine($"aiairgate: elapsed {sw.Elapsed.TotalSeconds:F1} s for {cases.Length} raids on {jobs} threads");
     return MeasureVerdict("aiairgate", "P8-17", binding,
         failures.Count == 0 ? failures : new List<string> { $"the raid was not answered with a harvester alive for {string.Join(", ", failures)}" },
-        "Every rung and faction killed the flyers (or won) and kept a harvester.");
+        "Every rung and faction killed the flyers (or won) with a harvester still alive.");
 }
 
 // The investigation's tower-creep probe (AI-10): seat 1 idle, and at tick `at`
@@ -15505,6 +15637,14 @@ int CheeseGate()
     // with P8-17, the row that answers air and escorts harvesters; tower creep
     // passes today, and binding it then makes a later regression visible,
     // which is what D29 asks for before P8-50 decides on a fix.
+    //
+    // BINDING since P8-17 (ADR-072). On the main it landed on, all four flyer
+    // raids on the base FAILED, although P8-13 recorded the gate passing. That
+    // pass had never been an answer to air: measured at the P8-16 merge, the
+    // commander WON each match outright with all three flyers still alive,
+    // which counts as answered. P8-15 gave seat 1 back the economy ML-01 had
+    // frozen, the commander stopped winning inside the window, and the flyers
+    // lived through it. With the commander answering air all ten pass.
     string root = MeasureRoot();
     var o = MeasureOptions("cheesegate", true, "jobs");
     bool binding = MeasurementHarness.CheeseGateBinding || o.ContainsKey("bind");
@@ -15943,10 +16083,10 @@ static class MeasurementHarness
     public const int FieldMirrorTicks = 9000;
 
     public const bool LadderGateBinding = false;        // F4: P8-26 sets this
-    public const bool AiAirGateBinding = false;         // F3: P8-17 sets this
+    public const bool AiAirGateBinding = true;          // F3: set by P8-17 (ADR-072)
     public const bool SeatFairGateBinding = false;      // F5: P8-21 sets this
     public const bool EndGateBinding = false;           // F6, the stalemate half: P8-24 sets this
-    public const bool CheeseGateBinding = false;        // AI-12's cheeses: P8-17 sets this (see CheeseGate)
+    public const bool CheeseGateBinding = true;         // AI-12's cheeses: set by P8-17 (see CheeseGate)
     public const bool FieldSurvivalGateBinding = false; // F7: P8-19 sets this
 }
 
@@ -15971,4 +16111,5 @@ sealed class MeasuredMatch
 
 /// <summary>P8-13: how one cheese raid ended (aiairgate, cheesegate).</summary>
 record RaidOutcome(int Winner, int EndTick, int Raiders, int RaidersAlive, int HarvestersAlive, int HarvestersLost,
-                   int StructsAtRaid, int Structs, int Army, long Credits, int FlakTracks);
+                   int StructsAtRaid, int Structs, int Army, long Credits, int FlakTracks,
+                   int AnswerTick = -1, int HarvestersAtAnswer = 0);

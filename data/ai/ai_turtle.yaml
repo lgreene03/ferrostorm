@@ -12,3 +12,8 @@ name: Turtle
 kind: personality
 act_every_ticks: 15
 wave_size: 10
+# P8-17 (ADR-072): the air answer, on Standard's rule. The cap is this
+# personality's wave size, ten, though the commander only builds one more than
+# the most flyers it has seen at once; the garrison keeps the floor of two.
+anti_air_cap: 10
+anti_air_garrison: 2

@@ -15,3 +15,8 @@ name: Rusher
 kind: personality
 act_every_ticks: 15
 wave_size: 4
+# P8-17 (ADR-072): the air answer, on Standard's rule. The cap is this
+# personality's wave size, so a Rusher holds at most four anti-air units, and the
+# garrison keeps the same floor of two at home.
+anti_air_cap: 4
+anti_air_garrison: 2

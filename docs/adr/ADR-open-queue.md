@@ -135,3 +135,12 @@ the same commit.
   can reach; the commander keeps a one-cell apron round its refineries.
   Goldens MOVE, measured and attributed one by one in the ADR. Ratified by the
   orchestrator under the owner's standing authority of 2026-10-02, citing D4.
+- ADR-072: RATIFIED 2026-10-02 - ADR-072-the-commander-answers-air.md
+  (P8-17, decision D10, findings AI-01 and PV-06). Number claimed here per the
+  numbering law before drafting. The commander counts the enemy aircraft it
+  can see, keeps one Flak Track more than the most it has seen at once (capped
+  by anti_air_cap in data/ai), holds two at home and sends the rest to escort
+  its harvesters, and pulls the radar forward. aiairgate and cheesegate bind.
+  Goldens NEUTRAL, measured; catalogue checksum MOVES
+  (0xB4E6F043C4A872CC to 0xF384205E0D0BF2D2). Ratified under the owner's
+  standing authority of 2026-10-02, citing D10.
