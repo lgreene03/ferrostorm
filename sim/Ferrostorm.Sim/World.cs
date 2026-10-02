@@ -4131,7 +4131,38 @@ public sealed partial class World
 
             int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
             int tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
-            if (cx != tcx || cy != tcy)
+            // ADR-071: a walk ONTO a building routes to its footprint, not to
+            // the one cell its centre falls in. Only when that cell is actually
+            // blocked: a mine does not block its ground, and walking onto one
+            // is walking onto a point, exactly as before.
+            int onto = Map.InBounds(tcx, tcy) && Map.IsBlocked(tcx, tcy) ? DestinationStructureOf(in e) : -1;
+            if (onto >= 0 && (cx != tcx || cy != tcy))
+            {
+                var s = _entities[onto];
+                int size = FootprintOf(s.StructType), ax = AnchorOf(s.X, s.StructType), ay = AnchorOf(s.Y, s.StructType);
+                var dock = _flow.GetFootprint(Map, ax, ay, size);
+                if (dock.IsGoal(Map, cx, cy))
+                {
+                    // On a face or a corner: close on the nearest point of the
+                    // footprint. That point lies on this cell's own boundary, so
+                    // the step never leaves the cell and can never clip a blocked
+                    // neighbour. Every point on the edge of a 2x2 or smaller
+                    // footprint is within 1.42 cells of its centre, inside both
+                    // the 1.75-cell contact reach and the 2.83-cell dock, so the
+                    // walk always ends in reach (and a harvester docks the moment
+                    // it enters any ring cell of a 2x2).
+                    aimX = Fix64.Clamp(e.X, Fix64.FromInt(ax), Fix64.FromInt(ax + size));
+                    aimY = Fix64.Clamp(e.Y, Fix64.FromInt(ay), Fix64.FromInt(ay + size));
+                }
+                else
+                {
+                    int next = dock.NextCell(Map, cx, cy);
+                    if (next < 0) { e.Moving = false; return; } // no open face reachable
+                    aimX = Map.CellCentre(next % Map.Width);
+                    aimY = Map.CellCentre(next / Map.Width);
+                }
+            }
+            else if (cx != tcx || cy != tcy)
             {
                 var field = _flow.Get(Map, tcx, tcy);
                 int next = field.NextCell(Map, cx, cy);
@@ -5068,7 +5099,19 @@ public sealed partial class World
                     }
                     var r = _entities[e.RefineryId];
                     if (Docked(in e, r.X, r.Y)) { e.HState = HarvestState.Unloading; e.StateTicks = UnloadTicks; e.Moving = false; }
-                    else MoveTo(ref e, r.X, r.Y);
+                    else
+                    {
+                        // ADR-071 clause 2: no open face of the assigned
+                        // refinery is reachable at all, so take the nearest
+                        // other one that is. The reassignment sticks, so the
+                        // next trip goes there too.
+                        if (!CanReachStructure(in e, e.RefineryId) && FallbackRefinery(in e) is int alt && alt >= 0)
+                        {
+                            e.RefineryId = alt;
+                            r = _entities[alt];
+                        }
+                        MoveTo(ref e, r.X, r.Y);
+                    }
                     break;
                 }
                 case HarvestState.Unloading:
@@ -5155,6 +5198,73 @@ public sealed partial class World
     {
         e.TargetX = x; e.TargetY = y; e.Moving = true; e.UseFlow = true;
         StepToward(ref e);
+    }
+
+    /// <summary>
+    /// ADR-071: the structure this entity is walking ONTO, or -1. Two walks
+    /// exist in the sim: a harvester heading to dock at its refinery, and a
+    /// contact unit (capture, theft, sabotage, demolition) heading to act on a
+    /// building, read through CaptureSystem's own predicate so a hero ordered
+    /// at a wall or its own building still walks the attack pursuit's route.
+    /// There is no repair walk to route: Repair toggles in place and the
+    /// depot order is a client PathMove to a point.
+    ///
+    /// Derived each tick from state that is already hashed (HState, RefineryId,
+    /// ExplicitTarget, TargetX/Y), so no new field, no save change, and the
+    /// answer is the same on every machine. The target must be the building's
+    /// position NOW: a stale target from the previous state routes as it always did.
+    /// </summary>
+    private int DestinationStructureOf(in Entity e)
+    {
+        int s;
+        if (e.Kind == EntityKind.Harvester)
+        {
+            if (e.HState != HarvestState.ToRefinery) return -1;
+            s = e.RefineryId;
+            if (!ValidId(s) || !_entities[s].Alive || !IsStructure(_entities[s].Kind)) return -1;
+        }
+        else if (e.Kind == EntityKind.Unit && ContactEffectOf(e.UnitType) != ContactEffect.None)
+        {
+            s = e.ExplicitTarget;
+            if (!ValidId(s) || !CanBeActedOn(in e, _entities[s])) return -1;
+        }
+        else return -1;
+        var t = _entities[s];
+        return t.X == e.TargetX && t.Y == e.TargetY ? s : -1;
+    }
+
+    /// <summary>ADR-071: can this entity reach any open face of structure s,
+    /// from the cell it stands in? A standing route, read from the same cached
+    /// footprint field StepToward walks, so the answer and the walk agree.</summary>
+    private bool CanReachStructure(in Entity e, int s)
+    {
+        var t = _entities[s];
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
+        if (!Map.InBounds(cx, cy)) return false;
+        int size = FootprintOf(t.StructType), ax = AnchorOf(t.X, t.StructType), ay = AnchorOf(t.Y, t.StructType);
+        return _flow.GetFootprint(Map, ax, ay, size).Reaches(Map, cx, cy);
+    }
+
+    /// <summary>
+    /// ADR-071 clause 2: with no route at all to its assigned refinery, a
+    /// harvester falls back to the nearest OTHER refinery its owner has that it
+    /// can reach. Squared distance to the refinery centre, the
+    /// FindNearestRefinery measure; a strict less-than in entity index order,
+    /// so a tie goes to the lower id. -1 when no other refinery is reachable,
+    /// and the harvester then keeps its assignment rather than oscillating.
+    /// </summary>
+    private int FallbackRefinery(in Entity e)
+    {
+        int best = -1; Fix64 bestD = Fix64.MaxValue;
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            if (i == e.RefineryId) continue;
+            var r = _entities[i];
+            if (!r.Alive || r.Kind != EntityKind.Refinery || !IsOwnedBy(in r, e.PlayerId)) continue;
+            Fix64 d = Fix64.DistSq(r.X - e.X, r.Y - e.Y);
+            if (d < bestD && CanReachStructure(in e, i)) { bestD = d; best = i; }
+        }
+        return best;
     }
 
     /// <summary>

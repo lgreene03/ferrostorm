@@ -127,3 +127,11 @@ the same commit.
   wire command, no save bump; all 24 goldens byte-identical). Cohesive
   formation movement, the part that would need hashed sim state and a golden
   regeneration, is deferred to a future ADR when a concrete need appears.
+- ADR-071: RATIFIED 2026-10-02 - ADR-071-a-refinery-docks-from-every-face.md
+  (P8-15, decision D4, finding ML-01). Number claimed here per the numbering
+  law before drafting. Harvester docking and every walk onto a building route
+  to a multi-source flow field seeded at every open cell round the footprint;
+  a harvester with no route to its refinery falls back to the nearest one it
+  can reach; the commander keeps a one-cell apron round its refineries.
+  Goldens MOVE, measured and attributed one by one in the ADR. Ratified by the
+  orchestrator under the owner's standing authority of 2026-10-02, citing D4.

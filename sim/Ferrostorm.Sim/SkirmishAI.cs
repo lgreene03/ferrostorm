@@ -542,7 +542,7 @@ public sealed class SkirmishAI
         int ready = w.Entities[cy].ReadyStructure;
         if (ready != 0)
         {
-            if (TryFindPlacement(w, out int ax, out int ay))
+            if (TryFindPlacement(w, ready, out int ax, out int ay))
                 output.Add(new Command(w.Tick, _player, CommandType.PlaceStructure, cy,
                     Fix64.FromInt(ax), Fix64.FromInt(ay), ready));
         }
@@ -1011,9 +1011,13 @@ public sealed class SkirmishAI
     /// <summary>Deterministic outward ring scan around own structures for a
     /// legal anchor, NEWEST structure first - so support buildings gravitate
     /// to the frontier (a fresh expansion CY gets its refinery, not the
-    /// already-crowded home base).</summary>
-    private bool TryFindPlacement(World w, out int ax, out int ay)
+    /// already-crowded home base). ADR-071 clause 3 filters the candidates
+    /// through KeepsApron; the scan's order and shape are untouched (D5, P8-21,
+    /// owns those).</summary>
+    private bool TryFindPlacement(World w, int ready, out int ax, out int ay)
     {
+        bool placingRefinery = w.GetStructureType(ready).Kind == EntityKind.Refinery;
+        int size = w.FootprintOf(ready);
         // P7-8: OLDEST FIRST, and the direction is the whole fix.
         //
         // This walked backwards, so the anchor was the most recently built
@@ -1041,10 +1045,42 @@ public sealed class SkirmishAI
                     {
                         if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != ring) continue; // ring shell only
                         int cx = oax + dx, cyy = oay + dy;
-                        if (w.ValidPlacement(_player, cx, cyy)) { ax = cx; ay = cyy; return true; }
+                        if (w.ValidPlacement(_player, cx, cyy) && KeepsApron(w, cx, cyy, size, placingRefinery))
+                        { ax = cx; ay = cyy; return true; }
                     }
         }
         ax = ay = -1;
         return false;
+    }
+
+    /// <summary>
+    /// ADR-071 clause 3: the commander keeps a one-cell clear apron round every
+    /// refinery it owns, so it can never seal its own dock. Two halves:
+    ///   1. Nothing it places may cover a cell of an own living refinery's
+    ///      apron (the one-cell ring round the footprint), whoever placed that
+    ///      refinery.
+    ///   2. A refinery it places must have its own apron clear: every in-bounds
+    ///      cell of the ring unblocked. A ring cell off the map edge is not a
+    ///      cell anything can stand in or seal, so it is not counted.
+    /// A filter only: it reads the world, entity index order, and keeps no state.
+    /// </summary>
+    private bool KeepsApron(World w, int ax, int ay, int size, bool placingRefinery)
+    {
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var r = w.Entities[i];
+            if (!r.Alive || r.Kind != EntityKind.Refinery || !World.IsOwnedBy(in r, _player)) continue;
+            int rs = w.FootprintOf(r.StructType), rax = w.AnchorOf(r.X, r.StructType), ray = w.AnchorOf(r.Y, r.StructType);
+            // The candidate's footprint against the refinery's footprint grown by one cell on every side.
+            if (ax <= rax + rs && ax + size - 1 >= rax - 1 && ay <= ray + rs && ay + size - 1 >= ray - 1) return false;
+        }
+        if (placingRefinery)
+            for (int y = ay - 1; y <= ay + size; y++)
+                for (int x = ax - 1; x <= ax + size; x++)
+                {
+                    bool inside = x >= ax && x < ax + size && y >= ay && y < ay + size;
+                    if (!inside && w.Map.InBounds(x, y) && w.Map.IsBlocked(x, y)) return false;
+                }
+        return true;
     }
 }
