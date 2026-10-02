@@ -1408,19 +1408,13 @@ public partial class VerifyRunner : Node
     /// </summary>
     private static readonly (string Stage, CommandType Verb, bool WholeVerb, string Gap, string Owner)[] InputGateKnownMissing =
     {
-        ("LoadTransport", CommandType.LoadTransport, true,
-            "no gesture boards infantry onto an own Carrier; right-clicking the Carrier with infantry selected is a move", "P8-7"),
-        ("UnloadTransport", CommandType.UnloadTransport, true,
-            "no key or button sets a Carrier's cargo down", "P8-7"),
-        ("Capture/neutral-outpost", CommandType.Attack, false,
-            "an engineer right-clicked onto a NEUTRAL outpost is sent a move, because the attack pick takes hostile seats only", "P8-8"),
-        ("Attack/neutral-bridge", CommandType.Attack, false,
-            "no force-attack gesture fells a neutral bridge (D23: Ctrl plus right-click)", "P8-8"),
-        ("SetRally/Airfield", CommandType.SetRally, false,
-            "right-clicking with an Airfield selected sets no rally: the client offers a rally on the Factory and Barracks only", "P8-9"),
-        ("Produce/Airfield", CommandType.Produce, false,
-            "the AIRCRAFT tab's buttons read the Factory's line, so with an Airfield standing and no Factory the Strike "
-            + "Flyer has no button", "P8-9"),
+        // P8-7 found this one, and it is the SIM's half, not a missing gesture:
+        // the right click is sent and re-sent, and the sim never lets it land.
+        ("LoadTransport/out-of-reach", CommandType.LoadTransport, false,
+            "infantry ordered onto a Carrier from more than two cells away is walked towards it by the sim and settles "
+            + "at the four-cell crowd-arrival radius (World.StepToward), outside LoadTransport's two-cell reach, so it "
+            + "never boards however often the order is re-sent (measured from 3, 4, 6 and 10 cells)",
+            "P8-56 (found by P8-7; the fix is in sim/Ferrostorm.Sim, outside the client lane)"),
     };
 
     /// <summary>The sim's contact effects. ContactEffect is private to World,
@@ -1995,42 +1989,15 @@ public partial class VerifyRunner : Node
                 "Sabotage" => "the plant is switched off",
                 _ => "the plant takes the demolition charge",
             };
-            // The capture verb has its own cursor; the other three read Attack
-            // until P8-8 gives every contact unit the Enter cursor.
-            bool cursorOk = effect != "Capture" || cursor == "Enter";
+            // P8-8: every contact unit wears the walk-in verb over a target it
+            // can act on. Until P8-8 only the engineer did and the other three
+            // read Attack, which for an unarmed infiltrator promised a fight.
+            bool cursorOk = cursor == "Enter";
             Gate(selAgent && walkIn == 1 && done && cursorOk, effect,
                  $"a click selects the {g.UnitNameForTest(unitType)} and a right click on an enemy building sends it in: "
                  + $"{reads} after {ticks} ticks (cursor {cursor}, {walkIn} Attack queued{(done ? "" : $"; {agentState}")})");
             _gateEffectsCovered.Add(effect);
         }
-
-        // --- Coverage: nothing is in neither place ---------------------------
-        string uncovered = "", stale = "";
-        int verbs = 0;
-        foreach (CommandType t in System.Enum.GetValues<CommandType>())
-        {
-            if (t == CommandType.None) continue;
-            verbs++;
-            bool excepted = System.Array.Exists(InputGateExceptions, x => x.Verb == t);
-            bool wholeMissing = System.Array.Exists(InputGateKnownMissing, x => x.Verb == t && x.WholeVerb);
-            if (!_gateCovered.Contains(t) && !excepted && !wholeMissing) uncovered += $" {t}";
-            if (_gateCovered.Contains(t) && wholeMissing) stale += $" {t}";
-        }
-        Check(uncovered.Length == 0,
-              $"inputgate/coverage: all {verbs} CommandType verbs have a gesture stage, are the recorded Move exception, or "
-              + $"are in the KNOWN-MISSING table{(uncovered.Length > 0 ? $" (in neither:{uncovered})" : "")}");
-        Check(stale.Length == 0,
-              $"inputgate/coverage: no verb with a stage is still listed as wholly KNOWN-MISSING{(stale.Length > 0 ? $" (delete the entry for:{stale})" : "")}");
-        string noEffect = "";
-        foreach (var (effect, _) in InputGateContactUnits)
-            if (!_gateEffectsCovered.Contains(effect)) noEffect += $" {effect}";
-        Check(noEffect.Length == 0,
-              $"inputgate/coverage: all {InputGateContactUnits.Length} contact effects have a gesture stage{(noEffect.Length > 0 ? $" (missing:{noEffect})" : "")}");
-        foreach (var (verb, why) in InputGateExceptions)
-            GD.Print($"  EXCEPTION      inputgate/{verb}: {why}");
-        foreach (var k in InputGateKnownMissing)
-            GD.Print($"  KNOWN-MISSING  inputgate/{k.Stage} ({k.Verb}{(k.WholeVerb ? ", the whole verb" : " on this target")}): "
-                     + $"{k.Gap}; owner {k.Owner}");
 
         // --- P8-5: an enemy under the shroud is not a target -----------------
         // The pick read the whole snapshot list, so the Attack glyph lit over
@@ -2065,7 +2032,48 @@ public partial class VerifyRunner : Node
             Check(false, $"inputgate/fog-pick: an enemy yard and an army to test with (the precondition; yard {foeYard}, army {fogArmy.Count})");
 
         RunStealthStages(g, foe);
+        // P8-7, P8-8 and P8-9 spawn fixtures of their own, so they run after
+        // every earlier stage has read its world, and the coverage check closes
+        // the gate once every stage has had its say.
+        RunCarrierStages(g);
+        RunNeutralTargetStages(g);
+        RunAirfieldStages(g);
+        RunInputGateCoverage();
         g.QueueFree();
+    }
+
+    /// <summary>The inputgate's closing check: every verb is staged, the
+    /// recorded exception, or KNOWN-MISSING, and the table is printed. Run
+    /// last, after every stage has marked what it covered.</summary>
+    private void RunInputGateCoverage()
+    {
+        // --- Coverage: nothing is in neither place ---------------------------
+        string uncovered = "", stale = "";
+        int verbs = 0;
+        foreach (CommandType t in System.Enum.GetValues<CommandType>())
+        {
+            if (t == CommandType.None) continue;
+            verbs++;
+            bool excepted = System.Array.Exists(InputGateExceptions, x => x.Verb == t);
+            bool wholeMissing = System.Array.Exists(InputGateKnownMissing, x => x.Verb == t && x.WholeVerb);
+            if (!_gateCovered.Contains(t) && !excepted && !wholeMissing) uncovered += $" {t}";
+            if (_gateCovered.Contains(t) && wholeMissing) stale += $" {t}";
+        }
+        Check(uncovered.Length == 0,
+              $"inputgate/coverage: all {verbs} CommandType verbs have a gesture stage, are the recorded Move exception, or "
+              + $"are in the KNOWN-MISSING table{(uncovered.Length > 0 ? $" (in neither:{uncovered})" : "")}");
+        Check(stale.Length == 0,
+              $"inputgate/coverage: no verb with a stage is still listed as wholly KNOWN-MISSING{(stale.Length > 0 ? $" (delete the entry for:{stale})" : "")}");
+        string noEffect = "";
+        foreach (var (effect, _) in InputGateContactUnits)
+            if (!_gateEffectsCovered.Contains(effect)) noEffect += $" {effect}";
+        Check(noEffect.Length == 0,
+              $"inputgate/coverage: all {InputGateContactUnits.Length} contact effects have a gesture stage{(noEffect.Length > 0 ? $" (missing:{noEffect})" : "")}");
+        foreach (var (verb, why) in InputGateExceptions)
+            GD.Print($"  EXCEPTION      inputgate/{verb}: {why}");
+        foreach (var k in InputGateKnownMissing)
+            GD.Print($"  KNOWN-MISSING  inputgate/{k.Stage} ({k.Verb}{(k.WholeVerb ? ", the whole verb" : " on this target")}): "
+                     + $"{k.Gap}; owner {k.Owner}");
     }
 
     /// <summary>
@@ -2248,6 +2256,456 @@ public partial class VerifyRunner : Node
              && selRifle2 && overPost == "Attack" && postAttacks == 1 && lw.Entities[rifle2].ExplicitTarget == phantom2,
              "stealth-detected", $"with a Watch Post in range it is drawn, tinted and attackable: cursor {overPost}, "
              + $"{postAttacks} Attack queued, and the sim holds it as the squad's target");
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-7: the Carrier's verbs. The 600-credit transport had none: nothing in
+    /// the client issued LoadTransport or UnloadTransport, so P7-3's carrier
+    /// was a vehicle that could only drive about empty. Every order here goes
+    /// through the gesture a player uses (a drag, a right click, the unload
+    /// key), and every check reads the hold off the sim.
+    /// </summary>
+    private void RunCarrierStages(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-7): the Carrier boards, sets down and reads its hold");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        Vector2 ScreenAt(int id) { var (x, z) = PosOf(id); return g.ScreenOf(x, z); }
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        int Loads(int carrierId)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.LoadTransport && c.AuxId == carrierId) n++;
+            return n;
+        }
+        bool InReach(int a, int b)
+            => Fix64.DistSq(lw.Entities[a].X - lw.Entities[b].X, lw.Entities[a].Y - lw.Entities[b].Y) <= Fix64.FromInt(4);
+        int OwnRiflesNear(int id)
+        {
+            int n = 0;
+            for (int i = 0; i < lw.EntityCount; i++)
+            {
+                var e = lw.Entities[i];
+                if (e.Alive && e.PlayerId == me && e.Kind == EntityKind.Unit && e.UnitType == 2
+                    && Fix64.DistSq(e.X - lw.Entities[id].X, e.Y - lw.Entities[id].Y) <= Fix64.FromInt(9)) n++;
+            }
+            return n;
+        }
+
+        // --- The key exists, and agrees with the rebind table ----------------
+        // The support-power key's proof: BindOf answers only for an action in
+        // BOTH the Bindable table and project.godot's [input] block.
+        Key unload = Settings.BindOf("unload");
+        Check(unload != Key.None && Settings.ConflictFor("unload", unload) == null,
+              $"inputgate/UnloadTransport: the unload key has a binding of its own ({Settings.KeyName(unload)}): "
+              + "project.godot and the Bindable table agree, and no other action holds it");
+
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        var q = QuietGround(lw, ycx, ycy);
+        if (q is not { } s)
+        {
+            Check(false, "inputgate/LoadTransport: open, quiet ground for the fixture (none found: a fixture failure, not a product one)");
+            return;
+        }
+
+        // --- LoadTransport: a drag on the squads, a right click on the Carrier
+        // Both squads stand within the sim's two-cell reach; the walk-in from
+        // farther is the KNOWN-MISSING line above, a sim defect.
+        int carrier = SpawnOfType(lw, me, World.CarrierUnitType, s.X + 1, s.Y);
+        int r1 = SpawnOfType(lw, me, 2, s.X, s.Y);
+        int r2 = SpawnOfType(lw, me, 2, s.X, s.Y + 1);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool inReach = InReach(r1, carrier) && InReach(r2, carrier);
+        var (cxf, czf) = PosOf(carrier);
+        // The camera's own closest zoom (RtsCamera.MinHeight), because the
+        // headless viewport is small and a cell is a few pixels across at the
+        // usual height. The squads stand in one column with the Carrier a cell
+        // to the east, so the drag is a tall, narrow box: its sides sit a third
+        // of the way to the Carrier, and its height makes it a drag rather than
+        // a click (FinishSelect's 8-pixel rule).
+        g.FocusCameraOn(cxf, czf, 8f);
+        var a = ScreenAt(r1);
+        var b = ScreenAt(r2);
+        float side = Mathf.Abs(g.ScreenOf(cxf, czf).X - a.X) / 3f;
+        g.ClearSelectionForTest();
+        g.BoxSelect(new Vector2(Mathf.Min(a.X, b.X) - side, Mathf.Min(a.Y, b.Y) - 6f),
+                    new Vector2(Mathf.Max(a.X, b.X) + side, Mathf.Max(a.Y, b.Y) + 6f));
+        bool selSquads = g.SelectionCount == 2 && g.IsSelected(r1) && g.IsSelected(r2);
+        string selDiag = $"selected [{string.Join(",", g.SelectedIdsForTest())}] of r1 #{r1} at {a}, r2 #{r2} at {b}, "
+                         + $"carrier #{carrier} at {g.ScreenOf(cxf, czf)}";
+        string over = g.CursorNameAt(g.ScreenOf(cxf, czf));
+        int hold0 = lw.CargoOf(carrier).Count;
+        g.PressRightClick(g.ScreenOf(cxf, czf));
+        int loads = Loads(carrier);
+        int strayMoves = 0;
+        foreach (var c in g.PendingForTest) if (c.Type == CommandType.PathMove) strayMoves++;
+        g.StepTicks(1);
+        bool aboard = !lw.Entities[r1].Alive && !lw.Entities[r2].Alive && lw.CargoOf(carrier).Count == hold0 + 2;
+        Gate(inReach && selSquads && over == "Enter" && loads == 2 && strayMoves == 0 && aboard, "LoadTransport",
+             $"a drag selects two rifle squads beside an own Carrier, the cursor over it reads {over}, and a right click "
+             + $"boards both: {loads} LoadTransport queued, {strayMoves} PathMove, hold {hold0} -> {lw.CargoOf(carrier).Count}"
+             + $" (in reach {inReach}{(selSquads ? "" : $"; {selDiag}")})");
+        _gateCovered.Add(CommandType.LoadTransport);
+
+        // --- ...and the client keeps the order until it can land ------------
+        // A squad three cells off is out of reach: the right click starts the
+        // boarding and the client re-sends it the tick the Carrier comes within
+        // reach (a fixture stands it there, the way a player drives it up), so
+        // it boards with no second click.
+        int r3 = SpawnOfType(lw, me, 2, s.X + 4, s.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selR3 = ClickSelect(r3);
+        bool r3OutOfReach = !InReach(r3, carrier);
+        (cxf, czf) = PosOf(carrier);
+        g.FocusCameraOn(cxf, czf, 22f);
+        g.PressRightClick(g.ScreenOf(cxf, czf));
+        int r3Loads = Loads(carrier);
+        bool tracked = g.PendingBoardingsForTest == 1;
+        for (int i = 0; i < 10 && lw.Entities[r3].Alive; i++) g.StepTicks(1);
+        if (lw.Entities[r3].Alive)
+        {
+            var ce = lw.Entities[carrier];
+            var re = lw.Entities[r3];
+            ce.X = re.X - Fix64.One; ce.Y = re.Y;
+            ce.PrevX = ce.X; ce.PrevY = ce.Y; ce.TargetX = ce.X; ce.TargetY = ce.Y;
+            ce.Moving = false;
+            lw.SetEntityForTest(carrier, ce);
+        }
+        for (int i = 0; i < 5 && lw.Entities[r3].Alive; i++) g.StepTicks(1);
+        g.StepTicks(1);                      // the tick after: the client lets the finished boarding go
+        Gate(selR3 && r3OutOfReach && r3Loads == 1 && tracked && !lw.Entities[r3].Alive
+             && lw.CargoOf(carrier).Count == hold0 + 3 && g.PendingBoardingsForTest == 0, "LoadTransport",
+             $"a squad ordered aboard from out of reach boards, with no second click, once its Carrier is beside it: the "
+             + $"client kept the order and re-sent it (selected {selR3}, out of reach {r3OutOfReach}, {r3Loads} "
+             + $"LoadTransport, held {tracked}, hold {lw.CargoOf(carrier).Count}, boardings still held "
+             + $"{g.PendingBoardingsForTest})");
+
+        // --- The readout: the hold and the key that empties it --------------
+        g.PumpActorsForTest();               // the view catches up with the Carrier the fixture moved
+        bool selCarrier = ClickSelect(carrier);
+        g.StepOneTick();                     // the frame half writes the readout
+        string readout = g.SelInfoText;
+        // Read against the sim's hold as it stands, so a failure upstream is
+        // reported there rather than again here.
+        int holdNow = lw.CargoOf(carrier).Count;
+        string wantHold = $"CARGO {holdNow}/{World.CarrierCapacity}";
+        Check(selCarrier && holdNow > 0 && readout.Contains(wantHold) && readout.Contains($"{Settings.KeyName(unload)} unload"),
+              $"inputgate/UnloadTransport: a selected Carrier reads its hold and names the unload key (\"{readout}\")");
+
+        // --- The army key leaves the transport out ---------------------------
+        g.ClearSelectionForTest();
+        g.PressKey(Settings.BindOf("select_all_army"));
+        var army = g.SelectedIdsForTest();
+        Check(army.Count > 0 && !army.Contains(carrier),
+              $"inputgate/LoadTransport: the army key selects the army ({army.Count}) and leaves the Carrier out, a transport and not army");
+
+        // --- UnloadTransport: the unload key on a selected Carrier ----------
+        selCarrier = ClickSelect(carrier);
+        int riflesBefore = OwnRiflesNear(carrier);
+        int heldBefore = lw.CargoOf(carrier).Count;
+        g.PressKey(unload);
+        int unloads = 0;
+        foreach (var c in g.PendingForTest) if (c.Type == CommandType.UnloadTransport && c.EntityId == carrier) unloads++;
+        g.StepTicks(1);
+        int riflesAfter = OwnRiflesNear(carrier);
+        Gate(selCarrier && unloads == 1 && heldBefore > 0 && lw.CargoOf(carrier).Count == 0
+             && riflesAfter == riflesBefore + heldBefore, "UnloadTransport",
+             $"a click selects the Carrier and the unload key sets its hold down beside it: {unloads} UnloadTransport, "
+             + $"hold {heldBefore} -> {lw.CargoOf(carrier).Count}, rifle squads beside it {riflesBefore} -> {riflesAfter}");
+        _gateCovered.Add(CommandType.UnloadTransport);
+        g.PressKey(unload);
+        int emptyUnloads = 0;
+        foreach (var c in g.PendingForTest) if (c.Type == CommandType.UnloadTransport) emptyUnloads++;
+        Check(emptyUnloads == 0 && g.ToastText.Contains("NOTHING ABOARD"),
+              $"inputgate/UnloadTransport: on an empty Carrier the key sends nothing and says so (\"{g.ToastText}\")");
+        g.StepTicks(1);
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-8: neutral targets. Neutral outposts pay their owner and stand on
+    /// seven of the nine skirmish maps, and the AI claims them, but the attack
+    /// pick took hostile seats only, so a human's engineer right-clicked onto
+    /// one was sent a move. ADR-025's bridge spans on skirmish-04 and -05 could
+    /// not be felled by any human at all. Decision D23 rules how: by the
+    /// force-attack gesture alone, Ctrl plus right click, never by an ordinary
+    /// right click, because a felled bridge does not come back. Both fixtures
+    /// are spawned the way the maps place them (owner -1), so the stage is
+    /// about the gesture, not about which map happens to carry one.
+    /// </summary>
+    private void RunNeutralTargetStages(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-8): neutral targets, the Enter cursor for every contact unit, and decision D23");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        string Over(int id, bool ctrl)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            return g.CursorNameAt(g.ScreenOf(x, z), ctrl);
+        }
+        int AttacksOn(int id)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == id) n++;
+            return n;
+        }
+        int Moves()
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.PathMove) n++;
+            return n;
+        }
+        void Hold(int id)
+        {
+            var e = lw.Entities[id];
+            e.Stance = Stance.HoldFire;
+            lw.SetEntityForTest(id, e);
+        }
+
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        var q = QuietGround(lw, ycx, ycy);
+        if (q is not { } s)
+        {
+            Check(false, "inputgate/Capture/neutral-outpost: open, quiet ground for the fixture (none found: a fixture failure, not a product one)");
+            return;
+        }
+
+        // --- An unclaimed outpost, and every contact unit's cursor over it ---
+        // The engineer stands at the far end of an open corridor east of the
+        // footprint's centre cell, the contact stages' approach (D4's
+        // single-cell walk-in). The other four contact units stand west of it,
+        // unordered, for the cursor alone.
+        int outpost = lw.SpawnOutpost(-1, s.X, s.Y);
+        int eng = SpawnOfType(lw, me, World.EngineerUnitType, s.X + 4, s.Y + 1);
+        var others = new (string Name, int Id, string Want)[]
+        {
+            ("saboteur", SpawnOfType(lw, me, World.SaboteurUnitType, s.X - 2, s.Y - 2), "Enter"),
+            ("commando", SpawnOfType(lw, me, World.CommandoUnitType, s.X - 2, s.Y), "Enter"),
+            ("shadow commando", SpawnOfType(lw, me, World.ShadowCommandoUnitType, s.X - 2, s.Y + 2), "Enter"),
+            // The sim turns an infiltrator away from a neutral: no treasury to rob.
+            ("infiltrator", SpawnOfType(lw, me, World.InfiltratorUnitType, s.X - 2, s.Y + 4), "Move"),
+        };
+        foreach (var o in others) Hold(o.Id);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        Check(lw.Entities[outpost].PlayerId < 0 && g.DrawnForLocalSeatForTest(outpost),
+              "inputgate/Capture/neutral-outpost: an unclaimed outpost stands, owned by no seat and drawn (the precondition)");
+        string cursors = "";
+        bool cursorsOk = true;
+        foreach (var o in others)
+        {
+            bool sel = ClickSelect(o.Id);
+            string got = Over(outpost, false);
+            cursors += $" {o.Name} {got};";
+            if (!sel || got != o.Want) cursorsOk = false;
+        }
+        Gate(cursorsOk, "Capture/neutral-outpost",
+             $"over an unclaimed outpost the saboteur, commando and shadow commando each read Enter, and the infiltrator, "
+             + $"whom the sim refuses a treasury-less target, reads Move ({cursors.Trim().TrimEnd(';')})");
+
+        // --- The engineer claims it ------------------------------------------
+        bool selEng = ClickSelect(eng);
+        string overOutpost = Over(outpost, false);
+        var (ox, oz) = PosOf(outpost);
+        g.PressRightClick(g.ScreenOf(ox, oz));
+        int walkIn = 0;
+        foreach (var c in g.PendingForTest)
+            if (c.Type == CommandType.Attack && c.EntityId == eng && c.AuxId == outpost) walkIn++;
+        bool captured = false;
+        int ticks = 0;
+        for (; ticks < 150 && !captured; ticks++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+                if (ev.Type == GameEventType.Captured && ev.A == outpost && ev.B == me) captured = true;
+        }
+        Gate(selEng && overOutpost == "Enter" && walkIn == 1 && captured && lw.Entities[outpost].PlayerId == me,
+             "Capture/neutral-outpost",
+             $"a click selects an engineer, the cursor over the unclaimed outpost reads {overOutpost}, and a right click "
+             + $"sends it in: {walkIn} Attack queued, Captured raised {captured} after {ticks} ticks, owner now "
+             + $"{lw.Entities[outpost].PlayerId}");
+        g.ClearSelectionForTest();
+
+        // --- D23: a bridge span is felled by force-attack, and only by it ---
+        var q2 = QuietGround(lw, ycx, ycy, (s.X, s.Y), 14);
+        if (q2 is not { } w)
+        {
+            Check(false, "inputgate/Attack/neutral-bridge: a second patch of quiet ground (none found: a fixture failure)");
+            return;
+        }
+        int span = lw.SpawnBridge(w.X + 3, w.Y);
+        // An eighth of its hit points, so the fell takes seconds rather than a
+        // minute: the gesture is under test here, not the damage model.
+        var se = lw.Entities[span];
+        se.Hp = System.Math.Max(1, se.MaxHp / 8);
+        lw.SetEntityForTest(span, se);
+        int tank = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("dir_cannon_tank"), w.X, w.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selTank = ClickSelect(tank);
+        int hp0 = lw.Entities[span].Hp;
+        string plainCursor = Over(span, false);
+        var (bx, bz) = PosOf(span);
+        g.PressRightClick(g.ScreenOf(bx, bz));
+        int plainAttacks = AttacksOn(span), plainMoves = Moves();
+        g.StepTicks(90);
+        bool untouched = lw.Entities[span].Alive && lw.Entities[span].Hp == hp0 && lw.Entities[tank].ExplicitTarget != span;
+        Gate(selTank && plainCursor == "Move" && plainAttacks == 0 && plainMoves == 1 && untouched, "Attack/neutral-bridge",
+             $"an ORDINARY right click on a neutral bridge span is ground: cursor {plainCursor}, {plainMoves} PathMove, "
+             + $"{plainAttacks} Attack, and 90 ticks on the span is {(untouched ? "untouched" : "STRUCK")} "
+             + $"({lw.Entities[span].Hp}/{hp0} hp)");
+        g.PressKey(Settings.BindOf("stop"));
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        selTank = ClickSelect(tank);
+        string forceCursor = Over(span, true);
+        (bx, bz) = PosOf(span);
+        g.PressRightClickWithCtrl(g.ScreenOf(bx, bz));
+        int forceAttacks = AttacksOn(span);
+        int fell = 0;
+        for (; fell < 450 && lw.Entities[span].Alive; fell++) g.StepTicks(1);
+        int scx = Map.CellOf(lw.Entities[span].X), scy = Map.CellOf(lw.Entities[span].Y);
+        bool blocked = lw.Map.IsBlocked(scx, scy);
+        Gate(selTank && forceCursor == "Attack" && forceAttacks == 1 && !lw.Entities[span].Alive && blocked,
+             "Attack/neutral-bridge",
+             $"Ctrl plus right click on the same span is the force-attack D23 rules: cursor {forceCursor}, "
+             + $"{forceAttacks} Attack queued, the span "
+             + $"{(lw.Entities[span].Alive ? "still STANDS after" : "falls after")} {fell} ticks, and its cell is "
+             + $"{(blocked ? "now impassable" : "still open")}");
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-9: the Airfield. The sim has accepted a Produce at an airfield since
+    /// ADR-028's follow-up and the panel has had an AIRCRAFT tab, but the tab's
+    /// buttons read the Factory's line: with only an Airfield standing the
+    /// Strike Flyer had no button, and with both standing its button showed
+    /// the Factory's queue while its order went to the Airfield. And the
+    /// client offered a rally on the Factory and Barracks only. The Factory the
+    /// SetRally stage stood up is still standing here, which is the case that
+    /// tells the two lines apart.
+    /// </summary>
+    private void RunAirfieldStages(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-9): the Airfield's production line and its rally point");
+        var lw = g.LiveWorld;
+        var sb = g.SidebarView;
+        int me = g.LocalPlayerId;
+        int flyer = UnitCatalogue.TypeIdOf("com_strike_flyer");
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        int ProducesAt(int producer)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest)
+                if (c.Type == CommandType.Produce && c.AuxId == flyer && c.EntityId == producer) n++;
+            return n;
+        }
+        int ProducesAnywhere()
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Produce && c.AuxId == flyer) n++;
+            return n;
+        }
+
+        int factory = g.FindEntity(EntityKind.Factory, me);
+        if (factory < 0)
+        {
+            Check(false, "inputgate/Produce/Airfield: the SetRally stage's Factory still stands (the precondition)");
+            return;
+        }
+        g.StepOneTick();                     // the frame half refreshes the panel
+        string emptyNote = sb.TabEmptyNote(Sidebar.TabAircraft);
+        bool hiddenWithFactory = factory >= 0 && g.FindEntity(EntityKind.Airfield, me) < 0 && !sb.UnitButtonVisible(flyer);
+        g.QueueUnit(flyer);                  // the button's own handler, pressed with no Airfield
+        int strayProduces = ProducesAnywhere();
+        string toast = g.ToastText;
+        Gate(hiddenWithFactory && emptyNote == "REQUIRES AN AIRFIELD" && strayProduces == 0 && toast.StartsWith("NO AIRFIELD"),
+             "Produce/Airfield",
+             $"with a Factory standing and no Airfield the Strike Flyer has no button, the AIRCRAFT tab says \"{emptyNote}\", "
+             + $"and its handler pressed anyway queues nothing ({strayProduces} Produce) and says so (\"{toast}\")");
+
+        // --- An Airfield beside the Factory: the button reads ITS line ------
+        var site = g.FindPlacementCell(World.AirfieldStructType);
+        if (site is not { } a)
+        {
+            Check(false, "inputgate/Produce/Airfield: a site for the Airfield (none found: a fixture failure, not a product one)");
+            return;
+        }
+        int airfield = lw.SpawnAirfield(me, a.X, a.Y);
+        // Power and credits enough that the line runs: the stage is about
+        // which line the button reads, not about a brown-out or a treasury.
+        if (g.FindPlacementCell(1) is { } pp) lw.SpawnPowerPlant(me, pp.X, pp.Y, supply: 1000);
+        if (lw.Credits(me) < 3000) lw.GrantCredits(me, 3000 - lw.Credits(me));
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.StepOneTick();
+        g.StepOneTick();
+        int fq0 = lw.QueueLength(factory), aq0 = lw.QueueLength(airfield);
+        bool shown = sb.UnitButtonVisible(flyer) && sb.TabOfUnit(flyer) == Sidebar.TabAircraft;
+        bool pressed = sb.PressUnitButton(flyer);
+        int atAirfield = ProducesAt(airfield), atFactory = ProducesAt(factory);
+        g.StepTicks(1);
+        bool onAirfield = lw.QueueLength(airfield) == aq0 + 1 && lw.QueueLength(factory) == fq0;
+        g.StepTicks(30);
+        g.StepOneTick();                     // the frame half writes the button and the tab
+        string suffix = sb.UnitButtonQueueSuffixForTest(flyer);
+        string tab = sb.TabTitle(Sidebar.TabAircraft);
+        bool progressing = lw.Entities[airfield].BuildProgress > 0;
+        // The head's suffix is its seconds left, "  Ns", which only the line
+        // that holds the flyer can give.
+        bool readsLine = suffix.Trim().EndsWith("s") && suffix.Trim().Length > 1 && tab == "AIRCRAFT 1";
+        Gate(shown && pressed && atAirfield == 1 && atFactory == 0 && onAirfield && progressing && readsLine,
+             "Produce/Airfield",
+             $"with an Airfield beside the Factory the Strike Flyer's button shows under AIRCRAFT and queues at the "
+             + $"AIRFIELD ({atAirfield} Produce there, {atFactory} at the Factory; queues airfield {aq0} -> "
+             + $"{lw.QueueLength(airfield)}, factory {fq0} -> {lw.QueueLength(factory)}), and shows that line's progress "
+             + $"(button \"{suffix.Trim()}\", tab \"{tab}\", progress {lw.Entities[airfield].BuildProgress})");
+
+        // --- The Airfield takes a rally --------------------------------------
+        bool selAirfield = ClickSelect(airfield);
+        var (afx, afz) = PosOf(airfield);
+        float rx = Mathf.Clamp(afx + 3f, 1.5f, lw.Map.Width - 2.5f), rz = Mathf.Clamp(afz + 3f, 1.5f, lw.Map.Height - 2.5f);
+        g.FocusCameraOn(rx, rz, 22f);
+        g.PressRightClick(g.ScreenOf(rx, rz));
+        int rallyCmds = 0;
+        foreach (var c in g.PendingForTest) if (c.Type == CommandType.SetRally && c.EntityId == airfield) rallyCmds++;
+        g.StepTicks(1);
+        var ae = lw.Entities[airfield];
+        bool rallied = ae.HasRally && Mathf.Abs(Fx(ae.RallyX) - rx) + Mathf.Abs(Fx(ae.RallyY) - rz) < 1.5f;
+        g.StepOneTick();
+        string readout = g.SelInfoText;
+        Gate(selAirfield && rallyCmds == 1 && rallied && readout.Contains("right-click: rally"), "SetRally/Airfield",
+             $"a click selects the Airfield, its readout offers the rally (\"{readout}\"), and a right click on the ground "
+             + $"sets its rally point in the sim ({rallyCmds} SetRally, rally held {rallied})");
         g.ClearSelectionForTest();
     }
 

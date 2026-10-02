@@ -197,7 +197,7 @@ public partial class SkirmishLive : Node3D
     // ADR-009 clause 6: one cached producer id per unit-producing struct type.
     // The barracks joins the factory because the sidebar's INFANTRY tab reads
     // its queue, exactly as VEHICLES reads the factory's.
-    private int _yardId = -1, _factoryId = -1, _barracksId = -1;
+    private int _yardId = -1, _factoryId = -1, _barracksId = -1, _airfieldId = -1;
     // DEF-01: the ghost's own range ring (a child of the ghost, so it tracks
     // the cursor for free) plus a dim ring on every own armed structure while
     // placing - the coverage-gap read that makes turret siting a decision.
@@ -408,6 +408,18 @@ public partial class SkirmishLive : Node3D
     // because the deploy control tests it in three places and a bare 7 in each
     // is how one of them drifts.
     private const int McvUnitType = World.McvUnitType;
+    // P8-7: the Carrier's catalogue id, named for McvUnitType's reason: the
+    // boarding pick, the unload key, the readout and the army filter all test
+    // it, and a bare 14 in each is how one of them drifts.
+    private const int CarrierUnitType = World.CarrierUnitType;
+    // P8-7: boardings this client ordered and the sim has not yet completed,
+    // keyed by the boarding unit: which Carrier, and where that Carrier stood
+    // when the order was last sent. LoadTransport walks a unit that is out of
+    // reach and boards only one that is within it, and the sim leaves the
+    // re-issue to whoever gave the order (World.ApplyCommand, LoadTransport),
+    // so this is that giver's memory. See ReissueBoardings.
+    private readonly Dictionary<int, (int Carrier, Fix64 X, Fix64 Y)> _boarding = new();
+    private readonly List<int> _boardingKeys = new();
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
     // carry the identical destination (see SendMobilesToDepot for why exact
     // equality matters: the sim's arrival contagion keys on it).
@@ -443,9 +455,11 @@ public partial class SkirmishLive : Node3D
     private int _autoHarvestIssues;
 
     /// <summary>Producers the CLIENT offers a rally click on (TICKET-P5-BD-14
-    /// clause 5). The two that SPAWN units: the Factory and, since ADR-009
-    /// clause 5, the Barracks - infantry want a rally most of all. The
-    /// Airfield joins when it exists.
+    /// clause 5). The three that SPAWN units: the Factory, since ADR-009
+    /// clause 5 the Barracks (infantry want a rally most of all), and since
+    /// P8-9 the Airfield. This comment said the Airfield would join "when it
+    /// exists", and it existed from ADR-028 on while nobody came back, so a
+    /// player could build aircraft and never point them anywhere.
     ///
     /// The Construction Yard is deliberately still absent, which settles the
     /// question B2 deferred to this wave. The sim's SetRally accepts a CY
@@ -455,7 +469,7 @@ public partial class SkirmishLive : Node3D
     /// Depot dead affordance again, which TICKET-P5-REP-10 retired on purpose.
     /// The sim keeps accepting the command because refusing it would be a
     /// behaviour change for nothing; the client simply declines to offer it.</summary>
-    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.Barracks;
+    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.Barracks or EntityKind.Airfield;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
     // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
@@ -1255,6 +1269,60 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
+    /// P8-7: the giver's half of LoadTransport. The sim boards a unit only on
+    /// the tick a LoadTransport lands with the unit within two cells of its
+    /// Carrier; from farther it walks the unit towards where the Carrier stood
+    /// and leaves the re-issue to whoever gave the order. So a boarding the
+    /// player ordered is remembered here and sent again on two occasions only:
+    /// the tick the unit is within the sim's own reach (the same Fix64 test the
+    /// sim applies, so it boards on that tick), and whenever the Carrier has
+    /// moved more than a cell since the last send (so the walk follows it). A
+    /// waiting unit beside a parked Carrier sends nothing, so the lockstep
+    /// stream carries no per-tick flood (P5-ECON-15's lesson).
+    ///
+    /// It ends when the unit is aboard or dead, when the Carrier is dead or
+    /// full, or the moment the player gives that unit any other order than a
+    /// stance, read off the commands queued since the last tick, so a squad
+    /// sent elsewhere is never dragged back to a transport it was ordered away
+    /// from.
+    /// </summary>
+    private void ReissueBoardings()
+    {
+        if (_boarding.Count == 0) return;
+        if (_replay != null) { _boarding.Clear(); return; }   // a spectator issues no orders
+        // A stance is not a destination: hold-fire on a squad walking to its
+        // Carrier changes how it fights, not where it is going.
+        foreach (var c in _pending)
+            if (c.Type != CommandType.LoadTransport && c.Type != CommandType.SetStance) _boarding.Remove(c.EntityId);
+        var ents = _world.Entities;
+        _boardingKeys.Clear();
+        _boardingKeys.AddRange(_boarding.Keys);
+        _boardingKeys.Sort();                   // one order on every machine
+        foreach (int u in _boardingKeys)
+        {
+            var (carrier, lastX, lastY) = _boarding[u];
+            if (u < 0 || u >= ents.Count || carrier < 0 || carrier >= ents.Count) { _boarding.Remove(u); continue; }
+            var e = ents[u];
+            var t = ents[carrier];
+            if (!e.Alive || e.PlayerId != LocalPlayerId || !t.Alive || t.PlayerId != LocalPlayerId
+                || _world.CargoOf(carrier).Count >= World.CarrierCapacity)
+            {
+                _boarding.Remove(u);
+                continue;
+            }
+            bool inReach = Fix64.DistSq(e.X - t.X, e.Y - t.Y) <= Fix64.FromInt(4);
+            bool carrierMoved = Fix64.DistSq(t.X - lastX, t.Y - lastY) > Fix64.One;
+            if (!inReach && !carrierMoved) continue;
+            bool alreadySent = false;
+            foreach (var c in _pending)
+                if (c.Type == CommandType.LoadTransport && c.EntityId == u) { alreadySent = true; break; }
+            if (!alreadySent)
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier));
+            _boarding[u] = (carrier, t.X, t.Y);
+        }
+    }
+
+    /// <summary>
     /// A mission's tech gate, asked in ONE place rather than at each of the six
     /// sites that used to open-code it. Null means the full catalogue (every
     /// skirmish), an empty set means nothing.
@@ -1288,12 +1356,31 @@ public partial class SkirmishLive : Node3D
         // live catalogue the sim gates on. Sending every unit to the factory
         // would now be sending the infantry somewhere that refuses them, and
         // it would do it silently, which is REP-D1's sin.
-        int producer = FindOwnStructureByType(_world.GetUnitType(unitType).ProducedAt);
+        int producedAt = _world.GetUnitType(unitType).ProducedAt;
+        int producer = FindOwnStructureByType(producedAt);
         if (producer >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
             _audio.Play("ui_confirm", -6);
         }
+        else
+        {
+            // P8-9: no producer standing is said, never swallowed. The panel
+            // hides a unit whose producer is gone, but the producer can fall
+            // between the frame that drew the button and the press, and a
+            // press that did nothing in silence is REP-D1's sin. The NO
+            // REFINERY denial's words and sound.
+            ShowToast($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
+            _audio.Play("ui_click", -12);
+        }
+    }
+
+    /// <summary>The producing building's name off the catalogue (AIRFIELD,
+    /// FACTORY, BARRACKS), for the no-producer toast.</summary>
+    private static string ProducerNameOf(int structType)
+    {
+        try { return StructureCatalogue.DisplayNameOf(structType); }
+        catch (System.FormatException) { return "PRODUCER"; }
     }
 
     /// <summary>C3 (ADR-020): the last queue index of a type in a producer's
@@ -1702,6 +1789,7 @@ public partial class SkirmishLive : Node3D
         // convention the runner's replay gate records and replays under.
         int recTick = _world.Tick;
         AutoResumeHarvesters();
+        ReissueBoardings();
         _tickCmds.Clear();
         if (_replay != null)
         {
@@ -2241,6 +2329,10 @@ public partial class SkirmishLive : Node3D
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructureByType(World.FactoryStructType);
         _barracksId = FindOwnStructureByType(World.BarracksStructType);
+        // P8-9: the AIRCRAFT tab's line. It read the Factory's, so with only an
+        // Airfield standing the Strike Flyer had no button, and with both its
+        // button showed the Factory's queue and progress.
+        _airfieldId = FindOwnStructureByType(World.AirfieldStructType);
         int ready = _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
         // W3-15: hand the sidebar the full queue contents plus the head's
         // build fraction (BuildProgress counts percent-ticks, total is
@@ -2272,7 +2364,7 @@ public partial class SkirmishLive : Node3D
             ? laneSt.Progress / (_world.GetStructureType(laneQ[0]).BuildTicks * 100f) : 0f;
         _sidebar.Refresh(_world.Credits(LocalPlayerId), ready,
             new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
-            UnitLine(_factoryId), UnitLine(_barracksId),
+            UnitLine(_factoryId), UnitLine(_barracksId), UnitLine(_airfieldId),
             supply, draw, PrereqsMetForLocal,
             new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
         RefreshSupportPowerBar();
@@ -2484,8 +2576,19 @@ public partial class SkirmishLive : Node3D
     /// over an enemy structure reads as the capture verb; any combat presence
     /// reads as attack, because IssueOrder sends Attack for every selected
     /// mobile alike.
+    ///
+    /// P8-8: the walk-in verb is every CONTACT unit's, not the engineer's
+    /// alone (ContactOf below), and its target is any structure that unit can
+    /// act on, a neutral outpost included, exactly as the sim admits it. A
+    /// selection of contact units only reads Enter over a target one of them
+    /// can act on; a mixed one reads Enter over a neutral target (the contact
+    /// units walk in and the rest move) and Attack over an enemy (everyone is
+    /// sent at it). Decision D23: with Ctrl held, a neutral bridge span under
+    /// the cursor reads Attack for a selection with a gun in it, because that
+    /// is what the force-attack click sends; without Ctrl it is ground.
+    /// `ctrl` is the modifier state, polled from the device when not given.
     /// </summary>
-    private GameCursor CursorFor(Vector2 screen)
+    private GameCursor CursorFor(Vector2 screen, bool? ctrl = null)
     {
         if (_placingType > 0)
         {
@@ -2497,24 +2600,29 @@ public partial class SkirmishLive : Node3D
         if (_superArmed || _attackMoveArmed || _patrolArmed || _powerArmed != null) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
-        bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false;
+        bool force = ctrl ?? (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta));
+        bool anyMobile = false, allContact = true, anyArmed = false, anyBoarder = false, anyHarvester = false;
+        int contactAt = -1;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind))
             {
                 anyMobile = true;
+                if (CanBoard(in v)) anyBoarder = true;
                 if (v.Kind == EntityKind.Harvester) anyHarvester = true;
-                else if (v.UnitType == EngineerUnitType) anyEngineer = true;
-                else anyCombat = true;
+                if (Armed(id)) anyArmed = true;
+                if (ContactOf(v.UnitType) == ContactVerb.None) allContact = false;
+                else if (contactAt < 0) contactAt = PickContactTarget(screen, v.UnitType);
             }
         if (!anyMobile) return GameCursor.Select;
+        if (force && anyArmed && PickNeutralBridge(screen) >= 0) return GameCursor.Attack;
         int enemy = PickHostile(screen);
-        if (enemy >= 0)
-        {
-            if (anyEngineer && !anyCombat && !anyHarvester
-                && _latest.TryGetValue(enemy, out var te) && !Mobile(te.Kind))
-                return GameCursor.Enter;
-            return GameCursor.Attack;
-        }
+        if (contactAt >= 0 && (allContact || enemy < 0)) return GameCursor.Enter;
+        if (enemy >= 0) return GameCursor.Attack;
+        // P8-7: an own Carrier, with something selected that can board it, is
+        // the boarding verb: the same two questions IssueOrder asks. A full one
+        // reads as refused, because the click refuses it.
+        if (anyBoarder && PickOwnCarrier(screen) is >= 0 and var hold)
+            return _world.CargoOf(hold).Count >= World.CarrierCapacity ? GameCursor.Invalid : GameCursor.Enter;
         // The refinery precondition is part of the pick, not decoration. Without
         // one standing, IssueOrder refuses every harvest and toasts NO REFINERY,
         // so a cursor that showed the harvest verb here promised a verb the click
@@ -2530,6 +2638,65 @@ public partial class SkirmishLive : Node3D
     /// <summary>The engineer's catalogue id (com_engineer), named for the same
     /// reason McvUnitType is.</summary>
     private const int EngineerUnitType = World.EngineerUnitType;
+
+    // -------- P8-8: contact units and neutral targets --------
+
+    /// <summary>What a unit does on contact with a structure. The sim's
+    /// ContactEffect is private to World, so the five contact types are named
+    /// here off World's own constants, in World.ContactEffectOf's order; the
+    /// inputgate drives every effect through this table with a real right
+    /// click, so a type added there and not here fails a stage rather than
+    /// going quiet.</summary>
+    private enum ContactVerb { None, Capture, Theft, Sabotage, Demolition }
+
+    private static ContactVerb ContactOf(int unitType) => unitType switch
+    {
+        World.EngineerUnitType => ContactVerb.Capture,
+        World.InfiltratorUnitType => ContactVerb.Theft,
+        World.SaboteurUnitType => ContactVerb.Sabotage,
+        World.CommandoUnitType or World.ShadowCommandoUnitType => ContactVerb.Demolition,
+        _ => ContactVerb.None,
+    };
+
+    /// <summary>
+    /// Can a unit of this type act on this structure? The sim's rule
+    /// (World.CanBeActedOn and the theft refusal in CaptureSystem), read
+    /// across: a structure, not a barrier and not a bridge, and NOT ALLIED,
+    /// which is deliberately not the same as hostile. A neutral outpost
+    /// belongs to no seat, so it is allied to nobody and an engineer may claim
+    /// it (ADR-021's whole point), while IsHostileSeat still calls it nobody's
+    /// enemy, so no combat pick ever takes it. An infiltrator is the one
+    /// exception the sim makes: a neutral has no treasury to rob, so the sim
+    /// turns it away and the cursor does not offer it. And only what the local
+    /// seat is shown (P8-5, P8-6): a neutral is shown everywhere, an enemy only
+    /// where it is drawn.
+    /// </summary>
+    private bool ContactCanAct(int unitType, in SnapshotInterpolator.ViewEntity t)
+    {
+        var verb = ContactOf(unitType);
+        if (verb == ContactVerb.None || !t.Alive) return false;
+        if (!World.IsStructure(t.Kind) || World.IsBarrier(t.Kind) || t.Kind == EntityKind.Bridge) return false;
+        if (t.PlayerId >= 0 && !IsHostileSeat(t.PlayerId)) return false;   // own or allied
+        if (verb == ContactVerb.Theft && t.PlayerId < 0) return false;    // nothing to rob
+        return DrawnForLocalSeat(t);
+    }
+
+    /// <summary>The structure under the cursor a unit of this type would walk
+    /// into, or -1, at PickHostile's radius.</summary>
+    private int PickContactTarget(Vector2 screen, int unitType) =>
+        PickEntity(screen, 0.8f, v => ContactCanAct(unitType, v));
+
+    /// <summary>Decision D23: a neutral bridge span is attacked ONLY by the
+    /// explicit force-attack gesture, Ctrl (or Cmd) plus right click, because
+    /// felling one is irreversible. This is the one pick that gesture makes;
+    /// no other pick takes a bridge, so an ordinary right click on a span is
+    /// ground.</summary>
+    private int PickNeutralBridge(Vector2 screen) =>
+        PickEntity(screen, 0.8f, v => v.Kind == EntityKind.Bridge && v.PlayerId < 0 && DrawnForLocalSeat(v));
+
+    /// <summary>Does this unit carry a gun? The sim's own test (CombatSystem
+    /// skips WeaponId 0), read off the sim entity.</summary>
+    private bool Armed(int id) => id >= 0 && id < _world.EntityCount && _world.Entities[id].WeaponId != 0;
 
     /// <summary>Struct type 8, the Service Depot, named because the repair
     /// prompt quotes its price and a bare 8 in a readout is a number nobody can
@@ -2553,7 +2720,10 @@ public partial class SkirmishLive : Node3D
 
     // ---- TICKET-P6-CURSOR-01 verification surface: the resolver itself and
     // what is actually applied, never a recomputation.
-    public string CursorNameAt(Vector2 screen) => CursorFor(screen).ToString();
+    public string CursorNameAt(Vector2 screen) => CursorFor(screen, ctrl: false).ToString();
+    /// <summary>P8-8: the resolver with the force-attack modifier held, as the
+    /// harness cannot hold a real key.</summary>
+    public string CursorNameAt(Vector2 screen, bool ctrl) => CursorFor(screen, ctrl).ToString();
     public string CursorShownName => _cursorShown.ToString();
     public bool CursorTextureLoaded(string kindName) =>
         System.Enum.TryParse<GameCursor>(kindName, out var k)
@@ -2691,7 +2861,14 @@ public partial class SkirmishLive : Node3D
                         // rebound key never leaves the readout lying.
                         : v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType
                             ? $"   {Settings.KeyName(Settings.BindOf("deploy"))} deploy"
-                            : "";
+                            // P8-7: the Carrier says what it holds and how it is
+                            // emptied, from the sim's own hold and the live
+                            // binding (the SET-01 rule).
+                            : v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit && v.UnitType == CarrierUnitType
+                              && sid >= 0 && sid < _world.EntityCount
+                                ? $"   CARGO {_world.CargoOf(sid).Count}/{World.CarrierCapacity}"
+                                  + $"   {Settings.KeyName(Settings.BindOf("unload"))} unload"
+                                : "";
                     // ADR-015: an own combat unit carries a stance readout - the
                     // LIVE stance from the sim, and the three stance keys named
                     // from their live bindings (the SET-01 rule). The MCV is
@@ -3860,8 +4037,11 @@ public partial class SkirmishLive : Node3D
                 _dragRect.Position = tl; _dragRect.Size = br - tl;
                 _dragRect.Visible = (br - tl).Length() > 8;
                 break;
+            // P8-8, decision D23: Ctrl (or Cmd) on the click is force-attack,
+            // read off the EVENT like the group-assign modifier, so the
+            // harness can drive it.
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
-                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift));
+                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
                 break;
         }
     }
@@ -3925,6 +4105,9 @@ public partial class SkirmishLive : Node3D
         // something - a bare press with no MCV selected means nothing and is
         // left to whatever else might answer the key after a rebind.
         if (ev.IsActionPressed("deploy") && DeploySelectedMcvs()) return true;
+        // P8-7: the unload key, on the deploy key's rule: consumed only when a
+        // Carrier is selected, so a bare press is left to a rebind.
+        if (ev.IsActionPressed("unload") && UnloadSelectedCarriers()) return true;
         // TICKET-P5-ALERT-02: the jump-to-event key (GDD s7 line 85). Flies
         // the camera to the most recent alert through the exact minimap-jump
         // idiom (RtsCamera.FlyTo). No alert yet this match: nothing to jump
@@ -3936,7 +4119,7 @@ public partial class SkirmishLive : Node3D
             return true;
         }
         // Doc 27 DR-05: the army in one press. COMBAT units only - the MCV,
-        // engineer and repair vehicle are deliberately excluded, because
+        // engineer, repair vehicle and (P8-7) Carrier are deliberately excluded, because
         // "select the army" that grabs your MCV is how an MCV walks into a
         // firefight; the harvester is excluded by kind. The sentinel counts:
         // unarmed, but it is a military scout and the classic key takes it.
@@ -4706,6 +4889,63 @@ public partial class SkirmishLive : Node3D
         => PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId
             && v.Kind == EntityKind.Unit && v.UnitType == McvUnitType);
 
+    // -------- P8-7: the Carrier's verbs --------
+
+    /// <summary>The own Carrier under the cursor, or -1, at the radius a click
+    /// selects an own mobile with, so the transport that answers a right click
+    /// is the one a left click there would select. Own units are always drawn,
+    /// so this picks nothing the player cannot see.</summary>
+    private int PickOwnCarrier(Vector2 at)
+        => PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId
+            && v.Kind == EntityKind.Unit && v.UnitType == CarrierUnitType);
+
+    /// <summary>Can this own unit board a Carrier? The SIM's own predicate,
+    /// World.IsCarryable (anything the barracks produces), asked rather than
+    /// copied, so the cursor and the click offer boarding to exactly the units
+    /// LoadTransport accepts.</summary>
+    private bool CanBoard(in SnapshotInterpolator.ViewEntity v)
+        => v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit && _world.IsCarryable(v.UnitType);
+
+    private bool AnySelectedCanBoard()
+    {
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && CanBoard(in v)) return true;
+        return false;
+    }
+
+    /// <summary>The unload key's handler: every own Carrier in the selection
+    /// that holds anything sets its whole hold down around itself, the sim's
+    /// UnloadTransport. Whatever else is selected is left alone (the deploy
+    /// key's partition rule). A press with no Carrier selected is not consumed;
+    /// a press on Carriers that are all empty is, and says so.</summary>
+    private bool UnloadSelectedCarriers()
+    {
+        if (_replay != null) return false;   // a spectator issues no orders
+        int carriers = 0, n = 0;
+        foreach (int sid in _selection)
+        {
+            if (!_latest.TryGetValue(sid, out var cv) || cv.PlayerId != LocalPlayerId
+                || cv.Kind != EntityKind.Unit || cv.UnitType != CarrierUnitType) continue;
+            carriers++;
+            if (sid >= _world.EntityCount || _world.CargoOf(sid).Count == 0) continue;
+            _pending.Add(new Command(0, LocalPlayerId, CommandType.UnloadTransport, sid, Fix64.Zero, Fix64.Zero));
+            n++;
+        }
+        if (carriers == 0) return false;
+        if (n == 0)
+        {
+            ShowToast("NOTHING ABOARD");
+            _audio.Play("ui_click", -12);
+            return true;
+        }
+        _audio.Play("ui_confirm", -8);
+        return true;
+    }
+
+    /// <summary>P8-7 verification read: the boardings this client is still
+    /// re-issuing, so a check can see one start and end.</summary>
+    public int PendingBoardingsForTest => _boarding.Count;
+
     private void FinishSelect(Vector2 at, bool add)
     {
         if (!add) _selection.Clear();
@@ -5408,6 +5648,12 @@ public partial class SkirmishLive : Node3D
         _UnhandledInput(new InputEventMouseButton
         { ButtonIndex = MouseButton.Right, Pressed = true, Position = at });
 
+    /// <summary>P8-8: the force-attack gesture, a right click with Ctrl on the
+    /// event, through the same real input path.</summary>
+    public void PressRightClickWithCtrl(Vector2 at) =>
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Right, Pressed = true, Position = at, CtrlPressed = true });
+
     /// <summary>P8-1 (inputgate): the Commands a gesture has queued and the
     /// next tick has not yet drained. Read where they sit, because once a tick
     /// takes them they are gone, and a check of WHAT the gesture asked for has
@@ -5603,6 +5849,7 @@ public partial class SkirmishLive : Node3D
         int tick = _world.Tick;
         if (tick != _lastSubmittedTick)
         {
+            ReissueBoardings();   // P8-7: the boarding re-issue rides in this tick's batch, as offline
             _net.SubmitCommands(_pending);
             _pending.Clear();
             _lastSubmittedTick = tick;
@@ -5724,7 +5971,10 @@ public partial class SkirmishLive : Node3D
         return slots;
     }
 
-    public void IssueOrder(Vector2 screen, bool queued)
+    /// <summary>The right click. `force` is decision D23's force-attack
+    /// modifier (Ctrl or Cmd on the click): it changes the order only over a
+    /// neutral bridge span, which nothing else attacks.</summary>
+    public void IssueOrder(Vector2 screen, bool queued, bool force = false)
     {
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
@@ -5756,11 +6006,19 @@ public partial class SkirmishLive : Node3D
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int enemy = PickHostile(screen);
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
+        // P8-7: an own Carrier under the cursor is a boarding target, offered
+        // only while the selection holds something it can carry (CursorFor
+        // asks the same two questions).
+        int carrier = AnySelectedCanBoard() ? PickOwnCarrier(screen) : -1;
+        bool carrierFull = carrier >= 0 && _world.CargoOf(carrier).Count >= World.CarrierCapacity;
         // P5-ECON-06: computed ONCE for the whole click, not per selected unit,
         // and the answer decides whether the order is sent at all.
         bool hasRef = HasLiveRefinery();
-        bool deniedHarvest = false;
-        int issued = 0;
+        // P8-8, decision D23: the force-attack target, a neutral bridge span,
+        // and only under the explicit gesture.
+        int forced = force ? PickNeutralBridge(screen) : -1;
+        bool deniedHarvest = false, deniedBoard = false;
+        int issued = 0, boarded = 0, struck = -1;
         // ADR-018: a plain move (not an attack on an enemy) arranges the selected
         // combat units into a formation. Resolved once for the click; harvesters
         // are never members and keep the shared anchor below.
@@ -5768,8 +6026,36 @@ public partial class SkirmishLive : Node3D
         foreach (int id in _selection)
         {
             if (!_latest.TryGetValue(id, out var me)) continue;
-            if (enemy >= 0)
+            // P8-8: a contact unit walks into a structure it can act on, a
+            // neutral outpost included, which PickHostile rightly never takes.
+            int contact = Mobile(me.Kind) && ContactOf(me.UnitType) != ContactVerb.None
+                ? PickContactTarget(screen, me.UnitType) : -1;
+            if (forced >= 0 && Mobile(me.Kind) && Armed(id))
+            {
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, forced, queued));
+                struck = forced;
+            }
+            else if (contact >= 0)
+            {
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, contact, queued));
+                struck = contact;
+            }
+            else if (enemy >= 0)
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, enemy, queued));
+            else if (carrier >= 0 && id != carrier && CanBoard(in me))
+            {
+                // P8-7: board. The sim walks a unit that is out of reach and
+                // boards one that is within it; ReissueBoardings sends the order
+                // again on the tick it can land. A full Carrier is refused here,
+                // said by toast, rather than sent orders the sim would drop.
+                if (carrierFull) { deniedBoard = true; continue; }
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, id, Fix64.Zero, Fix64.Zero, carrier, queued));
+                if (!queued) _boarding[id] = (carrier, _world.Entities[carrier].X, _world.Entities[carrier].Y);
+                boarded++;
+            }
+            // The Carrier being boarded is the destination, not a mover: one
+            // selected alongside its passengers stays where it is.
+            else if (id == carrier) continue;
             else if (field >= 0 && me.Kind == EntityKind.Harvester)
             {
                 // P5-ECON-06: without a refinery this command is a silent no-op
@@ -5800,6 +6086,11 @@ public partial class SkirmishLive : Node3D
             ShowToast("NO REFINERY - BUILD ONE FIRST");
             _audio.Play("ui_click", -12);
         }
+        if (deniedBoard)
+        {
+            ShowToast($"CARRIER FULL   {World.CarrierCapacity}/{World.CarrierCapacity} ABOARD");
+            _audio.Play("ui_click", -12);
+        }
         // A click that queued nothing gets no acknowledgement. P5-ECON-06 clause
         // 4 only suppresses the gold harvest marker, which would leave a denied
         // harvest drawing the MOVE ring and playing the move sound instead: the
@@ -5807,8 +6098,11 @@ public partial class SkirmishLive : Node3D
         if (issued == 0) return;
         // W3-17: contracting acknowledgement ring at the order point, colour
         // coded by order type (attack rings sit on the target itself).
-        int mk = enemy >= 0 ? 1 : (field >= 0 && hasRef ? 2 : 0);
-        Vector3 mpos = enemy >= 0 && _latest.TryGetValue(enemy, out var ev2)
+        // P8-7: a boarding acknowledges in gold on the Carrier itself. P8-8: a
+        // walk-in or a force-attack rings its target like any attack.
+        int mk = enemy >= 0 || struck >= 0 ? 1 : (boarded > 0 || (field >= 0 && hasRef) ? 2 : 0);
+        int markOn = enemy >= 0 ? enemy : struck >= 0 ? struck : boarded > 0 ? carrier : -1;
+        Vector3 mpos = markOn >= 0 && _latest.TryGetValue(markOn, out var ev2)
             ? new Vector3((float)ev2.X, 0, (float)ev2.Y)
             : new Vector3(p.X, 0, p.Z);
         _effects.OrderMarker(mpos, mk);
@@ -5819,11 +6113,14 @@ public partial class SkirmishLive : Node3D
     /// mobile units, then order them to a map point through the same command
     /// path the mouse uses.</summary>
     /// <summary>Doc 27 DR-05: the army. One definition of "combat unit" - the
-    /// key, the double-click type-select and any future select-all share it.</summary>
+    /// key, the double-click type-select and any future select-all share it.
+    /// P8-7: the Carrier is a transport, not army, so it stays out too: an
+    /// unarmed 600-credit vehicle swept into an attack by the army key drives
+    /// its passengers into the fight it was bought to keep them out of.</summary>
     private bool IsArmy(in SnapshotInterpolator.ViewEntity v) =>
         v.Alive && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit
         && v.UnitType != McvUnitType && v.UnitType != EngineerUnitType
-        && v.UnitType != World.RepairVehicleType;
+        && v.UnitType != World.RepairVehicleType && v.UnitType != CarrierUnitType;
 
     private void SelectArmy()
     {
