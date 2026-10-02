@@ -18,19 +18,24 @@
 # Windows and drives the real client; it is the part that can be known early.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# Each run gets its OWN log directory. Fixed /tmp paths meant two worktrees
+# running this gate at once overwrote each other's logs, so a step's evidence
+# could be another lane's output (verdicts were unaffected: they come from
+# exit codes). The directory is kept so a failure stays inspectable.
+L=$(mktemp -d "${TMPDIR:-/tmp}/ci-local.XXXXXX")
 fail=0
 step() { printf '%-46s' "$1"; }
 ok()   { echo "ok"; }
 bad()  { echo "FAIL"; fail=1; }
 
 step "sim purity (no float/double/Random/Godot)"
-if grep -rnE '\b(float|double|System\.Random|Godot)\b' sim/Ferrostorm.Sim/ >/tmp/ci-purity.txt 2>&1; then
-  bad; cat /tmp/ci-purity.txt
+if grep -rnE '\b(float|double|System\.Random|Godot)\b' sim/Ferrostorm.Sim/ >$L/purity.txt 2>&1; then
+  bad; cat $L/purity.txt
 else ok; fi
 
 step "portability (no engine ref outside /game)"
-if grep -rln --include='*.cs' 'using Godot' sim/ tools/ data/ >/tmp/ci-port.txt 2>&1; then
-  bad; cat /tmp/ci-port.txt
+if grep -rln --include='*.cs' 'using Godot' sim/ tools/ data/ >$L/port.txt 2>&1; then
+  bad; cat $L/port.txt
 else ok; fi
 
 step "hardcoded seat in the battle scene"
@@ -52,31 +57,31 @@ HITS=$(grep -rnE '(LocalPlayerId|EnemyPlayerId).*\?.*(DirectorateMark|SodalityMa
 if [ -n "$HITS" ]; then bad; echo "$HITS"; else ok; fi
 
 step "hardcoded player-0 faction gate in sidebar"
-if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs >/tmp/ci-sb.txt 2>&1; then
-  bad; cat /tmp/ci-sb.txt
+if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs >$L/sb.txt 2>&1; then
+  bad; cat $L/sb.txt
 else ok; fi
 
 # P8-2 (D31): CLAUDE.md's Legal rule, as CI runs it. Patterns, allowlist and
 # scope live in tools/legalgrep-patterns.txt, tools/legal-allowlist.txt and
 # the script's own header.
 step "legal (protected names, retired VO phrasing)"
-if bash tools/legalgrep.sh >/tmp/ci-legal.txt 2>&1; then ok; else bad; cat /tmp/ci-legal.txt; fi
+if bash tools/legalgrep.sh >$L/legal.txt 2>&1; then ok; else bad; cat $L/legal.txt; fi
 
 step "build"
-if dotnet build sim/Ferrostorm.Sim.Runner -c Release >/tmp/ci-build.txt 2>&1; then ok; else bad; tail -20 /tmp/ci-build.txt; fi
+if dotnet build sim/Ferrostorm.Sim.Runner -c Release >$L/build.txt 2>&1; then ok; else bad; tail -20 $L/build.txt; fi
 
 run_mode() {
   step "$1"
-  if dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- $2 >"/tmp/ci-$1.txt" 2>&1; then ok
-  else bad; tail -6 "/tmp/ci-$1.txt"; fi
+  if dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- $2 >"$L/$1.txt" 2>&1; then ok
+  else bad; tail -6 "$L/$1.txt"; fi
 }
 run_mode selftest      "selftest"
 run_mode determinism   "determinism 2026"
 
 step "golden (ORDERED diff, as CI does it)"
-dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- golden 2026 >/tmp/ci-got.txt 2>&1
-grep -v '^#' sim/golden-hashes.txt >/tmp/ci-want.txt
-if diff /tmp/ci-got.txt /tmp/ci-want.txt >/tmp/ci-golden.txt 2>&1; then ok; else bad; cat /tmp/ci-golden.txt; fi
+dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- golden 2026 >$L/got.txt 2>&1
+grep -v '^#' sim/golden-hashes.txt >$L/want.txt
+if diff $L/got.txt $L/want.txt >$L/golden.txt 2>&1; then ok; else bad; cat $L/golden.txt; fi
 
 run_mode match         "match 2026"
 run_mode lan           "lan 5"
@@ -87,9 +92,9 @@ run_mode saveload      "saveload"
 run_mode campaignsave  "campaignsave"
 
 step "balance gate"
-if dotnet build tools/Ferrostorm.Balance -c Release >/tmp/ci-bb.txt 2>&1 \
-   && dotnet run --project tools/Ferrostorm.Balance -c Release --no-build >/tmp/ci-balance.txt 2>&1; then ok
-else bad; tail -6 /tmp/ci-balance.txt; fi
+if dotnet build tools/Ferrostorm.Balance -c Release >$L/bb.txt 2>&1 \
+   && dotnet run --project tools/Ferrostorm.Balance -c Release --no-build >$L/balance.txt 2>&1; then ok
+else bad; tail -6 $L/balance.txt; fi
 
 echo
 if [ "$fail" -eq 0 ]; then
@@ -99,4 +104,5 @@ if [ "$fail" -eq 0 ]; then
 else
   echo "ci-local: FAILED. Do not push."
 fi
+echo "logs: $L"
 exit "$fail"
