@@ -1,0 +1,14 @@
+# The ONE exception to CLAUDE.md's Legal rule (decision D31, which closed Q011):
+# documents whose purpose is to discuss the marks being avoided, because a mark
+# cannot be cleared, or a competitor assessed, without being named.
+#
+# One repo-relative path per line, then a one-line reason. tools/legalgrep.sh
+# refuses an entry outside docs/ (nothing that ships is ever excepted), an
+# entry that does not exist, and an entry that no longer carries a protected
+# name, so this list cannot quietly grow or rot. Keep it as short as honesty
+# allows: a design document that cites a classic game as a quality bar is not
+# clearance, and is reworded to "the genre's classics" or "the classic RTS
+# games of the 90s" instead of being listed here.
+
+docs/design/07-competitive-analysis.md  # competitor research: names the competing products and the category they sell in
+docs/design/09-title-and-trademark.md   # trademark clearance: lists the marks the title, store copy and tags must never use

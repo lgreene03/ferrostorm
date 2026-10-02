@@ -21,12 +21,12 @@ Second-to-second loop: watch sidebar queues, place buildings, group and move uni
 ## 3. Factions
 
 ### Faction A - The Directorate (conventional superpower)
-- **Fantasy:** Steel, doctrine, overwhelming firepower. The "GDI/Allies-feel" slot without any of their expression.
+- **Fantasy:** Steel, doctrine, overwhelming firepower. The conventional-superpower slot that the classic RTS games of the 90s made familiar, without any of their expression.
 - **Identity mechanics:** Strongest armour and artillery; buildings are tough but expensive; power grid is centralised (fewer, bigger power plants = juicier targets); support powers are surgical (orbital scan, precision strike).
 - **Weakness:** Slow, expensive, telegraphed. Poor at map control early.
 
 ### Faction B - The Sodality (insurgent network)
-- **Fantasy:** Stealth, subversion, asymmetric warfare. The "Nod-feel" slot.
+- **Fantasy:** Stealth, subversion, asymmetric warfare. The insurgent slot that the classic RTS games of the 90s made familiar, again without any of their expression.
 - **Identity mechanics:** Cloaked units and structures, hit-and-run vehicles, cheap infantry swarms, capture and sabotage tools (Engineers, saboteurs), decentralised power (many small generators). Support powers are dirty tricks (radar jamming, decoy army, tunnel deployment).
 - **Weakness:** Fragile units, weak in open head-on fights, economy more raid-dependent.
 
@@ -42,7 +42,7 @@ Faction C (a tech-cult "act 3" faction) is a post-launch expansion candidate onl
 
 ## 5. Construction and Power
 
-- **Sidebar build:** Two parallel building queues (structures / defences) and two unit queues (infantry / vehicles) per production-structure type, C&C3-style multi-queue with per-structure rally points.
+- **Sidebar build:** Two parallel building queues (structures / defences) and two unit queues (infantry / vehicles) per production-structure type: the sidebar of the classic RTS games of the 90s, extended to a multi-queue with per-structure rally points.
 - **Placement:** Completed structures placed within build radius of existing structures; Construction Yard projects the largest radius.
 - **MCV:** Both factions can build replacement MCVs at the Factory once a Tech Centre exists.
 - **Power:** Each structure lists draw; total supply vs draw shown as a bar. Below 100%: production speed scales down linearly to 50%, radar goes dark, defensive turrets go offline at <75%. Deliberate "sell power to sneak a superweapon" plays should be possible.
@@ -80,7 +80,7 @@ Full stat sheets live in `/data/units/*.yaml` once the data format exists; the G
 
 ## 10. UX and Controls
 
-- Grid hotkeys default, fully remappable; classic C&C left-click-select/left-click-order scheme AND modern RTS scheme both offered at first launch.
+- Grid hotkeys default, fully remappable; the left-click-select/left-click-order scheme of the classic RTS games of the 90s AND the modern RTS scheme both offered at first launch.
 - Control groups 0-9 with steal/add-to modifiers, camera bookmarks F1-F4, select-all-military key.
 - Alert system: harvester under attack, base under attack, low power, superweapon detected/launched - each with distinct audio and a jump-to-event key.
 - Sidebar always visible on the right; tabbed (Buildings / Defence / Infantry / Vehicles / Aircraft). Radar minimap top-right above sidebar (the classic silhouette).
@@ -89,8 +89,8 @@ Full stat sheets live in `/data/units/*.yaml` once the data format exists; the G
 ## 11. Art and Audio Direction (brief)
 
 - **Camera:** Fixed-angle top-down with modest zoom range. 3D renderer, but composed and lit to read like idealised memory of 2D isometric sprites (strong silhouettes, painterly palettes, minimal visual noise on terrain).
-- **Faction palettes:** Directorate = gunmetal/gold/blue glow. Sodality = dark red/black/sand with green glow accents. Never resembling GDI gold-on-black or Nod red-scorpion trade dress.
-- **Audio:** Unit acknowledgements with personality (memorable barks are half the nostalgia), EVA-style faction announcer voices (original scripts), industrial/electronic hybrid soundtrack commissioned with explicit streaming-safe licence.
+- **Faction palettes:** Directorate = gunmetal/gold/blue glow. Sodality = dark red/black/sand with green glow accents. Never resembling the faction trade dress of the classic RTS games of the 90s, in particular a gold-on-black livery or a red scorpion emblem.
+- **Audio:** Unit acknowledgements with personality (memorable barks are half the nostalgia), faction announcer voices in the manner of the classic RTS games of the 90s (original scripts and original phrasing, never their lines), industrial/electronic hybrid soundtrack commissioned with explicit streaming-safe licence.
 
 ## 12. Balance Philosophy
 
@@ -103,7 +103,7 @@ Full stat sheets live in `/data/units/*.yaml` once the data format exists; the G
 | # | Question | Resolution |
 |---|---|---|
 | Q1 | Unit cap | RESOLVED: no hard cap (classic). The economy and production speed are the throttle; revisit only if beta telemetry shows pathological blob play. Rationale: caps read as modern-RTS friction to the P1 persona, and the sim holds the perf budget with headroom. |
-| Q2 | Build-radius rules | RESOLVED: strict classic adjacency - structures must be placed within the build radius projected by existing structures, Construction Yard largest. Rationale: base layout as strategic expression is core to the fantasy; loose RA2-style rules dilute expansion risk decisions. |
+| Q2 | Build-radius rules | RESOLVED: strict classic adjacency - structures must be placed within the build radius projected by existing structures, Construction Yard largest. Rationale: base layout as strategic expression is core to the fantasy; the looser placement rules of some later classics dilute expansion risk decisions. |
 | Q3 | Infantry squads vs individuals | RESOLVED: squads - see ADR-003. |
 | Q4 | Classic control scheme default on/off at first boot | OPEN: A/B in beta (unchanged). |
 | Q5 | Campaign co-op | OPEN: decide at Alpha; cut unless free from architecture (unchanged). |

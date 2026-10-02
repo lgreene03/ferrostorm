@@ -95,6 +95,16 @@ jobs:
           if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs ; then
             echo "::error::Hardcoded player-0 faction gate in the sidebar - use _game.LocalPlayerId (C7b)"; exit 1
           fi
+      - name: Legal check (legalgrep - no protected names, no retired announcer phrasing; P8-2, D31)
+        run: |
+          # CLAUDE.md's Legal rule was absolute and nothing enforced it, so ten
+          # announcer lines in the classics' own phrasing were voiced and
+          # shipped. The script reads its patterns from
+          # tools/legalgrep-patterns.txt, so neither it nor this file has to
+          # spell what it forbids, and its single exception is the short list
+          # of clearance and competitor-research documents in
+          # tools/legal-allowlist.txt, which it also keeps honest.
+          bash tools/legalgrep.sh || { echo "::error::Protected name or retired announcer phrasing (CLAUDE.md Legal rule, D31). Reword the hit; tools/legal-allowlist.txt is for clearance and competitor-research documents only"; exit 1; }
   determinism:
     strategy:
       fail-fast: false

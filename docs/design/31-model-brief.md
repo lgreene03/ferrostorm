@@ -53,8 +53,9 @@ Uniform livery, insignia always in the same place. Wide, low, planted.
 **SODALITY - the shadow.** Angular, asymmetric, welded-from-salvage. Broken or
 tilted rooflines. Mismatched parts and visibly civilian chassis. Silhouette-
 breaking additions on top: cargo, tarpaulins, aerials, exposed crew. Narrow, tall,
-leaning. **Upgrades should show as added geometry** - the C&C: Generals GLA
-precedent, where scavenged armour appears on the model.
+leaning. **Upgrades should show as added geometry** - the precedent of the
+insurgent faction in the genre's 2003 modern-war classic, where scavenged armour
+appears on the model.
 
 **COMMON hardware** is field olive and reads as *neither*: utilitarian, boxy,
 unglamorous. It is the stuff both sides inherited rather than built.

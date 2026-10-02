@@ -1866,7 +1866,7 @@ public partial class SkirmishLive : Node3D
                 {
                     _lastAttackAlert = now;
                     _audio.Play("alert_attack", -4);
-                    ShowToast("BASE UNDER ATTACK");
+                    ShowToast("HOSTILES ARE HITTING THE BASE");
                     PlayVo("vo_base_under_attack");   // TICKET-P6-VO-01: with the klaxon, not instead
                     // W3-20: red minimap ping at the struck structure.
                     var basePos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
@@ -1882,7 +1882,7 @@ public partial class SkirmishLive : Node3D
                     // art/audio/synth.py), so the pitch shift that stood in for
                     // it while alert_attack was the only alert asset is gone.
                     _audio.Play("alert_harvester", -4);
-                    ShowToast("HARVESTER UNDER ATTACK");
+                    ShowToast("HARVESTER IS TAKING FIRE");
                     PlayVo("vo_harvester_under_attack");   // TICKET-P6-VO-01
                     // Amber rather than the base alert's red: the minimap should
                     // say which of the two alerts fired without the toast.
@@ -1919,7 +1919,7 @@ public partial class SkirmishLive : Node3D
                 // The hard klaxon, not a new cue: an incoming superweapon is
                 // exactly the "drop everything" register alert_attack owns.
                 _audio.Play("alert_attack", -4);
-                ShowToast("SUPERWEAPON LAUNCH DETECTED");
+                ShowToast("ENEMY STRIKE INBOUND: BRACE");
                 PlayVo("vo_superweapon_launch");   // TICKET-P6-VO-01
                 var sw = _world.Entities[ev.A];
                 // The impact ping's orange: launch and impact are two ends of
@@ -2092,7 +2092,7 @@ public partial class SkirmishLive : Node3D
         if (brownOut && !_wasBrownOut)
         {
             LowPowerAlerts++;
-            ShowToast("LOW POWER");
+            ShowToast("BROWN-OUT: DEFENCES GOING DARK");
             PlayVo("vo_low_power");   // TICKET-P6-VO-01
             // GDD s7 line 85's "distinct audio": alert_low_power is its own
             // synthesised cue (a sagging descent, the sound of something
@@ -2142,7 +2142,7 @@ public partial class SkirmishLive : Node3D
             // a gold ping at the uplink (the power-family colour), and the
             // position recorded for the jump-to-event key.
             RadarAlerts++;
-            ShowToast("RADAR OFFLINE");
+            ShowToast("UPLINK LOST: WE ARE BLIND");
             PlayVo("vo_radar_offline");
             _audio.Play("alert_radar", -4);
             _minimap.Ping(_lastUplinkPos, new Color(0.79f, 0.63f, 0.36f));
@@ -2651,7 +2651,7 @@ public partial class SkirmishLive : Node3D
                     // readout twin of the actor's dark wash, the REP-04 idiom.
                     string off = v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1
                         && _ownerBrownedOut[v.PlayerId]
-                        ? "   OFFLINE - LOW POWER" : "";
+                        ? "   OFFLINE - BROWN-OUT" : "";
                     string acts = !Mobile(v.Kind)
                         // ADR-009: the rally affordance follows Ralliable, so
                         // a barracks advertises its rally exactly as a factory
@@ -4032,7 +4032,7 @@ public partial class SkirmishLive : Node3D
         var (supply, draw) = OwnPower();
         if (supply < draw)
         {
-            ShowToast("DEPOT OFFLINE: LOW POWER");   // World's depot gate, said out loud
+            ShowToast("DEPOT OFFLINE: BROWN-OUT");   // World's depot gate, said out loud
             _audio.Play("ui_click", -12);
             return;
         }

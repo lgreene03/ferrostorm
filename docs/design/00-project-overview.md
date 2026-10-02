@@ -2,7 +2,7 @@
 ## Modern Classic-Style RTS - Project Overview and Documentation Index
 
 **Working title:** Ferrostorm (provisional public title, pending trademark clearance - see 09-title-and-trademark.md and 10-stage-a-report.md; internal codename Project FERROSTORM)
-**Genre:** Real-time strategy, classic base-building style (Command & Conquer lineage)
+**Genre:** Real-time strategy, classic base-building style (in the lineage of the classic RTS games of the 90s)
 **Status:** In active development. Playable from source, public on GitHub with green determinism CI; post-vertical-slice, in the P6 campaign build-out (Phase B complete; Phase C largely complete as of 2026-07-25 - see docs/tickets/P6-campaign-tracker.md, which is the authoritative status table)
 **Owner:** Luke (solo developer, agent-assisted development model)
 
@@ -10,11 +10,11 @@
 
 ## 1. Vision Statement
 
-Build a modern RTS that recaptures the *feel* of the original Command & Conquer and Red Alert: fast to learn, fast to play, one resource, one sidebar, big explosions, asymmetric factions with personality - delivered with modern quality-of-life, deterministic multiplayer, first-class replays, and open modding.
+Build a modern RTS that recaptures the *feel* of the classic RTS games of the 90s: fast to learn, fast to play, one resource, one sidebar, big explosions, asymmetric factions with personality - delivered with modern quality-of-life, deterministic multiplayer, first-class replays, and open modding.
 
 The one-line pitch: **"The 1995 RTS you remember, built the way you'd build it in 2026."**
 
-## 2. What "C&C-style" Means (Mechanical Definition)
+## 2. What "Classic-Style" Means (Mechanical Definition)
 
 The gameplay style is defined by mechanics, which are not protectable IP. The specific mechanics we are preserving:
 
@@ -47,10 +47,10 @@ The gameplay style is defined by mechanics, which are not protectable IP. The sp
 
 ## 5. Legal Constraints
 
-Command & Conquer, Red Alert, Tiberium, GDI, Nod, and all associated names, characters, logos, music, and art are EA intellectual property. **Mechanics and genre conventions are fair game; expression is not.** Hard rules for every contributor and agent:
+The classic RTS franchises this project is inspired by, their factions, resource, studio and publisher, and all associated names, characters, logos, music, and art are their rights holder's intellectual property. The list of protected names lives in one place, CLAUDE.md's Legal rule, with its machine-readable form in `tools/legalgrep-patterns.txt`; this document deliberately does not repeat it. **Mechanics and genre conventions are fair game; expression is not.** Hard rules for every contributor and agent:
 
-- No C&C names, faction names, unit names, or story elements anywhere in the product.
-- No assets, sounds, or music derived from C&C games, including the freeware releases.
+- None of those names, nor their faction names, unit names, announcer lines or story elements, anywhere in the product, its public copy, or any working document. The single exception is a document whose purpose is clearance, legal analysis or competitor research, listed by path in `tools/legal-allowlist.txt` (decision D31, which closed Q011). `tools/legalgrep.sh` enforces both in CI, together with the ten retired announcer phrasings in anything a player hears or reads.
+- No assets, sounds, or music derived from those games, including the freeware releases.
 - OpenRA's *source code* (GPLv3) may be studied for architectural reference; copying code imposes GPL obligations on our codebase - treat it as read-only research unless we deliberately choose GPL.
 - All art, audio, and writing must be original or properly licensed.
 

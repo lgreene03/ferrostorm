@@ -11,9 +11,11 @@
 
 ## Context
 
-GDD line 45 specifies, verbatim: "Two parallel building queues (structures /
-defences) and two unit queues (infantry / vehicles) per production-structure
-type, C&C3-style multi-queue with per-structure rally points." The C3 tracker row
+GDD line 45 specifies, verbatim in the wording P8-2 gave it under decision D27
+(the requirement is unchanged; only a protected name left the sentence): "Two
+parallel building queues (structures / defences) and two unit queues (infantry
+/ vehicles) per production-structure type: the sidebar of the classic RTS games
+of the 90s, extended to a multi-queue with per-structure rally points." The C3 tracker row
 titles the wave "Four-queue sidebar (GDD line 45 in full)" and guessed the hash
 impact "likely neutral (client)".
 

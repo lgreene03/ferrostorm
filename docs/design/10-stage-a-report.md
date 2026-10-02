@@ -25,7 +25,7 @@ This is the most important output of Stage A and it reaches beyond titles into t
 2. The adult reality series *Cinder Wars* occupies the phrase-space on Amazon, Apple TV, IMDb, and social platforms.
 3. Several small games already use the bare word: *Cinder* (Steam, top-down tank shooter), *Cinder* (1980 TRS-80 strategy game), *Cinder!* (tabletop space combat).
 
-**Recommendation:** rename the placeholder resource itself before any asset, script, or code carries it. Candidate resource names for the Game Designer agent to work up: **Ferrite** (pairs naturally with Ferrostorm as a title - resource and title reinforcing each other, the way Tiberium did for the original), **Cindral**, or **Corex**. The internal codename "Project FERROSTORM" can stay (codenames are internal), but nothing player-facing uses the Cinder root. Doc 02 §4 and doc 09 to be amended once chosen.
+**Recommendation:** rename the placeholder resource itself before any asset, script, or code carries it. Candidate resource names for the Game Designer agent to work up: **Ferrite** (pairs naturally with Ferrostorm as a title - resource and title reinforcing each other, the way the classics' signature resource did for its series), **Cindral**, or **Corex**. The internal codename "Project FERROSTORM" can stay (codenames are internal), but nothing player-facing uses the Cinder root. Doc 02 §4 and doc 09 to be amended once chosen.
 
 ## 3. Stage B slate
 

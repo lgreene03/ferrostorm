@@ -7,7 +7,7 @@ Every feature must trace back to at least one persona need. Every decision with 
 ## Part A: Player Personas
 
 ### P1 - "The Veteran Commander" (primary persona)
-- **Profile:** 38-55, played C&C/Red Alert/Dune 2000 in the 90s. Plays 3-6 hours a week, mostly evenings. Mid-range PC, sometimes a laptop.
+- **Profile:** 38-55, played the classic RTS games of the 90s when they were new. Plays 3-6 hours a week, mostly evenings. Mid-range PC, sometimes a laptop.
 - **Motivation:** Nostalgia with respect. Wants the *feel* back: the sidebar, the harvester rhythm, the tank rush. Deeply allergic to anything that feels like a lane-pusher or mobile game.
 - **Skill:** Rusty but knowledgeable. Knows build orders conceptually, APM around 40-70.
 - **Needs:** Skirmish vs AI as a first-class mode, classic control scheme available, pause-capable single player, readable UI at 100% scale, soundtrack that slaps.
@@ -30,7 +30,7 @@ Every feature must trace back to at least one persona need. Every decision with 
 - **Success signal:** Their four-person group makes it their default Friday game.
 
 ### P4 - "The Modder / Mapmaker"
-- **Profile:** Any age, technical hobbyist. Made maps in the Red Alert 2 editor or mods for OpenRA.
+- **Profile:** Any age, technical hobbyist. Made maps in the classic games' bundled editors or mods for OpenRA.
 - **Motivation:** Creation. Wants to add a unit, rebalance the game, build a tower-defence map.
 - **Needs:** Data-driven unit definitions in plain text, documented file formats, shipped map editor, Steam Workshop publishing, stable mod API across patches.
 - **Frustrations:** Binary-only formats, undocumented breaking changes, mods disabled in multiplayer with no alternative.
@@ -71,7 +71,7 @@ Every feature must trace back to at least one persona need. Every decision with 
 - **Stake:** Revenue share, platform policy compliance.
 - **Needs:** Store policy compliance (AI-asset disclosure requirements included), review-score health, Workshop integration done properly, Steam Deck verification as a marketing lever.
 
-### S5 - Rights Holders (EA) - negative stakeholder
+### S5 - Rights Holders (the publisher of the classic franchises) - negative stakeholder
 - **Stake:** Their IP. They do not need to approve mechanics, but they will act on trademark or asset infringement.
 - **Mitigation:** Legal constraints in doc 00 are non-negotiable; trademark search on the final title; no nostalgic marketing that names their products in a confusing way ("inspired by classic 90s RTS" is fine, trade-dress mimicry is not).
 

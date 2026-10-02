@@ -56,6 +56,12 @@ if grep -nE 'FactionOf\(0\)' game/scripts/Sidebar.cs >/tmp/ci-sb.txt 2>&1; then
   bad; cat /tmp/ci-sb.txt
 else ok; fi
 
+# P8-2 (D31): CLAUDE.md's Legal rule, as CI runs it. Patterns, allowlist and
+# scope live in tools/legalgrep-patterns.txt, tools/legal-allowlist.txt and
+# the script's own header.
+step "legal (protected names, retired VO phrasing)"
+if bash tools/legalgrep.sh >/tmp/ci-legal.txt 2>&1; then ok; else bad; cat /tmp/ci-legal.txt; fi
+
 step "build"
 if dotnet build sim/Ferrostorm.Sim.Runner -c Release >/tmp/ci-build.txt 2>&1; then ok; else bad; tail -20 /tmp/ci-build.txt; fi
 

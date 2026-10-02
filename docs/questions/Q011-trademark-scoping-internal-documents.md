@@ -4,6 +4,53 @@ Owner: legal-review + Luke
 Raised by: doc 23 section 7's referred legal finding (2026-07-16); filed by
 ADR drafting, 2026-07-17, with the inventory re-verified by grep at HEAD
 Decide by: 2026-07-24
+**Status: CLOSED 2026-10-02 by decision D31** (docs/tickets/P8-formidable-tracker.md,
+taken under the owner's standing authority of 2026-10-02; implemented by row P8-2)
+
+## Decision (D31)
+
+Option 3's hybrid shape, with the allow-list cut down to the documents whose
+purpose is the marks themselves. The prohibition is absolute for everything
+that ships or speaks to the player and for every working design document, with
+ONE narrow exception: a document whose purpose is clearance, legal analysis or
+competitor research, because a mark cannot be cleared, or a competitor
+assessed, without being named.
+
+- **The exception is a file, `tools/legal-allowlist.txt`**: one repo-relative
+  path per line with its reason. It holds two documents, doc 07 (competitor
+  research) and doc 09 (trademark clearance). The check refuses an entry
+  outside docs/, an entry that does not exist, and an entry that no longer
+  names anything, so the list can neither grow quietly nor rot.
+- **Everything else was reworded rather than listed.** The GDD lines below
+  (and two more the check found, the audio line and a build-radius
+  resolution) now use the approved formulation; so do docs 00,
+  01, 04, 05, 10, 13, 18, 20, 22, 27, 30 and 31, ADR-020's quotation of the
+  GDD, the phase 1 backlog and art/audio/synth.py. Doc 00 section 5 now states
+  the same rule and points at the canonical list instead of repeating it,
+  which answers this file's closing request that the two say the same thing.
+  Doc 10 is a clearance report, but its one usage was an analogy, so it was
+  reworded and is not listed. The historical reports option 3 would have
+  excepted were reworded the same way. This file names nothing, by its own
+  method, so it needs no exception either.
+- **Enforced by `tools/legalgrep.sh`**, run by the banned-tokens job in
+  .github/workflows/determinism.yml and by tools/ci-local.sh. It fails on any
+  protected name over game/, art/, data/, sim/, docs/ and the README outside
+  the allowlist, and on the ten retired announcer phrasings wherever a player
+  hears or reads them (the VO generator, data/, and string literals in
+  game/scripts). Its patterns live in tools/legalgrep-patterns.txt, outside
+  every scanned tree, so the check never matches its own source.
+- **The two WIP files** the inventory warned about (doc 22 and the phase 1
+  backlog) were edited. The warning dates from 2026-07-17; both are history
+  now that P6 and P7 have closed, and the edits touch only the protected
+  usages.
+- **Not decided here, still legal-review's judgement call:** the slot
+  shorthands this file flags below under the trade-dress clause (GDD lines 62
+  and 64 and the code comment it cites). They are not on the name list and the
+  check does not look for them.
+- **CLAUDE.md's Legal bullet is restated** (2026-10-02, by the orchestrator under the
+  owner's standing authority, since the implementing agent rightly declined to edit
+  CLAUDE.md on another agent's instruction). It now names the allowlist and the check,
+  so CLAUDE.md and doc 00 section 5 say the same thing.
 
 NOTE ON METHOD: this file names no names. Every occurrence below is cited by
 file and line only, because the rule under discussion forbids the terms in
@@ -98,12 +145,12 @@ means so that neither the tax nor the mass-edit happens by default.
 
 ## Changed / Assumed / Needed next
 
-- **Changed:** nothing. This is a question, not a decision.
-- **Assumed:** the grep inventory above is complete for the LISTED terms at
-  HEAD (fdff459); the trade-dress judgement calls are flagged but not
+- **Changed (2026-07-17):** nothing. This was a question, not a decision.
+- **Changed (2026-10-02, P8-2):** closed by D31 as recorded above; the
+  inventory below the decision is kept as the record of what was found.
+- **Assumed:** the grep inventory above was complete for the LISTED terms at
+  HEAD (fdff459); it is superseded by tools/legalgrep.sh, which re-derives it
+  on every push. The trade-dress judgement calls are flagged but not
   enumerated exhaustively, because judging resemblance is exactly the call
   being requested.
-- **Needed next (from legal-review + Luke):** pick an option by the
-  decide-by date; whichever lands, CLAUDE.md and doc 00 line 52 should end
-  up saying the same thing, and the two live WIP files are edited only in
-  coordination with their owning session.
+- **Needed next:** from legal-review, a ruling on the slot shorthands if one is wanted.

@@ -4,7 +4,8 @@
 Renders the game's first SFX set as 16-bit 44.1 kHz mono WAV files into
 game/audio/. Pure standard library (wave, math, array, random); no numpy,
 no downloaded assets. Every sound is an original synthesis recipe and
-deliberately avoids any resemblance to C&C or EVA-style audio motifs.
+deliberately avoids any resemblance to the audio motifs or announcer of the
+classic RTS games of the 90s.
 
 Each file is normalised to a peak of -3 dBFS and the script prints the
 RMS level of every rendered file so silence or clipping is obvious.
@@ -358,7 +359,8 @@ def alert_radar():
     alert_low_power's sagging tone, because losing the radar picture and
     losing production speed are different bad news. Completes GDD s7 line
     85's alert set ("radar goes dark", ADR-008 clause 4 / ALERT-02's last
-    clause). Original synthesis; no resemblance to EVA-style audio."""
+    clause). Original synthesis; no resemblance to the classic games'
+    announcer audio."""
     rng = random.Random(112)
     carrier = mix(sine_sweep(0.20, 932.0, 932.0),
                   gain(sine_sweep(0.20, 1864.0, 1864.0), 0.18))
@@ -373,7 +375,7 @@ def alert_radar():
 def production_done():
     """Pleasant confirmation chime (~400 ms): a struck bar around G5 with
     second and third harmonics decaying faster than the fundamental, plus a
-    soft octave pre-tap. Aiming for a warm 'unit ready' that never nags."""
+    soft octave pre-tap. Aiming for a warm 'it is done' that never nags."""
     f = 784.0  # G5
     fundamental = exp_decay(sine_sweep(0.40, f, f), tau=0.130, attack=0.004)
     h2 = exp_decay(sine_sweep(0.28, f * 2.0, f * 2.0), tau=0.070, attack=0.003)

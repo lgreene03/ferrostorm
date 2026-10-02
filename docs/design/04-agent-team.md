@@ -5,7 +5,7 @@ This project is built by one human (Luke, acting as director/product owner) orch
 ## Global rules for every agent (paste into every charter)
 
 - Source of truth order: 03-TDD > 02-GDD > 01-Personas > your own judgement. Conflicts get escalated as a written question in `/docs/questions/`, never silently resolved.
-- Legal constraints in 00-project-overview §5 are absolute. No C&C names, assets, or trade dress, ever, including in placeholder content, comments, and test fixtures.
+- Legal constraints in 00-project-overview §5 are absolute. No names, assets, or trade dress from the classic franchises, ever, including in placeholder content, comments, and test fixtures. `tools/legalgrep.sh` enforces it in CI; its only exception is the short list of clearance and competitor-research documents in `tools/legal-allowlist.txt` (D31).
 - No `float` in `/sim`. No engine references in `/sim`. (Yes, you too, non-engineering agents: don't request features that would break this.)
 - Every deliverable ends with: what changed, what you assumed, what you need from whom next.
 - Scope discipline: if a task grows beyond its ticket, stop and report rather than expanding silently.
@@ -62,7 +62,7 @@ This project is built by one human (Luke, acting as director/product owner) orch
 **Uses skills:** design:ux-copy, design:accessibility-review, design:design-critique where available.
 
 ## A9 - Art Director / Asset Pipeline
-**Mission:** Style bible (palettes, silhouette rules, team-colour masking, readability standards), asset specs for contractors, and the automated import pipeline into Godot. Flags any asset that drifts toward C&C trade dress.
+**Mission:** Style bible (palettes, silhouette rules, team-colour masking, readability standards), asset specs for contractors, and the automated import pipeline into Godot. Flags any asset that drifts toward the classic franchises' trade dress.
 **Inputs:** GDD §11, legal constraints, performance budgets.
 **Outputs:** Style bible, per-asset spec sheets, pipeline scripts, AI-asset disclosure log (Steam requirement).
 **Note:** Final hero art likely human-contracted (stakeholder S6); this agent manages briefs and QC, not necessarily creation.
@@ -87,7 +87,7 @@ This project is built by one human (Luke, acting as director/product owner) orch
 
 ## A14 - Community & Docs Writer
 **Mission:** Player-facing documentation (manual, modding docs, format specs), roadmap posts, patch notes polish, code of conduct, Steam page copy.
-**Guardrails:** Marketing copy may say "inspired by classic 90s RTS"; may never name EA properties in a manner implying affiliation.
+**Guardrails:** Marketing copy may say "inspired by the classic RTS games of the 90s"; it may never name the classic franchises, their studio or their publisher at all, because public copy has no exception under CLAUDE.md's Legal rule.
 
 ## A15 - Legal/Compliance Reviewer
 **Mission:** Periodic sweep of names, assets, copy, and trade dress against constraints; trademark search on final title; contractor licence checklist; Steam AI-disclosure accuracy.

@@ -55,7 +55,7 @@ Solo-developer, agent-assisted schedule. Durations are effort-honest estimates w
 |---|---|---|---|---|---|
 | R1 | Cross-platform determinism proves unstable | Med | Critical | Phase 1 is entirely this bet; fixed-point + analyser + CI from first commit; kill criterion defined | Architect |
 | R2 | Scope creep (the RTS disease) | High | High | Non-goals list in doc 00; Producer veto; feature freeze at Alpha gate | Producer |
-| R3 | IP/trade-dress infringement claim | Low | Critical | Legal agent sweeps every gate; original names/art; no EA references in marketing | Legal agent |
+| R3 | IP/trade-dress infringement claim | Low | Critical | Legal agent sweeps every gate; original names/art; no reference to the classic franchises or their publisher in marketing; `tools/legalgrep.sh` in CI | Legal agent |
 | R4 | Solo-dev burnout / stall | Med | Critical | Effort-honest schedule; phases end in playable states (motivation checkpoints); permission to pause pre-Alpha | Luke |
 | R5 | "Fun gap": faithful but flat | Med | High | Vertical slice fun-gate with external testers; pivot budgeted | Game Designer |
 | R6 | RTS market too niche for ROI | Med | Med | Costs staged behind gates; Steam wishlist targets checked at Alpha before big art spend | Producer |

@@ -1,0 +1,48 @@
+# The data the legal check reads (tools/legalgrep.sh; P8-2, decision D31 in
+# docs/tickets/P8-formidable-tracker.md).
+#
+# The patterns live here rather than in the script so the check can never
+# match its own source, and this file sits in tools/, which is not scanned, for
+# the same reason. Apart from CLAUDE.md, which states the rule, and the
+# documents named in tools/legal-allowlist.txt, this is the only file that has
+# to spell what it forbids. CLAUDE.md's Legal rule is the authority for the
+# name list; this file is its machine-readable form, widened only by variant
+# spellings and abbreviations of the same marks and by the announcer's
+# character name, which doc 00 section 5's "associated names, characters"
+# covers. The low-power line is listed in both word orders because the
+# client's toast used the order the retired voice line did not.
+#
+# Format: KIND FLAGS REGEX, separated by whitespace, one pattern per line, no
+# trailing comment on a pattern line.
+#   KIND   name    a protected franchise, faction, resource, character, studio
+#                  or publisher name. Scanned over every tree that ships and
+#                  over docs/, minus the allowlist.
+#          phrase  one of the ten retired announcer phrasings. Scanned only
+#                  where a player hears or reads it. Word boundaries are added
+#                  by the script, so keep any alternation inside a group.
+#   FLAGS  i case-insensitive, s case-sensitive, w whole word (names only)
+#   REGEX  POSIX extended. No spaces: write [[:space:]]+ between words.
+
+name    i    command[[:space:]]*(&|and|&amp;)[[:space:]]*conquer
+name    i    c&c
+name    sw   CnC
+name    i    red[[:space:]]+alert
+name    i    tiberi(um|an)
+name    i    westwood
+name    sw   GDI
+name    sw   Nod
+name    sw   EA
+name    sw   EVA
+name    sw   RA[0-9]*
+
+phrase  i    construction[[:space:]]+complete
+phrase  i    unit[[:space:]]+ready
+phrase  i    unit[[:space:]]+lost
+phrase  i    base[[:space:]]+(is[[:space:]]+)?under[[:space:]]+attack
+phrase  i    harvester[[:space:]]+(is[[:space:]]+)?under[[:space:]]+attack
+phrase  i    power[[:space:]]+low
+phrase  i    low[[:space:]]+power
+phrase  i    radar[[:space:]]+offline
+phrase  i    superweapon[[:space:]]+launch[[:space:]]+detected
+phrase  i    mission[[:space:]]+accomplished
+phrase  i    mission[[:space:]]+failed

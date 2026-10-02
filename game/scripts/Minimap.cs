@@ -28,7 +28,7 @@ public partial class Minimap : Control
     private bool _radarLive;
 
     /// <summary>ADR-008 clause 4, per doc 22 BD-09's sketch: while dark the
-    /// minimap renders only the cinder panel and centred bone RADAR OFFLINE
+    /// minimap renders only the cinder panel and centred bone UPLINK LOST
     /// text - no terrain, no fog, no dots, no frustum. Pings still render,
     /// deliberately: blanking the base-under-attack ping would make the
     /// blackout a stealth nerf to the alert system (doc 22's LOW_POWER
@@ -143,7 +143,7 @@ public partial class Minimap : Control
             DrawRect(new Rect2(Vector2.Zero, Size), UplinkUi.Panel);
             var font = GetThemeDefaultFont();
             if (font != null)
-                DrawString(font, new Vector2(0, Size.Y / 2 + 4), "RADAR OFFLINE",
+                DrawString(font, new Vector2(0, Size.Y / 2 + 4), "UPLINK LOST",
                     HorizontalAlignment.Center, Size.X, 12, UplinkUi.Bone);
         }
         DrawRect(new Rect2(Vector2.Zero, Size), new Color(0.79f, 0.63f, 0.36f, 0.7f), false, 1f);
