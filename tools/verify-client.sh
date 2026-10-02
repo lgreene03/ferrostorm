@@ -31,7 +31,10 @@ set +e
 "$GODOT" --headless --audio-driver Dummy --path "$ROOT/game" res://scenes/Verify.tscn > "$LOG" 2>&1
 rc=$?
 set -e
-grep -E '^verify:|^  ok |^  FAIL ' "$LOG" || true
+# KNOWN-MISSING and EXCEPTION are the inputgate's table of verbs a player
+# cannot yet issue (P8-1): shown, never counted as failures, so the gap stays
+# visible while the harness stays green.
+grep -E '^verify:|^  ok |^  FAIL |^  KNOWN-MISSING |^  EXCEPTION ' "$LOG" || true
 
 # Godot has been known to exit 0 after a Quit(1) on some platforms, so the
 # verdict LINE is the authority and the exit code is corroboration. Trusting

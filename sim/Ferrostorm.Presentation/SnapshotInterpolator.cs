@@ -36,7 +36,14 @@ public sealed class SnapshotInterpolator
         // indistinguishable: the Sodality seismic charge rendered as the
         // Directorate orbital cannon, because both are EntityKind.Superweapon.
         // Optional and defaulted, so every existing caller is unchanged.
-        int StructType = 0);
+        int StructType = 0,
+        // P8-6: the stealth state, carried so the client can draw cloak as the
+        // sim rules it. The client read none of it, so every cloaked unit,
+        // Sodality building and mine was drawn for its enemies whether detected
+        // or not, and a detector changed nothing on screen. The sim's own field
+        // names and types (no float), snapped from the earlier snapshot like
+        // every discrete field here, so cloak never flickers ahead of its tick.
+        bool Stealth = false, bool FieldCloaked = false, int RevealTicks = 0, byte DetectedMask = 0);
 
     private readonly Dictionary<int, Entity[]> _snapshots = new();
     private readonly int _window;
@@ -96,12 +103,14 @@ public sealed class SnapshotInterpolator
                 // interpolated: it is a discrete stock, like Hp and Kind above,
                 // and a lerped ore count would render a fractional deposit.
                 output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, x, y, e0.Hp, e0.UnitType, e0.MaxHp,
-                    e0.FerriteAmount, e0.FerriteCap, e0.StructType));
+                    e0.FerriteAmount, e0.FerriteCap, e0.StructType,
+                    e0.Stealth, e0.FieldCloaked, e0.RevealTicks, e0.DetectedMask));
             }
             else
             {
                 output.Add(new ViewEntity(e0.Id, e0.Alive, e0.PlayerId, e0.Kind, ToDouble(e0.X), ToDouble(e0.Y), e0.Hp, e0.UnitType, e0.MaxHp,
-                    e0.FerriteAmount, e0.FerriteCap, e0.StructType));
+                    e0.FerriteAmount, e0.FerriteCap, e0.StructType,
+                    e0.Stealth, e0.FieldCloaked, e0.RevealTicks, e0.DetectedMask));
             }
         }
         return true;

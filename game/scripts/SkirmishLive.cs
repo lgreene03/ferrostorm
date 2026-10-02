@@ -88,8 +88,26 @@ public partial class SkirmishLive : Node3D
     /// the question the code actually means instead: "not mine" is
     /// `PlayerId != LocalPlayerId` (with `PlayerId >= 0` where neutrals matter),
     /// and "who won" is `_world.Winner`, which the sim already knows and which
-    /// no amount of seat arithmetic can reconstruct.</summary>
+    /// no amount of seat arithmetic can reconstruct.
+    ///
+    /// P8-4: and "is this an enemy" is <see cref="IsHostileSeat"/>. NO GAME
+    /// PATH READS THIS PROPERTY ANY MORE. It drew fog, picked targets and chose
+    /// the cursor, and on the four-seat map that left seats 2 and 3 drawn
+    /// through the fog and impossible to right-click attack. It stays for the
+    /// harness, whose main scene is a two-seat match where "the other seat" is
+    /// exactly what a check means.</summary>
     public int EnemyPlayerId => 1 - LocalPlayerId;
+
+    /// <summary>
+    /// P8-4: is this seat an ENEMY of the local seat? The one predicate fog,
+    /// target picking and the attack cursor ask, built on the sim's own
+    /// World.TeamOf, so a free-for-all, a team game and a duel all answer
+    /// without anything here knowing which it is. A neutral (-1) is nobody's
+    /// enemy, which keeps outposts, bridges and ferrite out of the attack pick
+    /// exactly as before; an ally is not an enemy, so it is neither hidden by
+    /// the fog nor offered as a target.
+    /// </summary>
+    public bool IsHostileSeat(int seat) => seat >= 0 && _world.TeamOf(seat) != _world.TeamOf(LocalPlayerId);
 
     private readonly HashSet<int> _selection = new();
     // ADR-021 legibility: the entity the player last clicked that they do NOT
@@ -374,7 +392,10 @@ public partial class SkirmishLive : Node3D
     // deliberately: watching the enemy's guns go dark is the payoff of the
     // plant-snipe pillar (doc 00 line 24), and the sim state it mirrors is
     // already visible in the turret's refusal to fire.
-    private readonly bool[] _ownerBrownedOut = new bool[2];
+    // P8-4: one entry per SEAT the world was built with, sized where it is
+    // filled, because new bool[2] was the two-seat assumption again: on the
+    // four-seat map seats 2 and 3 were never tallied and never dimmed.
+    private bool[] _ownerBrownedOut = System.Array.Empty<bool>();
     private readonly HashSet<int> _offlineDimmed = new();
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
@@ -540,6 +561,10 @@ public partial class SkirmishLive : Node3D
         // verified offscreen) and a battle reached that way must still come up
         // with the player's volume, video and key bindings.
         LocalPlayerId = LocalSeat;
+        // P8-4: consumed, exactly as PendingNet is below. Only the LAN join
+        // path sets it, and nothing set it back, so a single-player match
+        // started after joining a LAN game as seat 1 put the human in seat 1.
+        LocalSeat = 0;
         _net = PendingNet;
         PendingNet = null;   // consumed: the next scene must not inherit this session
         Settings.EnsureLoaded();
@@ -2161,15 +2186,17 @@ public partial class SkirmishLive : Node3D
         // said OFFLINE while the joiner's grid was healthy, and stayed lit while
         // it collapsed and the sim quietly refused to let them fire.
         {
-            var supplyOf = new int[2];
-            var drawOf = new int[2];
+            int seats = _world.PlayerCount;
+            if (_ownerBrownedOut.Length != seats) _ownerBrownedOut = new bool[seats];
+            var supplyOf = new int[seats];
+            var drawOf = new int[seats];
             foreach (var e in _world.Entities)
             {
-                if (!e.Alive || e.PlayerId < 0 || e.PlayerId > 1) continue;
+                if (!e.Alive || (uint)e.PlayerId >= (uint)seats) continue;
                 supplyOf[e.PlayerId] += e.PowerSupply;
                 drawOf[e.PlayerId] += e.PowerDraw;
             }
-            for (int p = 0; p < 2; p++) _ownerBrownedOut[p] = BrownedOut(supplyOf[p], drawOf[p]);
+            for (int p = 0; p < seats; p++) _ownerBrownedOut[p] = BrownedOut(supplyOf[p], drawOf[p]);
         }
         // TICKET-P5-SAVE-01: the mode is on the status line because two of the
         // three modes change what the player's clicks do, and a replay that
@@ -2182,7 +2209,7 @@ public partial class SkirmishLive : Node3D
         foreach (var v in _view)
         {
             if (!v.Alive || v.Kind == EntityKind.FerriteField) continue;
-            if (!DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y)) continue;
+            if (!DrawnForLocalSeat(v)) continue;   // P8-6: an undetected cloaked enemy gets no dot either
             // Through the team-colour law, not a rival copy keyed on "me versus
             // them": a player's colour is which player they ARE, not who is
             // looking, or the minimap and the battlefield disagree at seat 1.
@@ -2480,7 +2507,7 @@ public partial class SkirmishLive : Node3D
                 else anyCombat = true;
             }
         if (!anyMobile) return GameCursor.Select;
-        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == EnemyPlayerId && v.Kind != EntityKind.FerriteField);
+        int enemy = PickHostile(screen);
         if (enemy >= 0)
         {
             if (anyEngineer && !anyCombat && !anyHarvester
@@ -2649,7 +2676,7 @@ public partial class SkirmishLive : Node3D
                         rep = RepairStalled(sid) ? "   REPAIR STALLED - NO CREDITS" : $"   REPAIRING {RepairCostPerSecond} cr/s";
                     // ADR-008: an unpowered turret says so out loud - the
                     // readout twin of the actor's dark wash, the REP-04 idiom.
-                    string off = v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1
+                    string off = v.Kind == EntityKind.Turret && (uint)v.PlayerId < (uint)_ownerBrownedOut.Length
                         && _ownerBrownedOut[v.PlayerId]
                         ? "   OFFLINE - BROWN-OUT" : "";
                     string acts = !Mobile(v.Kind)
@@ -2950,6 +2977,68 @@ public partial class SkirmishLive : Node3D
         foreach (var c in node.GetChildren())
             if (!DimExempt.Contains(((Node)c).Name.ToString()))
                 SetOfflineDim((Node)c, off);
+    }
+
+    // -------- P8-6, decision D24: cloak on screen --------
+    // Two looks, and they answer two different questions. TRANSLUCENT is the
+    // player's own (or an ally's) cloaked unit, building or mine: it tells the
+    // player it is hidden from the enemy, which nothing on screen ever said. The
+    // DETECTED wash is an enemy cloaked thing that is drawn because it is
+    // detected or has fired: it tells the player this is a cloaked enemy they
+    // can see now and may lose again. An undetected enemy needs no look; it is
+    // not drawn at all (DrawnForLocalSeat).
+    private enum CloakLook { None, Translucent, Detected }
+    private readonly Dictionary<int, CloakLook> _cloakLook = new();
+    private const float FriendlyCloakTransparency = 0.55f;
+    // Bone, doc 16's own pale, as a wash at partial alpha: neither seat's mark
+    // nor the near-black offline dim, so it cannot be read as either. A wash on
+    // MaterialOverlay keeps the model's silhouette, the offline dim's method.
+    private static readonly StandardMaterial3D DetectedTintMat = new()
+    {
+        ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+        AlbedoColor = UplinkUi.Bone with { A = 0.45f },
+        Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+    };
+
+    /// <summary>`drawn` is the verdict DrawnForLocalSeat already gave, so an
+    /// enemy wears the detected wash only while it is actually on screen.</summary>
+    private CloakLook CloakLookFor(in SnapshotInterpolator.ViewEntity v, bool drawn)
+    {
+        if (!(v.Stealth || v.FieldCloaked) || v.PlayerId < 0) return CloakLook.None;
+        if (!IsHostileSeat(v.PlayerId)) return CloakLook.Translucent;
+        return drawn ? CloakLook.Detected : CloakLook.None;
+    }
+
+    /// <summary>Paint a cloak look over an actor's meshes, chrome exempt as the
+    /// offline dim exempts it. The detected wash shares MaterialOverlay with
+    /// the offline dim, and only a Turret is ever dimmed while nothing cloaked
+    /// is a Turret, so the two never meet; clearing removes only the wash this
+    /// method laid.</summary>
+    private static void ApplyCloakLook(Node node, CloakLook look)
+    {
+        if (node is GeometryInstance3D g && !DimExempt.Contains(node.Name.ToString()))
+        {
+            g.Transparency = look == CloakLook.Translucent ? FriendlyCloakTransparency : 0f;
+            if (look == CloakLook.Detected) g.MaterialOverlay = DetectedTintMat;
+            else if (g.MaterialOverlay == DetectedTintMat) g.MaterialOverlay = null;
+        }
+        foreach (var c in node.GetChildren())
+            if (!DimExempt.Contains(((Node)c).Name.ToString()))
+                ApplyCloakLook((Node)c, look);
+    }
+
+    /// <summary>P8-6 verification reads: the look an actor is WEARING, read off
+    /// its meshes rather than off the cache that decided it.</summary>
+    public bool ActorTranslucentForTest(int id) =>
+        _actors.TryGetValue(id, out var n) && AnyMesh(n, g => g.Transparency > 0f);
+    public bool ActorDetectedTintForTest(int id) =>
+        _actors.TryGetValue(id, out var n) && AnyMesh(n, g => g.MaterialOverlay == DetectedTintMat);
+    private static bool AnyMesh(Node node, System.Func<GeometryInstance3D, bool> test)
+    {
+        if (node is GeometryInstance3D g && !DimExempt.Contains(node.Name.ToString()) && test(g)) return true;
+        foreach (var c in node.GetChildren())
+            if (!DimExempt.Contains(((Node)c).Name.ToString()) && AnyMesh((Node)c, test)) return true;
+        return false;
     }
 
     /// <summary>
@@ -3281,6 +3370,7 @@ public partial class SkirmishLive : Node3D
                 AddChild(node);
                 _actors[v.Id] = node;
                 _actorOwner[v.Id] = v.PlayerId;   // what the team strip was drawn FOR
+                _cloakLook.Remove(v.Id);          // P8-6: a fresh node wears no look yet
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
                 _rigs[v.Id] = newRig;
@@ -3324,7 +3414,7 @@ public partial class SkirmishLive : Node3D
             // existing materials, the ghost-tint precedent). Applied to both
             // sides' turrets; the sim state it mirrors is already public in
             // the turret's refusal to fire.
-            if (v.Kind == EntityKind.Turret && v.PlayerId is 0 or 1)
+            if (v.Kind == EntityKind.Turret && (uint)v.PlayerId < (uint)_ownerBrownedOut.Length)
             {
                 bool off = _ownerBrownedOut[v.PlayerId];
                 if (off != _offlineDimmed.Contains(v.Id))
@@ -3433,8 +3523,17 @@ public partial class SkirmishLive : Node3D
                     BattlefieldView.ApplyTeamStrip(node, v.PlayerId, 2.6f);
                 _actorOwner[v.Id] = v.PlayerId;
             }
-            // Fog: enemies are hidden unless their cell is currently visible
-            node.Visible = DrawnForLocalSeat(v.PlayerId, (int)v.X, (int)v.Y);
+            // Fog: enemies are hidden unless their cell is currently visible,
+            // and (P8-6) a cloaked enemy unless it is detected or revealed.
+            node.Visible = DrawnForLocalSeat(v);
+            // P8-6: how a cloaked thing that IS drawn looks. Written only on a
+            // change, the offline-dim pattern, because it walks every mesh.
+            var look = CloakLookFor(v, node.Visible);
+            if (look != _cloakLook.GetValueOrDefault(v.Id))
+            {
+                ApplyCloakLook(node, look);
+                if (look == CloakLook.None) _cloakLook.Remove(v.Id); else _cloakLook[v.Id] = look;
+            }
         }
         foreach (var id in new List<int>(_actors.Keys))
             if (!seen.Contains(id))
@@ -3484,6 +3583,7 @@ public partial class SkirmishLive : Node3D
                 ForgetRally(id);              // TICKET-P5-BD-14: no orphan markers
                 _manuallyStopped.Remove(id);  // P5-ECON-07: ids are reused by nothing, but the set should not grow forever
                 _offlineDimmed.Remove(id);    // ADR-008: the dim state dies with the actor
+                _cloakLook.Remove(id);        // P8-6: and so does the cloak look
             }
 
         _now += dt;
@@ -4971,9 +5071,73 @@ public partial class SkirmishLive : Node3D
     /// whole time (it has always used LocalPlayerId), which is precisely why the
     /// existing fog check could not see this: the overlay was correct and the
     /// units underneath it were filtered by the wrong player's eyes.
+    ///
+    /// P8-4: "an enemy" is a HOSTILE SEAT, not `1 - LocalPlayerId`, which was
+    /// the joiner-fog defect one seat count wider: on the four-seat map seats 2
+    /// and 3 were never the "enemy" and were drawn through the fog for the
+    /// whole match. Allies are not enemies and are drawn wherever they stand.
+    /// Visibility is the local seat's own, because the sim gives allies no
+    /// shared sight (World.FogSystem, P7-8c) and the shroud texture is drawn
+    /// from the same bitset.
+    ///
+    /// P8-6, decision D24: and a CLOAKED enemy in a visible cell is drawn only
+    /// once detected or revealed. The client read no stealth at all, so every
+    /// cloaked unit, Sodality building and mine was drawn for its enemies and a
+    /// detector changed nothing on screen. Detection is TEAM-wide, as D24
+    /// rules: the enemy counts as detected when any seat on the local seat's
+    /// team has its bit in DetectedMask. Firing (RevealTicks) uncloaks for
+    /// everyone, which is the sim's own CanTarget rule.
     /// </summary>
-    private bool DrawnForLocalSeat(int playerId, int cx, int cy) =>
-        playerId != EnemyPlayerId || _world.IsVisible(LocalPlayerId, cx, cy);
+    private bool DrawnForLocalSeat(in SnapshotInterpolator.ViewEntity v) =>
+        ShownToLocalSeat(v.PlayerId, (int)v.X, (int)v.Y, v.Stealth || v.FieldCloaked, v.RevealTicks > 0, v.DetectedMask);
+
+    private bool ShownToLocalSeat(int playerId, int cx, int cy, bool cloaked, bool revealed, int detectedMask) =>
+        !IsHostileSeat(playerId)
+        || (_world.IsVisible(LocalPlayerId, cx, cy) && (!cloaked || revealed || (detectedMask & LocalTeamMask()) != 0));
+
+    /// <summary>P8-6 (D24): one bit per seat on the local seat's team, its own
+    /// included, in DetectedMask's layout (bit n is seat n).</summary>
+    private int LocalTeamMask()
+    {
+        int mask = 0, team = _world.TeamOf(LocalPlayerId);
+        for (int p = 0; p < _world.PlayerCount; p++)
+            if (_world.TeamOf(p) == team) mask |= 1 << p;
+        return mask;
+    }
+
+    /// <summary>
+    /// P8-6: can the local seat's units actually shoot this? The sim's own
+    /// CanTarget, asked for the local seat: uncloaked, revealed by firing, or
+    /// detected by THIS seat. It is narrower than drawing on purpose. D24 draws
+    /// an enemy any teammate detects, but the sim lets a seat engage only what
+    /// its own detectors found (World.CanTarget reads the attacker's bit
+    /// alone), so an Attack on an enemy only an ally has found is dropped by
+    /// CombatSystem the tick it lands. The pick asks this as well, so the cursor
+    /// never offers an attack the sim would refuse: an ally-detected enemy is
+    /// shown, tinted, and is a move target until this seat detects it too.
+    /// </summary>
+    private bool LocalSeatCanTarget(in SnapshotInterpolator.ViewEntity v) =>
+        !(v.Stealth || v.FieldCloaked) || v.RevealTicks > 0 || (v.DetectedMask & (1 << LocalPlayerId)) != 0;
+
+    /// <summary>P8-4: the enemy under the cursor, the ONE pick the attack
+    /// cursor and the right click both ask, so the cursor cannot promise an
+    /// attack the click would not send, or the reverse. Any hostile seat, at
+    /// any seat count.
+    ///
+    /// P8-5: and only one the local seat is SHOWN. The pick read the whole
+    /// snapshot list, fog and all, so sweeping the cursor over the shroud lit
+    /// the Attack glyph over every hidden enemy and a right click sent the army
+    /// straight to it: a free maphack, and from a LAN peer an exploit. The
+    /// filter is the drawing predicate itself rather than a second opinion of
+    /// it, so an enemy is pickable exactly where it is drawn. Under the shroud
+    /// the cursor reads Move and the click is a move.
+    ///
+    /// P8-6: an undetected cloaked enemy is not drawn, so it is not picked
+    /// either, and a drawn one is picked only if this seat can engage it (see
+    /// LocalSeatCanTarget for the one case those two differ).</summary>
+    private int PickHostile(Vector2 screen) =>
+        PickEntity(screen, 0.8f, v => IsHostileSeat(v.PlayerId) && v.Kind != EntityKind.FerriteField
+                                      && DrawnForLocalSeat(v) && LocalSeatCanTarget(v));
 
     /// <summary>Verification read: would the client draw this entity for the
     /// local seat? Reads the SIM's own position rather than the per-frame view
@@ -4982,7 +5146,8 @@ public partial class SkirmishLive : Node3D
     public bool DrawnForLocalSeatForTest(int id)
     {
         var e = _world.Entities[id];
-        return DrawnForLocalSeat(e.PlayerId, Map.CellOf(e.X), Map.CellOf(e.Y));
+        return ShownToLocalSeat(e.PlayerId, Map.CellOf(e.X), Map.CellOf(e.Y),
+            e.Stealth || e.FieldCloaked, e.RevealTicks > 0, e.DetectedMask);
     }
 
     /// <summary>Verification read: is the seat's OWN base revealed to it? A
@@ -5234,6 +5399,33 @@ public partial class SkirmishLive : Node3D
     public void PressLeftClick(Vector2 at) =>
         _UnhandledInput(new InputEventMouseButton
         { ButtonIndex = MouseButton.Left, Pressed = true, Position = at });
+
+    /// <summary>P8-1 (inputgate): a real RIGHT click through the real input
+    /// path, which is where every contextual order (move, attack, harvest,
+    /// rally, the contact units' walk-in) is decided. Calling IssueOrder
+    /// directly would skip the dispatch a player's mouse goes through.</summary>
+    public void PressRightClick(Vector2 at) =>
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Right, Pressed = true, Position = at });
+
+    /// <summary>P8-1 (inputgate): the Commands a gesture has queued and the
+    /// next tick has not yet drained. Read where they sit, because once a tick
+    /// takes them they are gone, and a check of WHAT the gesture asked for has
+    /// to be made before the sim is asked whether it agreed.</summary>
+    public IReadOnlyList<Command> PendingForTest => _pending;
+    /// <summary>P8-1 (inputgate): the selection as ids, copied, so a check can
+    /// ask the SIM about every unit an order went to.</summary>
+    public List<int> SelectedIdsForTest() => new(_selection);
+    /// <summary>P8-4: is this entity's actor SHOWING right now? Read off the
+    /// node the actor loop last wrote, never recomputed, so a check of the fog
+    /// rule reads what the player would actually see.</summary>
+    public bool ActorShownForTest(int id) => _actors.TryGetValue(id, out var n) && n.Visible;
+    /// <summary>P8-6: a Command sent PAST the cursor and the click, as a LAN
+    /// peer's stream could carry one, so a check can ask what the SIM does with
+    /// an order the client declines to offer. Carries LocalPlayerId like every
+    /// other client Command; never used to prove a gesture works.</summary>
+    public void QueueCommandForTest(CommandType type, int entityId, int auxId) =>
+        _pending.Add(new Command(0, LocalPlayerId, type, entityId, Fix64.Zero, Fix64.Zero, auxId));
 
     public bool AttackMoveArmed => _attackMoveArmed;
 
@@ -5562,7 +5754,7 @@ public partial class SkirmishLive : Node3D
         }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
-        int enemy = PickEntity(screen, 0.8f, v => v.PlayerId == EnemyPlayerId && v.Kind != EntityKind.FerriteField);
+        int enemy = PickHostile(screen);
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
         // P5-ECON-06: computed ONCE for the whole click, not per selected unit,
         // and the answer decides whether the order is sent at all.

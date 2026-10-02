@@ -799,6 +799,39 @@ public partial class Sidebar : PanelContainer
         b.EmitSignal(Godot.BaseButton.SignalName.Pressed);
         return true;
     }
+    /// <summary>P8-1 (inputgate): the BUILDING twin of PressUnitButton, with
+    /// the same three refusals, so a check proves the wired handler of a button
+    /// a player can actually see and press.</summary>
+    public bool PressStructButton(int typeId)
+    {
+        if (!_structButtons.TryGetValue(typeId, out var b) || !b.Visible || b.Disabled) return false;
+        b.EmitSignal(Godot.BaseButton.SignalName.Pressed);
+        return true;
+    }
+    /// <summary>P8-1 (inputgate): a RIGHT click on a unit or building button,
+    /// delivered as the GuiInput event the mouse raises, so the cancel handler
+    /// MakeButton wired is the one that runs. False if the button is absent or
+    /// hidden, because a hidden button cannot be right-clicked either.</summary>
+    public bool RightClickUnitButton(int typeId) =>
+        _unitButtons.TryGetValue(typeId, out var b) && RightClick(b);
+    public bool RightClickStructButton(int typeId) =>
+        _structButtons.TryGetValue(typeId, out var b) && RightClick(b);
+    private static bool RightClick(Button b)
+    {
+        if (!b.Visible) return false;
+        b.EmitSignal(Control.SignalName.GuiInput,
+            new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = true });
+        return true;
+    }
+    /// <summary>P8-1 (inputgate): press the PLACE prompt a finished building
+    /// raises, through its own Pressed signal. False while it is hidden, which
+    /// is whenever nothing is waiting to be placed.</summary>
+    public bool PressPlaceButton()
+    {
+        if (!_placeButton.Visible || _placeButton.Disabled) return false;
+        _placeButton.EmitSignal(Godot.BaseButton.SignalName.Pressed);
+        return true;
+    }
     public string PowerText => _powerLabel.Text;
     public float PowerFillWidth => _powerFill.Size.X;
     public float PowerTickX => _powerTick.Position.X;
