@@ -32,7 +32,24 @@ public partial class MainMenu : Control
     private OptionButton _creditPick = null!;
     private OptionButton _oppCountPick = null!;   // GDD s9: "1-7 opponents"
     private OptionButton _teamPick = null!;       // GDD s9: "up to 4v4"
-    private readonly List<string> _maps = new();
+    private PanelContainer _setupPanel = null!;
+    // P8-40: the theatres as the picker lists them, and the preview beside it.
+    private List<MapCard> _cards = new();
+    private TextureRect _previewThumb = null!;
+    private Label _previewSize = null!;
+    private Label _previewSeats = null!;
+
+    /// <summary>P8-40: developer-only rows (today, the LAN screen's in-process
+    /// smoke test) appear only when the game is launched with "-- --dev". A
+    /// player has no use for them and reads them as a development build.</summary>
+    public static bool DevTools => System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--dev") >= 0;
+
+    private const string TeamsTip =
+        "FREE FOR ALL: every seat fights alone. EVEN SIDES: two teams, seats alternating, so you share a side with the third seat.";
+    private const string TeamsOffTip =
+        "Teams need three or more seats. This is a one against one match, so there are no sides to choose.";
+
+    private string? SelectedMapPath => _cards.Count > 0 ? _cards[_mapPick.Selected].Path : null;
 
     public override void _Ready()
     {
@@ -52,8 +69,15 @@ public partial class MainMenu : Control
             // TICKET-P5-SET-01 added LAN and SETTINGS, so it grew again.
             // TICKET-P6-FACTION-01 added the FACTION row: one more growth.
             // P7-8h added the TEAMS row, so it grows by that row's height again.
-            OffsetLeft = -220, OffsetRight = 220, OffsetTop = -329, OffsetBottom = 329,
+            // P8-40 MEASURED it (inputgate/front-door now asserts it): the
+            // content was 788 px in a 658 px box, so the panel had been growing
+            // off its centre and its bottom edge sat at 909 in the 900 px
+            // window. The box is now sized to the measured content, and the
+            // theatre preview is a column BESIDE the rows, so it costs width
+            // the screen has rather than height it does not.
+            OffsetLeft = -300, OffsetRight = 300, OffsetTop = -400, OffsetBottom = 400,
         };
+        _setupPanel = panel;
         var style = new StyleBoxFlat { BgColor = new Color(0.086f, 0.094f, 0.102f), BorderColor = Seam };
         style.SetBorderWidthAll(1);
         style.ContentMarginLeft = 28; style.ContentMarginRight = 28;
@@ -75,25 +99,38 @@ public partial class MainMenu : Control
         v.AddChild(sub);
         v.AddChild(new HSeparator());
 
+        // P8-40: the setup rows on the left and the theatre preview on the
+        // right, the layout the genre's skirmish screens use.
+        var setup = new HBoxContainer();
+        setup.AddThemeConstantOverride("separation", 16);
+        var rows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        rows.AddThemeConstantOverride("separation", 10);
+        setup.AddChild(rows);
+        setup.AddChild(BuildPreview());
+        v.AddChild(setup);
+
         // TICKET-P6-FACTION-01: the side is the first choice, because that is
         // where the classic genre puts it. Indices are World's own faction
         // constants (0 Directorate, 1 Sodality), so Selected IS the faction.
-        _factionPick = Row(v, "FACTION");
+        _factionPick = Row(rows, "FACTION",
+            "The side you command. Your first opponent fields the other; any further opponents alternate between the two.");
         _factionPick.AddItem("DIRECTORATE"); _factionPick.AddItem("SODALITY");
-        _mapPick = Row(v, "THEATRE");
+        _mapPick = Row(rows, "THEATRE", "The battlefield. The preview beside it shows the theatre's terrain, size and seats.");
         // Through GameFiles.RepoRoot, not the res://-parent idiom open-coded:
         // that idiom is true only when running from source, so a packaged build
         // listed no maps at all and the theatre picker came up empty.
-        // P7-8a: "skirmish-*.fmap" rather than "*.fmap". data/maps now also
-        // holds a four-start TEST FIXTURE for the runner's multiseatgate, and a
-        // fixture carries no fairness proof by construction - an unfiltered
-        // listing would have offered it here as a theatre to play, which is
-        // exactly what its own header says must never happen.
-        foreach (var f in System.IO.Directory.GetFiles(
-            System.IO.Path.Combine(GameFiles.RepoRoot, "data", "maps"), "skirmish-*.fmap"))
+        // P7-8a: "skirmish-*.fmap" rather than "*.fmap"; MapCatalogue keeps
+        // that filter, because data/maps also holds a test fixture its own
+        // header says must never be offered as a theatre.
+        // P8-40: each theatre is listed by the NAME its header declares, not
+        // its file name, and the preview beside the rows shows its size, its
+        // seats and a thumbnail of its terrain, so choosing a map tells the
+        // player what they are choosing.
+        _cards = MapCatalogue.Skirmish();
+        for (int i = 0; i < _cards.Count; i++)
         {
-            _maps.Add(f);
-            _mapPick.AddItem(System.IO.Path.GetFileNameWithoutExtension(f).ToUpperInvariant());
+            _mapPick.AddItem(_cards[i].DisplayName);
+            _mapPick.SetItemTooltip(i, $"{_cards[i].SizeText}, {_cards[i].SeatsText}");
         }
         // GDD s9 promises "skirmish vs AI, 1-7 opponents". The RANGE comes from
         // the selected map, because a count the map cannot seat is not an
@@ -102,9 +139,8 @@ public partial class MainMenu : Control
         // one opponent and the control is correctly fixed rather than specially
         // cased. Repopulated whenever the theatre changes, and defaulted to the
         // maximum, which is what P7-8d did unconditionally.
-        _oppCountPick = Row(v, "OPPONENTS");
-        _mapPick.ItemSelected += _ => RefreshOpponentCounts();
-        RefreshOpponentCounts();
+        _oppCountPick = Row(rows, "OPPONENTS",
+            "How many computer opponents. The theatre's start positions set the most it can hold.");
         // P7-8h: GDD s9's other seating promise, "up to 4v4". A MODE rather than
         // a seat-by-seat assignment, because two items express every division
         // the shipped maps can hold and a per-seat control would be a row per
@@ -112,11 +148,18 @@ public partial class MainMenu : Control
         // exactly as the faction picker's are World's, so nothing translates.
         // FREE FOR ALL is preselected: it is what every match before this picker
         // was played as.
-        _teamPick = Row(v, "TEAMS");
+        _teamPick = Row(rows, "TEAMS", TeamsTip);
         _teamPick.AddItem("FREE FOR ALL");
         _teamPick.AddItem("EVEN SIDES");
         _teamPick.Select(MatchSetup.TeamsFreeForAll);
-        _aiPick = Row(v, "OPPOSITION");
+        // Wired once every row they touch exists, then run once for the
+        // theatre the picker opens on.
+        _mapPick.ItemSelected += _ => OnTheatreChanged();
+        _oppCountPick.ItemSelected += _ => RefreshTeams();
+        OnTheatreChanged();
+        _aiPick = Row(rows, "OPPOSITION",
+            "How the computer plays. STANDARD is balanced; RUSHER attacks early and often with small waves; "
+            + "TURTLE keeps a strong garrison and strikes late with a large one.");
         _aiPick.AddItem("STANDARD"); _aiPick.AddItem("RUSHER"); _aiPick.AddItem("TURTLE");
         // DR-14b / doc 28: strength, on its own axis from the taste above.
         // BRUTAL names its handicap in the item itself, because GDD line 76
@@ -124,11 +167,12 @@ public partial class MainMenu : Control
         // entitled to know the opponent is being given money rather than
         // playing better. Normal is preselected: it is the opponent every
         // match before this picker existed was played against.
-        _diffPick = Row(v, "DIFFICULTY");
+        _diffPick = Row(rows, "DIFFICULTY",
+            "How well the computer plays. BRUTAL is also handed 5000 extra credits at the start.");
         _diffPick.AddItem("EASY"); _diffPick.AddItem("NORMAL"); _diffPick.AddItem("HARD");
         _diffPick.AddItem("BRUTAL (+5000 CR HANDICAP)");
         _diffPick.Select(1);
-        _creditPick = Row(v, "TREASURY");
+        _creditPick = Row(rows, "TREASURY", "The credits every side starts with.");
         _creditPick.AddItem("5000"); _creditPick.AddItem("8000"); _creditPick.AddItem("12000");
         _creditPick.Select(1);
 
@@ -303,12 +347,16 @@ public partial class MainMenu : Control
 
         // Kept: the transport driven inside this one binary, which is still the
         // fastest way to tell "the network is wrong" from "the game is wrong"
-        // when a real join fails.
-        var report = UplinkUi.Note(
-            "runs a relay and two lockstep clients inside this process over a real TCP socket, on the map and treasury selected above, and compares both worlds at the end.", 12);
-        v.AddChild(UplinkUi.MenuButton("RUN THE TWO-CLIENT SMOKE TEST", () => StartSmoke(report)));
-        v.AddChild(report);
-        v.AddChild(new HSeparator());
+        // when a real join fails. P8-40: kept for the developer only, behind
+        // --dev, because to a player it is a test harness on the front door.
+        if (DevTools)
+        {
+            var report = UplinkUi.Note(
+                "runs a relay and two lockstep clients inside this process over a real TCP socket, on the map and treasury selected above, and compares both worlds at the end.", 12);
+            v.AddChild(UplinkUi.MenuButton("RUN THE TWO-CLIENT SMOKE TEST", () => StartSmoke(report)));
+            v.AddChild(report);
+            v.AddChild(new HSeparator());
+        }
         v.AddChild(MenuButton("BACK", () =>
         {
             _smoke = null;
@@ -334,7 +382,7 @@ public partial class MainMenu : Control
         MatchConfig.MissionPath = null;
         MatchConfig.AllowedStructures = null;
         MatchConfig.AllowedUnits = null;
-        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MapPath = SelectedMapPath;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
         // Selected index 0 is one opponent, so seats is that plus the local
@@ -425,7 +473,7 @@ public partial class MainMenu : Control
     private void StartSmoke(Label report)
     {
         if (_smoke is { Done: false }) return;   // one at a time
-        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MapPath = SelectedMapPath;
         MatchConfig.MissionPath = null;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         _smokeReport = report;
@@ -450,7 +498,7 @@ public partial class MainMenu : Control
     public LanSmokeResult? SmokeResult => _smoke;
     public void RunSmokeForTest(int ticks)
     {
-        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MapPath = SelectedMapPath;
         MatchConfig.MissionPath = null;
         _smoke = LanSmoke.Start(MatchConfig.CurrentSetup(), ticks);
     }
@@ -520,34 +568,26 @@ public partial class MainMenu : Control
     private VBoxContainer OverlayBox(Control overlay, string heading, int halfW = 240, int halfH = 220)
         => UplinkUi.OverlayBox(overlay, heading, halfW, halfH);
 
-    /// <summary>How many seats a map file declares, read from its `start`
-    /// lines. Deliberately a line count rather than a MapData.Load: this runs
-    /// on every theatre change and the menu has no use for the grid. Two on
-    /// anything malformed, which is what every map but skirmish-09 declares
-    /// anyway, so a bad file gives a duel rather than an exception in the
-    /// menu.</summary>
-    private static int StartsIn(string mapPath)
+    /// <summary>Everything that follows from the theatre: how many opponents
+    /// it can seat, whether TEAMS means anything, and the preview.</summary>
+    private void OnTheatreChanged()
     {
-        try
-        {
-            int n = 0;
-            foreach (string line in System.IO.File.ReadLines(mapPath))
-            {
-                if (line.StartsWith("start ", System.StringComparison.Ordinal)) n++;
-                if (line.StartsWith("grid:", System.StringComparison.Ordinal)) break;
-            }
-            return n < 2 ? 2 : n;
-        }
-        catch { return 2; }
+        RefreshOpponentCounts();
+        RefreshTeams();
+        RefreshPreview();
     }
 
     /// <summary>Rebuild the opponent-count options for the selected theatre.
     /// The map's seat count is the ceiling and the choice runs from one
-    /// opponent up to it, defaulting to a full house.</summary>
+    /// opponent up to it, defaulting to a full house. The count is the
+    /// header's own `start` lines (MapCard), read once when the menu opens
+    /// rather than on every change; two on anything malformed, which is what
+    /// every map but skirmish-09 declares anyway, so a bad file gives a duel
+    /// rather than an exception in the menu.</summary>
     private void RefreshOpponentCounts()
     {
         _oppCountPick.Clear();
-        int seats = _maps.Count > 0 ? System.Math.Min(StartsIn(_maps[_mapPick.Selected]), 8) : 2;
+        int seats = _cards.Count > 0 ? System.Math.Clamp(_cards[_mapPick.Selected].Seats, 2, 8) : 2;
         for (int opponents = 1; opponents < seats; opponents++)
             _oppCountPick.AddItem(opponents == 1 ? "1 OPPONENT" : $"{opponents} OPPONENTS");
         _oppCountPick.Select(_oppCountPick.ItemCount - 1);
@@ -556,14 +596,78 @@ public partial class MainMenu : Control
         _oppCountPick.Disabled = _oppCountPick.ItemCount <= 1;
     }
 
-    private static OptionButton Row(VBoxContainer parent, string label)
+    /// <summary>P8-40: TEAMS divides seats, and a match of two seats has
+    /// nothing to divide (EVEN SIDES on two seats writes the identity teams the
+    /// world already has). Keyed on the seats this MATCH will have, not on the
+    /// map's ceiling, because skirmish-09 cut to one opponent is a duel too.
+    /// Disabled rather than hidden, with a tooltip saying why, and held on
+    /// FREE FOR ALL so a choice made on a bigger match is not left showing over
+    /// a match it cannot describe.</summary>
+    private void RefreshTeams()
+    {
+        int seats = _oppCountPick.Selected + 2;   // as StartSkirmish counts them
+        bool meaningful = seats > 2;
+        if (!meaningful) _teamPick.Select(MatchSetup.TeamsFreeForAll);
+        _teamPick.Disabled = !meaningful;
+        _teamPick.TooltipText = meaningful ? TeamsTip : TeamsOffTip;
+    }
+
+    /// <summary>P8-40: the theatre preview, a column beside the setup rows: a
+    /// thumbnail of the map's terrain with its size and seats beneath.</summary>
+    private Control BuildPreview()
+    {
+        var column = new VBoxContainer { SizeFlagsVertical = SizeFlags.ShrinkBegin };
+        column.AddThemeConstantOverride("separation", 6);
+        var frame = new PanelContainer();
+        var frameStyle = new StyleBoxFlat { BgColor = UplinkUi.Cinder, BorderColor = Seam };
+        frameStyle.SetBorderWidthAll(1);
+        frame.AddThemeStyleboxOverride("panel", frameStyle);
+        _previewThumb = new TextureRect
+        {
+            CustomMinimumSize = new Vector2(144, 96),
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            TextureFilter = TextureFilterEnum.Linear,
+            TooltipText = "Dark: open ground. Grey: blocked terrain. Blue: water. Gold: ferrite fields. White squares: start positions.",
+        };
+        frame.AddChild(_previewThumb);
+        column.AddChild(frame);
+        _previewSize = new Label { HorizontalAlignment = HorizontalAlignment.Center };
+        _previewSeats = new Label { HorizontalAlignment = HorizontalAlignment.Center };
+        foreach (var l in new[] { _previewSize, _previewSeats })
+        {
+            l.AddThemeFontSizeOverride("font_size", 13);
+            l.AddThemeColorOverride("font_color", Bone);
+            column.AddChild(l);
+        }
+        return column;
+    }
+
+    private void RefreshPreview()
+    {
+        if (_cards.Count == 0)
+        {
+            _previewThumb.Texture = null;
+            _previewSize.Text = "";
+            _previewSeats.Text = "";
+            return;
+        }
+        var card = _cards[_mapPick.Selected];
+        _previewThumb.Texture = MapCatalogue.Thumbnail(card.Path);
+        _previewSize.Text = $"SIZE {card.SizeText}";
+        _previewSeats.Text = card.SeatsText;
+    }
+
+    private static OptionButton Row(VBoxContainer parent, string label, string tooltip)
     {
         var h = new HBoxContainer();
         var l = new Label { Text = label, CustomMinimumSize = new Vector2(110, 0) };
         l.AddThemeFontSizeOverride("font_size", 12);
         l.AddThemeColorOverride("font_color", new Color(0.45f, 0.44f, 0.42f));
         h.AddChild(l);
-        var opt = new OptionButton { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        // P8-40: every setup row says what it does, on the control a player
+        // actually points at (a Label ignores the mouse, so it would never show).
+        var opt = new OptionButton { SizeFlagsHorizontal = SizeFlags.ExpandFill, TooltipText = tooltip };
         h.AddChild(opt);
         parent.AddChild(h);
         return opt;
@@ -577,7 +681,7 @@ public partial class MainMenu : Control
         MatchConfig.MissionPath = null;
         MatchConfig.AllowedStructures = null;   // skirmish: full catalogue
         MatchConfig.AllowedUnits = null;
-        MatchConfig.MapPath = _maps.Count > 0 ? _maps[_mapPick.Selected] : null;
+        MatchConfig.MapPath = SelectedMapPath;
         MatchConfig.AiPreset = _aiPick.Selected;
         MatchConfig.AiDifficulty = _diffPick.Selected;   // DR-14b
         // Selected index 0 is one opponent, so seats is that plus the local
@@ -585,9 +689,9 @@ public partial class MainMenu : Control
         // it, so a stale selection after a theatre change cannot ask for more
         // than the map seats.
         MatchConfig.Seats = _oppCountPick.Selected + 2;
-        // P7-8h: the division of those seats. On a two-start map both modes are
-        // the same match, which is honest rather than a gap: the control says
-        // what it does and the map decides how much it can mean.
+        // P7-8h: the division of those seats. In a two-seat match both modes
+        // are the same match; P8-40 disables the control there (RefreshTeams)
+        // and holds it on FREE FOR ALL, so what it shows is what is played.
         MatchConfig.TeamMode = _teamPick.Selected;
         MatchConfig.StartCredits = long.Parse(_creditPick.GetItemText(_creditPick.Selected));
         // TICKET-P6-FACTION-01: the chosen side, and the opponent takes the
@@ -601,6 +705,33 @@ public partial class MainMenu : Control
     /// drive the REAL row widget and the REAL start path, not a copy.</summary>
     public void SelectFactionForTest(int faction) => _factionPick.Select(faction);
     public void StartSkirmishForTest() => StartSkirmish();
+
+    // P8-40: the picker, driven the way a click drives it. A click on a popup
+    // row emits the popup's index_pressed, which is the signal OptionButton
+    // itself listens to; Select() would set the index without emitting
+    // ItemSelected, so nothing downstream of the picker would ever run.
+    public int TheatreCountForTest => _cards.Count;
+    public MapCard TheatreCardForTest(int i) => _cards[i];
+    public string TheatreItemTextForTest(int i) => _mapPick.GetItemText(i);
+    public int TheatreSelectedForTest => _mapPick.Selected;
+    public void ChooseTheatreForTest(int i) => _mapPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public void ChooseOpponentsForTest(int i) => _oppCountPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public void ChooseTeamsForTest(int i) => _teamPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public int OpponentChoicesForTest => _oppCountPick.ItemCount;
+    public string PreviewSizeForTest => _previewSize.Text;
+    public string PreviewSeatsForTest => _previewSeats.Text;
+    public Texture2D? PreviewThumbnailForTest => _previewThumb.Texture;
+    public bool TeamsDisabledForTest => _teamPick.Disabled;
+    public int TeamsSelectedForTest => _teamPick.Selected;
+    public string TeamsTooltipForTest => _teamPick.TooltipText;
+    public PanelContainer SetupPanelForTest => _setupPanel;
+    /// <summary>Opens the LAN screen exactly as its button does and returns
+    /// the overlay it built, for the harness to read and close.</summary>
+    public Node OpenLanForTest()
+    {
+        ShowLan();
+        return GetChild(GetChildCount() - 1);
+    }
 }
 
 /// <summary>Match options carried from the menu into the battle scene.</summary>
