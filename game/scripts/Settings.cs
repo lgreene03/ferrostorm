@@ -102,6 +102,12 @@ public static class Settings
         // The superweapon's fire control. Rebindable like everything else
         // (the SET-01 rule); default F, which was unbound.
         ("launch_super", "SUPERWEAPON"),
+        // The support powers' key: arms the first ready power and cycles while
+        // armed. Default V, which was unbound: it sits under F, so the two
+        // fire controls share a column, and every key around it is harmless or
+        // two-step. C was the mnemonic and was refused for its neighbour, X,
+        // which sells, and a mass sell cannot be taken back.
+        ("support_power", "SUPPORT POWERS"),
         ("stop", "STOP"),
         // Doc 27 DR-05/DR-06: the selection layer. Rebindable like everything
         // else (the SET-01 rule); defaults E and I.

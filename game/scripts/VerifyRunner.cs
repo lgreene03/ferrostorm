@@ -597,12 +597,21 @@ public partial class VerifyRunner : Node
         // The minimap held a rival copy keyed on "me versus them", so at seat 1
         // a joiner's own army was orange on the minimap and teal on the
         // battlefield. Asserted from the seat that inverts: my own colour must
-        // be the SODALITY mark here, because I am player 1 - if this reads the
-        // Directorate mark, the "me versus them" copy is back.
+        // be seat 1's teal here, because I am player 1. If this reads seat 0's
+        // orange, the "me versus them" copy is back.
+        //
+        // The marks are SEAT colours (BattlefieldView.SeatMarks, indexed by
+        // player id), and SodalityMark and DirectorateMark are only the names
+        // of the teal and the orange. They say nothing about which faction a
+        // seat plays. In this harness seat 1 plays the DIRECTORATE (see
+        // _Ready: MatchConfig.Faction goes to seat 0, the opposition faction
+        // to seat 1, and the faction-gate check below prints "1 and 0") and
+        // still wears the teal.
         Check(BattlefieldView.MarkFor(_game.LocalPlayerId) == BattlefieldView.SodalityMark,
-              "at seat 1 my own mark is Sodality's, not 'whoever is looking' orange");
+              "at seat 1 my own mark is seat 1's teal (SodalityMark, a seat colour, though this seat plays the Directorate), "
+              + "not 'whoever is looking' orange");
         Check(BattlefieldView.MarkFor(_game.EnemyPlayerId) == BattlefieldView.DirectorateMark,
-              "and the opposition at seat 0 wears Directorate's");
+              "and the opposition at seat 0 wears seat 0's orange (DirectorateMark)");
         Check(BattlefieldView.MarkFor(-1) == BattlefieldView.NeutralMark,
               "an unowned entity wears neither side's mark");
         // ...and the same question asked of what the minimap will ACTUALLY
@@ -1257,7 +1266,320 @@ public partial class VerifyRunner : Node
         _game.PressStop();
         Check(!_game.SuperArmed, "STOP clears an armed superweapon too, because stop means stop");
 
+        // After the superweapon, for its reason: these spawn into the shared
+        // world, so they run last among the live-world checks.
+        RunSupportPowerChecks();
+        RunArmedOrderMatrixChecks();
+
         RunLanChecks();
+    }
+
+    /// <summary>
+    /// The armed-order family, proved as a matrix rather than pair by pair.
+    /// #143 claimed arming any one armed order cleared the others, and it did
+    /// not: ArmAttackMove and ArmPatrol never cleared the superweapon, and
+    /// because the click switch tests the superweapon first, the next click
+    /// launched it. The checks that existed tested the pairs someone thought
+    /// of. These walk all twelve ordered pairs of the four orders, so a missed
+    /// pair names itself, and then prove stop, guard and cancel each leave
+    /// nothing armed.
+    /// </summary>
+    private void RunArmedOrderMatrixChecks()
+    {
+        GD.Print("  --    the armed-order matrix: arming any one clears the other three");
+        var lw = _game.LiveWorld;
+        int me = _game.LocalPlayerId;
+        var (yx, yy) = _game.CellOfForTest(_game.FindEntity(EntityKind.ConstructionYard, me));
+        // Preconditions. Every power building the support-power checks stood
+        // up is now charging, so a fresh Shroud Nest is stood up READY (it
+        // spawns uncharged, World.Add). The superweapon those checks inherited
+        // is still charged, and nothing here launches it. Attack-move and
+        // patrol need the seat's own combat units selected.
+        int nest = lw.SpawnFactionDefence(me, 18, yx - 3, yy + 8);   // 18: the Shroud Nest
+        var ne = lw.Entities[nest];
+        ne.ChargeTicks = 0;
+        lw.SetEntityForTest(nest, ne);
+        _game.PumpActorsForTest();
+        _game.SelectAllOwn();
+
+        var orders = new (string Name, System.Action Arm, System.Func<bool> Armed)[]
+        {
+            ("attack-move", () => _game.PressKey(Settings.BindOf("attack_move")), () => _game.AttackMoveArmed),
+            ("patrol", () => _game.PressKey(Settings.BindOf("patrol")), () => _game.PatrolArmed),
+            ("superweapon", () => _game.PressKey(Settings.BindOf("launch_super")), () => _game.SuperArmed),
+            ("support power", () => _game.PressKey(Settings.BindOf("support_power")), () => _game.SupportPowerArmed != null),
+        };
+        string Standing()
+        {
+            var up = new List<string>();
+            foreach (var o in orders) if (o.Armed()) up.Add(o.Name);
+            return up.Count == 0 ? "nothing" : string.Join(" + ", up);
+        }
+
+        // Each order arms on its own from a clean slate, so a pair that fails
+        // below fails for the pair and not for a missing precondition.
+        string wontArm = "";
+        foreach (var o in orders)
+        {
+            _game.PressStop();
+            o.Arm();
+            if (!o.Armed() || _game.ArmedOrderCountForTest != 1) wontArm += $" {o.Name} ({Standing()});";
+        }
+        Check(wontArm.Length == 0,
+              $"each of the four armed orders arms on its own from a clean slate (the precondition){(wontArm.Length > 0 ? $": failed{wontArm}" : "")}");
+
+        foreach (var a in orders)
+            foreach (var b in orders)
+            {
+                if (a.Name == b.Name) continue;
+                _game.PressStop();
+                a.Arm();
+                bool aUp = a.Armed();
+                b.Arm();
+                int n = _game.ArmedOrderCountForTest;
+                Check(aUp && b.Armed() && n == 1,
+                      $"arm {a.Name}, then {b.Name}: only {b.Name} is armed (standing: {Standing()}; {n} flag(s) set)");
+            }
+
+        // Stop, guard and cancel each clear the whole family, whichever order
+        // happens to be standing.
+        var clearers = new (string Name, System.Action Clear)[]
+        {
+            ("STOP", () => _game.PressStop()),
+            ("GUARD", () => _game.PressKey(Settings.BindOf("guard"))),
+            ("CANCEL", () => _game.PressKey(Settings.BindOf("cancel"))),
+        };
+        foreach (var c in clearers)
+        {
+            string survived = "";
+            foreach (var o in orders)
+            {
+                _game.PressStop();
+                o.Arm();
+                bool up = o.Armed();
+                c.Clear();
+                if (!up || _game.ArmedOrderCountForTest != 0) survived += $" {o.Name}{(up ? "" : " (never armed)")};";
+            }
+            Check(survived.Length == 0,
+                  $"{c.Name} leaves NOTHING armed, whichever of the four was standing{(survived.Length > 0 ? $" (left:{survived})" : "")}");
+        }
+        _game.PressStop();
+        _game.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// The support powers can actually be used by a player. CommandType
+    /// .UseSupportPower (P7-21) was issued by SkirmishAI and the battery and by
+    /// nothing in game/scripts, so all five powers P7 shipped had no human
+    /// trigger and the playtest brief's Match 3 could not be played. Each power
+    /// building is spawned for this seat and stood up READY, and every order
+    /// goes through the strip's own buttons, the real key, a real left click,
+    /// or the commit a click runs, never through a hand-built Command.
+    /// </summary>
+    private void RunSupportPowerChecks()
+    {
+        GD.Print("  --    support powers: the player's fire control");
+        var lw = _game.LiveWorld;
+        int me = _game.LocalPlayerId;
+        var bar = _game.SupportPowerView;
+        Key key = Settings.BindOf("support_power");
+        // A power building starts UNCHARGED (World.Add, P7-21: a timer you could
+        // skip by rebuilding is not a timer), so each one is zeroed through the
+        // sim's own scenario hook to stand it up READY.
+        int SpawnCharged(int id)
+        {
+            var e = lw.Entities[id];
+            e.ChargeTicks = 0;
+            lw.SetEntityForTest(id, e);
+            return id;
+        }
+        void Pump()
+        {
+            // The view first (the superweapon lesson: StepTicks cannot refresh
+            // it inside one synchronous pass), then the strip's frame handover.
+            _game.PumpActorsForTest();
+            _game.PumpSupportPowersForTest();
+        }
+        int OwnUnits()
+        {
+            int n = 0;
+            for (int i = 0; i < lw.EntityCount; i++)
+            {
+                var u = lw.Entities[i];
+                if (u.Alive && u.PlayerId == me && u.Kind == EntityKind.Unit) n++;
+            }
+            return n;
+        }
+        // The sim sets the charge to full when it applies the order and its
+        // charge loop may count one tick off it in the same Step, so "back to
+        // full" is the full charge or one less. Anything lower means the order
+        // never landed.
+        bool Recharged(int id) => lw.Entities[id].ChargeTicks >= World.SupportPowerChargeTicks - 1;
+        string Countdown(string text) => text.Substring(text.LastIndexOf(' ') + 1);
+
+        // --- The key exists, and agrees with the rebind table ----------------
+        // BindOf only answers for an action Settings captured, and it captures
+        // only actions that are in BOTH the Bindable table and project.godot's
+        // [input] block, so one non-empty answer proves the two agree.
+        Check(key != Key.None && Settings.ConflictFor("support_power", key) == null,
+              $"the support-power key has a binding of its own ({Settings.KeyName(key)}): project.godot and the "
+              + "Bindable table agree, and no other action holds it");
+        // NameOf throws on an id it cannot name (the UnitNameOf rule), so this
+        // is what makes that throw unreachable for everything that ships.
+        string unnamed = "";
+        foreach (int t in lw.StructureTypeIds())
+        {
+            var granted = lw.GetStructureType(t).SupportPowerIds;
+            if (granted == null) continue;
+            foreach (int p in granted)
+            {
+                try { SupportPowerBar.NameOf(p); }
+                catch (System.ArgumentOutOfRangeException) { unnamed += $" type {t} power {p};"; }
+            }
+        }
+        Check(unnamed.Length == 0,
+              $"every power any registered building grants has a name on the strip{(unnamed.Length > 0 ? $" (unnamed:{unnamed})" : "")}");
+
+        // --- No power building: no strip, and the key refuses ----------------
+        Pump();
+        Check(!bar.Visible && bar.EntryCount == 0, "with no power building standing, the POWERS strip is hidden");
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed == null && _game.ToastText.StartsWith("NO SUPPORT POWERS"),
+              $"...and the key refuses rather than arming, and says why (\"{_game.ToastText}\")");
+
+        var (yx, yy) = _game.CellOfForTest(_game.FindEntity(EntityKind.ConstructionYard, me));
+
+        // --- RADAR JAMMING: the untargeted power fires from its button -------
+        int post = SpawnCharged(lw.SpawnWatchPost(me, yx - 6, yy + 4));
+        Pump();
+        int jam = bar.IndexOf(post, World.RadarJammingPowerId);
+        Check(bar.Visible && jam >= 0 && bar.EntryText(jam).Contains("RADAR JAMMING")
+              && bar.EntryText(jam).Contains("READY") && !bar.EntryGreyed(jam),
+              $"a charged Watch Post puts RADAR JAMMING on the strip as READY (\"{(jam >= 0 ? bar.EntryText(jam) : "absent")}\")");
+        if (jam >= 0)
+        {
+            bar.PressEntryForTest(jam);
+            Check(_game.SupportPowerArmed == null && _game.PendingSupportPowerCommandsForTest == 1,
+                  "pressing it FIRES at once, because a jam has no target, and queues exactly one UseSupportPower");
+            _game.StepTicks(1);
+            Check(Recharged(post) && _game.PendingSupportPowerCommandsForTest == 0,
+                  $"the sim ACCEPTED it: the post's charge went back to full ({lw.Entities[post].ChargeTicks} of {World.SupportPowerChargeTicks})");
+            Check(lw.IsRadarJammed(_game.EnemyPlayerId), "...and the opposition's radar is jammed, so the order did what it says");
+            Pump();
+            Check(bar.EntryGreyed(jam) && !bar.EntryText(jam).Contains("READY"),
+                  $"...and the strip greys the button with a countdown (\"{bar.EntryText(jam)}\")");
+        }
+
+        // --- DECOY ARMY: the key arms it, the whole family clears it ---------
+        int nest = SpawnCharged(lw.SpawnFactionDefence(me, 18, yx - 3, yy + 4));   // 18: the Shroud Nest
+        Pump();
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed == (nest, World.DecoyArmyPowerId),
+              "the key ARMS the first READY power (DECOY ARMY on the Shroud Nest; the jam is still charging)");
+        Check(_game.CursorNameAt(new Vector2(400, 300)) == "Attack", "...and while armed the cursor wears the attack glyph");
+        _game.PressStop();
+        Check(_game.SupportPowerArmed == null, "STOP disarms an armed support power, because stop means stop");
+        _game.PressKey(key);
+        _game.PressKey(Settings.BindOf("cancel"));
+        Check(_game.SupportPowerArmed == null && _game.ToastText.Contains("CANCELLED"),
+              "...and so does the cancel key, saying so");
+        _game.PressKey(key);
+        _game.PressKey(Settings.BindOf("guard"));
+        Check(_game.SupportPowerArmed == null, "...and so does guard");
+        // The armed orders are exclusive both ways round, superweapon included
+        // (the superweapon checks above left one standing, charged).
+        _game.PressKey(key);
+        _game.PressKey(Settings.BindOf("launch_super"));
+        Check(_game.SuperArmed && _game.SupportPowerArmed == null, "arming the superweapon clears an armed support power");
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed != null && !_game.SuperArmed, "...and arming a support power clears the superweapon");
+        _game.SelectAllOwn();
+        _game.PressKey(Settings.BindOf("attack_move"));
+        Check(_game.AttackMoveArmed && _game.SupportPowerArmed == null, "arming attack-move clears it");
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed != null && !_game.AttackMoveArmed, "...and arming it clears attack-move");
+        _game.PressKey(Settings.BindOf("patrol"));
+        Check(_game.PatrolArmed && _game.SupportPowerArmed == null, "arming patrol clears it");
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed != null && !_game.PatrolArmed, "...and arming it clears patrol");
+        _game.PressStop();
+        _game.ClearSelectionForTest();
+        // Fired by a REAL left click through the real input path, so the
+        // armed case in _UnhandledInput is proved wired, not just the commit.
+        _game.PressKey(key);
+        float dx = yx - 4 + 0.5f, dz = yy - 3 + 0.5f;
+        _game.FocusCameraOn(dx, dz, 22f);
+        int unitsBefore = OwnUnits();
+        _game.PressLeftClick(_game.ScreenOf(dx, dz));
+        Check(_game.SupportPowerArmed == null && _game.PendingSupportPowerCommandsForTest == 1,
+              "a real left click on the ground fires the armed DECOY ARMY");
+        _game.StepTicks(1);
+        int decoys = OwnUnits() - unitsBefore;
+        Check(Recharged(nest) && decoys > 0,
+              $"the sim ACCEPTED it: the nest's charge went back to full and {decoys} decoys stand");
+
+        // --- TUNNEL DEPLOYMENT: refused on ground the player cannot see ------
+        int veil = SpawnCharged(lw.SpawnVeilProjector(me, yx - 9, yy + 2));
+        Pump();
+        int tunnel = bar.IndexOf(veil, World.TunnelDeploymentPowerId);
+        Check(tunnel >= 0, "a charged Veil Projector puts TUNNEL DEPLOYMENT on the strip");
+        if (tunnel >= 0)
+        {
+            bar.PressEntryForTest(tunnel);
+            Check(_game.SupportPowerArmed == (veil, World.TunnelDeploymentPowerId),
+                  "pressing a TARGETED power's button arms it rather than firing it");
+            var (ex, ey) = _game.CellOfForTest(_game.FindEntity(EntityKind.ConstructionYard, _game.EnemyPlayerId));
+            Check(!lw.IsVisible(me, ex, ey) && lw.IsVisible(me, yx, yy),
+                  "the opposition's yard is out of sight and this seat's own yard is in it (the precondition)");
+            _game.FireArmedSupportPowerAtForTest(ex + 0.5f, ey + 0.5f);
+            Check(_game.SupportPowerArmed != null && _game.PendingSupportPowerCommandsForTest == 0
+                  && lw.Entities[veil].ChargeTicks == 0 && _game.ToastText.Contains("SEE"),
+                  $"a tunnel aimed at unseen ground is refused, says why and stays armed, so no charge is wasted (\"{_game.ToastText}\")");
+            _game.FireArmedSupportPowerAtForTest(yx + 0.5f, yy + 0.5f);
+            Check(_game.SupportPowerArmed == null && _game.PendingSupportPowerCommandsForTest == 1,
+                  "...and aimed at ground in sight, it fires");
+            _game.StepTicks(1);
+            Check(Recharged(veil), "the sim ACCEPTED the tunnel: the projector's charge went back to full");
+        }
+
+        // --- The Bastion: two powers, ONE charge -----------------------------
+        int bastion = SpawnCharged(lw.SpawnFactionDefence(me, 17, yx - 9, yy - 2));   // 17: the Bastion
+        Pump();
+        int scan = bar.IndexOf(bastion, World.OrbitalScanPowerId);
+        int strike = bar.IndexOf(bastion, World.PrecisionStrikePowerId);
+        Check(scan >= 0 && strike >= 0 && bar.EntryText(scan).Contains("READY") && bar.EntryText(strike).Contains("READY"),
+              "a charged Bastion offers BOTH ORBITAL SCAN and PRECISION STRIKE, each READY");
+        if (scan >= 0 && strike >= 0)
+        {
+            // Everything else is charging now, so the key walks the Bastion's
+            // pair and wraps.
+            _game.PressKey(key);
+            Check(_game.SupportPowerArmed == (bastion, World.OrbitalScanPowerId), "the key arms ORBITAL SCAN first");
+            _game.PressKey(key);
+            Check(_game.SupportPowerArmed == (bastion, World.PrecisionStrikePowerId),
+                  "...a second press while armed cycles to PRECISION STRIKE");
+            _game.PressKey(key);
+            Check(_game.SupportPowerArmed == (bastion, World.OrbitalScanPowerId), "...and a third wraps round to the scan");
+            bar.PressEntryForTest(scan);
+            Check(_game.SupportPowerArmed == null, "pressing the ARMED power's own button stands it down");
+            bar.PressEntryForTest(scan);
+            _game.FireArmedSupportPowerAtForTest(yx + 0.5f, yy + 0.5f);
+            Check(_game.SupportPowerArmed == null && _game.PendingSupportPowerCommandsForTest == 1,
+                  "the scan's button arms it and the ground pick fires it");
+            _game.StepTicks(1);
+            Pump();
+            Check(Recharged(bastion), "the sim ACCEPTED the scan: the Bastion's charge went back to full");
+            Check(bar.EntryGreyed(scan) && bar.EntryGreyed(strike)
+                  && Countdown(bar.EntryText(scan)) == Countdown(bar.EntryText(strike)),
+                  $"firing ONE spends the SHARED charge: both Bastion buttons grey out on the same countdown "
+                  + $"(\"{bar.EntryText(scan)}\", \"{bar.EntryText(strike)}\")");
+            bar.PressEntryForTest(strike);
+            Check(_game.SupportPowerArmed == null && _game.ToastText.Contains("CHARGING"),
+                  $"...so the strike now refuses, and says it is charging (\"{_game.ToastText}\")");
+        }
+        _game.PressKey(key);
+        Check(_game.SupportPowerArmed == null && _game.ToastText.StartsWith("NO SUPPORT POWER READY"),
+              $"with every power charging, the key refuses and names the soonest (\"{_game.ToastText}\")");
     }
 
     /// <summary>
