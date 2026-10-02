@@ -342,14 +342,16 @@ public static class DataLoader
         string Id, string Name, AiTuningKind Kind,
         int ActEvery, int WaveSize,
         int BeatNumerator, int BeatDenominator,
-        int HarvestersPerRefinery, int StartingCreditHandicap, string Notes);
+        int HarvestersPerRefinery, int StartingCreditHandicap, string Notes,
+        int AntiAirCap = 0, int AntiAirGarrison = 0);
 
     /// <summary>The keys each family OWNS. Stated as data rather than as a run
     /// of ContainsKey tests so that a key added to one family is automatically
     /// forbidden in the other: a rule that named the keys one at a time would be
     /// missed by whoever adds the next one, which is this codebase's recurring
-    /// defect shape.</summary>
-    private static readonly string[] PersonalityKeys = { "act_every_ticks", "wave_size" };
+    /// defect shape. P8-17 (ADR-072) added the two anti-air keys here, and that
+    /// one edit is what refuses them in a rung file.</summary>
+    private static readonly string[] PersonalityKeys = { "act_every_ticks", "wave_size", "anti_air_cap", "anti_air_garrison" };
     private static readonly string[] RungKeys =
         { "beat_numerator", "beat_denominator", "harvesters_per_refinery", "starting_credit_handicap" };
 
@@ -387,12 +389,21 @@ public static class DataLoader
                     + "personality is a commander's taste and difficulty is its strength, and DR-14 keeps them orthogonal");
 
         int actEvery = 0, waveSize = 0, numerator = 1, denominator = 1, harvesters = 1, handicap = 0;
+        int antiAirCap = 0, antiAirGarrison = 0;
         if (isPersonality)
         {
             actEvery = ReqInt(m, "act_every_ticks");
             if (actEvery < 1) throw new FormatException("act_every_ticks must be at least 1; the commander takes Tick modulo it");
             waveSize = ReqInt(m, "wave_size");
             if (waveSize < 1) throw new FormatException("wave_size must be at least 1");
+            // P8-17 (ADR-072): REQUIRED rather than defaulted, for the reason
+            // every key in this family is: a personality that forgot its air
+            // answer would play the compiled one silently, and the file would
+            // be a convincing description of a commander nobody runs.
+            antiAirCap = ReqInt(m, "anti_air_cap");
+            if (antiAirCap < 0) throw new FormatException("anti_air_cap must not be negative; 0 means the commander never builds anti-air");
+            antiAirGarrison = ReqInt(m, "anti_air_garrison");
+            if (antiAirGarrison < 0) throw new FormatException("anti_air_garrison must not be negative");
         }
         else
         {
@@ -415,7 +426,9 @@ public static class DataLoader
             BeatDenominator: denominator,
             HarvestersPerRefinery: harvesters,
             StartingCreditHandicap: handicap,
-            Notes: m.TryGetValue("notes", out var n) ? n : "");
+            Notes: m.TryGetValue("notes", out var n) ? n : "",
+            AntiAirCap: antiAirCap,
+            AntiAirGarrison: antiAirGarrison);
     }
 
     public static AiTuningData LoadAiTuningFile(string path) => ParseAiTuning(File.ReadAllText(path));
@@ -845,7 +858,7 @@ public static class AiCatalogue
     /// a commander that plays the compiled numbers regardless.</summary>
     public static AiTuningDef ToTuningDef(DataLoader.AiTuningData a)
         => new(a.Kind, a.ActEvery, a.WaveSize, a.BeatNumerator, a.BeatDenominator,
-               a.HarvestersPerRefinery, a.StartingCreditHandicap);
+               a.HarvestersPerRefinery, a.StartingCreditHandicap, a.AntiAirCap, a.AntiAirGarrison);
 }
 
 /// <summary>

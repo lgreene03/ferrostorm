@@ -75,6 +75,38 @@ public sealed class SkirmishAI
     private readonly int _actEvery;   // decision beat; larger = slower commander (the ladder's honest knob)
     private readonly int _waveSize;   // units per attack wave (PERSONALITY, not difficulty - DR-14)
     private readonly int _harvestersPerRefinery;  // DR-14: the ladder's economy knob
+    // P8-17 (ADR-072): the air answer's two numbers, from the personality row
+    // beside the wave size, because a home guard's size is shape, not strength.
+    private readonly int _antiAirCap;       // most anti-air units it builds once it has seen air
+    private readonly int _antiAirGarrison;  // how many of those it holds at home
+
+    /// <summary>P8-17 (ADR-072): the MOST enemy aircraft this commander has seen
+    /// at once, with its own eyes, so far this match. Zero until the first
+    /// sighting, and every air-answer branch below is gated on it, which is what
+    /// keeps a ground-only match (every golden) byte-identical.
+    ///
+    /// A high-water mark rather than this beat's count, and that is a decision:
+    /// a commander that has watched three flyers burn its harvesters does not
+    /// forget the enemy flies the moment they leave its sight. It is memory of
+    /// what it SAW, never a read through fog, so D9's spirit holds. AI-internal
+    /// like every field here: never hashed, never saved, and a loaded match's
+    /// commander learns it again from the next sighting.</summary>
+    private int _airSeen;
+    /// <summary>P8-17: has the anti-air answer reached its target since the
+    /// last time the high-water mark rose? See orderAntiAir in Act.</summary>
+    private bool _antiAirStood;
+    private int _lastAirDefendTick = -10_000;
+
+    /// <summary>The garrison's re-order cadence in ticks, and the three guard
+    /// distances (squared cells) the garrison and the escorts work to. Named
+    /// because P8-17's anti-air garrison and escort reuse each of them rather
+    /// than inventing its own: a second literal would be a copy that could
+    /// drift. The values are the ones these sites always used.</summary>
+    private const int DefendCadenceTicks = 60;
+    private const int EconomyGuardSq = 64;    // 8 cells round a harvester (the intruder census)
+    private const int BaseGuardSq = 196;      // 14 cells round a structure (the intruder census)
+    private const int HomeLeashSq = 144;      // 12 cells: an idle garrison further out drifts home
+    private const int EscortLeashSq = 9;      // 3 cells: an escort further from its ward closes up
 
     /// <summary>
     /// P7-7a: how many refineries a commander runs per base, from GDD s4's
@@ -137,6 +169,9 @@ public sealed class SkirmishAI
         // runs a second harvester per refinery, which is macro rather than a
         // gift.
         _harvestersPerRefinery = rung.HarvestersPerRefinery;
+        // P8-17: shape, so from the personality, exactly as the wave size is.
+        _antiAirCap = shape.AntiAirCap;
+        _antiAirGarrison = shape.AntiAirGarrison;
     }
 
     /// <summary>The tuning row for an id: the world's registered one where a
@@ -220,6 +255,9 @@ public sealed class SkirmishAI
         bool hasDetector = false;
         int harvesters = 0, army = 0, supply = 0, draw = 0;
         int cyCount = 0, refineryCount = 0, ownMcv = -1, scouts = 0, ownEngineer = -1;
+        // P8-17 (ADR-072): my anti-air units, and the enemy aircraft I can see
+        // this beat. Both stay 0 in a ground-only match.
+        int antiAir = 0, airSeenNow = 0;
         bool hasSuper = false;
         int readySuper = -1, enemyRefinery = -1;
         int enemyStructure = -1;
@@ -266,6 +304,12 @@ public sealed class SkirmishAI
                     case EntityKind.Unit:
                         if (e.UnitType == World.McvUnitType) ownMcv = i;
                         else if (e.UnitType == 6) scouts++; // support, not line strength
+                        // P8-17: anti-air is not line strength either. It
+                        // cannot shoot the ground (ADR-028 clause 3), so a
+                        // flak track counted as army would launch waves that
+                        // arrive one gun short. Asked of the WEAPON rather than
+                        // the type id, so it means "can shoot aircraft".
+                        else if (IsAntiAir(w, in e)) antiAir++;
                         else
                         {
                             // ADR-021: note an engineer so the outpost logic can
@@ -318,7 +362,17 @@ public sealed class SkirmishAI
                 }
                 else if (enemyStructure < 0) enemyStructure = i;
             }
+            // P8-17 (ADR-072): the AIR-THREAT CENSUS. An enemy aircraft counts
+            // only if this commander can see it: its cell lit in MY fog this
+            // tick, and not an undetected cloaked unit (D9). The commander
+            // never reads through fog to learn the enemy flies.
+            else if (w.IsEnemyOf(in e, _player) && SeesAircraft(w, in e))
+            {
+                airSeenNow++;
+            }
         }
+        // A larger raid than any before reopens the build-up (see orderAntiAir).
+        if (airSeenNow > _airSeen) { _airSeen = airSeenNow; _antiAirStood = false; }
         if (cy < 0)
         {
             // DR-10: the last stand. This return used to be plain silence - a
@@ -457,10 +511,40 @@ public sealed class SkirmishAI
         // the yard forever rather than failing loudly.
         int superStruct = w.BuildableStructOfKind(_player, EntityKind.Superweapon);
         int detectorStruct = w.BuildableDetectorStruct(_player);
+        // P8-17 (ADR-072): once air has been seen, the anti-air unit my side
+        // can build (0 for none, or a cap of 0), and the building that unlocks
+        // it if I lack one. Both asked of the catalogue: the unit is "whatever
+        // of mine shoots aircraft" and the tier is "whatever it waits behind",
+        // which today are the Flak Track and the Radar Uplink for both sides.
+        int antiAirType = _airSeen > 0 && _antiAirCap > 0 ? AntiAirUnitType(w) : 0;
+        int airTier = antiAirType != 0 ? MissingTierStruct(w, antiAirType) : 0;
+        // The target: one more than the most flyers seen at once, capped.
+        int antiAirTarget = _airSeen + 1 < _antiAirCap ? _airSeen + 1 : _antiAirCap;
+        if (antiAirType != 0 && antiAir >= antiAirTarget) _antiAirStood = true;
+        // WHEN to order, which memory alone gets wrong in both directions.
+        // The first build-up runs from memory until the answer STANDS, because
+        // a commander may glimpse the flyers once and not again until they are
+        // over its harvesters, and every beat of waiting is a harvester lost.
+        // After that, losses are replaced only while an aircraft is in sight.
+        // MEASURED both ways: keyed on memory alone, a Normal Sodality
+        // commander whose flak had died to ground fire and an orbital strike
+        // spent 2200 credits rebuilding it against an empty sky while its
+        // harvester line starved; keyed on sight alone, a Normal Directorate
+        // commander placed its first order 195 ticks later (t=4845 against
+        // t=4650) and lost all three harvesters before the last flyer fell.
+        bool orderAntiAir = antiAirType != 0 && (!_antiAirStood || airSeenNow > 0);
         int wanted = !hasPlant ? plant
                    : refinery < 0 ? 3
                    : barracks < 0 ? 11
                    : factory < 0 ? 2
+                   // P8-17: the anti-air tier, PULLED FORWARD once enemy air
+                   // has been seen. Ahead of the harvester rung below on
+                   // purpose: under air, a harvester bought before the answer
+                   // exists is 1400 credits handed to the flyers (AI-01 lost
+                   // five to nine of them that way). The ordinary radar rung
+                   // further down waits behind defences and 1500 credits; this
+                   // one waits only for the price. Inert until air is seen.
+                   : airTier != 0 ? airTier
                    // ECONOMY BEFORE EVERYTHING ELSE, and this rung is not
                    // decoration: the barracks above costs 500 credits the
                    // opening did not previously spend, and MEASURED on
@@ -626,7 +710,51 @@ public sealed class SkirmishAI
         // the multiplier is 1, so this reads exactly as it always did (one
         // harvester per refinery); Hard and Brutal run a second per refinery,
         // which is the honest way to be stronger - more mining, not free money.
-        if (factory >= 0 && refinery >= 0 && harvesters < refineryCount * _harvestersPerRefinery
+        // --- P8-17 (ADR-072): ANTI-AIR INTO THE CYCLE. Once enemy air has been
+        // seen, keep one anti-air unit more than the most flyers seen at once,
+        // capped by the personality's anti_air_cap, ordered when orderAntiAir
+        // says (above). Units already on the line count, or the commander
+        // would queue one every beat while the first was still being built.
+        // While the answer is short it takes its producer's turn ahead of the
+        // harvester and the army: a harvester or a tank bought under
+        // unanswered air is fed to the flyers.
+        int antiAirProducer = -1;
+        bool antiAirShort = false, antiAirOrdered = false;
+        if (orderAntiAir)
+        {
+            var aa = w.GetUnitType(antiAirType);
+            antiAirProducer = aa.ProducedAt == World.BarracksStructType ? barracks
+                            : aa.ProducedAt == World.FactoryStructType ? factory : -1;
+            int have = antiAir + (antiAirProducer >= 0 ? QueuedCount(w, antiAirProducer, antiAirType) : 0);
+            antiAirShort = have < antiAirTarget && antiAirProducer >= 0 && w.HasPrereqs(_player, aa.Prereqs);
+            if (antiAirShort && w.Credits(_player) >= aa.Cost)
+            {
+                // THE ANSWER CLEARS ITS LINE. Anything else on the producer's
+                // queue is cancelled first, back to front so each index is
+                // still the one meant (commands apply in list order), and the
+                // head's refund is exact under pay-as-you-build, so the only
+                // cost is build progress. MEASURED: a Normal Sodality commander
+                // saw the flyers at t=4522 and ordered flak at t=4545, behind a
+                // phantom tank that had just started; 210 ticks of phantom
+                // stood between it and its first gun, and all three harvesters
+                // died before the last flyer fell.
+                var line = w.QueueContents(antiAirProducer);
+                for (int q = line.Count - 1; q >= 0; q--)
+                    if (line[q] != antiAirType)
+                        output.Add(new Command(w.Tick, _player, CommandType.CancelProduce, antiAirProducer,
+                                               Fix64.Zero, Fix64.Zero, q));
+                output.Add(new Command(w.Tick, _player, CommandType.Produce, antiAirProducer,
+                                       Fix64.Zero, Fix64.Zero, antiAirType));
+                antiAirOrdered = true;
+            }
+        }
+        if (antiAirOrdered)
+        {
+            // The factory's turn this beat is spent on the answer: the
+            // harvester and MCV guards below read the queue as it stood before
+            // this beat's orders, so without this they would stack behind it.
+        }
+        else if (factory >= 0 && refinery >= 0 && harvesters < refineryCount * _harvestersPerRefinery
             && w.QueueLength(factory) == 0)
             output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
         else if (expansionDesired && w.Credits(_player) >= 3500 && w.QueueLength(factory) == 0)
@@ -688,7 +816,11 @@ public sealed class SkirmishAI
             // the treasury pay-as-you-build, which is the runaway ADR-009
             // clause 7 names. A producer that does not stand yet takes no
             // order at all.
+            // P8-17: and a producer whose anti-air answer is short builds
+            // that first (above), so the army waits its turn there. Inert
+            // until air is seen, when antiAirShort is false everywhere.
             if (producer >= 0 && w.QueueLength(producer) < 2
+                && !(antiAirShort && producer == antiAirProducer)
                 && w.Credits(_player) >= w.GetUnitType(unitType).Cost)
             {
                 output.Add(new Command(w.Tick, _player, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
@@ -733,7 +865,8 @@ public sealed class SkirmishAI
             var e = w.Entities[i];
             if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
                 && e.UnitType != 6 && e.UnitType != World.McvUnitType && e.UnitType != EngineerType
-                && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9))
+                && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
+                && !IsAntiAir(w, in e))   // P8-17: anti-air keeps its own garrison, below
                 garrison[garrisonCount++] = i;
         }
         bool InGarrison(int id)
@@ -767,12 +900,12 @@ public sealed class SkirmishAI
                 bool isEconomy = own.Kind == EntityKind.Harvester;
                 if (!isEconomy && own.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant
                     or EntityKind.Refinery or EntityKind.Factory or EntityKind.Turret)) continue;
-                Fix64 guard = isEconomy ? Fix64.FromInt(64) : Fix64.FromInt(196);
+                Fix64 guard = isEconomy ? Fix64.FromInt(EconomyGuardSq) : Fix64.FromInt(BaseGuardSq);
                 Fix64 d = Fix64.DistSq(hostile.X - own.X, hostile.Y - own.Y);
                 if (d <= guard && d < intruderD) { intruderD = d; intruder = i; }
             }
         }
-        if (intruder >= 0 && garrisonCount > 0 && w.Tick - _lastDefendTick >= 60)
+        if (intruder >= 0 && garrisonCount > 0 && w.Tick - _lastDefendTick >= DefendCadenceTicks)
         {
             var threat = w.Entities[intruder];
             for (int g = 0; g < garrisonCount; g++)
@@ -787,10 +920,24 @@ public sealed class SkirmishAI
             {
                 var e = w.Entities[garrison[g]];
                 if (!e.Moving && e.ExplicitTarget < 0
-                    && Fix64.DistSq(e.X - homeX, e.Y - homeY) > Fix64.FromInt(144))
+                    && Fix64.DistSq(e.X - homeX, e.Y - homeY) > Fix64.FromInt(HomeLeashSq))
                     output.Add(new Command(w.Tick, _player, CommandType.PathMove, garrison[g], homeX, homeY));
             }
         }
+
+        // --- P8-17 (ADR-072): THE ANTI-AIR GARRISON AND THE HARVESTER ESCORT.
+        // The first anti_air_garrison anti-air units (lowest ids, so the split
+        // is deterministic and stable as units die) hold the base: they close
+        // on any flyer seen within the structure guard radius the intruder
+        // census uses, and drift home when the sky is quiet. Every anti-air
+        // unit beyond them is an ESCORT: it shadows a harvester (the k-th
+        // escort the k-th harvester, round robin in id order), and when a
+        // flyer is seen within the economy guard radius of any harvester, all
+        // escorts close on it. With no harvester alive an escort guards the
+        // refinery, which is where the next one docks. Entirely inert while
+        // the commander owns no anti-air unit, which it never builds until it
+        // has seen air.
+        if (antiAir > 0) AnswerAir(w, output, homeX, homeY);
 
         // --- Waves: a full wave stands ready, at most one order per 300 ticks ---
         // --- Directorate escort doctrine (TICKET-P3-FAC-07): sentinels
@@ -811,7 +958,7 @@ public sealed class SkirmishAI
                     Fix64 d = Fix64.DistSq(h.X - sc.X, h.Y - sc.Y);
                     if (d < wardD) { wardD = d; ward = j; }
                 }
-                if (ward >= 0 && wardD > Fix64.FromInt(9))
+                if (ward >= 0 && wardD > Fix64.FromInt(EscortLeashSq))
                 {
                     var h = w.Entities[ward];
                     output.Add(new Command(w.Tick, _player, CommandType.PathMove, i, h.X, h.Y));
@@ -860,6 +1007,7 @@ public sealed class SkirmishAI
                 if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
                     && e.UnitType != World.McvUnitType && e.UnitType != 6 && e.UnitType != EngineerType
                     && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
+                    && !IsAntiAir(w, in e)   // P8-17: anti-air guards home and harvesters, never a wave
                     && !InGarrison(i))
                     output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, target.X, target.Y));
             }
@@ -1006,6 +1154,191 @@ public sealed class SkirmishAI
         var q = w.QueueContents(producer);
         for (int i = 0; i < q.Count; i++) if (q[i] == unitType) return true;
         return false;
+    }
+
+    /// <summary>P8-17: how many of a unit type are on a producer's line, so the
+    /// anti-air target counts units being built as well as units standing.</summary>
+    private static int QueuedCount(World w, int producer, int unitType)
+    {
+        var q = w.QueueContents(producer);
+        int n = 0;
+        for (int i = 0; i < q.Count; i++) if (q[i] == unitType) n++;
+        return n;
+    }
+
+    /// <summary>P8-17 (ADR-072): is this a unit that can shoot aircraft? Asked
+    /// of its WEAPON, the ADR-028 clause 3 flag, so it means the capability
+    /// rather than naming the Flak Track. Never true of anything the commander
+    /// owned before P8-17, which never built anti-air.</summary>
+    private static bool IsAntiAir(World w, in Entity e)
+        => e.Kind == EntityKind.Unit && e.WeaponId != 0 && w.GetWeaponType(e.WeaponId).AntiAir;
+
+    /// <summary>
+    /// P8-17 (ADR-072): the census rule, stated once. An enemy aircraft counts
+    /// only if this commander can actually see it, and that means two things:
+    ///   1. its cell is lit in MY fog this tick (World.IsVisible, the bitset the
+    ///      fog pass writes for each player from that player's own sight and
+    ///      scans), so the commander never reads through fog;
+    ///   2. it is not an undetected cloaked unit, the same rule the sim's own
+    ///      targeting applies (World.CanTarget), which is D9's spirit. No flyer
+    ///      in the catalogue cloaks today, so this half costs nothing and is
+    ///      written so a cloaked one is not counted the day it exists.
+    /// The caller has already asked hostility; this asks only "a plane I see".
+    /// </summary>
+    private bool SeesAircraft(World w, in Entity e)
+    {
+        if (!w.IsAirborne(in e)) return false;
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
+        if (!w.Map.InBounds(cx, cy) || !w.IsVisible(_player, cx, cy)) return false;
+        bool cloaked = e.Stealth || e.FieldCloaked;
+        return !cloaked || e.RevealTicks > 0 || (e.DetectedMask & (1 << _player)) != 0;
+    }
+
+    /// <summary>
+    /// P8-17 (ADR-072): the anti-air unit this commander's side can build, or 0
+    /// for none. Asked of the catalogue rather than naming the Flak Track, in
+    /// the shape of World.BuildableDetectorStruct: the lowest unit type id, in
+    /// the ascending order UnitTypeIds returns, that is producible (a price),
+    /// on the ground (D10: the AI does not fly), the commander's side or
+    /// common, and armed with an anti-air weapon. The Flak Track is common, so
+    /// it is the answer for both the Directorate and the Sodality today.
+    /// </summary>
+    private int AntiAirUnitType(World w)
+    {
+        int faction = w.FactionOf(_player);
+        var ids = w.UnitTypeIds();
+        for (int k = 0; k < ids.Count; k++)
+        {
+            var d = w.GetUnitType(ids[k]);
+            if (d.Cost <= 0 || d.Air || d.WeaponId == 0) continue;
+            if (d.Faction != World.FactionCommon && d.Faction != faction) continue;
+            if (w.GetWeaponType(d.WeaponId).AntiAir) return ids[k];
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// P8-17 (ADR-072): the building a unit waits behind that this commander
+    /// lacks and can build now, or 0. "The anti-air tier" read as a property:
+    /// for each prerequisite the unit names, in authored order, a missing KIND
+    /// (World.HasPrereqs' own reading, ADR-009 as amended by P7-5) is answered
+    /// with the buildable structure of that kind for this side, provided its
+    /// own prerequisites stand, because queueing a building the yard will
+    /// refuse stalls the yard forever. For the Flak Track that is the Radar
+    /// Uplink, behind the factory the ladder has already built.
+    /// </summary>
+    private int MissingTierStruct(World w, int unitType)
+    {
+        var prereqs = w.GetUnitType(unitType).Prereqs;
+        if (prereqs == null) return 0;
+        for (int r = 0; r < prereqs.Length; r++)
+        {
+            EntityKind need = w.GetStructureType(prereqs[r]).Kind;
+            bool owned = false;
+            for (int i = 0; i < w.Entities.Count && !owned; i++)
+            {
+                var o = w.Entities[i];
+                owned = o.Alive && World.IsOwnedBy(in o, _player) && World.IsStructure(o.Kind) && o.Kind == need;
+            }
+            if (owned) continue;
+            int build = w.BuildableStructOfKind(_player, need);
+            if (build != 0 && w.HasPrereqs(_player, w.GetStructureType(build).Prereqs)) return build;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// P8-17 (ADR-072): orders for the anti-air units, garrison first and
+    /// escorts after; see the call site for the doctrine. Threats are the seen
+    /// flyers (SeesAircraft) nearest to what they threaten, ties to the lower
+    /// id: within BaseGuardSq of a structure on my side, and within
+    /// EconomyGuardSq of a harvester on my side, the intruder census's own
+    /// radii and its own IsAlliedTo reading of "my side". Orders go out at most
+    /// once per DefendCadenceTicks, the ground garrison's own cadence; the
+    /// shadowing and the drift home are idle-only, so they never fight a live
+    /// order. Reads the world in entity index order and keeps one tick of
+    /// state, the cadence stamp.
+    /// </summary>
+    private void AnswerAir(World w, List<Command> output, Fix64 homeX, Fix64 homeY)
+    {
+        int baseFlyer = -1, raidFlyer = -1;
+        Fix64 baseD = Fix64.MaxValue, raidD = Fix64.MaxValue;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var f = w.Entities[i];
+            if (!f.Alive || !w.IsEnemyOf(in f, _player) || !SeesAircraft(w, in f)) continue;
+            for (int j = 0; j < w.Entities.Count; j++)
+            {
+                var own = w.Entities[j];
+                if (!own.Alive || !w.IsAlliedTo(in own, _player)) continue;
+                Fix64 d = Fix64.DistSq(f.X - own.X, f.Y - own.Y);
+                if (own.Kind == EntityKind.Harvester)
+                {
+                    if (d <= Fix64.FromInt(EconomyGuardSq) && d < raidD) { raidD = d; raidFlyer = i; }
+                }
+                else if (World.IsStructure(own.Kind) && d <= Fix64.FromInt(BaseGuardSq) && d < baseD)
+                {
+                    baseD = d; baseFlyer = i;
+                }
+            }
+        }
+
+        // My own harvesters in id order, the escorts' wards, and my lowest-id
+        // refinery for when none is left.
+        var wards = new List<int>();
+        int refinery = -1;
+        for (int j = 0; j < w.Entities.Count; j++)
+        {
+            var own = w.Entities[j];
+            if (!own.Alive || !World.IsOwnedBy(in own, _player)) continue;
+            if (own.Kind == EntityKind.Harvester) wards.Add(j);
+            else if (own.Kind == EntityKind.Refinery && refinery < 0) refinery = j;
+        }
+
+        bool answer = w.Tick - _lastAirDefendTick >= DefendCadenceTicks;
+        bool ordered = false;
+        int n = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || !World.IsOwnedBy(in e, _player) || !IsAntiAir(w, in e)) continue;
+            int rank = n++;
+            if (rank < _antiAirGarrison)
+            {
+                // GARRISON: hold the base.
+                if (baseFlyer >= 0)
+                {
+                    if (answer)
+                    {
+                        var t = w.Entities[baseFlyer];
+                        output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, t.X, t.Y));
+                        ordered = true;
+                    }
+                }
+                else if (!e.Moving && e.ExplicitTarget < 0
+                         && Fix64.DistSq(e.X - homeX, e.Y - homeY) > Fix64.FromInt(HomeLeashSq))
+                    output.Add(new Command(w.Tick, _player, CommandType.PathMove, i, homeX, homeY));
+                continue;
+            }
+            // ESCORT: close on a raid, otherwise shadow a harvester.
+            if (raidFlyer >= 0)
+            {
+                if (answer)
+                {
+                    var t = w.Entities[raidFlyer];
+                    output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, t.X, t.Y));
+                    ordered = true;
+                }
+                continue;
+            }
+            if (e.Moving || e.ExplicitTarget >= 0) continue;
+            int ward = wards.Count > 0 ? wards[(rank - _antiAirGarrison) % wards.Count] : refinery;
+            if (ward < 0) continue;
+            var h = w.Entities[ward];
+            if (Fix64.DistSq(h.X - e.X, h.Y - e.Y) > Fix64.FromInt(EscortLeashSq))
+                output.Add(new Command(w.Tick, _player, CommandType.PathMove, i, h.X, h.Y));
+        }
+        if (ordered) _lastAirDefendTick = w.Tick;
     }
 
     /// <summary>Deterministic outward ring scan around own structures for a

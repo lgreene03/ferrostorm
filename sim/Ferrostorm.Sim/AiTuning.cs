@@ -34,6 +34,15 @@ public enum AiTuningKind
 /// determinism rule). The composed beat is `actEvery * numerator / denominator`
 /// in integer arithmetic, truncating exactly as the compiled expression it
 /// replaces did: 15 * 2 / 3 is 10, not 10.0.
+///
+/// P8-17 (ADR-072) appends the air answer's two numbers to the PERSONALITY
+/// family, beside the wave size they are the same kind of number as: how large
+/// a home guard a commander keeps is its shape, not its strength, and F3 asks
+/// every rung from Normal up to answer air alike. <see cref="AntiAirCap"/> caps
+/// the anti-air units the commander builds once it has seen enemy aircraft, and
+/// <see cref="AntiAirGarrison"/> is how many of them it holds at home rather
+/// than sending out as harvester escorts. A rung row leaves both at 0, which is
+/// not a number anything reads, exactly as it leaves the wave size.
 /// </summary>
 public readonly record struct AiTuningDef(
     AiTuningKind Kind,
@@ -42,7 +51,9 @@ public readonly record struct AiTuningDef(
     int BeatNumerator,
     int BeatDenominator,
     int HarvestersPerRefinery,
-    int StartingCreditHandicap);
+    int StartingCreditHandicap,
+    int AntiAirCap = 0,
+    int AntiAirGarrison = 0);
 
 /// <summary>
 /// The compiled reference table for the skirmish commander's tuning: the values
@@ -78,9 +89,13 @@ public static class AiTuning
 
     // Each def below is the reference copy of one file in data/ai, named in the
     // trailing comment.
-    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0);   // ai_standard
-    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0);     // ai_rusher
-    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0);    // ai_turtle
+    // P8-17 (ADR-072): the last two numbers of a personality are its anti-air
+    // cap and its anti-air garrison. The cap is the personality's own wave size,
+    // so no commander ever holds more anti-air than one wave's worth of army;
+    // the garrison is 2, the floor the ground garrison already keeps.
+    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2);    // ai_standard
+    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2);      // ai_rusher
+    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2);    // ai_turtle
     public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0);               // ai_easy
     public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0);             // ai_normal
     public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0);               // ai_hard
