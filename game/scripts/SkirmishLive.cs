@@ -464,10 +464,10 @@ public partial class SkirmishLive : Node3D
     private const int CarrierUnitType = World.CarrierUnitType;
     // P8-7: boardings this client ordered and the sim has not yet completed,
     // keyed by the boarding unit: which Carrier, and where that Carrier stood
-    // when the order was last sent. LoadTransport walks a unit that is out of
-    // reach and boards only one that is within it, and the sim leaves the
-    // re-issue to whoever gave the order (World.ApplyCommand, LoadTransport),
-    // so this is that giver's memory. See ReissueBoardings.
+    // when the order was last sent. Written when the sim left the re-issue to
+    // whoever gave the order; since P8-56 the sim walks the unit in and boards
+    // it itself (World.BoardingSystem), and this memory is a harmless backstop.
+    // See ReissueBoardings.
     private readonly Dictionary<int, (int Carrier, Fix64 X, Fix64 Y)> _boarding = new();
     private readonly List<int> _boardingKeys = new();
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
@@ -1338,16 +1338,20 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
-    /// P8-7: the giver's half of LoadTransport. The sim boards a unit only on
-    /// the tick a LoadTransport lands with the unit within two cells of its
-    /// Carrier; from farther it walks the unit towards where the Carrier stood
-    /// and leaves the re-issue to whoever gave the order. So a boarding the
-    /// player ordered is remembered here and sent again on two occasions only:
-    /// the tick the unit is within the sim's own reach (the same Fix64 test the
-    /// sim applies, so it boards on that tick), and whenever the Carrier has
-    /// moved more than a cell since the last send (so the walk follows it). A
-    /// waiting unit beside a parked Carrier sends nothing, so the lockstep
-    /// stream carries no per-tick flood (P5-ECON-15's lesson).
+    /// P8-7: the giver's half of LoadTransport, written when the sim boarded a
+    /// unit only on the tick a LoadTransport landed within two cells of its
+    /// Carrier and left the re-issue to whoever gave the order. P8-56 moved
+    /// that half into the sim: a walk-in now follows the Carrier and boards on
+    /// the very tick it closes to reach, so the in-reach trigger below is not
+    /// normally seen, and a re-send after the Carrier moves lands on a walker
+    /// the sim is already following it with. It stays as a harmless backstop.
+    /// A boarding the player ordered is remembered here and sent again on two
+    /// occasions only: the tick the unit is within the sim's own reach (the
+    /// same Fix64 test the sim applies, so it boards on that tick), and
+    /// whenever the Carrier has moved more than a cell since the last send (so
+    /// the walk follows it). A waiting unit beside a parked Carrier sends
+    /// nothing, so the lockstep stream carries no per-tick flood (P5-ECON-15's
+    /// lesson).
     ///
     /// It ends when the unit is aboard or dead, when the Carrier is dead or
     /// full, or the moment the player gives that unit any other order than a

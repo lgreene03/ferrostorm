@@ -2882,13 +2882,10 @@ public partial class VerifyRunner : Node
     /// </summary>
     private static readonly (string Stage, CommandType Verb, bool WholeVerb, string Gap, string Owner)[] InputGateKnownMissing =
     {
-        // P8-7 found this one, and it is the SIM's half, not a missing gesture:
-        // the right click is sent and re-sent, and the sim never lets it land.
-        ("LoadTransport/out-of-reach", CommandType.LoadTransport, false,
-            "infantry ordered onto a Carrier from more than two cells away is walked towards it by the sim and settles "
-            + "at the four-cell crowd-arrival radius (World.StepToward), outside LoadTransport's two-cell reach, so it "
-            + "never boards however often the order is re-sent (measured from 3, 4, 6 and 10 cells)",
-            "P8-56 (found by P8-7; the fix is in sim/Ferrostorm.Sim, outside the client lane)"),
+        // Empty since P8-56: its one entry, LoadTransport/out-of-reach (found by
+        // P8-7, the sim's walk-in settling outside the boarding reach), is now
+        // the real stage in RunBoardingWalkStage. The table stays, so the next
+        // gap a row finds is printed rather than hidden.
     };
 
     /// <summary>The sim's contact effects. ContactEffect is private to World,
@@ -3510,6 +3507,7 @@ public partial class VerifyRunner : Node
         // every earlier stage has read its world, and the coverage check closes
         // the gate once every stage has had its say.
         RunCarrierStages(g);
+        RunBoardingWalkStage(g);
         RunNeutralTargetStages(g);
         RunAirfieldStages(g);
         RunInputGateCoverage();
@@ -3793,7 +3791,7 @@ public partial class VerifyRunner : Node
 
         // --- LoadTransport: a drag on the squads, a right click on the Carrier
         // Both squads stand within the sim's two-cell reach; the walk-in from
-        // farther is the KNOWN-MISSING line above, a sim defect.
+        // farther is RunBoardingWalkStage's (P8-56).
         int carrier = SpawnOfType(lw, me, World.CarrierUnitType, s.X + 1, s.Y);
         int r1 = SpawnOfType(lw, me, 2, s.X, s.Y);
         int r2 = SpawnOfType(lw, me, 2, s.X, s.Y + 1);
@@ -3833,9 +3831,10 @@ public partial class VerifyRunner : Node
 
         // --- ...and the client keeps the order until it can land ------------
         // A squad three cells off is out of reach: the right click starts the
-        // boarding and the client re-sends it the tick the Carrier comes within
-        // reach (a fixture stands it there, the way a player drives it up), so
-        // it boards with no second click.
+        // boarding and the client holds it until it lands, so it boards with no
+        // second click. Since P8-56 the sim's own walk-in lands it within the
+        // first ten ticks, so the fixture that stands the Carrier beside it (the
+        // way a player drives it up) is only a fallback.
         int r3 = SpawnOfType(lw, me, 2, s.X + 4, s.Y);
         g.StepTicks(1);
         g.PumpActorsForTest();
@@ -3860,8 +3859,8 @@ public partial class VerifyRunner : Node
         g.StepTicks(1);                      // the tick after: the client lets the finished boarding go
         Gate(selR3 && r3OutOfReach && r3Loads == 1 && tracked && !lw.Entities[r3].Alive
              && lw.CargoOf(carrier).Count == hold0 + 3 && g.PendingBoardingsForTest == 0, "LoadTransport",
-             $"a squad ordered aboard from out of reach boards, with no second click, once its Carrier is beside it: the "
-             + $"client kept the order and re-sent it (selected {selR3}, out of reach {r3OutOfReach}, {r3Loads} "
+             $"a squad ordered aboard from out of reach boards with no second click, the client holding the order "
+             + $"until it landed (selected {selR3}, out of reach {r3OutOfReach}, {r3Loads} "
              + $"LoadTransport, held {tracked}, hold {lw.CargoOf(carrier).Count}, boardings still held "
              + $"{g.PendingBoardingsForTest})");
 
@@ -3904,6 +3903,77 @@ public partial class VerifyRunner : Node
         Check(emptyUnloads == 0 && g.ToastText.Contains("NOTHING ABOARD"),
               $"inputgate/UnloadTransport: on an empty Carrier the key sends nothing and says so (\"{g.ToastText}\")");
         g.StepTicks(1);
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-56: boarding from beyond reach, through the real right click, with no
+    /// fixture moving anything. P8-7 found that a squad ordered aboard from more
+    /// than two cells never boarded, because the sim's walk-in settled at the
+    /// four-cell crowd radius however often the order was re-sent, and printed
+    /// it as KNOWN-MISSING. The sim now closes the walk to reach and boards on
+    /// arrival. The client's own re-send (ReissueBoardings) stays, because it is
+    /// harmless: it fires only when it sees the squad alive inside reach or the
+    /// Carrier moved by more than a cell, and the sim boards a walker on the
+    /// very tick it closes to reach, so neither can be seen while the Carrier
+    /// is parked. The stage records both, so what it proves is that the ONE
+    /// order the click sent is what boarded the squad.
+    /// </summary>
+    private void RunBoardingWalkStage(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-56): a squad ordered aboard from beyond reach walks in and boards");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        if (QuietGround(lw, ycx, ycy) is not { } s)
+        {
+            Check(false, "inputgate/LoadTransport/out-of-reach: open, quiet ground for the fixture (none found: a "
+                         + "fixture failure, not a product one)");
+            return;
+        }
+        // Six cells apart, both inside QuietGround's open box (-3 to +5).
+        int carrier = SpawnOfType(lw, me, World.CarrierUnitType, s.X - 2, s.Y);
+        int squad = SpawnOfType(lw, me, 2, s.X + 4, s.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        Fix64 GapSq() => Fix64.DistSq(lw.Entities[squad].X - lw.Entities[carrier].X,
+                                      lw.Entities[squad].Y - lw.Entities[carrier].Y);
+        Fix64 reachSq = Fix64.FromInt(4);    // LoadTransport's two cells, the test ReissueBoardings applies
+        bool outOfReach = GapSq() > reachSq;
+        Fix64 parkedX = lw.Entities[carrier].X, parkedY = lw.Entities[carrier].Y;
+
+        float sx = Fx(lw.Entities[squad].X), sz = Fx(lw.Entities[squad].Y);
+        g.FocusCameraOn(sx, sz, 22f);
+        g.ClearSelectionForTest();
+        g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+        bool selected = g.SelectionCount == 1 && g.IsSelected(squad);
+        float cx = Fx(parkedX), cz = Fx(parkedY);
+        g.FocusCameraOn(cx, cz, 22f);
+        int hold0 = lw.CargoOf(carrier).Count;
+        g.PressRightClick(g.ScreenOf(cx, cz));
+        int loads = 0;
+        foreach (var c in g.PendingForTest)
+            if (c.Type == CommandType.LoadTransport && c.EntityId == squad && c.AuxId == carrier) loads++;
+
+        // Twice the straight walk at the squad's own speed: derived, not chosen.
+        int bound = 2 * (Fix64.FromInt(6) / lw.GetUnitType(2).Speed).ToIntRound();
+        int took = 0;
+        bool seenInReach = false;
+        while (took < bound && lw.Entities[squad].Alive)
+        {
+            g.StepTicks(1);
+            took++;
+            if (lw.Entities[squad].Alive && GapSq() <= reachSq) seenInReach = true;
+        }
+        bool parked = Fix64.DistSq(lw.Entities[carrier].X - parkedX, lw.Entities[carrier].Y - parkedY) <= Fix64.One;
+        bool aboard = !lw.Entities[squad].Alive && lw.CargoOf(carrier).Count == hold0 + 1;
+        g.StepTicks(1);                      // the tick after: the client lets the finished boarding go
+        Gate(selected && outOfReach && loads == 1 && aboard && !seenInReach && parked && g.PendingBoardingsForTest == 0,
+             "LoadTransport/out-of-reach",
+             $"a squad six cells from its parked Carrier, ordered aboard by one right click, walks in and boards: hold "
+             + $"{hold0} -> {lw.CargoOf(carrier).Count} after {took} ticks (bound {bound}), {loads} LoadTransport, and the "
+             + $"client's re-send never fired (seen alive in reach {seenInReach}, Carrier parked {parked}; selected "
+             + $"{selected}, out of reach {outOfReach}, boardings still held {g.PendingBoardingsForTest})");
         g.ClearSelectionForTest();
     }
 

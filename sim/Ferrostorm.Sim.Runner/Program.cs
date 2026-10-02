@@ -12603,13 +12603,234 @@ int TransportGate()
             return Fail("transport: a loaded world carrying cargo must hash identically to the one saved");
     }
 
+    int walkGate = BoardingWalkStages();
+    if (walkGate != 0) return walkGate;
+
     Console.WriteLine("transportgate: infantry boards and leaves the world rather than lingering as a skipped entity; a "
                       + "tank is refused because carryable is DATA (barracks-produced) and the engineer therefore rides; "
                       + $"the hold fills to {World.CarrierCapacity} and a refused boarder survives; unloading returns the "
                       + "unit with its health and rank and PRUNES the hold; and a destroyed carrier takes its cargo with "
                       + "it, so the hold is not somewhere to hide an army; and a v9 save round-trips the hold in order, "
-                      + "hash-identical");
+                      + "hash-identical; and (P8-56) a squad ordered aboard ONCE from out of reach walks in and boards, "
+                      + "following a Carrier that drives off, lapsing when its Carrier fills or dies, resuming from a "
+                      + "save, ending a Guard stance, and resuming after it stops to shoot with a shift-queued order "
+                      + "held behind it, while a plain move to the same point still settles short");
     return 0;
+
+    // P8-56: ordered aboard from OUT OF REACH, the squad boards. Until this row
+    // the walk-in was a flow walk with no target, so StepToward's crowd-arrival
+    // rule settled it at four cells, outside the two-cell reach, and nothing
+    // boarded however often the order was re-sent (P8-7 measured 3, 4, 6 and 10
+    // cells, 300 ticks each). Every boarding order below is issued ONCE, by
+    // Board or by hand, and every bound is twice the straight walk at the
+    // squad's own speed: derived from the catalogue, so it needs no defence and
+    // cannot drift from it.
+    int BoardingWalkStages()
+    {
+        static string Cells(Fix64 sq) => Fix64.Sqrt(sq).ToString();
+        static Fix64 Gap(World w, int a, int b)
+            => Fix64.DistSq(w.Entities[a].X - w.Entities[b].X, w.Entities[a].Y - w.Entities[b].Y);
+        static int Bound(World w, int cells) => 2 * (Fix64.FromInt(cells) / w.GetUnitType(Rifle).Speed).ToIntRound();
+        // Steps with NO commands until the unit leaves the world or the limit
+        // runs out, and answers how many ticks that took.
+        static int Run(World w, int u, int limit)
+        {
+            int t = 0;
+            while (t < limit && w.Entities[u].Alive) { w.Step(default); t++; }
+            return t;
+        }
+        int Rifleman(World w, int cx, int cy)
+        {
+            var rd = w.GetUnitType(Rifle);
+            return w.SpawnUnit(0, Fix64.FromInt(cx), Fix64.FromInt(cy), rd.Speed, rd.Hp, rd.Armour, rd.WeaponId,
+                               veterancy: false, unitType: Rifle);
+        }
+
+        // --- 7. From 3, 6 and 10 cells, ordered once, each squad boards.
+        string walks = "";
+        foreach (int d in new[] { 3, 6, 10 })
+        {
+            var w = Fresh(out int carrier);
+            int bound = Bound(w, d);
+            int u = Board(w, carrier, Rifle, 20 + d, 20);
+            if (!w.Entities[u].Alive)
+                return Fail($"transport walk: a squad {d} cells off is out of reach and must walk, not board on the order's tick");
+            int took = 1 + Run(w, u, bound - 1);
+            if (w.Entities[u].Alive || w.CargoOf(carrier).Count != 1)
+                return Fail($"transport walk: a squad ordered aboard ONCE from {d} cells must board within {bound} ticks "
+                            + $"(twice the straight walk at its own speed); after {took} it stands "
+                            + $"{Cells(Gap(w, u, carrier))} cells off, {(w.Entities[u].Moving ? "still walking" : "settled")}, "
+                            + $"hold {w.CargoOf(carrier).Count}");
+            walks += $" {d} cells in {took} ticks (bound {bound});";
+        }
+        Console.WriteLine($"  transportgate: ordered aboard ONCE from out of reach, each squad boards:{walks}");
+
+        // --- 8. The control. The crowd-arrival exemption belongs to the
+        //        BOARDING walk alone: a plain move to the very same point from
+        //        six cells still settles at the crowd radius, outside reach.
+        {
+            var w = Fresh(out int carrier);
+            int u = Rifleman(w, 26, 20);
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.PathMove, u, w.Entities[carrier].X, w.Entities[carrier].Y) });
+            int bound = Bound(w, 6);
+            for (int t = 0; t < bound && w.Entities[u].Moving; t++) w.Step(default);
+            Fix64 gap = Gap(w, u, carrier);
+            if (!w.Entities[u].Alive || w.Entities[u].Moving || w.CargoOf(carrier).Count != 0
+                || gap <= Fix64.FromInt(4) || gap > Fix64.FromInt(16))
+                return Fail($"transport walk: a plain PathMove onto a Carrier's point must still settle at the four-cell "
+                            + $"crowd radius and board nothing (alive {w.Entities[u].Alive}, moving {w.Entities[u].Moving}, "
+                            + $"{Cells(gap)} cells off, hold {w.CargoOf(carrier).Count})");
+            Console.WriteLine($"  transportgate: control, a plain PathMove onto the same point from 6 cells still settles "
+                              + $"at the crowd radius, {Cells(gap)} cells off, and boards nothing");
+        }
+
+        // --- 9. The Carrier fills before the walker arrives: the order lapses,
+        //        and the walker survives and settles beside the Carrier rather
+        //        than boarding past capacity or vanishing.
+        {
+            var w = Fresh(out int carrier);
+            for (int i = 0; i < World.CarrierCapacity - 1; i++) Board(w, carrier, Rifle, 21, 20 + (i % 2));
+            int walker = Board(w, carrier, Rifle, 26, 20);
+            int filler = Board(w, carrier, Rifle, 21, 21);
+            if (w.Entities[filler].Alive || w.CargoOf(carrier).Count != World.CarrierCapacity)
+                return Fail("transport walk: the precondition needs the hold filled by a squad in reach while the walker is en route");
+            for (int t = 0; t < Bound(w, 6) && w.Entities[walker].Moving; t++) w.Step(default);
+            var we = w.Entities[walker];
+            Fix64 gap = Gap(w, walker, carrier);
+            if (!we.Alive || w.CargoOf(carrier).Count != World.CarrierCapacity)
+                return Fail("transport walk: a squad walking to a Carrier that filled before it arrived must be refused, "
+                            + $"neither boarded past capacity nor lost (alive {we.Alive}, hold {w.CargoOf(carrier).Count})");
+            if (we.ExplicitTarget != -1 || we.Moving || gap > Fix64.FromInt(16))
+                return Fail($"transport walk: when the hold fills the boarding order must lapse and the squad settle beside "
+                            + $"the Carrier (target {we.ExplicitTarget}, moving {we.Moving}, {Cells(gap)} cells off)");
+            Console.WriteLine($"  transportgate: the hold filled while a squad walked in, so its order lapsed and it "
+                              + $"settled {Cells(gap)} cells off, hold {w.CargoOf(carrier).Count}/{World.CarrierCapacity}");
+        }
+
+        // --- 10. The Carrier dies mid-walk: the order lapses the tick the walk
+        //         sees it dead, and nothing boards a wreck.
+        {
+            var w = Fresh(out int carrier);
+            int walker = Board(w, carrier, Rifle, 30, 20);
+            for (int t = 0; t < 8; t++) w.Step(default);
+            // Killed through the REAL damage path, stage 5's rule: one hit point
+            // and a hostile squad beside it, on the far side from the walker.
+            var frail = w.Entities[carrier]; frail.Hp = 1; w.SetEntityForTest(carrier, frail);
+            var rd = w.GetUnitType(Rifle);
+            w.SpawnUnit(1, Fix64.FromInt(18), Fix64.FromInt(20), rd.Speed, rd.Hp, rd.Armour, rd.WeaponId,
+                        veterancy: false, unitType: Rifle);
+            int died = -1;
+            for (int t = 0; t < 60 && died < 0; t++) { w.Step(default); if (!w.Entities[carrier].Alive) died = t + 1; }
+            if (died < 0) return Fail("transport walk: the precondition needs the Carrier destroyed mid-walk");
+            w.Step(default);                     // the tick after the death: the walk sees it
+            var we = w.Entities[walker];
+            if (!we.Alive || we.ExplicitTarget != -1 || w.CargoOf(carrier).Count != 0)
+                return Fail($"transport walk: a squad walking to a Carrier that dies must survive with its order lapsed and "
+                            + $"board nothing (alive {we.Alive}, target {we.ExplicitTarget}, hold {w.CargoOf(carrier).Count})");
+            Console.WriteLine($"  transportgate: the Carrier was shot dead {died} tick(s) after a hostile squad reached it, "
+                              + $"9 ticks into a walk, and the walker's order lapsed the tick after with the squad alive, "
+                              + $"{Cells(Gap(w, walker, carrier))} cells from the wreck, and nothing aboard");
+        }
+
+        // --- 11. The Carrier drives off mid-walk: the walk FOLLOWS it and
+        //         boards. Driven twelve cells south, so it ends well outside the
+        //         reach of the point where the order found it.
+        {
+            var w = Fresh(out int carrier);
+            Fix64 sx = w.Entities[carrier].X, sy = w.Entities[carrier].Y;
+            int walker = Board(w, carrier, Rifle, 26, 20);
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.PathMove, carrier, Fix64.FromInt(20), Fix64.FromInt(32)) });
+            int bound = Bound(w, 6 + 12);
+            int took = 2 + Run(w, walker, bound);
+            var ce = w.Entities[carrier];
+            Fix64 moved = Fix64.DistSq(ce.X - sx, ce.Y - sy);
+            if (w.Entities[walker].Alive || w.CargoOf(carrier).Count != 1)
+                return Fail($"transport walk: a squad ordered aboard a Carrier that then drives off must follow it and board "
+                            + $"within {bound} ticks; after {took} it stands {Cells(Gap(w, walker, carrier))} cells off, "
+                            + $"hold {w.CargoOf(carrier).Count}");
+            if (moved <= Fix64.FromInt(4))
+                return Fail($"transport walk: the Carrier must have driven out of the walk's starting reach for this stage "
+                            + $"to test following ({Cells(moved)} cells)");
+            Console.WriteLine($"  transportgate: a Carrier drove off mid-walk and the squad followed and boarded in {took} "
+                              + $"ticks (bound {bound}), {Cells(moved)} cells from where the order found it");
+        }
+
+        // --- 12. A save taken mid-walk resumes it. The walk lives in fields the
+        //         save already carries, so the loaded world boards on the same
+        //         tick and hashes identically at the end, with no format change.
+        {
+            var w = Fresh(out int carrier);
+            int walker = Board(w, carrier, Rifle, 30, 20);
+            for (int t = 0; t < 5; t++) w.Step(default);
+            var ms = new MemoryStream();
+            w.Save(ms);
+            ms.Position = 0;
+            var back = World.Load(ms);
+            if (back.ComputeStateHash() != w.ComputeStateHash())
+                return Fail("transport walk: a world saved mid-walk must load hash-identical");
+            int bound = Bound(w, 10);
+            int ta = Run(w, walker, bound), tb = Run(back, walker, bound);
+            if (w.Entities[walker].Alive || back.Entities[walker].Alive || ta != tb
+                || w.ComputeStateHash() != back.ComputeStateHash())
+                return Fail($"transport walk: a save taken mid-walk must resume it and board on the same tick as the "
+                            + $"unbroken run (boarded {!w.Entities[walker].Alive}/{!back.Entities[walker].Alive} after "
+                            + $"{ta}/{tb} ticks, hashes {(w.ComputeStateHash() == back.ComputeStateHash() ? "equal" : "DIFFER")})");
+            Console.WriteLine($"  transportgate: saved 5 ticks into a walk, loaded, and both worlds boarded {ta} ticks "
+                              + "later and hash alike: the walk needs nothing the save does not already carry");
+        }
+
+        // --- 13. A squad on Guard boards too. The leash cancelled the walk the
+        //         very next tick and marched the squad home; the boarding order
+        //         now ends a positional stance, as Move and Attack do.
+        {
+            var w = Fresh(out int carrier);
+            int u = Rifleman(w, 26, 20);
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.SetStance, u, Fix64.Zero, Fix64.Zero, (int)Stance.Guard) });
+            if (w.Entities[u].Stance != Stance.Guard) return Fail("transport walk: the precondition needs a squad on Guard");
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier) });
+            int bound = Bound(w, 6);
+            int took = 1 + Run(w, u, bound);
+            if (w.Entities[u].Alive || w.CargoOf(carrier).Count != 1)
+                return Fail($"transport walk: a squad on Guard ordered aboard from 6 cells must board within {bound} ticks; "
+                            + $"after {took} it stands {Cells(Gap(w, u, carrier))} cells off on stance "
+                            + $"{w.Entities[u].Stance}, hold {w.CargoOf(carrier).Count}");
+            Console.WriteLine($"  transportgate: a squad on Guard ordered aboard from 6 cells boarded in {took} ticks (bound {bound})");
+        }
+
+        // --- 14. A walker that stops to shoot on the way resumes the walk, and
+        //         an order shift-queued behind the boarding WAITS for it rather
+        //         than taking over on the tick the shot halted the walker. The
+        //         bait is a hostile Carrier beside the route: unarmed, so the
+        //         walker's shots are the only ones fired.
+        {
+            var w = Fresh(out int carrier);
+            int u = Rifleman(w, 30, 20);
+            var cd = w.GetUnitType(Carrier);
+            w.SpawnUnit(1, Fix64.FromInt(25), Fix64.FromInt(22), cd.Speed, cd.Hp, cd.Armour, 0,
+                        veterancy: false, unitType: Carrier);
+            w.Step(new[]
+            {
+                new Command(w.Tick, 0, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier),
+                new Command(w.Tick, 0, CommandType.PathMove, u, Fix64.FromInt(40), Fix64.FromInt(40), -1, queued: true),
+            });
+            int bound = Bound(w, 10), took = 1, shots = 0;
+            while (took < bound && w.Entities[u].Alive)
+            {
+                w.Step(default);
+                took++;
+                foreach (var ev in w.Events) if (ev.Type == GameEventType.Fired && ev.A == u) shots++;
+            }
+            if (shots == 0)
+                return Fail("transport walk: the precondition needs the walker to stop and shoot the bait on its way");
+            if (w.Entities[u].Alive || w.CargoOf(carrier).Count != 1)
+                return Fail($"transport walk: a walker that fired {shots} shot(s) on its way must still board, with the "
+                            + $"queued move held behind the boarding; after {took} ticks it stands "
+                            + $"{Cells(Gap(w, u, carrier))} cells off, hold {w.CargoOf(carrier).Count}");
+            Console.WriteLine($"  transportgate: a walker fired {shots} shot(s) at a hostile beside its route and still "
+                              + $"boarded in {took} ticks (bound {bound}), the shift-queued move held behind it");
+        }
+        return 0;
+    }
 }
 
 int EmplacementGate()

@@ -20,7 +20,7 @@ public enum CommandType : byte
     LaunchSuper = 15,    // EntityId (charged superweapon) fires at map position X/Y (TICKET-P2-SIM-15)
     SetRally = 16,       // EntityId (own producing structure) rally point at X/Y; AuxId == -1 clears (ADR-007)
     SetStance = 17,      // EntityId (own unit) stance = (Stance)AuxId; Patrol reads X/Y as the far waypoint (ADR-015)
-    LoadTransport = 18,  // P7-3: EntityId (own infantry) boards transport AuxId; walks to it if out of reach
+    LoadTransport = 18,  // P7-3: EntityId (own infantry) boards transport AuxId; walks to it if out of reach and (P8-56) boards on arrival
     UnloadTransport = 19,// P7-3: EntityId (own transport) sets its whole cargo down around itself
     // P7-21: EntityId (own structure whose def carries a support power, charged)
     // uses it at map position X/Y. GDD s8: "3-4 minor support powers per faction
@@ -114,7 +114,7 @@ public struct Entity
     public ArmourClass Armour;
     public int WeaponId;         // 0 = unarmed
     public int Cooldown;
-    public int ExplicitTarget;   // -1 = auto-acquire
+    public int ExplicitTarget;   // -1 = auto-acquire; below -1 = walking to board a Carrier (P8-56, World.BoardingWalk)
     public Fix64 Sight;          // cells
 
     // Economy
@@ -952,6 +952,120 @@ public sealed partial class World
     /// is not a transport.</summary>
     public IReadOnlyList<CargoUnit> CargoOf(int transportId)
         => _cargo.TryGetValue(transportId, out var c) ? c : System.Array.Empty<CargoUnit>();
+
+    /// <summary>P7-3: LoadTransport boards within two cells of the Carrier's
+    /// centre. Squared, the way every reach in the sim is compared.</summary>
+    private static readonly Fix64 BoardingReachSq = Fix64.FromInt(4);
+
+    /// <summary>
+    /// P8-56: a walk to board lives in ExplicitTarget's NEGATIVE range, so it
+    /// needs no new field, no new hash input and no save change, and no golden
+    /// moves. -1 means no order to finish, as it always has; BoardingWalk(c),
+    /// which is -2 - c, means "walking to board own Carrier c"; zero and above
+    /// is an attack target, as it always has been.
+    ///
+    /// Why a range of an existing field rather than a side collection: the
+    /// collection would be new hashed and saved state, a save format change,
+    /// and this needs neither. Every reader that asks "is there an attack
+    /// target" asks only whether the value is negative, so combat, capture,
+    /// the ADR-071 dock route and the AI all see a boarding walker exactly as
+    /// they saw the plain walk that stood here before, and the two places that
+    /// must tell the walks apart ask by name: StepToward's crowd-arrival rule
+    /// and BoardingSystem. A save written before this row never holds a value
+    /// below -1, so it loads unchanged. And why not ExplicitTarget = c itself:
+    /// an explicit Attack on your own Carrier already means exactly that
+    /// (CanTarget is a stealth test, not a hostility test), and it must go on
+    /// meaning a force-fire rather than turning into a boarding.
+    /// </summary>
+    private static int BoardingWalk(int carrierId) => -2 - carrierId;
+
+    /// <summary>P8-56: the Carrier this entity is walking to board, or -1.</summary>
+    private static int BoardingCarrierOf(in Entity e) => e.ExplicitTarget <= -2 ? -2 - e.ExplicitTarget : -1;
+
+    /// <summary>
+    /// P7-3's boarding rule, asked in ONE place by the order and by the walk,
+    /// so a walk can never land where the order would have been refused: the
+    /// boarder is infantry (IsCarryable), and the transport is a live Carrier
+    /// that the boarder's own player owns, with room in its hold. P7-8g:
+    /// ownership, not alliance. You board YOUR transport, and teams do not
+    /// change that even once an ally's transport is not an enemy.
+    /// </summary>
+    private bool BoardingOpen(in Entity e, int carrierId)
+    {
+        if (e.Kind != EntityKind.Unit || !IsCarryable(e.UnitType)) return false;
+        if (!ValidId(carrierId)) return false;
+        var carrier = _entities[carrierId];
+        if (!carrier.Alive || !IsOwnedBy(in carrier, e.PlayerId)
+            || carrier.Kind != EntityKind.Unit || carrier.UnitType != CarrierUnitType) return false;
+        return CargoOf(carrierId).Count < CarrierCapacity;
+    }
+
+    /// <summary>P7-3: the boarding itself, for a unit BoardingOpen admitted and
+    /// that stands within reach.</summary>
+    private void Board(ref Entity e, int carrierId)
+    {
+        if (!_cargo.TryGetValue(carrierId, out var hold)) _cargo[carrierId] = hold = new List<CargoUnit>();
+        hold.Add(new CargoUnit(e.UnitType, e.Hp, e.Rank));
+        // Despawned, not flagged. A carried unit that stayed alive would
+        // have to be skipped by movement, combat, separation, selection
+        // and drawing, and every one of those skips is an enumeration
+        // somebody forgets - this phase has already paid for that lesson
+        // three times.
+        e.Alive = false;
+        e.Moving = false;
+        // D34: Boarded, not Died, A the unit and B the Carrier. Nothing in the
+        // sim reads, hashes or saves its own events, so the type is free to be
+        // honest. Raised here and nowhere else, so the in-reach order and
+        // BoardingSystem's walk-in each raise it exactly once per boarding.
+        _events.Add(new GameEvent(GameEventType.Boarded, e.Id, carrierId));
+    }
+
+    /// <summary>
+    /// P8-56: the walk-in's other half, the sim re-issuing the boarding order
+    /// to itself each tick instead of leaving that to whoever gave it. A walker
+    /// whose Carrier is in reach boards; one whose Carrier is out of reach
+    /// follows it, so a Carrier that drives off is chased exactly as an attack
+    /// pursuit chases its target, and a walk halted short (a shot taken on the
+    /// way stops a walker for that tick) is resumed. If the Carrier has died,
+    /// changed hands or filled, the order lapses back to -1 and the walk already
+    /// in flight finishes as a plain one, so the squad settles beside where its
+    /// Carrier was, as an attacker does when its target dies.
+    ///
+    /// Placed after movement, separation, mines and gates have settled the
+    /// tick's positions and before capture and combat, so a squad that closed
+    /// to reach this tick is aboard before anything shoots at it, and a Carrier
+    /// killed last tick is seen dead. Walked in entity-index order, so when two
+    /// walkers reach the last place on the same tick the lower id takes it, on
+    /// every machine. It writes nothing unless a boarding walk exists, which no
+    /// golden scenario, AI or mission ever starts, so their hashes stay put.
+    /// </summary>
+    private void BoardingSystem()
+    {
+        for (int i = 0; i < _entities.Count; i++)
+        {
+            if (_entities[i].ExplicitTarget > -2) continue;
+            var e = _entities[i];
+            if (!e.Alive) continue;
+            int c = BoardingCarrierOf(in e);
+            if (!BoardingOpen(in e, c))
+                e.ExplicitTarget = -1;
+            else
+            {
+                var carrier = _entities[c];
+                if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) <= BoardingReachSq)
+                {
+                    e.ExplicitTarget = -1;   // the order is spent, so the despawned entity holds no walk
+                    Board(ref e, c);
+                }
+                else
+                {
+                    e.TargetX = carrier.X; e.TargetY = carrier.Y;
+                    e.Moving = true; e.UseFlow = true;
+                }
+            }
+            _entities[i] = e;
+        }
+    }
 
     /// <summary>P7-3: infantry is what a transport carries, and it is a DATA
     /// question, not a hardcoded list - anything the barracks produces fits.
@@ -2763,6 +2877,7 @@ public sealed partial class World
             for (int i = 0; i < _entities.Count; i++)
                 if (!_entities[i].Alive && _gateOpenUntil.ContainsKey(i)) _gateOpenUntil.Remove(i);
         }
+        BoardingSystem();   // P8-56: settled positions in, before anything shoots
         CaptureSystem();
         CombatSystem();
         HarvestSystem();
@@ -2781,8 +2896,10 @@ public sealed partial class World
     // any ITERATION goes through sorted keys.
     private readonly Dictionary<int, List<Command>> _orderQueues = new();
 
+    // P8-56: any order to finish, so a boarding walk (BoardingWalk) halted for
+    // one tick by a shot holds a shift-queue back exactly as an attack does.
     private static bool IsBusy(in Entity e)
-        => e.Moving || e.AMove || e.ExplicitTarget >= 0 || e.HState != HarvestState.Idle;
+        => e.Moving || e.AMove || e.ExplicitTarget != -1 || e.HState != HarvestState.Idle;
 
     /// <summary>
     /// Pop the next queued order for every idle entity. Runs after incoming
@@ -3228,40 +3345,30 @@ public sealed partial class World
                 // P7-3. EntityId is the unit doing the boarding, AuxId the
                 // transport, matching Attack and Harvest where the actor is the
                 // entity and the target is the aux.
-                if (e.Kind != EntityKind.Unit || !IsCarryable(e.UnitType)) break;
-                if (c.AuxId < 0 || c.AuxId >= _entities.Count) break;
+                if (!BoardingOpen(in e, c.AuxId)) break;
                 var carrier = _entities[c.AuxId];
-                // P7-8g: ownership. You board YOUR transport, and teams does not
-                // change that even once an ally's transport is not an enemy.
-                if (!carrier.Alive || !IsOwnedBy(in carrier, e.PlayerId)
-                    || carrier.Kind != EntityKind.Unit || carrier.UnitType != CarrierUnitType) break;
-                if (!_cargo.TryGetValue(c.AuxId, out var hold)) hold = null;
-                if ((hold?.Count ?? 0) >= CarrierCapacity) break;
 
-                // Out of reach: WALK there rather than refusing. The order is
-                // re-issued each beat by whoever gave it, so this is
-                // self-healing if the transport moves - the same shape the AI's
-                // engineer-to-outpost order uses.
-                if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) > Fix64.FromInt(4))
+                // Out of reach: WALK there rather than refusing. P8-56: and the
+                // walk now ENDS aboard. It used to be a flow walk with no target,
+                // left for whoever gave the order to re-issue, and StepToward's
+                // crowd-arrival rule settled it at four cells, outside this
+                // two-cell reach, however often it was re-sent. The walk is now
+                // marked in ExplicitTarget (see BoardingWalk), which exempts it
+                // from crowd arrival exactly as an attack order is exempt, and
+                // BoardingSystem follows the Carrier and boards on arrival.
+                // Ending a positional stance is the Move and Attack rule: a Guard
+                // leash would otherwise cancel the walk the very next tick.
+                if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) > BoardingReachSq)
                 {
+                    e.ExplicitTarget = BoardingWalk(c.AuxId);
                     e.TargetX = carrier.X; e.TargetY = carrier.Y;
                     e.Moving = true; e.UseFlow = true; e.AMove = false;
                     e.StallTicks = 0; e.NearestApproachSq = Fix64.Zero; e.NoProgressTicks = 0;
+                    CancelPositionalStance(ref e);
                     break;
                 }
 
-                if (hold is null) _cargo[c.AuxId] = hold = new List<CargoUnit>();
-                hold.Add(new CargoUnit(e.UnitType, e.Hp, e.Rank));
-                // Despawned, not flagged. A carried unit that stayed alive would
-                // have to be skipped by movement, combat, separation, selection
-                // and drawing, and every one of those skips is an enumeration
-                // somebody forgets - this phase has already paid for that lesson
-                // three times.
-                e.Alive = false;
-                e.Moving = false;
-                // D34: Boarded, not Died. Nothing in the sim reads, hashes or
-                // saves its own events, so the type is free to be honest.
-                _events.Add(new GameEvent(GameEventType.Boarded, c.EntityId, c.AuxId));
+                Board(ref e, c.AuxId);
                 break;
             }
             case CommandType.UnloadTransport:
@@ -4313,7 +4420,11 @@ public sealed partial class World
             // leave the factory mouth - without the guard any rally (or
             // default exit) within 4 cells of the spawn cell is a silent
             // no-op and the spawn ring saturates (SPAWN-D3).
-            if (e.Kind == EntityKind.Unit && e.ExplicitTarget < 0 && !e.AMove && !e.Departing
+            // P8-56: -1, not "any negative", because a walk to board a Carrier
+            // (BoardingWalk, the values below -1) must close to its two-cell
+            // reach for the reason an attacker must close to weapon range.
+            // Identical for every other walk: nothing else holds a value below -1.
+            if (e.Kind == EntityKind.Unit && e.ExplicitTarget == -1 && !e.AMove && !e.Departing
                 && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16))
             { e.Moving = false; return; }
 
