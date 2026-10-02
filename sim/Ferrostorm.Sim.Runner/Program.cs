@@ -35,6 +35,7 @@ using Ferrostorm.Sim;
 //   wallgategate       - P7-10: a gate is ORDERED and placed like a wall, blocks while shut, opens for an ALLY and shuts 45 ticks after the last one leaves, lets an ENEMY follow them through (the design, not an oversight), does not flutter, and round-trips its remaining delay through a save
 //   teamgate           - P7-8c: every seat starts on its own team so a free-for-all is unchanged by construction; allies are not targets, victory is by TEAM while elimination stays per player, contact effects and detectors respect the alliance, and tech, fog, the veil and splash deliberately do not
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
+//   dockfacegate       - P8-15, ADR-071: any open face of a refinery docks, a sealed one falls back to the next, a walk onto a building reaches an open face, and the commander keeps its refineries' aprons clear
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
 //   aituninggate       - the seven data/ai files reproduce the compiled commander exactly, the sim plays what they say, and a changed AI number moves the catalogue checksum (the LAN desync guard)
@@ -9080,6 +9081,201 @@ int DockProbe()
     return 0;
 }
 
+int DockFaceGate()
+{
+    // P8-15 (ADR-071, D4, ML-01). A building is reached from WHICHEVER face is
+    // open. The single-cell route seeded only the footprint's centre cell, for
+    // a 2x2 its bottom-right cell, whose only open neighbours are the cells
+    // east, south and south-east of it: block those three and the building was
+    // unreachable from every side, with the west and north faces standing open.
+    //
+    //   STAGE 1: ML-01's fixture. A refinery with exactly those three cells
+    //   walled; a harvester working a field to the north-west must bank a load,
+    //   docking on the north or west side. Before ADR-071: 0 credits in 3000
+    //   ticks, the harvester frozen at ToRefinery carrying 700.
+    //   STAGE 2: every face walled, a second refinery open further away. The
+    //   harvester is assigned the sealed one (it is nearer) and must fall back
+    //   to the open one and bank there (clause 2).
+    //   STAGE 3: a unit ordered ONTO a building whose centre approach is boxed
+    //   in, the client harness lane's finding: a saboteur and an engineer must
+    //   each reach an open face and act. Before: both stood still.
+    //   STAGE 4: the commander's own base on skirmish-01, both start
+    //   orientations, Directorate mirror, to t=9000 (F5's income window, the
+    //   one ML-01 measured over). No refinery a commander owns ever has a
+    //   blocked cell in its one-cell apron (clause 3), and no harvester stands
+    //   frozen at ToRefinery for more than one second. One tick per trip is
+    //   normal: Loading hands over to ToRefinery with the harvester stopped,
+    //   and the next HarvestSystem pass moves it. ML-01 measured seat 1 stuck
+    //   for 60 per cent of its harvester-ticks here.
+    //
+    // Additive, as every gate in the battery: a standalone mode and a Match
+    // stage, never a golden scenario.
+    const int Cap = World.HarvesterCapacity;
+
+    // One harvester sent to work a field until it banks a full load or the
+    // budget runs out. Reports the delivery tick (-1 for none), the cell it
+    // docked from, the refinery it was first assigned and the one it banked at.
+    (int Tick, int Cx, int Cy, int First, int Banked) Deliver(World w, int harv, int field, int budget)
+    {
+        long start = w.Credits(0);
+        var order = new List<Command> { new(w.Tick, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order);
+        int cx = -1, cy = -1, first = -1;
+        for (int t = 0; t < budget; t++)
+        {
+            var before = w.Entities[harv];
+            w.Step(t == 0 ? span : default);
+            var h = w.Entities[harv];
+            if (t == 0) first = h.RefineryId;
+            if (cx < 0 && before.HState == HarvestState.ToRefinery && h.HState == HarvestState.Unloading)
+            { cx = Map.CellOf(h.X); cy = Map.CellOf(h.Y); }
+            if (w.Credits(0) - start >= Cap) return (w.Tick, cx, cy, first, h.RefineryId);
+        }
+        return (-1, cx, cy, first, w.Entities[harv].RefineryId);
+    }
+
+    // Is (x,y) a cell of the one-cell ring round a size x size footprint at (ax,ay)?
+    static bool InRing(int x, int y, int ax, int ay, int size)
+        => x >= ax - 1 && x <= ax + size && y >= ay - 1 && y <= ay + size
+           && !(x >= ax && x < ax + size && y >= ay && y < ay + size);
+
+    // --- 1. Three walls on the old seed's only exits; west and north stand open.
+    {
+        var w = new World(3510, 64, 64, players: 2);
+        w.SpawnRefinery(0, 30, 30);
+        w.SpawnWall(0, 32, 31); w.SpawnWall(0, 31, 32); w.SpawnWall(0, 32, 32);
+        int field = w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(20), 100000);
+        int harv = w.SpawnHarvester(0, Map.CellCentre(22), Map.CellCentre(22));
+        var r = Deliver(w, harv, field, 3000);
+        var h = w.Entities[harv];
+        if (r.Tick < 0)
+            return Fail($"dockface: with the cells east, south and south-east of the refinery's bottom-right cell walled, the harvester "
+                        + $"banked nothing in 3000 ticks (state {h.HState}, moving {h.Moving}, carry {h.Carry}) - the dock route is "
+                        + "seeded at one cell again, and the open west and north faces are unusable (ML-01)");
+        // Docked() accepts 2.83 cells from the centre, which reaches past the
+        // ring in places, so the side is asserted rather than ring membership.
+        if (!(r.Cy < 30 || r.Cx < 30))
+            return Fail($"dockface: the harvester must dock on the open north or west side of the refinery, and docked from cell ({r.Cx},{r.Cy})");
+        Console.WriteLine($"dockface: stage 1, east/south/south-east walled: a load banked at t={r.Tick}, docked from ({r.Cx},{r.Cy}) on the "
+                          + $"{(r.Cy < 30 && r.Cx < 30 ? "north-west corner" : r.Cy < 30 ? "north side" : "west side")}");
+    }
+
+    // --- 2. Every face walled: the nearer refinery is unreachable, so fall back.
+    {
+        var w = new World(3511, 64, 64, players: 2);
+        int sealedRef = w.SpawnRefinery(0, 30, 30);
+        for (int y = 29; y <= 32; y++)
+            for (int x = 29; x <= 32; x++)
+                if (x is 29 or 32 || y is 29 or 32) w.SpawnWall(0, x, y);
+        int openRef = w.SpawnRefinery(0, 46, 30);
+        int field = w.SpawnFerriteField(Fix64.FromInt(20), Fix64.FromInt(31), 100000);
+        int harv = w.SpawnHarvester(0, Map.CellCentre(22), Map.CellCentre(31));
+        var r = Deliver(w, harv, field, 3000);
+        if (r.First != sealedRef)
+            return Fail($"dockface: the fixture must assign the SEALED refinery first (assigned {r.First}, sealed is {sealedRef}) - otherwise the fallback is never exercised");
+        if (r.Tick < 0)
+            return Fail($"dockface: with every face of its refinery walled the harvester banked nothing in 3000 ticks (assigned {w.Entities[harv].RefineryId}) "
+                        + $"- it must fall back to the open refinery {openRef} (ADR-071 clause 2)");
+        if (r.Banked != openRef)
+            return Fail($"dockface: the harvester must bank at the open refinery {openRef}, and banked at {r.Banked} from cell ({r.Cx},{r.Cy})");
+        Console.WriteLine($"dockface: stage 2, every face walled: assigned the sealed refinery {sealedRef}, fell back to {openRef}, "
+                          + $"a load banked at t={r.Tick} from ({r.Cx},{r.Cy})");
+    }
+
+    // --- 3. A unit ordered onto a building whose centre approach is boxed in.
+    foreach (var (type, name, ev) in new[] {
+        (World.SaboteurUnitType, "saboteur", GameEventType.Sabotaged),
+        (World.EngineerUnitType, "engineer", GameEventType.Captured) })
+    {
+        var w = new World(3512, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionSodality);
+        int plant = w.SpawnPowerPlant(1, 30, 30);
+        w.SpawnWall(1, 32, 31); w.SpawnWall(1, 31, 32); w.SpawnWall(1, 32, 32);
+        var d = w.GetUnitType(type);
+        int u = w.SpawnUnit(0, Map.CellCentre(20), Map.CellCentre(24), d.Speed, d.Hp, d.Armour, 0, veterancy: false, unitType: type);
+        var order = new List<Command> { new(0, 0, CommandType.Attack, u, Fix64.Zero, Fix64.Zero, plant) };
+        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order);
+        int actedAt = -1, cx = -1, cy = -1;
+        for (int t = 0; t < 400 && actedAt < 0; t++)
+        {
+            var before = w.Entities[u];
+            w.Step(t == 0 ? span : default);
+            foreach (var e in w.Events)
+                if (e.Type == ev && e.A == plant) { actedAt = w.Tick; cx = Map.CellOf(before.X); cy = Map.CellOf(before.Y); }
+        }
+        if (actedAt < 0)
+        {
+            var s = w.Entities[u];
+            return Fail($"dockface: a {name} ordered onto a power plant whose centre approach is walled never acted in 400 ticks "
+                        + $"(at cell {Map.CellOf(s.X)},{Map.CellOf(s.Y)}, moving {s.Moving}) - a walk onto a building must reach any open face");
+        }
+        if (!InRing(cx, cy, 30, 30, 2) || !(cy < 30 || cx < 30))
+            return Fail($"dockface: the {name} must act from the open north or west side, and acted from cell ({cx},{cy})");
+        Console.WriteLine($"dockface: stage 3, the {name} reached an open face and acted at t={actedAt} from ({cx},{cy})");
+    }
+
+    // --- 4. The commander keeps its refineries' aprons clear, and nothing freezes.
+    {
+        string root = MeasureRoot();
+        var specs = new[] { false, true }
+            .Select(swap => new MatchSpec("skirmish-01", swap, World.FactionDirectorate, World.FactionDirectorate,
+                                          AiDifficulty.Normal, AiDifficulty.Normal, 0, 0, 2026, MeasurementHarness.IncomeWindowTicks))
+            .ToArray();
+        var results = RunOrdered(specs.Length, specs.Length, i =>
+        {
+            long[] stuck = new long[2], live = new long[2];
+            int[] longest = new int[2];
+            var run = new Dictionary<int, int>();
+            string? violation = null;
+            PlayMeasured(root, specs[i], w =>
+            {
+                for (int id = 0; id < w.EntityCount; id++)
+                {
+                    var e = w.Entities[id];
+                    if (!e.Alive || e.PlayerId is not (0 or 1)) continue;
+                    if (e.Kind == EntityKind.Harvester)
+                    {
+                        live[e.PlayerId]++;
+                        bool frozen = e.HState == HarvestState.ToRefinery && !e.Moving;
+                        int n = frozen ? run.GetValueOrDefault(id) + 1 : 0;
+                        run[id] = n;
+                        if (frozen) stuck[e.PlayerId]++;
+                        if (n > longest[e.PlayerId]) longest[e.PlayerId] = n;
+                    }
+                    else if (e.Kind == EntityKind.Refinery && violation == null)
+                    {
+                        int size = w.FootprintOf(e.StructType), ax = w.AnchorOf(e.X, e.StructType), ay = w.AnchorOf(e.Y, e.StructType);
+                        for (int y = ay - 1; y <= ay + size && violation == null; y++)
+                            for (int x = ax - 1; x <= ax + size && violation == null; x++)
+                                if (InRing(x, y, ax, ay, size) && w.Map.InBounds(x, y) && w.Map.IsBlocked(x, y))
+                                    violation = $"t={w.Tick} seat {e.PlayerId} refinery {id} at ({ax},{ay}) has apron cell ({x},{y}) blocked";
+                    }
+                }
+            });
+            return (stuck, live, longest, violation);
+        }, (_, _) => { });
+        for (int i = 0; i < specs.Length; i++)
+        {
+            var (stuck, live, longest, violation) = results[i];
+            string label = $"skirmish-01 DD o{(specs[i].Swap ? 1 : 0)}";
+            string Share(int p) => live[p] == 0 ? "no harvester" : $"{stuck[p] * 100 / live[p]} per cent";
+            Console.WriteLine($"dockface: stage 4, {label} to t={MeasurementHarness.IncomeWindowTicks}: harvester-ticks frozen at ToRefinery "
+                              + $"seat 0 {stuck[0]} of {live[0]} ({Share(0)}), seat 1 {stuck[1]} of {live[1]} ({Share(1)}); "
+                              + $"longest freeze {longest[0]}/{longest[1]} ticks; apron {(violation == null ? "clear throughout" : "BLOCKED")}");
+            if (violation != null)
+                return Fail($"dockface: {label}: a commander's refinery must keep a one-cell clear apron (ADR-071 clause 3): {violation}");
+            for (int p = 0; p < 2; p++)
+                if (longest[p] > World.TicksPerSecond)
+                    return Fail($"dockface: {label}: a seat {p} harvester stood frozen at ToRefinery for {longest[p]} consecutive ticks "
+                                + $"(ML-01: no open face of its refinery was reachable); one tick per trip is the handover, a second is a defect");
+        }
+    }
+
+    Console.WriteLine("dockfacegate: PASS - any open face of a refinery docks, a sealed refinery falls back to the next, a walk onto a "
+                      + "building reaches an open face, and the commander never seals its own dock");
+    return 0;
+}
+
 int BaseShapeGate()
 {
     // P7-8 (ADR-050). A commander's base must be a BASE - a cluster around its
@@ -12814,6 +13010,10 @@ int Match(ulong seed)
     // it, which is what carries the commander to s4's stated 3.
     int freeHarvester = FreeHarvesterGate();
     if (freeHarvester != 0) return freeHarvester;
+    // P8-15: and those harvesters can dock at whichever face of a refinery is
+    // open, which ML-01 found they could not.
+    int dockFace = DockFaceGate();
+    if (dockFace != 0) return dockFace;
     // P7-16: and the MCV it saves for is TIER-GATED, which GDD s5 line 47 has
     // asked for since the design doc and no code had ever enforced.
     int mcvTech = McvTechGate();
@@ -15673,6 +15873,7 @@ return args.Length == 0
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
         "dockprobe" => DockProbe(),
+        "dockfacegate" => DockFaceGate(),
         "churnprobe" => ChurnProbe(),
         "arrivalgate" => ArrivalGate(),
         "idleprobe" => IdleProbe(),
