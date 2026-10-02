@@ -489,6 +489,17 @@ public sealed partial class World
     public bool IsRadarJammed(int player)
         => (uint)player < (uint)_radarJamUntil.Length && _radarJamUntil[player] > Tick;
 
+    /// <summary>
+    /// P8-10: the tick this player's radar jam lifts, so the client can show a
+    /// JAMMED countdown that is not the uplink-lost face. A pure read of the
+    /// state IsRadarJammed already asks: no new state, nothing added to the
+    /// hash or the save, and the goldens are byte-identical (measured with
+    /// `golden 2026`). The player is jammed exactly while this is above Tick;
+    /// 0 means never jammed, and so does a seat this world does not have.
+    /// </summary>
+    public int RadarJamEndsAt(int player)
+        => (uint)player < (uint)_radarJamUntil.Length ? _radarJamUntil[player] : 0;
+
     public bool IsVisible(int player, int cx, int cy)
     { int c = Map.CellIndex(cx, cy); return (_visible[player][c >> 6] & (1UL << (c & 63))) != 0; }
     public bool IsExplored(int player, int cx, int cy)

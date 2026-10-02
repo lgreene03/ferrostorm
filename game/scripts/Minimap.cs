@@ -52,6 +52,30 @@ public partial class Minimap : Control
     /// <summary>Verification read: what the blackout gate is actually showing.</summary>
     public bool RadarLiveShown => _radarLive;
 
+    // P8-10: WHY the map is dark, because two different things darken it and
+    // they used to wear one face. Losing the uplink (destroyed, unpowered) is
+    // a problem in your own base; a JAM is the enemy's support power and ends
+    // on its own. Shown the same way, a jam read as the radar breaking for no
+    // reason, the "interface bug" ADR-065 warned of (FEEL-09). A jam now draws
+    // static under its own caption and countdown.
+    private string _darkCaption = "UPLINK LOST";
+    private bool _jammed;
+
+    /// <summary>P8-10: the dark face's caption, and whether it is the jammed
+    /// face (static) rather than the plain blackout. Only drawn while dark.</summary>
+    public void SetDarkFace(string caption, bool jammed)
+    {
+        if (_darkCaption == caption && _jammed == jammed) return;
+        _darkCaption = caption;
+        _jammed = jammed;
+        QueueRedraw();
+    }
+
+    /// <summary>Verification reads: the caption the dark face is drawing (empty
+    /// while the radar is live), and whether it is the jammed face.</summary>
+    public string DarkCaptionShown => _radarLive ? "" : _darkCaption;
+    public bool JammedFaceShown => !_radarLive && _jammed;
+
     /// <summary>W3-20: drop an expanding alert ping at a world position.
     /// Pings pulse for 2.4s; Refresh's QueueRedraw animates them for free.</summary>
     public void Ping(Vector2 world, Color c)
@@ -159,9 +183,24 @@ public partial class Minimap : Control
             // The blackout face: cinder panel, bone text, nothing else. The
             // colours are doc 16 tokens (UplinkUi.Panel and UplinkUi.Bone).
             DrawRect(new Rect2(Vector2.Zero, Size), UplinkUi.Panel);
+            // P8-10: a jam draws moving static under its caption, so it reads
+            // as interference from outside rather than as a dead screen. Bands
+            // of seam grey whose brightness is a hash of row and time: no
+            // randomness to seed, and nothing here is ever read back.
+            if (_jammed)
+            {
+                int frame = (int)(Time.GetTicksMsec() / 70);
+                for (int row = 0; row * 3 < Size.Y; row++)
+                {
+                    uint h = unchecked(((uint)row * 2654435761u) ^ ((uint)frame * 40503u));
+                    h ^= h >> 13;
+                    float a = (h % 100) / 100f * 0.55f;
+                    DrawRect(new Rect2(0, row * 3, Size.X, 2), UplinkUi.Seam with { A = a });
+                }
+            }
             var font = GetThemeDefaultFont();
             if (font != null)
-                DrawString(font, new Vector2(0, Size.Y / 2 + 4), "UPLINK LOST",
+                DrawString(font, new Vector2(0, Size.Y / 2 + 4), _darkCaption,
                     HorizontalAlignment.Center, Size.X, 12, UplinkUi.Bone);
         }
         DrawRect(new Rect2(Vector2.Zero, Size), new Color(0.79f, 0.63f, 0.36f, 0.7f), false, 1f);
