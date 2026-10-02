@@ -7,10 +7,26 @@
 # synthesised asset in game/audio carries (verified against ui_confirm.wav
 # with afinfo).
 #
-# LEGAL CAVEAT, stated rather than buried (doc 24): system text-to-speech
-# output is a PLACEHOLDER. Redistribution licensing for Apple voices must be
-# cleared by legal-review before any public release build ships these clips;
-# this script is the mitigation, because replacing the voice is one command.
+# LEGAL CAVEAT, stated rather than buried (doc 24). It has two halves, and for
+# a long time it had only the first.
+#
+# The VOICE: system text-to-speech output is a PLACEHOLDER. Redistribution
+# licensing for Apple voices must be cleared by legal-review before any public
+# release build ships these clips; this script is the mitigation, because
+# replacing the voice is one command.
+#
+# The WORDS: every line below is original phrasing in the game's own
+# vocabulary (ferrite, the uplink, brown-out, the field), written for P8-2
+# under decision D26. The first version of this list voiced the genre
+# classics' own announcer lines word for word, which CLAUDE.md's Legal rule
+# and the audio charter both forbid, and this caveat said nothing about it
+# because it covered only the voice. A line must do its job without echoing a
+# famous announcer or unit line from ANY well-known RTS: never restore a
+# retired line, and check a new one against the genre before adding it.
+# tools/legalgrep.sh fails CI on the ten retired phrasings here, in data/ and
+# in string literals in game/scripts, but it cannot recognise a new echo; that
+# check is a human one. (vo_unit_ready's first draft ended on a stock unit
+# acknowledgement from the classics and was replaced before it shipped.)
 set -e
 
 VOICE="Daniel"
@@ -28,15 +44,17 @@ gen() {
 
 # The clip list per doc 24. Silos needed is omitted on purpose: no silo
 # system exists to warn about.
-gen vo_construction_complete  "Construction complete."
-gen vo_unit_ready             "Unit ready."
-gen vo_unit_lost              "Unit lost."
-gen vo_base_under_attack      "Our base is under attack."
-gen vo_harvester_under_attack "Harvester under attack."
-gen vo_low_power              "Base power low."
-gen vo_radar_offline          "Radar offline."
-gen vo_superweapon_launch     "Superweapon launch detected."
-gen vo_mission_accomplished   "Mission accomplished."
-gen vo_mission_failed         "Mission failed."
+# The file names are the client's keys (SkirmishLive.PlayVo) and stay as they
+# were; only the words changed.
+gen vo_construction_complete  "Structure ready for placement."
+gen vo_unit_ready             "Fresh unit on the field."
+gen vo_unit_lost              "Casualty reported."
+gen vo_base_under_attack      "Hostiles are hitting the base."
+gen vo_harvester_under_attack "Harvester is taking fire."
+gen vo_low_power              "Brown-out. Defences going dark."
+gen vo_radar_offline          "Uplink lost. We are blind."
+gen vo_superweapon_launch     "Enemy strike inbound. Brace."
+gen vo_mission_accomplished   "The field is ours."
+gen vo_mission_failed         "The field is lost. Fall back."
 
 echo "done: $(ls "$OUT" | grep -c '\.wav$') clips in $OUT"

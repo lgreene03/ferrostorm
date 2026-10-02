@@ -9,7 +9,8 @@ The evidence base is: the live /data numbers and the sim code they drive; the
 balance simulator's engagement matrix and siege table (tools/Ferrostorm.Balance,
 run 2026-07-25); the three mission files and their briefings; the AI's actual
 decision rules read from SkirmishAI.cs; and a cited survey of the genre canon
-(C&C 1995/RA96 retrospectives, the 2020 Remaster's QoL record, OpenRA's
+(retrospectives on the genre's 1995 and 1996 founding titles, the 2020
+Remaster's QoL record, OpenRA's
 modernisation set, current retro-RTS releases, and published design writing on
 asymmetry, skirmish AI and victory conditions - the source list is at the foot).
 Where this review says "measurably", a number from the repo's own
@@ -55,7 +56,7 @@ believe:
 2. **Massed rifle squads are close to a universal per-cost answer.** At equal
    credits they beat the howitzer, the phantom, the bulwark and everything else
    except the vanguard car (their designed counter, which only wins 60 per
-   cent) and other infantry. This is Red Alert's tank-rush degeneracy inverted
+   cent) and other infantry. This is the classic 1996 tank-rush degeneracy inverted
    into a rifle rush, and the genre history says a single dominant per-cost
    blob is the thing players discover first.
 3. **Static defence measurably cannot hold.** Every siege configuration in the
@@ -268,13 +269,14 @@ matrix, siege table, faction war, tempo baseline); /data catalogue;
 sim/Ferrostorm.Sim (World.cs, Combat.cs, SkirmishAI.cs, MapLoader.cs,
 MissionRunner.cs); the four maps, three missions and three briefings.
 
-Genre canon (external, cited in the research digest of 2026-07-25): C&C 1995
-and RA96 retrospectives (Game Developer/Game Wisdom, SUPERJUMP, aarmstrong.org,
-GameSpeak); the C&C Remastered Collection QoL record (Wikipedia, bit-tech,
-Windows Central, TechRadar); OpenRA's modernisation set (openra.net, its wiki
+Genre canon (external, cited in the research digest of 2026-07-25):
+retrospectives on the genre's 1995 and 1996 founding titles (Game
+Developer/Game Wisdom, SUPERJUMP, aarmstrong.org, GameSpeak); the QoL record of
+those titles' 2020 remastered collection (Wikipedia, bit-tech, Windows Central,
+TechRadar); OpenRA's modernisation set (openra.net, its wiki
 and community guides); Tempest Rising, D.O.R.F. and Rusted Warfare reception;
 asymmetric faction design writing (Callum McCole; Dustin Browder's GDC 2011
-e-sport talk); the C&C GPL source AI analysis (AI and Games via Game
-Developer); victory-condition design writing (Matchsticks for my Eyes, Wayward
+e-sport talk); the AI analysis of those titles' GPL source release (AI and
+Games via Game Developer); victory-condition design writing (Matchsticks for my Eyes, Wayward
 Strategy). Full URLs live in the research digest retained in the session
 record; the load-bearing claims above are each traceable to one of these.

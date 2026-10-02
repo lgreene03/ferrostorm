@@ -65,9 +65,10 @@ palette* change plus targeted geometry, not 22 new models.
 ### Doctrine beyond colour, which we are unusually well placed to use
 
 GDD s3 already gives the two sides opposed doctrines - a conventional superpower
-and an insurgent network. C&C: Generals is the canonical reference for the second
-half: the GLA "piece units and equipment together in outdated designs", and it was
-the first game in the series where upgrades **showed up visibly on the models**.
+and an insurgent network. The genre's 2003 modern-war classic is the canonical
+reference for the second half: its insurgent faction is said to "piece units and
+equipment together in outdated designs", and it was the first game in its series
+where upgrades **showed up visibly on the models**.
 
 The levers that survive at 40-60px:
 
