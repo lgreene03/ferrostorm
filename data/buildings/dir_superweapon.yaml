@@ -1,7 +1,8 @@
 # P7-5c (DR-04, ADR-044): the Directorate's half of GDD s8's superweapon pair,
 # "orbital cannon (huge single-point damage)". Not one number here changed when
 # the pair split: 900 Omni inside a 1.5-cell core already WAS huge single-point
-# damage. What changed is that the Sodality stopped sharing it.
+# damage. What changed is that the Sodality stopped sharing it. (P8-18's D2
+# later raised the 900 to 2500; see strike_damage below.)
 # NAME left as "Superweapon" on purpose. The sidebar label is derived from the
 # ID (StructureCatalogue.DisplayNameOf -> DisplayNameFromId), not from this key,
 # so renaming here alone would leave the button reading SUPERWEAPON while the
@@ -23,9 +24,20 @@ footprint: 2
 weapon_ids: []
 prerequisites: [com_radar_uplink]
 build_tab: defence
+# P8-18 (ADR-073): the charge and the blast moved here from sim constants.
+# D1: GDD s8's "~6 minute charge", 5400 ticks (A11 co-sign exercised under the
+# owner's authority). At 1500 the weapon struck before first contact and fired
+# 29 or 30 times in a 30-minute match; at 5400 a seat fires it at most five.
+charge_ticks: 5400
+# D2: 900 -> 2500 (A11 co-sign exercised under the owner's authority). At 900 a
+# refinery took three strikes, eighteen minutes at the new charge; at 2500 one
+# strike kills it at ground zero (2000 Omni against 2000 hp).
+strike_damage: 2500
 notes: >
-  Charges over 1500 ticks, pausing while the base is underpowered, then throws
-  an area strike with five seconds of warning. The charge length is a spawn
-  override, not a catalogue value, because scenarios shorten it to test the
-  cycle. Draw 150 is ADR-008 clause 3 (A11 co-sign recorded there): with the
-  rest of the curve, a full base plus this weapon is a four-plant commitment.
+  Charges over charge_ticks, pausing while the base is underpowered, then
+  throws an area strike with five seconds of warning: strike_damage Omni inside
+  a 1.5-cell core and half that out to 3 cells. Scenarios may still shorten the
+  charge with a spawn override to test the cycle, and every recharge after an
+  impact takes this file's value. Draw 150 is ADR-008 clause 3 (A11 co-sign
+  recorded there): with the rest of the curve, a full base plus this weapon is
+  a four-plant commitment.

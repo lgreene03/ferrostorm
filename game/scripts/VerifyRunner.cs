@@ -2240,7 +2240,7 @@ public partial class VerifyRunner : Node
     {
         var lw = g.LiveWorld;
         var gauge = g.SuperweaponGaugeView;
-        int total = g.SuperweaponChargeTotalForTest;
+        int total = g.SuperweaponChargeTotalForTest();
         if (GroundNear(g, me) is not { } s)
         {
             EventGate(false, "superweapon/charge", "quiet ground for the superweapon (none: a fixture failure)");

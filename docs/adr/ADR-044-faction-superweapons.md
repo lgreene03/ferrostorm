@@ -1,5 +1,5 @@
 # ADR-044: two superweapons, and the one number in GDD s8 I am refusing to change
-- Status: Ratified
+- Status: Ratified; the refusal section and clause 1's 900 are superseded by ADR-073 (P8-18, 2026-10-02: charge 5400 and cannon 2500, both now in /data)
 - Date: 2026-08-01
 - Deciders: Architect agent + Luke (who authorised the design calls previously refused)
 - GDD/TDD feature served: GDD s8 line 70; doc 24 C9; doc 27 DR-04; P7-5c, the last part of Q017
@@ -84,6 +84,11 @@ unchanged, and a weapon that spared its owner's ground would make area denial
 free.
 
 ## The one number in GDD s8 I am REFUSING to change
+
+> **Superseded by ADR-073 (2026-10-02).** Route 1 below was taken: decision D1
+> of the P8 tracker exercised the A11 co-sign under the owner's standing
+> authority, and the charge is now 5400 ticks, authored as `charge_ticks` in
+> both superweapon files. The argument is kept as it was written.
 
 GDD s8 says **"~6 minute charge"**. Six minutes at 15 ticks per second is **5400
 ticks**. `SpawnSuperweapon` defaults to **1500 ticks**, which is 100 seconds.

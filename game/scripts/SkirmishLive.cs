@@ -2873,12 +2873,14 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
-    /// P8-10: the superweapon's FULL charge, read from the sim. One seam on
-    /// purpose: P8-18 is moving this number from a sim constant into /data
-    /// (1500 to 5400 ticks), and when it lands this line is the only one that
-    /// follows it. Nothing in the client may hold a duration of its own.
+    /// P8-10: a superweapon's FULL charge, read from the sim. One seam on
+    /// purpose, and P8-18 (ADR-073) is why: the charge now lives on the
+    /// weapon's own structure def as `charge_ticks` in /data, so the bar reads
+    /// the def the match registered rather than the compiled reference, and an
+    /// authored change is what the player sees. Nothing in the client may hold
+    /// a duration of its own.
     /// </summary>
-    private static int SuperweaponChargeTotal() => World.SuperweaponChargeTicks;
+    private int SuperweaponChargeTotal(int structType) => _world.GetStructureType(structType).ChargeTicks;
 
     /// <summary>DR-20's owner cache: every living structure's owner as the
     /// world stands now. Structures only: nothing else can be captured.</summary>
@@ -2962,7 +2964,7 @@ public partial class SkirmishLive : Node3D
                 if (pass == 0 ? !own : own || !IsHostileSeat(e.PlayerId) || !_spottedSuperweapons.Contains(i)) continue;
                 // A fixture or a mission may start a weapon on a longer charge
                 // than the standard one; the bar never reads past empty.
-                int total = System.Math.Max(SuperweaponChargeTotal(), e.ChargeTicks);
+                int total = System.Math.Max(SuperweaponChargeTotal(e.StructType), e.ChargeTicks);
                 _swRows.Add(new SuperweaponGauge.Row(i, StructureDisplayName(e.StructType), own,
                     e.ChargeTicks, total, e.StrikeTicks));
             }
@@ -5794,7 +5796,7 @@ public partial class SkirmishLive : Node3D
     public int AudioRequests(string name) => _audio.PlayRequests(name);
     public bool SuperweaponSpotted(int id) => _spottedSuperweapons.Contains(id);
     /// <summary>The superweapon total the gauge reads, through its one seam.</summary>
-    public int SuperweaponChargeTotalForTest => SuperweaponChargeTotal();
+    public int SuperweaponChargeTotalForTest(int structType = World.OrbitalCannonStructType) => SuperweaponChargeTotal(structType);
     /// <summary>Does this structure's actor WEAR the offline wash right now?
     /// Read off its meshes, not off the bookkeeping set, so a dim recorded and
     /// never applied would fail.</summary>

@@ -1220,7 +1220,25 @@ public sealed partial class World
         //
         // Asked as a property, never as a type id, because that is the mistake
         // this phase has now corrected about seventeen times.
-        int[]? SupportPowerIds = null)
+        int[]? SupportPowerIds = null,
+        // P8-18 (ADR-073): the three numbers that decide when a superweapon or
+        // a power arrives and what it does, moved out of sim constants. Each is
+        // 0 on a building it does not apply to, and the loader refuses a file
+        // that authors one there, so a number can never be authored and then
+        // silently unread.
+        //
+        // ChargeTicks: the superweapon's charge cycle, which SpawnSuperweapon
+        // starts and the impact restarts. A SUPERWEAPON's alone; a support
+        // power's charge is the compiled absolute SupportPowerChargeTicks.
+        int ChargeTicks = 0,
+        // StrikeDamage: the base damage of this building's STRIKE, never of its
+        // gun (that is WeaponId). The orbital cannon's blast and the Bastion's
+        // precision strike; each building that strikes has exactly one strike.
+        // The seismic charge's damage stays the compiled SeismicDamage, because
+        // its impact is P8-19's to rework.
+        int StrikeDamage = 0,
+        // RevealTicks: how long this building's orbital scan lights the ground.
+        int RevealTicks = 0)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -1255,6 +1273,12 @@ public sealed partial class World
             // different answers would diverge rather than merely disagree about
             // a button.
             && PrereqsEqual(SupportPowerIds, other.SupportPowerIds)
+            // P8-18: and the three pacing numbers, so the /data round-trip in
+            // selftest proves each authored value against its compiled
+            // reference rather than letting a mistyped charge through.
+            && ChargeTicks == other.ChargeTicks
+            && StrikeDamage == other.StrikeDamage
+            && RevealTicks == other.RevealTicks
             && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
@@ -1262,6 +1286,7 @@ public sealed partial class World
             h.Add(Cost); h.Add(Kind); h.Add(BuildTicks); h.Add(Hp); h.Add(PowerSupply);
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
             h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector); h.Add(DestroysFields);
+            h.Add(ChargeTicks); h.Add(StrikeDamage); h.Add(RevealTicks);   // P8-18
             if (SupportPowerIds != null) foreach (int sp in SupportPowerIds) h.Add(sp); // P7-21/P7-23
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
@@ -1311,9 +1336,14 @@ public sealed partial class World
         // plant the numbers are UNCHANGED. GDD s8 gives this side "huge
         // single-point damage", and 900 Omni inside a 1.5-cell core is exactly
         // that. The row needed the other side to stop sharing it.
+        // P8-18 (ADR-073): its charge and its blast are carried here as the
+        // compiled reference dir_superweapon.yaml must reproduce, and a match
+        // reads them off the def rather than off the named constants. D1 and
+        // D2 then moved both (1500 to 5400 ticks, 900 to 2500 damage).
         6 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4, Prereqs: new[] { 12 },
                                   Faction: FactionDirectorate,
-                                  Tab: BuildTab.Defence),
+                                  Tab: BuildTab.Defence,
+                                  ChargeTicks: SuperweaponChargeTicks, StrikeDamage: OrbitalCannonDamage),
         // P7-1: the Veil declares its side here as data rather than being
         // named in a hardcoded predicate. The compiled default must agree
         // with sod_veil_projector.yaml or the /data round-trip fails loudly,
@@ -1335,9 +1365,13 @@ public sealed partial class World
         // the Directorate's eye as much as its gun - SightCells 7 is the widest
         // of any building in the game - which is why the scan's radius is that
         // number rather than one of its own.
+        // P8-18 (ADR-073): and the two powers' own numbers, the precision
+        // strike's damage and the scan's reveal, as the compiled reference
+        // dir_bastion.yaml must reproduce.
         17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
                                    Tab: BuildTab.Defence,
-                                   SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId }),
+                                   SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId },
+                                   StrikeDamage: PrecisionStrikeDamage, RevealTicks: OrbitalScanRevealTicks),
         // P7-26: and the Shroud Nest carries GDD s3 line 30's DECOY ARMY. The
         // name is the argument - a shroud is deception - and it is cheap and
         // early, which suits a trick the Sodality's "cheap infantry swarms"
@@ -1500,9 +1534,10 @@ public sealed partial class World
         // event, the launch command and the five-second warning are all keyed
         // on that kind and all of it applies unchanged. Only the impact differs,
         // and the impact branches on StructType.
+        // P8-18: the same charge as the orbital cannon, for the reason above.
         22 => new StructureTypeDef(4000, EntityKind.Superweapon, 600, Hp: 1200, PowerDraw: 150, SightCells: 4,
                                    Prereqs: new[] { 12 }, Faction: FactionSodality, DestroysFields: true,
-                                   Tab: BuildTab.Defence),
+                                   Tab: BuildTab.Defence, ChargeTicks: SuperweaponChargeTicks),
         _ => default,
     };
 
@@ -1805,6 +1840,16 @@ public sealed partial class World
                 // would watch the same launch take the map's economy apart on
                 // one machine and not the other.
                 h.Add(d.DestroysFields);
+                // P8-18 (ADR-073): the superweapon's charge, the strike damage
+                // and the scan's reveal, on ADR-032's rule. They moved from sim
+                // constants, agreed by construction, into /data, agreed only if
+                // checked. Two peers holding different charges would see the
+                // same superweapon ready on one machine and charging on the
+                // other, and its LaunchSuper accepted by one and refused by the
+                // other, from the same command stream; a different strike or
+                // reveal would kill or reveal different things. Folded beside
+                // the other columns that decide what a command does.
+                h.Add(d.ChargeTicks); h.Add(d.StrikeDamage); h.Add(d.RevealTicks);
                 // P7-21: which support power this building unlocks. It decides
                 // whether a UseSupportPower command is ACCEPTED and what it
                 // does, so two peers holding different answers would watch one
@@ -2150,11 +2195,14 @@ public sealed partial class World
         });
     }
 
-    /// <summary>Superweapon: charges over defaultCharge ticks (pausing while underpowered); a test may shorten the charge.</summary>
+    /// <summary>Superweapon: charges over its def's ChargeTicks (pausing while underpowered); a test may shorten the charge.</summary>
+    /// <param name="chargeTicks">P8-18 (ADR-073): null, the default, takes the
+    /// REGISTERED def's charge, which is what /data drives. It was a compile-time
+    /// default of the constant, which a match could never have changed.</param>
     /// <param name="structType">P7-5c: which side's superweapon. Defaults to the
     /// Directorate's orbital cannon, so every existing caller and every golden
     /// scenario spawns exactly the building it always did.</param>
-    public int SpawnSuperweapon(int player, int ax, int ay, int chargeTicks = SuperweaponChargeTicks,
+    public int SpawnSuperweapon(int player, int ax, int ay, int? chargeTicks = null,
                                 int structType = OrbitalCannonStructType)
     {
         var def = GetStructureType(structType);
@@ -2166,7 +2214,7 @@ public sealed partial class World
             X = x, Y = y, TargetX = x, TargetY = y, StructType = structType,
             Hp = def.Hp, MaxHp = def.Hp, Armour = ArmourClass.Structure, ExplicitTarget = -1,
             Sight = Fix64.FromInt(def.SightCells), FieldId = -1, RefineryId = -1, PowerDraw = def.PowerDraw,
-            ChargeTicks = chargeTicks, StrikeTicks = -1,
+            ChargeTicks = chargeTicks ?? def.ChargeTicks, StrikeTicks = -1,
         });
     }
 
@@ -3213,7 +3261,7 @@ public sealed partial class World
                 int power = c.AuxId;
                 if (!GrantsPower(GetStructureType(e.StructType), power)) break;
                 // 2. IT MUST BE CHARGED. The same shape as the superweapon's,
-                //    on a third of the clock.
+                //    on a shorter clock.
                 if (e.ChargeTicks > 0) break;
                 // 3. And it fires at a place on the map, clamped like every
                 //    other map-targeted command in this switch.
@@ -3245,11 +3293,13 @@ public sealed partial class World
                 // sensors would see, projected anywhere on the map. It needs no
                 // number of its own, it explains itself, and a future scan
                 // building gets a radius the day it is authored.
+                // P8-18 (ADR-073): and the reveal's length is the building's
+                // own authored reveal_ticks, read off the registered def.
                 if (power == OrbitalScanPowerId)
                 {
-                    int radius = GetStructureType(e.StructType).SightCells;
+                    var scanDef = GetStructureType(e.StructType);
                     _scans.Add(new ScanReveal(c.PlayerId, Map.CellOf(px), Map.CellOf(py),
-                                              radius, OrbitalScanRevealTicks));
+                                              scanDef.SightCells, scanDef.RevealTicks));
                 }
                 // P7-23: GDD s3 line 25's PRECISION STRIKE, the Directorate's
                 // other surgical power. Its own function, never a widened
@@ -3258,7 +3308,8 @@ public sealed partial class World
                 // with the MINE, minegate asserts its 1.5/3 shape, and a radius
                 // parameter would put every mine in the game one careless
                 // argument from changing.
-                else if (power == PrecisionStrikePowerId) ApplyPrecisionStrike(px, py);
+                // P8-18: its damage is the firing building's authored strike_damage.
+                else if (power == PrecisionStrikePowerId) ApplyPrecisionStrike(px, py, GetStructureType(e.StructType).StrikeDamage);
                 // P7-24: GDD s3 line 30's RADAR JAMMING, the first Sodality
                 // dirty trick. It blinds every player HOSTILE to the firer -
                 // not a map position, because a radar is not somewhere you aim.
@@ -3550,33 +3601,42 @@ public sealed partial class World
     /// ticks), as an A11 balance call awaiting co-sign. That refusal stands, and
     /// naming the number does not weaken it - it makes the day it is taken a
     /// one-line change rather than a hunt.
+    ///
+    /// P8-18 (ADR-073): no longer read by the sim. The charge is a column on
+    /// the superweapon's def (charge_ticks in /data/buildings), and this is the
+    /// COMPILED REFERENCE the two superweapon files must reproduce, which is
+    /// what lets a bare World with no /data behave exactly as a loaded one.
+    ///
+    /// And ADR-044's refusal is overturned. D1 takes GDD s8's ~6 minutes, 5400
+    /// ticks, under the owner's standing authority of 2026-10-02 with the A11
+    /// co-sign exercised (+260 per cent). At 1500 the weapon was built at about
+    /// t=3000 in every measured match, struck before first contact and fired 29
+    /// or 30 times in a 30-minute match, deciding nothing. At 5400 a seat fires
+    /// it at most five times in 30 minutes, which is F8's bar by construction.
     /// </summary>
-    public const int SuperweaponChargeTicks = 1500;
+    public const int SuperweaponChargeTicks = 5400;
 
     /// <summary>
-    /// P7-21: a support power's charge, DERIVED rather than invented.
+    /// P7-21: a support power's charge. P8-18 (ADR-073, D1) made it an ABSOLUTE.
     ///
-    /// GDD s8 says support powers run on "shorter timers" - shorter THAN THE
-    /// SUPERWEAPON, which is the only other timer in the sentence. So this is
-    /// expressed as a fraction of that charge rather than as an absolute, and
-    /// "shorter" stays true BY CONSTRUCTION: if ADR-044's refusal is ever
-    /// overturned and the superweapon goes to 5400, support powers scale with it
-    /// and the specification is still honoured without anyone remembering to
-    /// look here.
-    ///
-    /// A THIRD, chosen for readability the way ADR-044 chose the seismic
-    /// charge's radius of exactly twice: a ratio a reader can hold. Rejected: a
-    /// half, too close to read as a different class of thing; a fifth, which at
-    /// 300 ticks is twenty seconds and makes a "power" into a cooldown.
+    /// It was derived as a third of the superweapon's charge, so that GDD s8's
+    /// "shorter timers" stayed true by construction. That derivation was written
+    /// for the day ADR-044's refusal was overturned, and on that day it would
+    /// have tripled every support power along with the superweapon: a scan or a
+    /// strike once every two minutes is not a minor power on a shorter timer, it
+    /// is a second superweapon. So the value it held, 500 ticks (33 seconds),
+    /// is pinned here and the superweapon moves alone. "Shorter" is no longer
+    /// true by construction; supportpowergate stage 1 measures it instead, by
+    /// charging both side by side in a running world.
     /// </summary>
-    public const int SupportPowerChargeDivisor = 3;
-    public const int SupportPowerChargeTicks = SuperweaponChargeTicks / SupportPowerChargeDivisor;
+    public const int SupportPowerChargeTicks = 500;
 
     /// <summary>
     /// P7-22: the superweapon's incoming warning, named once. It was a bare 75
     /// at its only site, and it is the closest thing this game has to a stated
     /// "long enough to see it and react" interval - which is why the orbital
-    /// scan's reveal is derived from it rather than from a new number.
+    /// scan's reveal was derived from it rather than from a new number, until
+    /// P8-18's D15 doubled the reveal to 150 and cut the link.
     /// </summary>
     public const int SuperweaponWarningTicks = 75;
 
@@ -3639,8 +3699,12 @@ public sealed partial class World
     /// be a trick - five seconds of blank minimap is a flicker. Rejected: the
     /// full charge, which is not a jam at all but a permanent blackout, since
     /// the power recharges exactly as it lapses.
+    ///
+    /// P8-18 (ADR-073, D1): pinned as an ABSOLUTE at the 166 ticks the
+    /// derivation gave, for the reason the charge above was. The duty cycle
+    /// still holds (166 of 500), and radarjamminggate stage 4 measures it.
     /// </summary>
-    public const int RadarJamTicks = SupportPowerChargeTicks / 3;
+    public const int RadarJamTicks = 166;
 
 
     /// <summary>P7-23: does this building unlock anything? Asked in one place so
@@ -3672,8 +3736,17 @@ public sealed partial class World
     /// fifth of the power's charge (100 ticks), which is a number derived from
     /// nothing about seeing; and a reveal lasting the full charge, which stops
     /// being a scan and becomes permanent vision on a cooldown.
+    ///
+    /// P8-18 (ADR-073): the COMPILED REFERENCE for dir_bastion's reveal_ticks.
+    /// The scan reads the registered def, not this.
+    ///
+    /// D15 doubles it to 150 ticks (10 seconds) under the owner's standing
+    /// authority of 2026-10-02, A11 co-sign exercised (+100 per cent), and so
+    /// cuts the derivation from the warning. Five seconds is a flicker rather
+    /// than a scan (OJ-06): about long enough to notice the circle, not to read
+    /// the base inside it and order anything.
     /// </summary>
-    public const int OrbitalScanRevealTicks = SuperweaponWarningTicks;
+    public const int OrbitalScanRevealTicks = 150;
 
 
     public const int VeilStructType = 7;
@@ -5694,7 +5767,8 @@ public sealed partial class World
                 continue;
             }
             // P7-21: support powers charge on the same terms as the superweapon
-            // and on a THIRD of its clock (GDD s8's "shorter timers"). Keyed on
+            // and on a shorter clock (GDD s8's "shorter timers"; an absolute
+            // since P8-18, see SupportPowerChargeTicks). Keyed on
             // the DEF carrying a power, never on a kind or a type id, so a
             // building acquires one the day its file says so.
             //
@@ -5724,7 +5798,10 @@ public sealed partial class World
                 else if (e.StrikeTicks == 0)
                 {
                     e.StrikeTicks = -1;
-                    e.ChargeTicks = SuperweaponChargeTicks; // the cycle begins again
+                    // The cycle begins again, on the REGISTERED def's charge
+                    // (P8-18): /data decides it, not a sim constant.
+                    var swDef = GetStructureType(e.StructType);
+                    e.ChargeTicks = swDef.ChargeTicks;
                     _events.Add(new GameEvent(GameEventType.SuperweaponImpact, i, -1, e.StrikeX, e.StrikeY));
                     _entities[i] = e;
                     // P7-5c: THE ONE PLACE the two superweapons differ. Charge,
@@ -5735,8 +5812,8 @@ public sealed partial class World
                     // P7-5e: asked of the DEF, where P7-5c named the type id.
                     // Same branch, and now the authored key decides it - which
                     // is what lets the AI ask the same question when it aims.
-                    if (GetStructureType(e.StructType).DestroysFields) ApplySeismicCharge(e.StrikeX, e.StrikeY);
-                    else ApplyAreaDamage(e.StrikeX, e.StrikeY, OrbitalCannonDamage);
+                    if (swDef.DestroysFields) ApplySeismicCharge(e.StrikeX, e.StrikeY);
+                    else ApplyAreaDamage(e.StrikeX, e.StrikeY, swDef.StrikeDamage);   // P8-18: the def's blast
                     e = _entities[i]; // the strike may have killed the launcher itself
                 }
                 _entities[i] = e;
@@ -6117,7 +6194,7 @@ public sealed partial class World
         }
     }
 
-    private void ApplyPrecisionStrike(Fix64 x, Fix64 y)
+    private void ApplyPrecisionStrike(Fix64 x, Fix64 y, int damage)
     {
         // The orbital cannon's inner radius, squared in the idiom the two
         // effect functions above already use: 1.5^2 = 2.25.
@@ -6134,7 +6211,7 @@ public sealed partial class World
             if (t.Kind == EntityKind.FerriteField) continue;
             if (Fix64.DistSq(t.X - x, t.Y - y) > coreSq) continue;
             if (IsAirborne(in t)) continue;   // D11: no blast reaches aircraft (see IsAirborne)
-            t.Hp -= DamageOf(PrecisionStrikeDamage, Warhead.Omni, t.Armour);
+            t.Hp -= DamageOf(damage, Warhead.Omni, t.Armour);
             if (t.Hp <= 0)
             {
                 _events.Add(new GameEvent(GameEventType.Died, i, -1));
@@ -6190,8 +6267,18 @@ public sealed partial class World
     /// derived from - so it needed a name before anything could sit below it.
     /// ADR-044 measured it: 900 Omni in a 1.5-cell core, "huge single-point
     /// damage" as GDD s8 writes the Directorate's superweapon.
+    ///
+    /// P8-18 (ADR-073): the COMPILED REFERENCE for dir_superweapon's
+    /// strike_damage. The impact reads the registered def, not this.
+    ///
+    /// D2 raises it to 2500 under the owner's standing authority of 2026-10-02,
+    /// A11 co-sign exercised (+178 per cent). At 900 the cannon took three
+    /// strikes to kill a refinery, which after D1's charge is eighteen minutes,
+    /// while the seismic charge at the same price erased a field in one. At
+    /// 2500 one strike kills a refinery (2000 Omni against its 2000 hp at
+    /// ground zero), so each six-minute charge buys one decisive blow.
     /// </summary>
-    public const int OrbitalCannonDamage = 900;
+    public const int OrbitalCannonDamage = 2500;
 
     /// <summary>
     /// P7-23: the PRECISION STRIKE's damage, DERIVED as a third of the orbital
@@ -6207,8 +6294,14 @@ public sealed partial class World
     /// Rejected: half the cannon (450), which is more than the SEISMIC CHARGE, a
     /// superweapon, and so is not minor at all; and a tenth (90), which against
     /// a 1600-hp Bastion or a 2000-hp refinery is a scratch dressed as a strike.
+    ///
+    /// P8-18 (ADR-073, D2): pinned as an ABSOLUTE at the 300 the derivation
+    /// gave, so that raising the cannon does not raise the strike with it (a
+    /// third of 2500 would be 833, more than twice the seismic charge, which is
+    /// the "not minor at all" case rejected above). It is the COMPILED
+    /// REFERENCE for dir_bastion's strike_damage; the strike reads the def.
     /// </summary>
-    public const int PrecisionStrikeDamage = OrbitalCannonDamage / 3;
+    public const int PrecisionStrikeDamage = 300;
 
     private void ApplyAreaDamage(Fix64 x, Fix64 y, int baseDamage)
     {

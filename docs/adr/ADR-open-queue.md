@@ -144,3 +144,18 @@ the same commit.
   Goldens NEUTRAL, measured; catalogue checksum MOVES
   (0xB4E6F043C4A872CC to 0xF384205E0D0BF2D2). Ratified under the owner's
   standing authority of 2026-10-02, citing D10.
+- ADR-073: RATIFIED 2026-10-02 - ADR-073-the-superweapon-is-a-climax.md
+  (P8-18, decisions D1, D2, D15 and D33, findings ML-05, OJ-02, BAL-07 part and
+  OJ-06). Number claimed here per the numbering law before drafting. The
+  support powers are decoupled to absolutes (500, 166, 300); the superweapon's
+  charge, the strike damage and the scan's reveal move into /data as structure
+  columns; the charge goes to 5400, the commander buys the weapon from two
+  refineries and a wave of army, the cannon goes to 2500 and the scan to 150.
+  Supersedes ADR-044's refusal section and clause 1's 900. Goldens MOVE
+  (skirmish, superweapon, aisuper), each attributed by step in the ADR;
+  catalogue checksum MOVES (0xF384205E0D0BF2D2 to 0x1255012DCF3D3A68).
+  Ratified under the owner's standing authority of 2026-10-02, citing D1, D2,
+  D15 and D33. D1 as written left F8's median first launch at 8701 against
+  10800; D33 (the commander does not buy the weapon before one full charge
+  has elapsed), taken on the ADR's measured recommendation, brings it to
+  11536, and pillargate binds both F8 halves.

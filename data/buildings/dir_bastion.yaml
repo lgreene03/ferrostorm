@@ -36,3 +36,11 @@ build_tab: defence
 # Bastion holds a scan OR a strike ready and never both - the choice is the
 # player's, which is what "surgical" should feel like.
 support_powers: [orbital_scan, precision_strike]
+# P8-18 (ADR-073): each power's own number, moved here from sim constants. The
+# precision strike's damage was derived as a third of the orbital cannon's and
+# is pinned at the 300 that gave, so the cannon can be raised alone. The scan's
+# reveal was the superweapon's 75-tick warning; D15 doubles it to 150 (A11
+# co-sign exercised under the owner's authority), because five seconds is a
+# flicker rather than a scan.
+strike_damage: 300
+reveal_ticks: 150

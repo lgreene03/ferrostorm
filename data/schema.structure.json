@@ -126,6 +126,21 @@
       "minItems": 1,
       "uniqueItems": true,
       "description": "P7-22, made a list by P7-23. Which support powers this building UNLOCKS (GDD s8: \"3-4 minor support powers per faction on shorter timers, unlocked by structures\"). A LIST because one power per building could never satisfy that sentence: the Directorate owns three faction-exclusive buildings, one of which already uses its charge for a superweapon and one of which is the first building anyone raises. Absent means none, which is every building but the Bastion. The powers on a building SHARE its charge, so it holds one of them ready at a time. An enum, so a typo is refused by the schema before the loader has to throw; uniqueItems, because listing a power twice would say nothing and mean nothing."
+    },
+    "charge_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "P8-18 (ADR-073, D1). A SUPERWEAPON's charge in sim ticks at 15Hz: how long after it is placed, and after each impact, before it can launch again. The charge pauses while its owner's base is underpowered. REQUIRED on both superweapons and REFUSED on every other building by the loader, because a support power's charge is the compiled absolute World.SupportPowerChargeTicks and a value authored here would never be read. GDD s8's ~6 minutes is 5400. Folded into World.CatalogueChecksum because it decides when a LaunchSuper is accepted."
+    },
+    "strike_damage": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "P8-18 (ADR-073, D2). The base damage of this building's STRIKE, never of its gun (that is weapon_ids): the orbital cannon's blast (1.5-cell core, half in the ring to 3 cells) or the Bastion's precision strike (one band, no ring). Omni, so the damage matrix's Omni row scales it per armour class. REQUIRED on a superweapon that does not destroy fields and on a building granting precision_strike, REFUSED everywhere else by the loader; the seismic charge's damage stays the compiled SeismicDamage until P8-19 reworks its impact. Folded into World.CatalogueChecksum because it decides what a strike kills."
+    },
+    "reveal_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "P8-18 (ADR-073, D15). How many sim ticks an orbital scan lights its circle of the map (the radius is the building's own sight_range). REQUIRED on a building granting orbital_scan and REFUSED everywhere else by the loader. Folded into World.CatalogueChecksum because what a player can see decides what its units acquire."
     }
   }
 }
