@@ -17,6 +17,10 @@ public partial class Minimap : Control
     private TextureRect _baseRect = null!;
     private TextureRect _fogRect = null!;
     private readonly List<(Vector2 Pos, Color C)> _dots = new();
+    // P8-6: the same dots in WORLD cells, kept beside the drawn ones so a
+    // check can ask about a place on the map whatever size the control is laid
+    // out at (headless, that size is not something to lean on).
+    private readonly List<(float X, float Y, Color C)> _dotsWorld = new();
     // W3-20: expiring alert pings and the camera view-frustum trapezoid
     // (which replaces the old camera-dot circle).
     private readonly List<(Vector2 Pos, Color C, double T0)> _pings = new();
@@ -117,12 +121,26 @@ public partial class Minimap : Control
         return cs;
     }
 
+    /// <summary>P8-6 verification read: does this minimap hold a dot of this
+    /// colour within a cell of this world position? Asked of the dots it is
+    /// about to draw, so a cloaked enemy's dot is caught where it would show.</summary>
+    public bool HasDotNearForTest(float worldX, float worldY, Color c)
+    {
+        foreach (var (x, y, col) in _dotsWorld)
+            if (col == c && Mathf.Abs(x - worldX) <= 1f && Mathf.Abs(y - worldY) <= 1f) return true;
+        return false;
+    }
+
     public void Refresh(Image fogImage, IEnumerable<(float X, float Y, Color C)> dots, Vector2 camAt, Vector2[]? frustum = null)
     {
         (_fogRect.Texture as ImageTexture)?.Update(fogImage);
         _dots.Clear();
+        _dotsWorld.Clear();
         foreach (var (x, y, c) in dots)
+        {
             _dots.Add((new Vector2(x / _w, y / _h) * Size, c));
+            _dotsWorld.Add((x, y, c));
+        }
         if (frustum is { Length: 4 })
         {
             _frustum = new Vector2[4];

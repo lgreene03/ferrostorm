@@ -1270,8 +1270,15 @@ public partial class VerifyRunner : Node
         // world, so they run last among the live-world checks.
         RunSupportPowerChecks();
         RunArmedOrderMatrixChecks();
+        // P8-1: in a scene of its own, so the spawns above cannot reach it and
+        // its own cannot reach anything after it.
+        RunInputGate();
 
         RunLanChecks();
+        // P8-4: after the LAN scenes on purpose. The joiner's scene was handed
+        // seat 1, and the scene this boots is handed nothing, as a
+        // single-player match started from the menu is.
+        RunFourSeatHostilityChecks();
     }
 
     /// <summary>
@@ -1365,6 +1372,883 @@ public partial class VerifyRunner : Node
         }
         _game.PressStop();
         _game.ClearSelectionForTest();
+    }
+
+    // ===================== INPUTGATE (P8-1) =====================
+
+    /// <summary>The inputgate's own battle scene. A fresh match rather than
+    /// the shared one, because everything above has spawned into that world
+    /// and every stage here spawns into this one.</summary>
+    private SkirmishLive _gate = null!;
+    /// <summary>The verbs a stage has driven through a real gesture, for the
+    /// coverage check that closes the gate.</summary>
+    private readonly HashSet<CommandType> _gateCovered = new();
+    private readonly HashSet<string> _gateEffectsCovered = new();
+    /// <summary>Set by RunSupportPowerChecks when a real left click fired a
+    /// power and the sim accepted it: the stage the inputgate folds in.</summary>
+    private bool _supportPowerFiredByClick;
+
+    /// <summary>The recorded exceptions: verbs that deliberately have no
+    /// player gesture and never will. The tracker's F1 names exactly one.</summary>
+    private static readonly (CommandType Verb, string Why)[] InputGateExceptions =
+    {
+        (CommandType.Move, "superseded by PathMove: every move a player orders is flow-field pathed, and only the "
+                           + "runner's scenario tests issue the bare point move"),
+    };
+
+    /// <summary>
+    /// THE KNOWN-MISSING TABLE: every verb, or verb on a particular target,
+    /// that a player cannot yet issue through any gesture. One table, printed
+    /// line by line as KNOWN-MISSING rather than as a failure, so the harness
+    /// stays green while the gap stays visible. Each entry names the P8 row
+    /// that owns it, and that row's job is to DELETE its entry here and add a
+    /// real stage in its place. WholeVerb marks an entry that is the verb's
+    /// only story (no gesture at all); the coverage check accepts it in place
+    /// of a stage, and refuses it if a stage for that verb now exists.
+    /// </summary>
+    private static readonly (string Stage, CommandType Verb, bool WholeVerb, string Gap, string Owner)[] InputGateKnownMissing =
+    {
+        ("LoadTransport", CommandType.LoadTransport, true,
+            "no gesture boards infantry onto an own Carrier; right-clicking the Carrier with infantry selected is a move", "P8-7"),
+        ("UnloadTransport", CommandType.UnloadTransport, true,
+            "no key or button sets a Carrier's cargo down", "P8-7"),
+        ("Capture/neutral-outpost", CommandType.Attack, false,
+            "an engineer right-clicked onto a NEUTRAL outpost is sent a move, because the attack pick takes hostile seats only", "P8-8"),
+        ("Attack/neutral-bridge", CommandType.Attack, false,
+            "no force-attack gesture fells a neutral bridge (D23: Ctrl plus right-click)", "P8-8"),
+        ("SetRally/Airfield", CommandType.SetRally, false,
+            "right-clicking with an Airfield selected sets no rally: the client offers a rally on the Factory and Barracks only", "P8-9"),
+        ("Produce/Airfield", CommandType.Produce, false,
+            "the AIRCRAFT tab's buttons read the Factory's line, so with an Airfield standing and no Factory the Strike "
+            + "Flyer has no button", "P8-9"),
+    };
+
+    /// <summary>The sim's contact effects. ContactEffect is private to World,
+    /// so the four are named here; a fifth added there without a stage here is
+    /// the gap this list exists to make someone notice.</summary>
+    private static readonly (string Effect, int UnitType)[] InputGateContactUnits =
+    {
+        ("Capture", World.EngineerUnitType),
+        ("Theft", World.InfiltratorUnitType),
+        ("Sabotage", World.SaboteurUnitType),
+        ("Demolition", World.CommandoUnitType),
+    };
+
+    private void Gate(bool ok, string stage, string what) => Check(ok, $"inputgate/{stage}: {what}");
+
+    /// <summary>A unit of a catalogue type, spawned with its authored def the
+    /// way the producers spawn one. A FIXTURE: what a stage tests is the
+    /// gesture that orders the unit, never how the unit came to stand there.</summary>
+    private static int SpawnOfType(World w, int player, int unitType, int cx, int cy)
+    {
+        var d = w.GetUnitType(unitType);
+        return d.Kind == EntityKind.Harvester
+            ? w.SpawnHarvester(player, Map.CellCentre(cx), Map.CellCentre(cy))
+            : w.SpawnUnit(player, Map.CellCentre(cx), Map.CellCentre(cy), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                d.SightCells, d.Stealth, d.Detector, d.Veterancy, unitType);
+    }
+
+    private static float Fx(Fix64 v) => (float)(v.Raw / 4294967296.0);
+
+    /// <summary>
+    /// P8-1: THE INPUTGATE. P7 proved every system with a gate that tested SIM
+    /// ACCEPTANCE, a Command built in C# and handed to World, and five headline
+    /// systems shipped that no human could reach. This drives every CommandType
+    /// verb (values 2 to 20) and every contact effect through the gesture a
+    /// player actually uses, a key, a left or right click through
+    /// _UnhandledInput, or a sidebar button's own signal, then asserts what the
+    /// gesture queued AND what the sim did with it. Verbs with no gesture yet
+    /// are in the KNOWN-MISSING table above; the coverage check at the end
+    /// refuses any verb that is in neither place.
+    /// </summary>
+    private void RunInputGate()
+    {
+        GD.Print("  --    inputgate (P8-1): every verb and contact effect through the gesture a player uses");
+        SkirmishLive.AutoStep = false;
+        SkirmishLive.LocalSeat = 1;          // the joiner's seat, as everywhere in this harness
+        SkirmishLive.PendingNet = null;      // offline
+        _gate = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+        AddChild(_gate);
+        var g = _gate;
+        var lw = g.LiveWorld;
+        var sb = g.SidebarView;
+        int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+        Check(me == 1 && lw.PlayerCount == 2,
+              $"inputgate: a fresh two-seat match driven from seat 1 (seat {me} of {lw.PlayerCount})");
+        // The first frame gives the view a snapshot to sample; the second runs
+        // the frame half that resolves the yard and refreshes the sidebar.
+        // Nothing a player does is possible before both.
+        g.StepOneTick();
+        g.StepOneTick();
+
+        int Pending(CommandType t)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == t) n++;
+            return n;
+        }
+        int PendingAt(CommandType t, int aux)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == t && c.AuxId == aux) n++;
+            return n;
+        }
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        void Aim(float x, float z) => g.FocusCameraOn(x, z, 22f);
+        Vector2 At(float x, float z) => g.ScreenOf(x, z);
+        // Selection by a real click (FinishSelect), never by setting the set.
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            Aim(x, z);
+            g.ClearSelectionForTest();
+            g.BoxSelect(At(x, z), At(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        int CountOwn(EntityKind k)
+        {
+            int n = 0;
+            for (int i = 0; i < lw.EntityCount; i++)
+                if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == me && lw.Entities[i].Kind == k) n++;
+            return n;
+        }
+        bool Crowded(int x, int y)
+        {
+            for (int i = 0; i < lw.EntityCount; i++)
+            {
+                var e = lw.Entities[i];
+                if (!e.Alive || !SkirmishLive.Mobile(e.Kind)) continue;
+                if (System.Math.Abs(Map.CellOf(e.X) - x) <= 1 && System.Math.Abs(Map.CellOf(e.Y) - y) <= 1) return true;
+            }
+            return false;
+        }
+        // An open, unblocked cell with no unit within one cell of it, nearest
+        // the asked-for cell, so a spawned unit can be clicked on its own.
+        (int X, int Y) OpenCellNear(int cx, int cy)
+        {
+            for (int r = 0; r < 12; r++)
+                for (int dy = -r; dy <= r; dy++)
+                    for (int dx = -r; dx <= r; dx++)
+                    {
+                        if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != r) continue;
+                        int x = cx + dx, y = cy + dy;
+                        if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1) continue;
+                        if (lw.Map.IsBlocked(x, y) || Crowded(x, y)) continue;
+                        return (x, y);
+                    }
+            return (cx, cy);
+        }
+        // Open ground: no blocked cell within two of the centre, so a whole
+        // formation's slots land on cells a unit can reach. A slot on rock is
+        // refused by the sim, which is the sim being right and a fixture being
+        // careless.
+        bool OpenArea(int x, int y, int r)
+        {
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    int ax = x + dx, ay = y + dy;
+                    if (ax < 1 || ay < 1 || ax >= lw.Map.Width - 1 || ay >= lw.Map.Height - 1) return false;
+                    if (lw.Map.IsBlocked(ax, ay)) return false;
+                }
+            return true;
+        }
+        (float X, float Z) OpenGroundNear(float x, float z)
+        {
+            int cx = (int)x, cy = (int)z;
+            for (int r = 0; r < 16; r++)
+                for (int dy = -r; dy <= r; dy++)
+                    for (int dx = -r; dx <= r; dx++)
+                        if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) == r && OpenArea(cx + dx, cy + dy, 2))
+                            return (cx + dx + 0.5f, cy + dy + 0.5f);
+            return (x, z);
+        }
+        void HoldFire(int id)
+        {
+            var e = lw.Entities[id];
+            e.Stance = Stance.HoldFire;
+            lw.SetEntityForTest(id, e);
+        }
+        float ClampX(float x) => Mathf.Clamp(x, 1.5f, lw.Map.Width - 2.5f);
+        float ClampZ(float z) => Mathf.Clamp(z, 1.5f, lw.Map.Height - 2.5f);
+
+        int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+        Check(yard >= 0 && g.YardIdForTest == yard,
+              "inputgate: the frame half has resolved the seat's Construction Yard (every sidebar order needs it)");
+
+        // --- BuildStructure and CancelProduce: the BUILDINGS tab ------------
+        const int plantType = 1;
+        int Queued() => lw.QueueLength(yard) + lw.LaneContents(yard).Count;
+        int q0 = Queued();
+        bool firstPress = sb.PressStructButton(plantType);
+        bool secondPress = sb.PressStructButton(plantType);
+        g.StepTicks(1);
+        Gate(firstPress && secondPress && Queued() == q0 + 2, "BuildStructure",
+             $"pressing the POWER PLANT button twice queues two at the yard, the second in its second lane ({q0} -> {Queued()})");
+        _gateCovered.Add(CommandType.BuildStructure);
+        bool cancelClick = sb.RightClickStructButton(plantType);
+        int cancelCmds = Pending(CommandType.CancelProduce);
+        g.StepTicks(1);
+        Gate(cancelClick && cancelCmds == 1 && Queued() == q0 + 1, "CancelProduce",
+             $"a RIGHT click on the same button cancels the later one ({q0 + 2} -> {Queued()})");
+        _gateCovered.Add(CommandType.CancelProduce);
+
+        // --- PlaceStructure: the PLACE prompt, then a left click -----------
+        for (int i = 0; i < 1500 && g.ReadyStructureForTest != plantType; i++) g.StepTicks(1);
+        g.StepOneTick();                     // the frame half raises PLACE for what finished
+        int plantsBefore = CountOwn(EntityKind.PowerPlant);
+        var ownPlants = new HashSet<int>();
+        for (int i = 0; i < lw.EntityCount; i++)
+            if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == me && lw.Entities[i].Kind == EntityKind.PowerPlant)
+                ownPlants.Add(i);
+        bool placePressed = sb.PressPlaceButton();
+        var plantSite = g.FindPlacementCell(plantType);
+        int placeCmds = 0;
+        if (placePressed && plantSite is { } ps)
+        {
+            Aim(ps.X + 1f, ps.Y + 1f);
+            g.PressLeftClick(At(ps.X + 0.5f, ps.Y + 0.5f));
+            placeCmds = Pending(CommandType.PlaceStructure);
+        }
+        g.StepTicks(1);
+        int placed = -1;
+        for (int i = 0; i < lw.EntityCount; i++)
+            if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == me && lw.Entities[i].Kind == EntityKind.PowerPlant
+                && !ownPlants.Contains(i)) placed = i;
+        Gate(placePressed && placeCmds == 1 && placed >= 0 && CountOwn(EntityKind.PowerPlant) == plantsBefore + 1
+             && g.ReadyStructureForTest == 0, "PlaceStructure",
+             $"the finished plant's PLACE prompt and a left click on open ground stand it there (plants {plantsBefore} -> "
+             + $"{CountOwn(EntityKind.PowerPlant)}, ready slot now {g.ReadyStructureForTest})");
+        _gateCovered.Add(CommandType.PlaceStructure);
+
+        // --- Repair and SellStructure: keys on a selected building ----------
+        if (placed >= 0)
+        {
+            var pe = lw.Entities[placed];
+            pe.Hp -= 40;
+            lw.SetEntityForTest(placed, pe);
+            g.PumpActorsForTest();
+            bool selPlant = ClickSelect(placed);
+            g.PressKey(Settings.BindOf("repair"));
+            int repairCmds = Pending(CommandType.Repair);
+            g.StepTicks(1);
+            Gate(selPlant && repairCmds == 1 && lw.Entities[placed].Repairing, "Repair",
+                 "a click selects the damaged plant and the repair key switches its repair ON in the sim");
+            long creditsBefore = lw.Credits(me);
+            g.PressKey(Settings.BindOf("sell"));
+            int sellCmds = Pending(CommandType.SellStructure);
+            g.StepTicks(1);
+            Gate(sellCmds == 1 && !lw.Entities[placed].Alive && lw.Credits(me) > creditsBefore, "SellStructure",
+                 $"the sell key sells it: the plant is gone and the treasury rose ({creditsBefore} -> {lw.Credits(me)})");
+        }
+        else
+        {
+            Gate(false, "Repair", "no placed plant to repair (the PlaceStructure stage above failed)");
+            Gate(false, "SellStructure", "no placed plant to sell (the PlaceStructure stage above failed)");
+        }
+        _gateCovered.Add(CommandType.Repair);
+        _gateCovered.Add(CommandType.SellStructure);
+
+        // --- PathMove, Stop, AttackMove, SetStance: the army ----------------
+        g.ClearSelectionForTest();
+        g.PressKey(Settings.BindOf("select_all_army"));
+        var army = g.SelectedIdsForTest();
+        Check(army.Count >= 2, $"inputgate: the army key selects the opening squads ({army.Count})");
+        var (sx, sz) = g.FirstSelectedPosition();
+        // Towards the middle of the map, so the destination is open ground.
+        float towardX = lw.Map.Width / 2f - sx, towardZ = lw.Map.Height / 2f - sz;
+        float len = Mathf.Max(0.001f, Mathf.Sqrt(towardX * towardX + towardZ * towardZ));
+        // Ten cells, not five: the sim settles a plain move within four cells
+        // of its destination (the crowd-arrival rule, StepToward) and completes
+        // an all-clear attack-move inside the same radius, so a nearer click
+        // would read as units that never moved.
+        var (mx, mz) = OpenGroundNear(ClampX(sx + towardX / len * 10f), ClampZ(sz + towardZ / len * 10f));
+        Aim(mx, mz);
+        g.PressRightClick(At(mx, mz));
+        int moveCmds = Pending(CommandType.PathMove), strayAttacks = Pending(CommandType.Attack);
+        g.StepTicks(1);
+        string ArmyState()
+        {
+            var parts = new List<string>();
+            foreach (int id in army)
+            {
+                var u = lw.Entities[id];
+                parts.Add($"#{id} at {Fx(u.X):0.0},{Fx(u.Y):0.0} to {Fx(u.TargetX):0.0},{Fx(u.TargetY):0.0}"
+                          + $"{(u.Moving ? " moving" : " still")}{(u.UseFlow ? " flow" : "")}{(u.AMove ? " amove" : "")}");
+            }
+            return string.Join("; ", parts);
+        }
+        var lead = lw.Entities[army[0]];
+        bool allMoving = army.TrueForAll(id => lw.Entities[id].Moving && lw.Entities[id].UseFlow);
+        bool towardClick = Mathf.Abs(Fx(lead.TargetX) - mx) + Mathf.Abs(Fx(lead.TargetY) - mz) < 4f;
+        Gate(moveCmds == army.Count && strayAttacks == 0 && allMoving && towardClick, "PathMove",
+             $"a right click on open ground sends every selected unit there by the flow field ({moveCmds} PathMove, "
+             + $"{strayAttacks} Attack, click at {mx:0.0},{mz:0.0}: {ArmyState()})");
+        _gateCovered.Add(CommandType.PathMove);
+
+        g.PressKey(Settings.BindOf("stop"));
+        int stopCmds = Pending(CommandType.Stop);
+        g.StepTicks(1);
+        Gate(stopCmds == army.Count && army.TrueForAll(id => !lw.Entities[id].Moving), "Stop",
+             $"the stop key halts every one of them in the sim ({stopCmds} Stop)");
+        _gateCovered.Add(CommandType.Stop);
+
+        g.PressKey(Settings.BindOf("attack_move"));
+        bool amArmed = g.AttackMoveArmed;
+        g.PressLeftClick(At(mx, mz));
+        int amCmds = Pending(CommandType.AttackMove);
+        g.StepTicks(1);
+        Gate(amArmed && amCmds == army.Count && army.TrueForAll(id => lw.Entities[id].AMove && lw.Entities[id].Moving),
+             "AttackMove", $"the attack-move key and a left click put every unit on an attack-move ({amCmds} AttackMove: {ArmyState()})");
+        _gateCovered.Add(CommandType.AttackMove);
+
+        bool AllStance(Stance s) => army.TrueForAll(id => lw.Entities[id].Stance == s);
+        g.PressKey(Settings.BindOf("hold_fire"));
+        g.StepTicks(1);
+        bool held = AllStance(Stance.HoldFire);
+        g.PressKey(Settings.BindOf("hold_fire"));
+        g.StepTicks(1);
+        bool freed = AllStance(Stance.Aggressive);
+        g.PressKey(Settings.BindOf("guard"));
+        g.StepTicks(1);
+        bool guarded = AllStance(Stance.Guard);
+        g.PressKey(Settings.BindOf("patrol"));
+        g.PressLeftClick(At(mx, mz));
+        g.StepTicks(1);
+        bool patrolling = AllStance(Stance.Patrol);
+        Gate(held && freed && guarded && patrolling, "SetStance",
+             $"hold-fire, hold-fire again, guard, and patrol with a left click set each stance in the sim (hold {held}, "
+             + $"weapons free {freed}, guard {guarded}, patrol {patrolling})");
+        _gateCovered.Add(CommandType.SetStance);
+        g.PressKey(Settings.BindOf("stop"));     // hand the army back, standing
+        g.StepTicks(1);
+
+        // --- Attack: a right click on an enemy in sight ---------------------
+        var (lx, lz) = PosOf(army[0]);
+        var (ecx, ecy) = OpenCellNear((int)lx + 3, (int)lz);
+        int target = SpawnOfType(lw, foe, 2, ecx, ecy);      // 2: com_rifle_squad
+        HoldFire(target);                                    // a fixture that does not start the fight itself
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        Check(g.DrawnForLocalSeatForTest(target), "inputgate: the enemy squad stands in sight (the precondition)");
+        var (tx, tz) = PosOf(target);
+        Aim(tx, tz);
+        string attackCursor = g.CursorNameAt(At(tx, tz));
+        g.PressRightClick(At(tx, tz));
+        int attackCmds = PendingAt(CommandType.Attack, target);
+        g.StepTicks(1);
+        bool engaged = army.Exists(id => lw.Entities[id].ExplicitTarget == target);
+        Gate(attackCursor == "Attack" && attackCmds == army.Count && engaged, "Attack",
+             $"over an enemy in sight the cursor reads {attackCursor}, and a right click orders the attack, which the sim takes "
+             + $"({attackCmds} Attack, explicit target held: {engaged})");
+        _gateCovered.Add(CommandType.Attack);
+        g.ClearSelectionForTest();
+
+        // --- Harvest: a right click on a field with the harvester selected --
+        int harv = g.FindEntity(EntityKind.Harvester, me);
+        var refSite = g.FindPlacementCell(3);
+        if (refSite is { } rs) lw.SpawnRefinery(me, rs.X, rs.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selHarv = harv >= 0 && ClickSelect(harv);
+        int field = -1;
+        {
+            Fix64 best = Fix64.MaxValue;
+            for (int i = 0; harv >= 0 && i < lw.EntityCount; i++)
+            {
+                var f = lw.Entities[i];
+                if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount <= 0) continue;
+                Fix64 d = Fix64.DistSq(f.X - lw.Entities[harv].X, f.Y - lw.Entities[harv].Y);
+                if (d < best) { best = d; field = i; }
+            }
+        }
+        int harvestAt = -1;
+        if (field >= 0)
+        {
+            var (fx, fz) = PosOf(field);
+            Aim(fx, fz);
+            g.PressRightClick(At(fx, fz));
+            foreach (var c in g.PendingForTest)
+                if (c.Type == CommandType.Harvest && c.EntityId == harv) harvestAt = c.AuxId;
+        }
+        g.StepTicks(1);
+        bool mining = harvestAt >= 0 && lw.Entities[harvestAt].Kind == EntityKind.FerriteField
+                      && lw.Entities[harv].FieldId == harvestAt && lw.Entities[harv].HState != HarvestState.Idle;
+        Gate(selHarv && g.RefineryLive && mining, "Harvest",
+             $"with a refinery standing, a click selects the harvester and a right click on a deposit sets it harvesting "
+             + $"there (field {harvestAt}, state {(harv >= 0 ? lw.Entities[harv].HState : HarvestState.Idle)})");
+        _gateCovered.Add(CommandType.Harvest);
+
+        // --- SetRally: a right click with a Factory selected ----------------
+        var facSite = g.FindPlacementCell(World.FactoryStructType);
+        int factory = facSite is { } fsx ? lw.SpawnFactory(me, fsx.X, fsx.Y) : -1;
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selFactory = factory >= 0 && ClickSelect(factory);
+        bool rallied = false;
+        int rallyCmds = 0;
+        if (factory >= 0)
+        {
+            var (fcx, fcz) = PosOf(factory);
+            float rx = ClampX(fcx + 3f), rz = ClampZ(fcz + 3f);
+            Aim(rx, rz);
+            g.PressRightClick(At(rx, rz));
+            rallyCmds = Pending(CommandType.SetRally);
+            g.StepTicks(1);
+            var fe = lw.Entities[factory];
+            rallied = fe.HasRally && Mathf.Abs(Fx(fe.RallyX) - rx) + Mathf.Abs(Fx(fe.RallyY) - rz) < 1.5f;
+        }
+        Gate(selFactory && rallyCmds == 1 && rallied, "SetRally",
+             "a click selects a Factory and a right click on the ground sets its rally point in the sim");
+        _gateCovered.Add(CommandType.SetRally);
+
+        // --- Produce and CancelProduce (unit): the VEHICLES tab -------------
+        g.StepOneTick();                     // the frame half sees the factory and lights its tab
+        g.StepOneTick();
+        int vehicle = -1;
+        foreach (int t in lw.UnitTypeIds())
+        {
+            var d = lw.GetUnitType(t);
+            if (d.ProducedAt != World.FactoryStructType) continue;
+            if (d.Faction != World.FactionCommon && d.Faction != lw.FactionOf(me)) continue;
+            if (!lw.HasPrereqs(me, d.Prereqs) || !sb.UnitButtonVisible(t)) continue;
+            vehicle = t;
+            break;
+        }
+        int fq = factory >= 0 ? lw.QueueLength(factory) : -1;
+        bool produced = vehicle > 0 && sb.PressUnitButton(vehicle);
+        g.StepTicks(1);
+        Gate(produced && factory >= 0 && lw.QueueLength(factory) == fq + 1, "Produce",
+             $"the {(vehicle > 0 ? g.UnitNameForTest(vehicle) : "(none)")} button queues one at the factory "
+             + $"({fq} -> {(factory >= 0 ? lw.QueueLength(factory) : -1)})");
+        _gateCovered.Add(CommandType.Produce);
+        bool unitCancel = vehicle > 0 && sb.RightClickUnitButton(vehicle);
+        g.StepTicks(1);
+        Gate(unitCancel && factory >= 0 && lw.QueueLength(factory) == fq, "CancelProduce",
+             "...and a right click on the unit's button cancels it again, the unit half of the same verb");
+
+        // --- Deploy: the deploy key on a selected MCV -----------------------
+        var (ycx, ycy) = g.CellOfForTest(yard);
+        (int X, int Y)? foundation = null;
+        for (int r = 4; r < 16 && foundation == null; r++)
+            for (int dy = -r; dy <= r && foundation == null; dy++)
+                for (int dx = -r; dx <= r && foundation == null; dx++)
+                {
+                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != r) continue;
+                    int x = ycx + dx, y = ycy + dy;
+                    if (x < 1 || y < 1 || x >= lw.Map.Width - 2 || y >= lw.Map.Height - 2) continue;
+                    if (lw.ValidFoundation(x, y) && !Crowded(x, y) && !Crowded(x + 1, y + 1)) foundation = (x, y);
+                }
+        int mcv = foundation is { } fo ? SpawnOfType(lw, me, World.McvUnitType, fo.X, fo.Y) : -1;
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selMcv = mcv >= 0 && ClickSelect(mcv);
+        int yardsBefore = CountOwn(EntityKind.ConstructionYard);
+        g.PressKey(Settings.BindOf("deploy"));
+        int deployCmds = Pending(CommandType.Deploy);
+        g.StepTicks(1);
+        Gate(selMcv && deployCmds == 1 && !lw.Entities[mcv].Alive && CountOwn(EntityKind.ConstructionYard) == yardsBefore + 1,
+             "Deploy", $"a click selects an MCV and the deploy key unpacks it into a Construction Yard (yards {yardsBefore} -> "
+             + $"{CountOwn(EntityKind.ConstructionYard)})");
+        _gateCovered.Add(CommandType.Deploy);
+        g.ClearSelectionForTest();
+
+        // --- LaunchSuper: the superweapon key and a left click --------------
+        // #143 proved the key ARMS; nothing proved a click then FIRES.
+        var swSite = g.FindPlacementCell(6);
+        int sw = swSite is { } s6 ? lw.SpawnSuperweapon(me, s6.X, s6.Y, chargeTicks: 0) : -1;
+        g.PumpActorsForTest();
+        g.PressKey(Settings.BindOf("launch_super"));
+        bool swArmed = g.SuperArmed;
+        // Aimed at whichever map corner lies farthest from both yards, so the
+        // strike that lands 75 ticks later falls on nothing a later stage reads.
+        int foeYard = g.FindEntity(EntityKind.ConstructionYard, foe);
+        float bestCorner = -1f, aimX = 2.5f, aimZ = 2.5f;
+        foreach (var (cxk, czk) in new[] { (2.5f, 2.5f), (lw.Map.Width - 3.5f, 2.5f),
+                                           (2.5f, lw.Map.Height - 3.5f), (lw.Map.Width - 3.5f, lw.Map.Height - 3.5f) })
+        {
+            float nearest = float.MaxValue;
+            foreach (int y in new[] { yard, foeYard })
+            {
+                if (y < 0) continue;
+                var (yx, yz) = PosOf(y);
+                nearest = Mathf.Min(nearest, Mathf.Abs(yx - cxk) + Mathf.Abs(yz - czk));
+            }
+            if (nearest > bestCorner) { bestCorner = nearest; aimX = cxk; aimZ = czk; }
+        }
+        Aim(aimX, aimZ);
+        g.PressLeftClick(At(aimX, aimZ));
+        int launchCmds = Pending(CommandType.LaunchSuper);
+        g.StepTicks(1);
+        Gate(sw >= 0 && swArmed && launchCmds == 1 && lw.Entities[sw].StrikeTicks >= 0, "LaunchSuper",
+             $"the superweapon key arms it and a left click FIRES it: the strike is in flight in the sim "
+             + $"({(sw >= 0 ? lw.Entities[sw].StrikeTicks : -1)} ticks to impact)");
+        _gateCovered.Add(CommandType.LaunchSuper);
+
+        // --- UseSupportPower: folded in, not repeated -----------------------
+        Gate(_supportPowerFiredByClick, "UseSupportPower",
+             "fired by the POWERS strip, the support-power key and a real left click, and accepted by the sim: the "
+             + "support-power stages above, folded in here rather than spawning every power building twice");
+        _gateCovered.Add(CommandType.UseSupportPower);
+
+        // --- The contact effects: a right click on an enemy building --------
+        // Each contact unit is ordered the way a player orders it, a click to
+        // select and a right click on an enemy structure in sight, and the
+        // effect is read off the sim. The structure is an enemy power plant
+        // stood up inside this seat's base, in sight and away from the army.
+        // THE SITE AND THE APPROACH ARE CHOSEN TOGETHER. A walk onto a building
+        // is routed at ONE cell, its centre cell (ax+1, ay+1), so a building
+        // whose centre cell is boxed in cannot be reached from any side: the
+        // single-cell destination D4 records for refineries and P8-15
+        // replaces. Measured twice, not guessed: a saboteur stood still for
+        // 120 ticks beside a plant whose centre cell had the yard below it and
+        // another building beside it, and a commando stood still in a pocket
+        // the earlier stages' buildings had walled in. So the site is taken
+        // only with an open three-cell corridor running east from the centre
+        // cell, and the unit starts at its far end: a two-cell walk to a cell
+        // orthogonally beside the one the route is built to, then the act.
+        (int X, int Y, int UX, int UY)? VictimSite()
+        {
+            var (ycx0, ycy0) = g.CellOfForTest(yard);
+            for (int r = 2; r <= World.CyBuildRadius; r++)
+                for (int dy = -r; dy <= r; dy++)
+                    for (int dx = -r; dx <= r; dx++)
+                    {
+                        if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != r) continue;
+                        int x = ycx0 + dx, y = ycy0 + dy;
+                        if (x + 5 >= lw.Map.Width || !lw.ValidPlacement(me, x, y, plantType)) continue;
+                        bool corridor = true;
+                        for (int c = 2; c <= 4; c++)
+                            if (lw.Map.IsBlocked(x + c, y + 1) || Crowded(x + c, y + 1)) corridor = false;
+                        if (!corridor || !lw.IsVisible(me, x + 1, y + 1)) continue;
+                        return (x, y, x + 4, y + 1);
+                    }
+            return null;
+        }
+        foreach (var (effect, unitType) in InputGateContactUnits)
+        {
+            var site = VictimSite();
+            if (site is not { } vs)
+            {
+                Gate(false, effect, "no open site for the enemy structure (a fixture failure, not a product one)");
+                continue;
+            }
+            int victim = lw.SpawnPowerPlant(foe, vs.X, vs.Y);
+            var (vx, vz) = PosOf(victim);
+            int agent = SpawnOfType(lw, me, unitType, vs.UX, vs.UY);
+            // HOLD FIRE, because the commando is armed: left aggressive it
+            // shoots the plant on the tick it lands and a demolition check
+            // would pass on rifle damage. The walk-in is unaffected, since the
+            // contact rule takes an explicit order whatever the stance.
+            HoldFire(agent);
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            bool selAgent = ClickSelect(agent);
+            Aim(vx, vz);
+            string cursor = g.CursorNameAt(At(vx, vz));
+            g.PressRightClick(At(vx, vz));
+            int walkIn = PendingAt(CommandType.Attack, victim);
+            bool robbed = false, done = false;
+            int ticks = 0, prevHp = lw.Entities[victim].Hp;
+            for (; ticks < 120 && !done; ticks++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.Robbed && ev.A == victim) robbed = true;
+                var v = lw.Entities[victim];
+                done = effect switch
+                {
+                    "Capture" => v.PlayerId == me,
+                    "Theft" => robbed,
+                    "Sabotage" => lw.IsDisabled(victim),
+                    // A charge, not attrition: a third of the demolition figure
+                    // in ONE tick is more than any gun here deals, and a sale
+                    // (which kills without touching Hp) cannot meet it either.
+                    _ => prevHp - v.Hp >= World.DemolitionDamage / 3,
+                };
+                prevHp = v.Hp;
+            }
+            var ag = lw.Entities[agent];
+            string agentState = $"agent #{agent} {(ag.Alive ? "alive" : "consumed")} at {Fx(ag.X):0.0},{Fx(ag.Y):0.0}"
+                                + $"{(ag.Moving ? " moving" : " still")} speed {Fx(ag.Speed):0.00}, "
+                                + $"target {ag.ExplicitTarget}, victim #{victim} at {vx:0.0},{vz:0.0} "
+                                + $"{(lw.Entities[victim].Alive ? "standing" : "destroyed")} owned by {lw.Entities[victim].PlayerId}";
+            if (!done)
+            {
+                // The ground round the victim, for a failure that is about a
+                // route: X blocked, A the agent's cell, a dot open.
+                var rows = new List<string>();
+                for (int y = vs.Y - 4; y <= vs.Y + 5; y++)
+                {
+                    var row = new System.Text.StringBuilder();
+                    for (int x = vs.X - 4; x <= vs.X + 5; x++)
+                        row.Append(x == Map.CellOf(ag.X) && y == Map.CellOf(ag.Y) ? 'A'
+                                   : x < 0 || y < 0 || x >= lw.Map.Width || y >= lw.Map.Height || lw.Map.IsBlocked(x, y) ? 'X' : '.');
+                    rows.Add(row.ToString());
+                }
+                agentState += $"; ground from {vs.X - 4},{vs.Y - 4}: {string.Join("/", rows)}";
+            }
+            string reads = effect switch
+            {
+                "Capture" => "the plant changes hands",
+                "Theft" => "the owner's treasury is robbed",
+                "Sabotage" => "the plant is switched off",
+                _ => "the plant takes the demolition charge",
+            };
+            // The capture verb has its own cursor; the other three read Attack
+            // until P8-8 gives every contact unit the Enter cursor.
+            bool cursorOk = effect != "Capture" || cursor == "Enter";
+            Gate(selAgent && walkIn == 1 && done && cursorOk, effect,
+                 $"a click selects the {g.UnitNameForTest(unitType)} and a right click on an enemy building sends it in: "
+                 + $"{reads} after {ticks} ticks (cursor {cursor}, {walkIn} Attack queued{(done ? "" : $"; {agentState}")})");
+            _gateEffectsCovered.Add(effect);
+        }
+
+        // --- Coverage: nothing is in neither place ---------------------------
+        string uncovered = "", stale = "";
+        int verbs = 0;
+        foreach (CommandType t in System.Enum.GetValues<CommandType>())
+        {
+            if (t == CommandType.None) continue;
+            verbs++;
+            bool excepted = System.Array.Exists(InputGateExceptions, x => x.Verb == t);
+            bool wholeMissing = System.Array.Exists(InputGateKnownMissing, x => x.Verb == t && x.WholeVerb);
+            if (!_gateCovered.Contains(t) && !excepted && !wholeMissing) uncovered += $" {t}";
+            if (_gateCovered.Contains(t) && wholeMissing) stale += $" {t}";
+        }
+        Check(uncovered.Length == 0,
+              $"inputgate/coverage: all {verbs} CommandType verbs have a gesture stage, are the recorded Move exception, or "
+              + $"are in the KNOWN-MISSING table{(uncovered.Length > 0 ? $" (in neither:{uncovered})" : "")}");
+        Check(stale.Length == 0,
+              $"inputgate/coverage: no verb with a stage is still listed as wholly KNOWN-MISSING{(stale.Length > 0 ? $" (delete the entry for:{stale})" : "")}");
+        string noEffect = "";
+        foreach (var (effect, _) in InputGateContactUnits)
+            if (!_gateEffectsCovered.Contains(effect)) noEffect += $" {effect}";
+        Check(noEffect.Length == 0,
+              $"inputgate/coverage: all {InputGateContactUnits.Length} contact effects have a gesture stage{(noEffect.Length > 0 ? $" (missing:{noEffect})" : "")}");
+        foreach (var (verb, why) in InputGateExceptions)
+            GD.Print($"  EXCEPTION      inputgate/{verb}: {why}");
+        foreach (var k in InputGateKnownMissing)
+            GD.Print($"  KNOWN-MISSING  inputgate/{k.Stage} ({k.Verb}{(k.WholeVerb ? ", the whole verb" : " on this target")}): "
+                     + $"{k.Gap}; owner {k.Owner}");
+
+        // --- P8-5: an enemy under the shroud is not a target -----------------
+        // The pick read the whole snapshot list, so the Attack glyph lit over
+        // every hidden enemy and a right click sent the army to it. The
+        // opposition's yard is the fixture: it stands in this seat's fog for
+        // the whole match. The control is the Attack stage above, where the
+        // same gesture on an enemy in sight IS an attack.
+        GD.Print("  --    inputgate (P8-5): target picking honours the fog");
+        g.ClearSelectionForTest();
+        g.PressKey(Settings.BindOf("select_all_army"));
+        var fogArmy = g.SelectedIdsForTest();
+        if (foeYard >= 0 && fogArmy.Count > 0)
+        {
+            var (hx, hy) = g.CellOfForTest(foeYard);
+            Check(!lw.IsVisible(me, hx, hy) && !g.DrawnForLocalSeatForTest(foeYard),
+                  "inputgate/fog-pick: the opposition's yard stands in this seat's fog and is not drawn (the precondition)");
+            var (hxf, hzf) = PosOf(foeYard);
+            Aim(hxf, hzf);
+            string overShroud = g.CursorNameAt(At(hxf, hzf));
+            g.PressRightClick(At(hxf, hzf));
+            int shroudAttacks = PendingAt(CommandType.Attack, foeYard);
+            int shroudMoves = Pending(CommandType.PathMove);
+            g.StepTicks(1);
+            bool noneTargeted = fogArmy.TrueForAll(id => lw.Entities[id].ExplicitTarget != foeYard);
+            Gate(overShroud == "Move" && shroudAttacks == 0 && shroudMoves == fogArmy.Count && noneTargeted, "fog-pick",
+                 $"over a shrouded enemy the cursor reads {overShroud} and a right click is a MOVE ({shroudMoves} PathMove, "
+                 + $"{shroudAttacks} Attack), so no unit is handed a target it cannot see");
+            g.PressKey(Settings.BindOf("stop"));
+            g.StepTicks(1);
+        }
+        else
+            Check(false, $"inputgate/fog-pick: an enemy yard and an army to test with (the precondition; yard {foeYard}, army {fogArmy.Count})");
+
+        RunStealthStages(g, foe);
+        g.QueueFree();
+    }
+
+    /// <summary>
+    /// A quiet patch of open ground for a stealth fixture: every cell from -3
+    /// to +5 of it unblocked and on the map, and no living entity other than a
+    /// ferrite field within two cells of that box, so nothing already standing
+    /// can detect, dot or be mistaken for what the stage spawns. Searched
+    /// outward from a cell, at least `minFrom` cells from `avoid`.
+    /// </summary>
+    private static (int X, int Y)? QuietGround(World lw, int fromX, int fromY, (int X, int Y)? avoid = null, int minFrom = 0)
+    {
+        for (int r = 4; r < 40; r++)
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != r) continue;
+                    int x = fromX + dx, y = fromY + dy;
+                    if (avoid is { } a && System.Math.Max(System.Math.Abs(x - a.X), System.Math.Abs(y - a.Y)) < minFrom) continue;
+                    bool ok = true;
+                    for (int by = y - 3; by <= y + 5 && ok; by++)
+                        for (int bx = x - 3; bx <= x + 5 && ok; bx++)
+                            if (bx < 1 || by < 1 || bx >= lw.Map.Width - 1 || by >= lw.Map.Height - 1 || lw.Map.IsBlocked(bx, by)) ok = false;
+                    for (int i = 0; i < lw.EntityCount && ok; i++)
+                    {
+                        var e = lw.Entities[i];
+                        if (!e.Alive || e.Kind == EntityKind.FerriteField) continue;
+                        int ex = Map.CellOf(e.X), ey = Map.CellOf(e.Y);
+                        if (ex >= x - 5 && ex <= x + 7 && ey >= y - 5 && ey <= y + 7) ok = false;
+                    }
+                    if (ok) return (x, y);
+                }
+        return null;
+    }
+
+    /// <summary>
+    /// P8-6, decision D24, from the seat a Directorate player sits in against
+    /// a Sodality opponent. The client read no stealth at all: every cloaked
+    /// unit, Sodality building and mine was drawn for its enemies, and a
+    /// detector changed nothing on screen, so the Sodality's defining mechanic
+    /// did nothing on the opponent's screen and players saw targets their units
+    /// refused to shoot. Every enemy fixture holds fire, because a cloaked thing
+    /// that fires is revealed to everyone (the sim's rule, and drawn rightly).
+    /// </summary>
+    private void RunStealthStages(SkirmishLive g, int foe)
+    {
+        GD.Print("  --    inputgate (P8-6): stealth on screen, decision D24");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        int phantomType = UnitCatalogue.TypeIdOf("sod_phantom_tank");
+        int scoutType = UnitCatalogue.TypeIdOf("dir_sentinel_scout");
+        Color foeMark = BattlefieldView.MarkFor(foe);
+        void Hold(int id)
+        {
+            var e = lw.Entities[id];
+            e.Stance = Stance.HoldFire;
+            lw.SetEntityForTest(id, e);
+        }
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        bool TeamDetects(int id) => (lw.Entities[id].DetectedMask & (1 << me)) != 0;
+        string Over(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            return g.CursorNameAt(g.ScreenOf(x, z));
+        }
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        int AttacksOn(int id)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == id) n++;
+            return n;
+        }
+        // Two frames, the radar check's reason: the frame half samples the view
+        // a tick behind, so the second is the one that shows what the first
+        // tick did. Then the actor sync, so the nodes are current too.
+        void Settle()
+        {
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+        }
+
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        var q = QuietGround(lw, ycx, ycy);
+        if (q is not { } s)
+        {
+            Check(false, "inputgate/stealth: open, quiet ground for the fixture (none found: a fixture failure, not a product one)");
+            return;
+        }
+
+        // --- Undetected, in sight: not drawn, not dotted, not pickable ------
+        int rifle = SpawnOfType(lw, me, 2, s.X, s.Y);                  // my eyes, and later my gun
+        int ownPhantom = SpawnOfType(lw, me, phantomType, s.X - 2, s.Y);
+        int phantom = SpawnOfType(lw, foe, phantomType, s.X + 3, s.Y);
+        Hold(phantom);
+        int mine = lw.SpawnMine(foe, s.X + 3, s.Y + 3);
+        int nest = lw.SpawnFactionDefence(foe, 18, s.X, s.Y + 3);     // 18: the Shroud Nest, a cloaked building
+        Hold(nest);
+        Settle();
+        var (px, pz) = PosOf(phantom);
+        bool inSight = lw.IsVisible(me, Map.CellOf(lw.Entities[phantom].X), Map.CellOf(lw.Entities[phantom].Y))
+                       && lw.IsVisible(me, s.X + 3, s.Y + 3) && lw.IsVisible(me, s.X + 1, s.Y + 4);
+        bool allCloaked = lw.Entities[phantom].Stealth && lw.Entities[mine].Stealth && lw.Entities[nest].Stealth;
+        bool undetected = !TeamDetects(phantom) && !TeamDetects(mine) && !TeamDetects(nest)
+                          && lw.Entities[phantom].RevealTicks == 0 && lw.Entities[nest].RevealTicks == 0;
+        Check(inSight && allCloaked && undetected,
+              "inputgate/stealth: an enemy Phantom Tank, mine and Shroud Nest stand cloaked and undetected in cells this seat "
+              + $"can SEE (the precondition: in sight {inSight}, cloaked {allCloaked}, undetected {undetected})");
+        Check(!g.DrawnForLocalSeatForTest(phantom) && !g.ActorShownForTest(phantom),
+              "inputgate/stealth: the undetected Phantom Tank in a visible cell is NOT drawn");
+        Check(!g.ActorShownForTest(mine) && !g.ActorShownForTest(nest),
+              "inputgate/stealth: nor are the undetected mine and the Shroud Nest beside it");
+        Check(!g.MinimapView.HasDotNearForTest(px, pz, foeMark),
+              "inputgate/stealth: and the minimap gives the Phantom Tank no dot");
+        bool selRifle = ClickSelect(rifle);
+        string overHidden = Over(phantom);
+        g.PressRightClick(g.ScreenOf(px, pz));
+        int hiddenAttacks = AttacksOn(phantom);
+        g.StepTicks(1);
+        Check(selRifle && overHidden == "Move" && hiddenAttacks == 0 && lw.Entities[rifle].ExplicitTarget != phantom,
+              $"inputgate/stealth: over the undetected Phantom Tank the cursor reads {overHidden} and a right click is a move "
+              + $"({hiddenAttacks} Attack), so it cannot be picked");
+        g.PressKey(Settings.BindOf("stop"));
+        g.StepTicks(1);
+
+        // --- My own cloaked unit says so ------------------------------------
+        Check(g.ActorShownForTest(ownPhantom) && g.ActorTranslucentForTest(ownPhantom) && !g.ActorTranslucentForTest(rifle),
+              "inputgate/stealth: my own Phantom Tank is drawn TRANSLUCENT, so I can see it is cloaked, and my uncloaked squad is not");
+
+        // --- A Sentinel Scout in range: drawn, tinted, attackable -----------
+        int scout = SpawnOfType(lw, me, scoutType, s.X + 1, s.Y - 2);
+        Settle();
+        Check(TeamDetects(phantom) && TeamDetects(mine) && TeamDetects(nest),
+              "inputgate/stealth: a Sentinel Scout in range detects all three (the precondition: the sim set this seat's bit)");
+        Check(g.ActorShownForTest(phantom) && g.ActorDetectedTintForTest(phantom),
+              "inputgate/stealth: the detected Phantom Tank is drawn, wearing the detected tint");
+        Check(g.ActorShownForTest(mine) && g.ActorShownForTest(nest),
+              "inputgate/stealth: and so are the detected mine and Shroud Nest");
+        Check(g.MinimapView.HasDotNearForTest(Fx(lw.Entities[phantom].X), Fx(lw.Entities[phantom].Y), foeMark),
+              "inputgate/stealth: and the detected Phantom Tank has its minimap dot");
+        selRifle = ClickSelect(rifle);
+        string overDetected = Over(phantom);
+        var (dx, dz) = PosOf(phantom);
+        g.PressRightClick(g.ScreenOf(dx, dz));
+        int detectedAttacks = AttacksOn(phantom);
+        g.StepTicks(1);
+        Gate(selRifle && overDetected == "Attack" && detectedAttacks == 1 && lw.Entities[rifle].ExplicitTarget == phantom,
+             "stealth-detected", $"with a Sentinel Scout in range the Phantom Tank is attackable: cursor {overDetected}, "
+             + $"{detectedAttacks} Attack queued, and the sim holds it as the squad's target");
+
+        // --- A Watch Post in range: the structure detector does the same -----
+        var q2 = QuietGround(lw, ycx, ycy, (s.X, s.Y), 14);
+        if (q2 is not { } w)
+        {
+            Check(false, "inputgate/stealth: a second patch of quiet ground, clear of the scout (none found: a fixture failure)");
+            return;
+        }
+        int rifle2 = SpawnOfType(lw, me, 2, w.X, w.Y);
+        int phantom2 = SpawnOfType(lw, foe, phantomType, w.X + 3, w.Y);
+        Hold(phantom2);
+        Settle();
+        Check(!TeamDetects(phantom2) && lw.Entities[phantom2].RevealTicks == 0 && !g.ActorShownForTest(phantom2),
+              "inputgate/stealth: a second Phantom Tank, far from the scout, is undetected and not drawn (the precondition)");
+        lw.SpawnWatchPost(me, w.X + 3, w.Y + 2);
+        Settle();
+        bool selRifle2 = ClickSelect(rifle2);
+        string overPost = Over(phantom2);
+        var (p2x, p2z) = PosOf(phantom2);
+        g.PressRightClick(g.ScreenOf(p2x, p2z));
+        int postAttacks = AttacksOn(phantom2);
+        g.StepTicks(1);
+        Gate(TeamDetects(phantom2) && g.ActorShownForTest(phantom2) && g.ActorDetectedTintForTest(phantom2)
+             && selRifle2 && overPost == "Attack" && postAttacks == 1 && lw.Entities[rifle2].ExplicitTarget == phantom2,
+             "stealth-detected", $"with a Watch Post in range it is drawn, tinted and attackable: cursor {overPost}, "
+             + $"{postAttacks} Attack queued, and the sim holds it as the squad's target");
+        g.ClearSelectionForTest();
     }
 
     /// <summary>
@@ -1515,7 +2399,11 @@ public partial class VerifyRunner : Node
               "a real left click on the ground fires the armed DECOY ARMY");
         _game.StepTicks(1);
         int decoys = OwnUnits() - unitsBefore;
-        Check(Recharged(nest) && decoys > 0,
+        // P8-1: this is the stage the inputgate folds in for UseSupportPower, a
+        // real left click through _UnhandledInput accepted by the sim, rather
+        // than spawning every power building a second time.
+        _supportPowerFiredByClick = Recharged(nest) && decoys > 0;
+        Check(_supportPowerFiredByClick,
               $"the sim ACCEPTED it: the nest's charge went back to full and {decoys} decoys stand");
 
         // --- TUNNEL DEPLOYMENT: refused on ground the player cannot see ------
@@ -1914,7 +2802,274 @@ public partial class VerifyRunner : Node
         Check(teamed.BannerTextForTest.Contains("DEFEAT"),
               $"...and an ENEMY winning is still DEFEAT (\"{teamed.BannerTextForTest.Split('\n')[0]}\")");
         teamed.ResetVictoryForTest();
+        RunTeamHostilityChecks(teamed);
+        RunTeamStealthChecks(teamed);
         teamed.QueueFree();
+    }
+
+    /// <summary>
+    /// P8-6, decision D24, in the teamed world from seat 1 (ally seat 3, enemy
+    /// seat 2): a cloaked enemy counts as DETECTED when any seat on my team has
+    /// it in DetectedMask, so an ally's Sentinel Scout puts it on my screen.
+    ///
+    /// The half D24 could not deliver without a sim change is asserted too,
+    /// because the cursor must not lie about it. The sim's CanTarget reads the
+    /// attacker's OWN bit alone, so an Attack on an enemy only my ally has
+    /// found is dropped the tick it lands. Drawn, tinted, and a move target
+    /// until a detector of mine finds it; then attackable.
+    /// </summary>
+    private void RunTeamStealthChecks(SkirmishLive teamed)
+    {
+        GD.Print("  --    inputgate (P8-6): team detection, decision D24");
+        var lw = teamed.LiveWorld;
+        int me = teamed.LocalPlayerId;
+        const int ally = 3, enemy = 2;
+        int phantomType = UnitCatalogue.TypeIdOf("sod_phantom_tank");
+        int scoutType = UnitCatalogue.TypeIdOf("dir_sentinel_scout");
+        void Settle()
+        {
+            teamed.StepOneTick();
+            teamed.StepOneTick();
+            teamed.PumpActorsForTest();
+        }
+        int ownYard = teamed.FindEntity(EntityKind.ConstructionYard, me);
+        if (ownYard < 0) { Check(false, "inputgate/stealth-team: seat 1 owns a yard (the precondition)"); return; }
+        var (ycx, ycy) = teamed.CellOfForTest(ownYard);
+        var q = QuietGround(lw, ycx, ycy);
+        if (q is not { } s) { Check(false, "inputgate/stealth-team: open, quiet ground for the fixture (none found)"); return; }
+
+        int rifle = SpawnOfType(lw, me, 2, s.X, s.Y);
+        int phantom = SpawnOfType(lw, enemy, phantomType, s.X + 3, s.Y);
+        var pe = lw.Entities[phantom];
+        pe.Stance = Stance.HoldFire;
+        lw.SetEntityForTest(phantom, pe);
+        Settle();
+        Check(lw.IsVisible(me, s.X + 3, s.Y) && lw.Entities[phantom].DetectedMask == 0 && !teamed.ActorShownForTest(phantom),
+              "inputgate/stealth-team: an enemy Phantom Tank in a cell seat 1 can see, detected by nobody, is not drawn (the precondition)");
+
+        SpawnOfType(lw, ally, scoutType, s.X + 1, s.Y - 2);       // my ALLY's detector
+        Settle();
+        byte mask = lw.Entities[phantom].DetectedMask;
+        Check((mask & (1 << ally)) != 0 && (mask & (1 << me)) == 0,
+              $"inputgate/stealth-team: my ALLY's Sentinel Scout detects it and I do not (the precondition: mask {mask})");
+        Gate(teamed.DrawnForLocalSeatForTest(phantom) && teamed.ActorShownForTest(phantom) && teamed.ActorDetectedTintForTest(phantom),
+             "stealth-team", "D24: a cloaked enemy my ally detects is DRAWN on my screen, wearing the detected tint");
+
+        var (px, pz) = (Fx(lw.Entities[phantom].X), Fx(lw.Entities[phantom].Y));
+        var (rx, rz) = (Fx(lw.Entities[rifle].X), Fx(lw.Entities[rifle].Y));
+        teamed.FocusCameraOn(rx, rz, 22f);
+        teamed.ClearSelectionForTest();
+        teamed.BoxSelect(teamed.ScreenOf(rx, rz), teamed.ScreenOf(rx, rz));
+        bool selRifle = teamed.SelectionCount == 1 && teamed.IsSelected(rifle);
+        teamed.FocusCameraOn(px, pz, 22f);
+        string overAllyFound = teamed.CursorNameAt(teamed.ScreenOf(px, pz));
+        Gate(selRifle && overAllyFound == "Move", "stealth-team",
+             $"...but the cursor over it offers {overAllyFound}, because Attack would be a promise the sim breaks: its "
+             + "CanTarget takes only my own seat's detection");
+        // The claim the line above rests on, measured rather than read: the
+        // same Attack sent past the cursor is cleared by the sim the tick it
+        // lands, because CombatSystem asks CanTarget for seat 1 alone.
+        teamed.QueueCommandForTest(CommandType.Attack, rifle, phantom);
+        teamed.StepTicks(1);
+        Check(lw.Entities[rifle].ExplicitTarget != phantom && (lw.Entities[phantom].DetectedMask & (1 << me)) == 0,
+              "inputgate/stealth-team: ...and the sim bears it out: an Attack sent past the cursor on the ally-detected "
+              + $"Phantom Tank is dropped the tick it lands (target now {lw.Entities[rifle].ExplicitTarget})");
+
+        SpawnOfType(lw, me, scoutType, s.X + 2, s.Y - 2);         // and now one of my own
+        Settle();
+        teamed.FocusCameraOn(px, pz, 22f);
+        string overMineFound = teamed.CursorNameAt(teamed.ScreenOf(px, pz));
+        teamed.PressRightClick(teamed.ScreenOf(px, pz));
+        int attacks = 0;
+        foreach (var c in teamed.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == phantom) attacks++;
+        teamed.StepTicks(1);
+        Gate((lw.Entities[phantom].DetectedMask & (1 << me)) != 0 && overMineFound == "Attack" && attacks == 1
+             && lw.Entities[rifle].ExplicitTarget == phantom, "stealth-team",
+             $"once my own Sentinel Scout detects it too, it is attackable: cursor {overMineFound}, {attacks} Attack queued, "
+             + "and the sim holds it as the squad's target");
+        teamed.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-4, in the teamed world: from seat 1, seat 3 is the ally and seats 0
+    /// and 2 the enemies. `1 - LocalPlayerId` named seat 0 alone, so seat 2,
+    /// an enemy, was drawn through the fog. The ally is the control: never
+    /// hidden, never offered as a target.
+    /// </summary>
+    private void RunTeamHostilityChecks(SkirmishLive teamed)
+    {
+        GD.Print("  --    inputgate (P8-4): an ally is not an enemy, and every enemy obeys the fog");
+        var lw = teamed.LiveWorld;
+        int me = teamed.LocalPlayerId;
+        teamed.StepOneTick();
+        teamed.StepOneTick();
+        teamed.PumpActorsForTest();
+        Check(!teamed.IsHostileSeat(me) && !teamed.IsHostileSeat(3) && teamed.IsHostileSeat(0) && teamed.IsHostileSeat(2)
+              && !teamed.IsHostileSeat(-1),
+              "inputgate/hostility: from seat 1 under EVEN SIDES, seats 0 and 2 are hostile, seat 3 (the ally), seat 1 and "
+              + "a neutral are not");
+        int allyYard = teamed.FindEntity(EntityKind.ConstructionYard, 3);
+        int foeYard = teamed.FindEntity(EntityKind.ConstructionYard, 2);
+        if (allyYard < 0 || foeYard < 0)
+        {
+            Check(false, $"inputgate/hostility: seats 2 and 3 each own a yard (the precondition; found {foeYard}, {allyYard})");
+            return;
+        }
+        var (ax, ay) = teamed.CellOfForTest(allyYard);
+        var (fx, fy) = teamed.CellOfForTest(foeYard);
+        Check(!lw.IsVisible(me, ax, ay) && !lw.IsVisible(me, fx, fy),
+              "inputgate/hostility: both yards stand in seat 1's fog (the precondition)");
+        Check(!teamed.DrawnForLocalSeatForTest(foeYard) && !teamed.ActorShownForTest(foeYard),
+              "inputgate/hostility: seat 2's yard, an ENEMY in fog, is not drawn (it was, because it is not 1 - LocalPlayerId)");
+        Check(teamed.DrawnForLocalSeatForTest(allyYard) && teamed.ActorShownForTest(allyYard),
+              "inputgate/hostility: seat 3's yard, my TEAMMATE's, is drawn wherever it stands");
+        teamed.SelectAllOwn();
+        var (axf, azf) = (Fx(lw.Entities[allyYard].X), Fx(lw.Entities[allyYard].Y));
+        teamed.FocusCameraOn(axf, azf, 22f);
+        string overAlly = teamed.CursorNameAt(teamed.ScreenOf(axf, azf));
+        Check(overAlly == "Move", $"inputgate/hostility: over the ally's yard, with my own units selected, the cursor offers Move, never Attack ({overAlly})");
+        teamed.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-4 on skirmish-09, four seats, free for all, from seat 0. Two things
+    /// the tracker names: hostility by team reaches every seat, so a seat 3
+    /// unit in fog is hidden and, once in sight, a right click attacks it;
+    /// and LocalSeat, set only by the LAN join path, is consumed by the scene
+    /// that reads it, so this scene, handed no seat after the LAN joiner's
+    /// scene was handed seat 1, comes up in seat 0.
+    /// </summary>
+    private void RunFourSeatHostilityChecks()
+    {
+        GD.Print("  --    inputgate (P8-4): hostility by team on the four-seat map, and the seat a single-player match takes");
+        Check(SkirmishLive.LocalSeat == 0,
+              $"inputgate/hostility: the seat handoff was consumed by the scene that took it (LocalSeat {SkirmishLive.LocalSeat})");
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        SkirmishLive ffa;
+        try
+        {
+            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-09.fmap");
+            MatchConfig.TeamMode = MatchSetup.TeamsFreeForAll;
+            MatchConfig.Seats = 0;                 // fill the map: four seats
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.PendingNet = null;
+            // LocalSeat deliberately NOT set: the menu's single-player road
+            // never sets it, which is the whole of the defect.
+            ffa = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(ffa);
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.Seats = wasSeats;
+        }
+        var lw = ffa.LiveWorld;
+        int me = ffa.LocalPlayerId;
+        Check(me == 0, $"inputgate/hostility: a single-player scene booted after the LAN joiner's seat-1 scene, handed no seat, "
+                       + $"takes seat 0 (took {me})");
+        bool ffaTeams = lw.PlayerCount == 4;
+        for (int p = 0; p < lw.PlayerCount; p++) if (lw.TeamOf(p) != p) ffaTeams = false;
+        Check(ffaTeams, $"inputgate/hostility: skirmish-09 seats four, each its own team ({lw.PlayerCount} seats)");
+        Check(!ffa.IsHostileSeat(0) && ffa.IsHostileSeat(1) && ffa.IsHostileSeat(2) && ffa.IsHostileSeat(3) && !ffa.IsHostileSeat(-1),
+              "inputgate/hostility: in a free-for-all every other seat is hostile, and a neutral is not");
+        ffa.StepOneTick();
+        ffa.StepOneTick();
+        ffa.PumpActorsForTest();
+
+        // --- Seats 2 and 3 obey the fog --------------------------------------
+        int y2 = ffa.FindEntity(EntityKind.ConstructionYard, 2);
+        int y3 = ffa.FindEntity(EntityKind.ConstructionYard, 3);
+        if (y2 < 0 || y3 < 0)
+        {
+            Check(false, $"inputgate/hostility: seats 2 and 3 each own a yard (the precondition; found {y2}, {y3})");
+            ffa.QueueFree();
+            return;
+        }
+        var (c2x, c2y) = ffa.CellOfForTest(y2);
+        var (c3x, c3y) = ffa.CellOfForTest(y3);
+        Check(!lw.IsVisible(me, c2x, c2y) && !lw.IsVisible(me, c3x, c3y),
+              "inputgate/hostility: seats 2 and 3's yards stand in seat 0's fog (the precondition)");
+        Check(!ffa.DrawnForLocalSeatForTest(y2) && !ffa.ActorShownForTest(y2)
+              && !ffa.DrawnForLocalSeatForTest(y3) && !ffa.ActorShownForTest(y3),
+              "inputgate/hostility: seat 2's and seat 3's yards in fog are NOT drawn (both were, because neither is 1 - LocalPlayerId)");
+        int hostileDots = 0;
+        foreach (var c in ffa.MinimapView.DotColoursForTest())
+            for (int p = 1; p < lw.PlayerCount; p++)
+                if (c == BattlefieldView.MarkFor(p)) hostileDots++;
+        Check(hostileDots == 0,
+              $"inputgate/hostility: no minimap dot wears seat 1's, 2's or 3's mark while all three are in fog ({hostileDots})");
+
+        // --- The brown-out table answers for every seat ----------------------
+        string grids = "";
+        bool gridsAgree = true;
+        for (int p = 0; p < lw.PlayerCount; p++)
+        {
+            int supply = 0, draw = 0;
+            for (int i = 0; i < lw.EntityCount; i++)
+            {
+                var e = lw.Entities[i];
+                if (e.Alive && e.PlayerId == p) { supply += e.PowerSupply; draw += e.PowerDraw; }
+            }
+            bool shown;
+            try { shown = ffa.BrownedOutForTest(p); }
+            catch (System.IndexOutOfRangeException) { gridsAgree = false; grids += $" seat {p}: no entry;"; continue; }
+            if (shown != SkirmishLive.BrownedOut(supply, draw)) { gridsAgree = false; grids += $" seat {p}: {shown};"; }
+        }
+        Check(gridsAgree, $"inputgate/hostility: the per-owner brown-out table has an entry for all four seats and each matches "
+                          + $"that seat's own grid{(grids.Length > 0 ? $" (wrong:{grids})" : "")}");
+
+        // --- P8-5: seat 3 in fog is not pickable either --------------------
+        // With hostility by team alone, seat 3 became pickable everywhere, fog
+        // or not; the fog half of the pick is what keeps it a fair fight.
+        {
+            ffa.SelectAllOwn();
+            int fogOwn = ffa.SelectionCount;
+            var (fx3, fz3) = (Fx(lw.Entities[y3].X), Fx(lw.Entities[y3].Y));
+            ffa.FocusCameraOn(fx3, fz3, 22f);
+            string overFog3 = ffa.CursorNameAt(ffa.ScreenOf(fx3, fz3));
+            ffa.PressRightClick(ffa.ScreenOf(fx3, fz3));
+            int fogAttacks = 0, fogMoves = 0;
+            foreach (var c in ffa.PendingForTest)
+            {
+                if (c.Type == CommandType.Attack && c.AuxId == y3) fogAttacks++;
+                if (c.Type == CommandType.PathMove) fogMoves++;
+            }
+            Check(fogOwn > 0 && overFog3 == "Move" && fogAttacks == 0 && fogMoves > 0,
+                  $"inputgate/fog-pick: on skirmish-09, seat 3's yard in fog is not a target: the cursor reads {overFog3} and a "
+                  + $"right click is a move ({fogMoves} PathMove, {fogAttacks} Attack)");
+            ffa.StepTicks(1);
+            ffa.ClearSelectionForTest();
+        }
+
+        // --- Seat 3 in sight is attackable by right click -------------------
+        // A seat-0 squad stood three cells from seat 3's yard, towards the
+        // middle of the map: its sight puts the yard in seat 0's view.
+        var (y3x, y3z) = (Fx(lw.Entities[y3].X), Fx(lw.Entities[y3].Y));
+        float tx = lw.Map.Width / 2f - y3x, tz = lw.Map.Height / 2f - y3z;
+        float tl = Mathf.Max(0.001f, Mathf.Sqrt(tx * tx + tz * tz));
+        int scout = SpawnOfType(lw, me, 2, (int)(y3x + tx / tl * 3f), (int)(y3z + tz / tl * 3f));   // 2: com_rifle_squad
+        ffa.StepTicks(1);
+        ffa.PumpActorsForTest();
+        Check(ffa.DrawnForLocalSeatForTest(y3) && ffa.ActorShownForTest(y3),
+              "inputgate/hostility: with a seat-0 squad beside it, seat 3's yard is drawn");
+        var (sxf, szf) = (Fx(lw.Entities[scout].X), Fx(lw.Entities[scout].Y));
+        ffa.FocusCameraOn(sxf, szf, 22f);
+        ffa.ClearSelectionForTest();
+        ffa.BoxSelect(ffa.ScreenOf(sxf, szf), ffa.ScreenOf(sxf, szf));
+        bool selScout = ffa.SelectionCount == 1 && ffa.IsSelected(scout);
+        ffa.FocusCameraOn(y3x, y3z, 22f);
+        string overSeat3 = ffa.CursorNameAt(ffa.ScreenOf(y3x, y3z));
+        ffa.PressRightClick(ffa.ScreenOf(y3x, y3z));
+        int attacks = 0;
+        foreach (var c in ffa.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == y3) attacks++;
+        ffa.StepTicks(1);
+        Check(selScout && overSeat3 == "Attack" && attacks == 1 && lw.Entities[scout].ExplicitTarget == y3,
+              $"inputgate/hostility: seat 3's yard in sight is an attack target: the cursor reads {overSeat3}, the right click "
+              + $"queues {attacks} Attack and the sim holds it as the squad's target (it could not be picked at all: "
+              + "it was never 1 - LocalPlayerId)");
+        ffa.QueueFree();
     }
 
     /// <summary>
