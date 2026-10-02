@@ -47,9 +47,10 @@ assessed, without being named.
   shorthands this file flags below under the trade-dress clause (GDD lines 62
   and 64 and the code comment it cites). They are not on the name list and the
   check does not look for them.
-- **CLAUDE.md's Legal bullet is not yet restated** to name the allowlist and
-  the check. The implementing agent may not edit CLAUDE.md on another agent's
-  instruction, so the proposed wording went to the owner in P8-2's handoff.
+- **CLAUDE.md's Legal bullet is restated** (2026-10-02, by the orchestrator under the
+  owner's standing authority, since the implementing agent rightly declined to edit
+  CLAUDE.md on another agent's instruction). It now names the allowlist and the check,
+  so CLAUDE.md and doc 00 section 5 say the same thing.
 
 NOTE ON METHOD: this file names no names. Every occurrence below is cited by
 file and line only, because the rule under discussion forbids the terms in
@@ -152,6 +153,4 @@ means so that neither the tax nor the mass-edit happens by default.
   on every push. The trade-dress judgement calls are flagged but not
   enumerated exhaustively, because judging resemblance is exactly the call
   being requested.
-- **Needed next:** from Luke, apply the restated CLAUDE.md Legal bullet from
-  P8-2's handoff so CLAUDE.md and doc 00 section 5 say the same thing; from
-  legal-review, a ruling on the slot shorthands if one is wanted.
+- **Needed next:** from legal-review, a ruling on the slot shorthands if one is wanted.
