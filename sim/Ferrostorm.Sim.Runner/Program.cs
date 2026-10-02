@@ -13097,6 +13097,13 @@ int Match(ulong seed)
     // open, which ML-01 found they could not.
     int dockFace = DockFaceGate();
     if (dockFace != 0) return dockFace;
+    // P8-17: and the commander answers air (F3, ADR-072) and the cheap cheeses,
+    // which bind from that row. Run here, at their defaults, so a regression
+    // turns CI red rather than waiting for somebody to run the mode by hand.
+    int aiAir = Measured(AiAirGate);
+    if (aiAir != 0) return aiAir;
+    int cheese = Measured(CheeseGate);
+    if (cheese != 0) return cheese;
     // P7-16: and the MCV it saves for is TIER-GATED, which GDD s5 line 47 has
     // asked for since the design doc and no code had ever enforced.
     int mcvTech = McvTechGate();
@@ -14818,7 +14825,9 @@ int Bench()
 // bites before flipping it.
 //
 // None of these is in golden, match, determinism, the default battery,
-// tools/ci-local.sh or CI. They are sweeps of whole AI matches and the full
+// tools/ci-local.sh or CI, with one exception: a gate whose row makes it
+// binding and which runs in seconds joins `match` in that row (aiairgate and
+// cheesegate, P8-17). The rest are sweeps of whole AI matches and the full
 // ones take minutes. Every mode takes key=value options to run a short subset
 // (maps=01 orient=0 and so on) and prints its elapsed time.
 //
@@ -14850,9 +14859,14 @@ int Measured(Func<int> mode)
 // --bind for the gates. An unknown key is REFUSED by name, because a typo that
 // quietly ran the full default sweep would cost many minutes and read as a
 // result.
+//
+// The options belong to the mode that was INVOKED. A gate that a binding row
+// has moved into `match` (P8-17's aiairgate and cheesegate) runs there with its
+// defaults, so `match 2026`'s seed is not read as one of its options.
 Dictionary<string, string> MeasureOptions(string mode, bool gate, params string[] keys)
 {
     var o = new Dictionary<string, string>(StringComparer.Ordinal);
+    if (args.Length == 0 || args[0] != mode) return o;
     for (int i = 1; i < args.Length; i++)
     {
         string a = args[i];
