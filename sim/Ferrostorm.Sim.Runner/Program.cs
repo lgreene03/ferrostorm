@@ -60,6 +60,8 @@ using Ferrostorm.Sim;
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); on demand, not in match
+//   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
+//                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31)
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. None is in golden, match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -16531,6 +16533,152 @@ int FieldSurvivalGate()
         "Every map kept half its fields to tick 13500 in every pairing, and the Sodality mirror kept a field to t=9000.");
 }
 
+// ---------------- P8-30: the long-match perf run ----------------
+//
+// F12: "no sim tick over 8 ms at p999 on the large-map perf run, and the
+// deterministic FlowField-build proxy inside its budget". The match battery's
+// perf figures are averages over rigs (movement, defence load), and an average
+// hides exactly what a player feels: the one tick in a thousand that stalls
+// because a structure went up and every cached route on a 256x192 map had to
+// be rebuilt (SP-01, D28). This is the measurement F12 names, registered P8-13
+// style: a gate, NON-BINDING until P8-31 lands the parity-proven FlowField
+// replacement and sets LongMatchPerfBinding in MeasurementHarness.
+//
+// THE MATCH: a full AI-versus-AI match in the shipped setup (PlayMeasured's,
+// generalised to every start the map has, so skirmish-09 is four seats), a
+// Normal Standard commander in every seat and the client's default sides
+// (Directorate on even seats, Sodality on odd), to MeasurementHarness's
+// 27000-tick window or a result. One TICK is what the client pays per sim
+// tick: every commander's Act and then Step, timed together.
+//
+// TWO MEASURES PER TICK. Wall time, which is what F12's 8 ms bar reads and
+// which no CI runner can be trusted to reproduce (the defence load gate saw
+// 5.052 and 11.899 ms on one commit); and the flow-field proxy, the fields
+// the world built that tick and the cells their relaxations lowered
+// (World.FlowFieldBuilds and FlowCellsRelaxed), which is a function of the
+// commands alone and therefore identical on every machine. The first
+// LongMatchSkipTicks ticks are left out of both, because they carry the JIT
+// and nothing else that a later tick does not.
+//
+// Each map's figures print as soon as it and every map before it are done, in
+// map order, so the output is the same at any jobs=; only the wall columns and
+// the elapsed line vary between runs. jobs= defaults to ONE because wall time
+// is the figure being measured and maps sharing a machine slow each other.
+
+/// <summary>P8-30: nearest-rank percentile of an ascending array (q of 0.999 is p999).</summary>
+T Percentile<T>(T[] sorted, double q) => sorted.Length == 0 ? default! : sorted[Math.Max(0, (int)Math.Ceiling(q * sorted.Length) - 1)];
+
+LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
+{
+    var map = LoadMeasureMap(root, name, false);
+    int seats = map.Starts.Count;
+    var w = map.BuildWorld(2026, players: seats, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
+    for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
+    map.PlaceSkirmishStart(w, 8000);
+    var ais = new SkirmishAI[seats];
+    for (int p = 0; p < seats; p++) ais[p] = SkirmishAI.Standard(p, AiDifficulty.Normal, w);
+    var ms = new List<double>(ticks);
+    var builds = new List<int>(ticks);
+    var relaxed = new List<long>(ticks);
+    var cmds = new List<Command>();
+    while (w.Tick < ticks && !MatchOver(w))
+    {
+        int began = w.Tick;
+        long b0 = w.FlowFieldBuilds, r0 = w.FlowCellsRelaxed;
+        long t0 = Stopwatch.GetTimestamp();
+        cmds.Clear();
+        for (int p = 0; p < seats; p++) ais[p].Act(w, cmds);
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        long t1 = Stopwatch.GetTimestamp();
+        if (began < MeasurementHarness.LongMatchSkipTicks) continue;
+        ms.Add((t1 - t0) * 1000.0 / Stopwatch.Frequency);
+        builds.Add((int)(w.FlowFieldBuilds - b0));
+        relaxed.Add(w.FlowCellsRelaxed - r0);
+    }
+    return new LongMatchPerf(name, map.Width, map.Height, seats, w.Tick, w.Winner, ms.ToArray(), builds.ToArray(), relaxed.ToArray());
+}
+
+int LongMatchPerfGate()
+{
+    string root = MeasureRoot();
+    var o = MeasureOptions("longmatchperf", true, "maps", "ticks", "jobs");
+    bool binding = MeasurementHarness.LongMatchPerfBinding || o.ContainsKey("bind");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps") ?? "07,08,09");
+    int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
+    int jobs = OptInt(o, "jobs", 1);
+    bool fullLength = ticks == MeasurementHarness.WindowCloseTicks;
+    Console.WriteLine($"longmatchperf: {maps.Length} map(s), a Normal Standard commander in every seat (Directorate on even seats, "
+        + $"Sodality on odd), shipped setup, to {ticks} ticks or a result; the first {MeasurementHarness.LongMatchSkipTicks} ticks "
+        + $"are not recorded. Bar: p999 of the wall time per tick at most {MeasurementHarness.LongMatchTickBudgetMs} ms (F12), "
+        + "and p999 of the cells relaxed per tick within the proxy budget recorded for the map.");
+    var sw = Stopwatch.StartNew();
+    var failures = new List<string>();
+    var rows = new List<string>();
+    RunOrdered(maps.Length, jobs, i => PlayLongMatchPerf(root, maps[i], ticks), (_, r) =>
+    {
+        var ms = (double[])r.Ms.Clone();
+        var bu = (int[])r.Builds.Clone();
+        var rx = (long[])r.Relaxed.Clone();
+        Array.Sort(ms);
+        Array.Sort(bu);
+        Array.Sort(rx);
+        int n = ms.Length;
+        string end = r.Winner >= 0 ? $"seat {r.Winner} wins at t={r.EndTick}" : $"no result at t={r.EndTick}";
+        Console.WriteLine($"  {r.Map} {r.Width}x{r.Height} ({r.Width * r.Height} cells), {r.Seats} seats: {end}, {n} ticks recorded");
+        if (n == 0)
+        {
+            failures.Add($"{r.Map} recorded no tick past the first {MeasurementHarness.LongMatchSkipTicks}");
+            return;
+        }
+        int over = 0, overBuilt = 0, built = 0;
+        double msBuilt = 0, msNone = 0;
+        for (int t = 0; t < n; t++)
+        {
+            bool b = r.Builds[t] > 0;
+            if (b) { built++; msBuilt += r.Ms[t]; } else msNone += r.Ms[t];
+            if (r.Ms[t] > MeasurementHarness.LongMatchTickBudgetMs) { over++; if (b) overBuilt++; }
+        }
+        double msP999 = Percentile(ms, 0.999);
+        long rxP999 = Percentile(rx, 0.999);
+        Console.WriteLine($"    wall ms/tick   mean {ms.Average(),8:F3}  p99 {Percentile(ms, 0.99),8:F3}  p999 {msP999,8:F3}  max {ms[^1],8:F3}  "
+            + $"over {MeasurementHarness.LongMatchTickBudgetMs} ms: {over} ticks, {overBuilt} of them built a field");
+        Console.WriteLine($"    builds/tick    mean {bu.Average(),8:F4}  p99 {Percentile(bu, 0.99),8}  p999 {Percentile(bu, 0.999),8}  max {bu[^1],8}  "
+            + $"total {bu.Sum(b => (long)b)} on {built} ticks");
+        Console.WriteLine($"    relaxed/tick   mean {rx.Average(),8:F0}  p99 {Percentile(rx, 0.99),8}  p999 {rxP999,8}  max {rx[^1],8}  "
+            + $"total {rx.Sum()}");
+        Console.WriteLine($"    wall ms on the {built} ticks that built a field: mean {(built == 0 ? 0 : msBuilt / built):F3}; "
+            + $"on the {n - built} that built none: mean {(n == built ? 0 : msNone / (n - built)):F3}");
+        rows.Add($"  {r.Map,-12} {r.Seats,5}  {ms.Average(),7:F3} {Percentile(ms, 0.99),7:F3} {msP999,7:F3} {ms[^1],8:F3}  "
+            + $"{bu.Average(),7:F4} {Percentile(bu, 0.99),3} {Percentile(bu, 0.999),4} {bu[^1],4}  "
+            + $"{rx.Average(),7:F0} {Percentile(rx, 0.99),7} {rxP999,7} {rx[^1],7}");
+        if (msP999 > MeasurementHarness.LongMatchTickBudgetMs)
+            failures.Add($"{r.Map} p999 {msP999:F3} ms/tick exceeds {MeasurementHarness.LongMatchTickBudgetMs} ms ({over} ticks over)");
+        // A full match that never routes anything is impossible, so a zero
+        // here means the counter has come unwired (a replacement Build that
+        // does not report its work, say), and a proxy reading zero would sit
+        // inside any budget. P8-13's rule: a stage that measured nothing fails.
+        if (built == 0)
+            failures.Add($"{r.Map} recorded no flow-field build in {n} ticks, so the proxy measured nothing");
+        var budget = Array.Find(MeasurementHarness.LongMatchProxyBudget, x => x.Map == r.Map);
+        if (budget.Map is null)
+            Console.WriteLine($"    proxy budget: none recorded for {r.Map}, so only the wall bar applies");
+        else if (!fullLength)
+            Console.WriteLine($"    proxy budget: not applied, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run it was measured on");
+        else
+        {
+            bool inside = rxP999 <= budget.RelaxedP999;
+            Console.WriteLine($"    proxy budget: p999 relaxed/tick {rxP999} against {budget.RelaxedP999}, {(inside ? "inside" : "OVER")}");
+            if (!inside) failures.Add($"{r.Map} p999 relaxed/tick {rxP999} exceeds its proxy budget of {budget.RelaxedP999}");
+        }
+    });
+    sw.Stop();
+    Console.WriteLine("  map          seats  ms mean     p99    p999      max  builds mean p99 p999  max  relaxed mean     p99    p999     max");
+    foreach (var row in rows) Console.WriteLine(row);
+    Console.WriteLine($"longmatchperf: elapsed {sw.Elapsed.TotalSeconds:F1} s for {maps.Length} match(es) on {jobs} thread(s)");
+    return MeasureVerdict("longmatchperf", "P8-31", binding, failures,
+        $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds.");
+}
+
 return args.Length == 0
     ? SelfTest() | Determinism(2026) | Match(2026) | Lan(5)
     : args[0] switch
@@ -16626,6 +16774,8 @@ return args.Length == 0
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
+        // P8-30: F12's large-map perf run, the same conventions.
+        "longmatchperf" => Measured(LongMatchPerfGate),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
@@ -16685,6 +16835,29 @@ static class MeasurementHarness
     /// loser's last Construction Yard died to a superweapon impact in more than
     /// this share of the sweep's decided matches.</summary>
     public const int D2YardBySuperweaponPercent = 25;
+
+    public const bool LongMatchPerfBinding = false;     // F12, the perf half: P8-31 sets this
+
+    /// <summary>P8-30: TDD s6's per-tick budget, which F12 reads at p999.</summary>
+    public const double LongMatchTickBudgetMs = 8.0;
+    /// <summary>P8-30: ticks left out of longmatchperf's figures, the JIT's.</summary>
+    public const int LongMatchSkipTicks = 30;
+    /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
+    /// cells relaxed per tick over the full-length run, read at the percentile
+    /// F12's wall bar uses. Each figure is the one MEASURED at 3633913, which
+    /// is the value P8-31 must meet or beat: a parity-proven replacement pops
+    /// in the same order, relaxes the same cells and so meets it exactly,
+    /// which makes an unchanged proxy part of the parity evidence, and the
+    /// whole of F12's wall-time gain must then come from each relaxation
+    /// costing less. The figures belong to the matches as they play today,
+    /// so a row that changes those matches (any row moving the commander
+    /// goldens) re-measures them in the same change, as it does its goldens.</summary>
+    public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
+    {
+        ("skirmish-07", 313104),
+        ("skirmish-08", 66271),
+        ("skirmish-09", 155801),
+    };
 }
 
 /// <summary>P8-18: F8's figures over one sweep (pillarprobe prints them,
@@ -16720,3 +16893,9 @@ sealed class MeasuredMatch
 record RaidOutcome(int Winner, int EndTick, int Raiders, int RaidersAlive, int HarvestersAlive, int HarvestersLost,
                    int StructsAtRaid, int Structs, int Army, long Credits, int FlakTracks,
                    int AnswerTick = -1, int HarvestersAtAnswer = 0);
+
+/// <summary>P8-30: one longmatchperf match. Ms, Builds and Relaxed hold one
+/// entry per recorded tick, in tick order: the wall time of the tick and the
+/// flow fields built and cells relaxed during it.</summary>
+record LongMatchPerf(string Map, int Width, int Height, int Seats, int EndTick, int Winner,
+                     double[] Ms, int[] Builds, long[] Relaxed);

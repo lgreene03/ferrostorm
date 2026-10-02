@@ -1118,6 +1118,14 @@ public sealed partial class World
     /// <summary>For scenario/campaign terrain scripting that edits Map directly: cached routes must be discarded.</summary>
     public void InvalidateFlowCache() => _flow.Clear();
 
+    /// <summary>P8-30: flow fields built by this world so far, and the cells
+    /// their relaxations lowered: the deterministic proxy `longmatchperf` reads
+    /// for pathfinding cost. Observations only (FlowFieldCache.Builds): never
+    /// read by the sim, hashed or saved.</summary>
+    public long FlowFieldBuilds => _flow.Builds;
+    /// <summary>P8-30: see <see cref="FlowFieldBuilds"/>.</summary>
+    public long FlowCellsRelaxed => _flow.CellsRelaxed;
+
     /// <summary>Queued build count for a factory (UI and AI read this; 0 for anything else).</summary>
     public int QueueLength(int factoryId)
         => _queues.TryGetValue(factoryId, out var q) ? q.Count : 0;
