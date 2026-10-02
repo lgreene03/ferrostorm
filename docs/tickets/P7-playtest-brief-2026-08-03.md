@@ -108,6 +108,16 @@ any of these feel like being outplayed, or like being cheated?
   changes - and calls both a PASS. A war with no middle is not a balanced game.
   **Does one side feel stronger to play?**
 
+  > **CORRECTED 2026-10-02 by P8-14 (the balance tool rebuilt).** The "6-0" was
+  > ONE match counted six times: the sim never draws its random numbers, so the
+  > six seeds were six identical runs, and it was decided on banked credits at
+  > 7000 ticks. Measured on the rebuilt tool, each faction in each seat on
+  > skirmish-01, -02 and -04, played to a result or 27000 ticks and never
+  > adjudicated: **Directorate 3 of 6 cells, Sodality 1, undecided 2**, and seat
+  > 0 won 3 against seat 1's 1. On skirmish-01 seat 0 won with BOTH factions,
+  > which is a seat effect, not a faction one. The question to the player
+  > stands; the number behind it was wrong.
+
 ---
 
 ## Found by the index, and added after this brief was first written
@@ -135,6 +145,14 @@ the check is that a brief written from memory *will* have holes.
 
 - **`dir_bulwark_tank`** loses every matchup the balance tool runs, at 1600
   credits. Build some. Are they worth it?
+
+  > **CORRECTED 2026-10-02 by P8-14.** "Loses every matchup" was an artefact of
+  > the old tool, which set one 1600-credit bulwark against 3000 credits of
+  > cheaper units. At equal credits fielded it beats the shade raider, the
+  > vanguard car and both heroes, and loses to cannon tanks, rifle squads and
+  > rocket squads at every budget from 1800 to 12600. The question stands: it is
+  > poor value against the line units, and whether it feels worth building is
+  > still yours to say.
 - **Q022** wants one sentence: the Directorate has 2 support powers against GDD
   s8's "3-4". Either name a third, or say the asymmetry is correct and s8 should
   be amended.

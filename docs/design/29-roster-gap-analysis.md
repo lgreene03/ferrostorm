@@ -85,6 +85,23 @@ Tier 3 holds three units: one aircraft and two heroes. **No tier-3 vehicle
 exists**, and the **1700 to 2999 credit band is completely empty** - exactly
 where a capstone sits.
 
+> **CORRECTED 2026-10-02 by P8-14 (the balance tool rebuilt). The measurement
+> this paragraph quotes was partly an artefact of the old tool.** It bought
+> "3000 credits a side" by integer division, so the bulwark fought as ONE tank
+> (1600) against fifteen rifle squads (3000), and its "0% survivor mirror" came
+> from a spawn defect that handed every mirror to seat 0. On the rebuilt tool
+> (equal credits fielded within one unit's cost, an exact mirrored arena, /data,
+> budgets 1800 to 12600, every pair from both seats and two angles of approach)
+> the bulwark does **not** lose every matchup: it beats the shade raider, the
+> vanguard car and both heroes at every budget, and the howitzer wherever that
+> row is settled. It loses to the cannon tank, the rifle squad and the rocket
+> squad at every budget, the winners keeping 62 to 100 per cent of their value,
+> and its mirror ends in mutual annihilation. So it IS poor value against the
+> three line units, which is what tracker D14's re-tune (P8-32) addresses, but
+> "loses to everything" was the tool, not the tank. The "scout cars" it was
+> said to lose to are the vanguard car, which it now beats from both seats in
+> both arenas. The original text follows.
+
 The unit billed as the heavy, `dir_bulwark_tank`, is tier **2** and the balance
 tool measures it losing to cannon tanks, rifles, rockets, phantoms and scout
 cars, with a 0% survivor mirror. A 1600-credit unit that loses to 200-credit
@@ -275,6 +292,13 @@ table with its own comment calling the `/data` wiring "a Phase 2 ticket". It is
 that gates that rule everywhere else. Research also notes a major studio re-cut
 its entire matrix between base game and expansion - **treat the matrix as tunable
 data, not as structure.**
+
+> **CORRECTED 2026-10-02 by P8-14.** "Loses every matchup" was an artefact of
+> the old balance tool's unequal armies and seat-biased mirrors; see the
+> correction in s2.4. Measured on the rebuilt tool, the bulwark loses to the
+> three line units (cannon tank, rifle squad, rocket squad) at every budget and
+> beats the specials and heroes. The defect is real but narrower than stated:
+> poor value against the line, not a unit that wins nothing.
 
 **`dir_bulwark_tank` is a live balance defect, not a gap.** It loses every
 matchup the balance tool runs. Research names the likely cause: "the counters to

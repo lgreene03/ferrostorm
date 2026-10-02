@@ -16,8 +16,14 @@ greps for `using Godot` here and fails on it.
 - **`mapgen.py`** and `gen_skirmish_0*.py` - map generation and validation. The
   fairness invariants (180-degree rotation symmetry, reachability, Chebyshev
   distance profiles) are checked here, not trusted. See docs/design/26-map-design.md.
-- **`Ferrostorm.Balance/`** - the engagement matrix and counter audit (doc 12),
-  run by CI. Reporting only; it does not fail the build on balance.
+- **`Ferrostorm.Balance/ [full|quick] [--report PATH]`** - the balance
+  simulator (doc 12, rebuilt by P8-14): the engagement matrix at four budgets,
+  the sieges, and the faction war, all on /data. CI runs `full`, the default.
+  It fails the build only on a failed self-check (fielded credits, mirror
+  annihilation, reproducible tempo) or one of the gates it has always carried
+  (the DEF-17 siege, the wall's hp per credit, the tempo floor); F10 and F11
+  are reported until P8-32 and P8-33 flip their switches. A `--report` path
+  inside the repository is refused.
 - **`viewer/`** and **`lookdev/`** - the HTML replay viewer and the look-dev
   harness.
 
