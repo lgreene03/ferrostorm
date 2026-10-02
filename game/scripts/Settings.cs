@@ -124,6 +124,10 @@ public static class Settings
         ("repair", "REPAIR"),
         ("sell", "SELL"),
         ("deploy", "DEPLOY"),   // TICKET-P5-SPAWN-03: unpack the selected MCV
+        // P8-7: set a selected Carrier's hold down. Default U, which was
+        // unbound and is the mnemonic; its neighbours (Y, I, J, H, 7, 8) are
+        // either free or harmless, so a slip costs nothing a key cannot undo.
+        ("unload", "UNLOAD"),
         // TICKET-P5-ALERT-02: fly the camera to the most recent alert
         // (GDD s7 line 85's "jump-to-event key"). Space, which the [input]
         // block had free.
