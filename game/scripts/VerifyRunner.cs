@@ -1332,7 +1332,7 @@ public partial class VerifyRunner : Node
             "in a LAN match no event reaches the client's sweep at all: AfterNetTick snapshots, updates the fog and checks "
             + "the winner, but never runs RunOneTick's post-step event handling, so a networked match draws no shot, "
             + "death or alert and raises no toast",
-            "unowned: found by P8-10, needs a row (the fix is the post-step sweep as one method both tick paths call)"),
+            "P8-58 (found by P8-10; the fix is the post-step sweep as one method both tick paths call)"),
     };
 
     /// <summary>Quiet ground for a fixture near a seat's own yard (QuietGround's
