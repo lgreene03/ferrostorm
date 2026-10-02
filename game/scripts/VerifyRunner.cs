@@ -1415,10 +1415,6 @@ public partial class VerifyRunner : Node
             + "at the four-cell crowd-arrival radius (World.StepToward), outside LoadTransport's two-cell reach, so it "
             + "never boards however often the order is re-sent (measured from 3, 4, 6 and 10 cells)",
             "a sim row to be raised (found by P8-7; sim/Ferrostorm.Sim is outside the client lane)"),
-        ("Capture/neutral-outpost", CommandType.Attack, false,
-            "an engineer right-clicked onto a NEUTRAL outpost is sent a move, because the attack pick takes hostile seats only", "P8-8"),
-        ("Attack/neutral-bridge", CommandType.Attack, false,
-            "no force-attack gesture fells a neutral bridge (D23: Ctrl plus right-click)", "P8-8"),
         ("SetRally/Airfield", CommandType.SetRally, false,
             "right-clicking with an Airfield selected sets no rally: the client offers a rally on the Factory and Barracks only", "P8-9"),
         ("Produce/Airfield", CommandType.Produce, false,
@@ -1998,9 +1994,10 @@ public partial class VerifyRunner : Node
                 "Sabotage" => "the plant is switched off",
                 _ => "the plant takes the demolition charge",
             };
-            // The capture verb has its own cursor; the other three read Attack
-            // until P8-8 gives every contact unit the Enter cursor.
-            bool cursorOk = effect != "Capture" || cursor == "Enter";
+            // P8-8: every contact unit wears the walk-in verb over a target it
+            // can act on. Until P8-8 only the engineer did and the other three
+            // read Attack, which for an unarmed infiltrator promised a fight.
+            bool cursorOk = cursor == "Enter";
             Gate(selAgent && walkIn == 1 && done && cursorOk, effect,
                  $"a click selects the {g.UnitNameForTest(unitType)} and a right click on an enemy building sends it in: "
                  + $"{reads} after {ticks} ticks (cursor {cursor}, {walkIn} Attack queued{(done ? "" : $"; {agentState}")})");
@@ -2044,6 +2041,7 @@ public partial class VerifyRunner : Node
         // every earlier stage has read its world, and the coverage check closes
         // the gate once every stage has had its say.
         RunCarrierStages(g);
+        RunNeutralTargetStages(g);
         RunInputGateCoverage();
         g.QueueFree();
     }
@@ -2436,6 +2434,169 @@ public partial class VerifyRunner : Node
         Check(emptyUnloads == 0 && g.ToastText.Contains("NOTHING ABOARD"),
               $"inputgate/UnloadTransport: on an empty Carrier the key sends nothing and says so (\"{g.ToastText}\")");
         g.StepTicks(1);
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-8: neutral targets. Neutral outposts pay their owner and stand on
+    /// seven of the nine skirmish maps, and the AI claims them, but the attack
+    /// pick took hostile seats only, so a human's engineer right-clicked onto
+    /// one was sent a move. ADR-025's bridge spans on skirmish-04 and -05 could
+    /// not be felled by any human at all. Decision D23 rules how: by the
+    /// force-attack gesture alone, Ctrl plus right click, never by an ordinary
+    /// right click, because a felled bridge does not come back. Both fixtures
+    /// are spawned the way the maps place them (owner -1), so the stage is
+    /// about the gesture, not about which map happens to carry one.
+    /// </summary>
+    private void RunNeutralTargetStages(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-8): neutral targets, the Enter cursor for every contact unit, and decision D23");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        string Over(int id, bool ctrl)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            return g.CursorNameAt(g.ScreenOf(x, z), ctrl);
+        }
+        int AttacksOn(int id)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == id) n++;
+            return n;
+        }
+        int Moves()
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.PathMove) n++;
+            return n;
+        }
+        void Hold(int id)
+        {
+            var e = lw.Entities[id];
+            e.Stance = Stance.HoldFire;
+            lw.SetEntityForTest(id, e);
+        }
+
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        var q = QuietGround(lw, ycx, ycy);
+        if (q is not { } s)
+        {
+            Check(false, "inputgate/Capture/neutral-outpost: open, quiet ground for the fixture (none found: a fixture failure, not a product one)");
+            return;
+        }
+
+        // --- An unclaimed outpost, and every contact unit's cursor over it ---
+        // The engineer stands at the far end of an open corridor east of the
+        // footprint's centre cell, the contact stages' approach (D4's
+        // single-cell walk-in). The other four contact units stand west of it,
+        // unordered, for the cursor alone.
+        int outpost = lw.SpawnOutpost(-1, s.X, s.Y);
+        int eng = SpawnOfType(lw, me, World.EngineerUnitType, s.X + 4, s.Y + 1);
+        var others = new (string Name, int Id, string Want)[]
+        {
+            ("saboteur", SpawnOfType(lw, me, World.SaboteurUnitType, s.X - 2, s.Y - 2), "Enter"),
+            ("commando", SpawnOfType(lw, me, World.CommandoUnitType, s.X - 2, s.Y), "Enter"),
+            ("shadow commando", SpawnOfType(lw, me, World.ShadowCommandoUnitType, s.X - 2, s.Y + 2), "Enter"),
+            // The sim turns an infiltrator away from a neutral: no treasury to rob.
+            ("infiltrator", SpawnOfType(lw, me, World.InfiltratorUnitType, s.X - 2, s.Y + 4), "Move"),
+        };
+        foreach (var o in others) Hold(o.Id);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        Check(lw.Entities[outpost].PlayerId < 0 && g.DrawnForLocalSeatForTest(outpost),
+              "inputgate/Capture/neutral-outpost: an unclaimed outpost stands, owned by no seat and drawn (the precondition)");
+        string cursors = "";
+        bool cursorsOk = true;
+        foreach (var o in others)
+        {
+            bool sel = ClickSelect(o.Id);
+            string got = Over(outpost, false);
+            cursors += $" {o.Name} {got};";
+            if (!sel || got != o.Want) cursorsOk = false;
+        }
+        Gate(cursorsOk, "Capture/neutral-outpost",
+             $"over an unclaimed outpost the saboteur, commando and shadow commando each read Enter, and the infiltrator, "
+             + $"whom the sim refuses a treasury-less target, reads Move ({cursors.Trim().TrimEnd(';')})");
+
+        // --- The engineer claims it ------------------------------------------
+        bool selEng = ClickSelect(eng);
+        string overOutpost = Over(outpost, false);
+        var (ox, oz) = PosOf(outpost);
+        g.PressRightClick(g.ScreenOf(ox, oz));
+        int walkIn = 0;
+        foreach (var c in g.PendingForTest)
+            if (c.Type == CommandType.Attack && c.EntityId == eng && c.AuxId == outpost) walkIn++;
+        bool captured = false;
+        int ticks = 0;
+        for (; ticks < 150 && !captured; ticks++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+                if (ev.Type == GameEventType.Captured && ev.A == outpost && ev.B == me) captured = true;
+        }
+        Gate(selEng && overOutpost == "Enter" && walkIn == 1 && captured && lw.Entities[outpost].PlayerId == me,
+             "Capture/neutral-outpost",
+             $"a click selects an engineer, the cursor over the unclaimed outpost reads {overOutpost}, and a right click "
+             + $"sends it in: {walkIn} Attack queued, Captured raised {captured} after {ticks} ticks, owner now "
+             + $"{lw.Entities[outpost].PlayerId}");
+        g.ClearSelectionForTest();
+
+        // --- D23: a bridge span is felled by force-attack, and only by it ---
+        var q2 = QuietGround(lw, ycx, ycy, (s.X, s.Y), 14);
+        if (q2 is not { } w)
+        {
+            Check(false, "inputgate/Attack/neutral-bridge: a second patch of quiet ground (none found: a fixture failure)");
+            return;
+        }
+        int span = lw.SpawnBridge(w.X + 3, w.Y);
+        // An eighth of its hit points, so the fell takes seconds rather than a
+        // minute: the gesture is under test here, not the damage model.
+        var se = lw.Entities[span];
+        se.Hp = System.Math.Max(1, se.MaxHp / 8);
+        lw.SetEntityForTest(span, se);
+        int tank = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("dir_cannon_tank"), w.X, w.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool selTank = ClickSelect(tank);
+        int hp0 = lw.Entities[span].Hp;
+        string plainCursor = Over(span, false);
+        var (bx, bz) = PosOf(span);
+        g.PressRightClick(g.ScreenOf(bx, bz));
+        int plainAttacks = AttacksOn(span), plainMoves = Moves();
+        g.StepTicks(90);
+        bool untouched = lw.Entities[span].Alive && lw.Entities[span].Hp == hp0 && lw.Entities[tank].ExplicitTarget != span;
+        Gate(selTank && plainCursor == "Move" && plainAttacks == 0 && plainMoves == 1 && untouched, "Attack/neutral-bridge",
+             $"an ORDINARY right click on a neutral bridge span is ground: cursor {plainCursor}, {plainMoves} PathMove, "
+             + $"{plainAttacks} Attack, and 90 ticks on the span is {(untouched ? "untouched" : "STRUCK")} "
+             + $"({lw.Entities[span].Hp}/{hp0} hp)");
+        g.PressKey(Settings.BindOf("stop"));
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        selTank = ClickSelect(tank);
+        string forceCursor = Over(span, true);
+        (bx, bz) = PosOf(span);
+        g.PressRightClickWithCtrl(g.ScreenOf(bx, bz));
+        int forceAttacks = AttacksOn(span);
+        int fell = 0;
+        for (; fell < 450 && lw.Entities[span].Alive; fell++) g.StepTicks(1);
+        int scx = Map.CellOf(lw.Entities[span].X), scy = Map.CellOf(lw.Entities[span].Y);
+        bool blocked = lw.Map.IsBlocked(scx, scy);
+        Gate(selTank && forceCursor == "Attack" && forceAttacks == 1 && !lw.Entities[span].Alive && blocked,
+             "Attack/neutral-bridge",
+             $"Ctrl plus right click on the same span is the force-attack D23 rules: cursor {forceCursor}, "
+             + $"{forceAttacks} Attack queued, the span "
+             + $"{(lw.Entities[span].Alive ? "still STANDS after" : "falls after")} {fell} ticks, and its cell is "
+             + $"{(blocked ? "now impassable" : "still open")}");
         g.ClearSelectionForTest();
     }
 

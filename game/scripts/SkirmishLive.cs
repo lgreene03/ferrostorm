@@ -2551,8 +2551,19 @@ public partial class SkirmishLive : Node3D
     /// over an enemy structure reads as the capture verb; any combat presence
     /// reads as attack, because IssueOrder sends Attack for every selected
     /// mobile alike.
+    ///
+    /// P8-8: the walk-in verb is every CONTACT unit's, not the engineer's
+    /// alone (ContactOf below), and its target is any structure that unit can
+    /// act on, a neutral outpost included, exactly as the sim admits it. A
+    /// selection of contact units only reads Enter over a target one of them
+    /// can act on; a mixed one reads Enter over a neutral target (the contact
+    /// units walk in and the rest move) and Attack over an enemy (everyone is
+    /// sent at it). Decision D23: with Ctrl held, a neutral bridge span under
+    /// the cursor reads Attack for a selection with a gun in it, because that
+    /// is what the force-attack click sends; without Ctrl it is ground.
+    /// `ctrl` is the modifier state, polled from the device when not given.
     /// </summary>
-    private GameCursor CursorFor(Vector2 screen)
+    private GameCursor CursorFor(Vector2 screen, bool? ctrl = null)
     {
         if (_placingType > 0)
         {
@@ -2564,25 +2575,24 @@ public partial class SkirmishLive : Node3D
         if (_superArmed || _attackMoveArmed || _patrolArmed || _powerArmed != null) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
-        bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false, anyBoarder = false;
+        bool force = ctrl ?? (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta));
+        bool anyMobile = false, allContact = true, anyArmed = false, anyBoarder = false, anyHarvester = false;
+        int contactAt = -1;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind))
             {
                 anyMobile = true;
                 if (CanBoard(in v)) anyBoarder = true;
                 if (v.Kind == EntityKind.Harvester) anyHarvester = true;
-                else if (v.UnitType == EngineerUnitType) anyEngineer = true;
-                else anyCombat = true;
+                if (Armed(id)) anyArmed = true;
+                if (ContactOf(v.UnitType) == ContactVerb.None) allContact = false;
+                else if (contactAt < 0) contactAt = PickContactTarget(screen, v.UnitType);
             }
         if (!anyMobile) return GameCursor.Select;
+        if (force && anyArmed && PickNeutralBridge(screen) >= 0) return GameCursor.Attack;
         int enemy = PickHostile(screen);
-        if (enemy >= 0)
-        {
-            if (anyEngineer && !anyCombat && !anyHarvester
-                && _latest.TryGetValue(enemy, out var te) && !Mobile(te.Kind))
-                return GameCursor.Enter;
-            return GameCursor.Attack;
-        }
+        if (contactAt >= 0 && (allContact || enemy < 0)) return GameCursor.Enter;
+        if (enemy >= 0) return GameCursor.Attack;
         // P8-7: an own Carrier, with something selected that can board it, is
         // the boarding verb: the same two questions IssueOrder asks. A full one
         // reads as refused, because the click refuses it.
@@ -2603,6 +2613,65 @@ public partial class SkirmishLive : Node3D
     /// <summary>The engineer's catalogue id (com_engineer), named for the same
     /// reason McvUnitType is.</summary>
     private const int EngineerUnitType = World.EngineerUnitType;
+
+    // -------- P8-8: contact units and neutral targets --------
+
+    /// <summary>What a unit does on contact with a structure. The sim's
+    /// ContactEffect is private to World, so the five contact types are named
+    /// here off World's own constants, in World.ContactEffectOf's order; the
+    /// inputgate drives every effect through this table with a real right
+    /// click, so a type added there and not here fails a stage rather than
+    /// going quiet.</summary>
+    private enum ContactVerb { None, Capture, Theft, Sabotage, Demolition }
+
+    private static ContactVerb ContactOf(int unitType) => unitType switch
+    {
+        World.EngineerUnitType => ContactVerb.Capture,
+        World.InfiltratorUnitType => ContactVerb.Theft,
+        World.SaboteurUnitType => ContactVerb.Sabotage,
+        World.CommandoUnitType or World.ShadowCommandoUnitType => ContactVerb.Demolition,
+        _ => ContactVerb.None,
+    };
+
+    /// <summary>
+    /// Can a unit of this type act on this structure? The sim's rule
+    /// (World.CanBeActedOn and the theft refusal in CaptureSystem), read
+    /// across: a structure, not a barrier and not a bridge, and NOT ALLIED,
+    /// which is deliberately not the same as hostile. A neutral outpost
+    /// belongs to no seat, so it is allied to nobody and an engineer may claim
+    /// it (ADR-021's whole point), while IsHostileSeat still calls it nobody's
+    /// enemy, so no combat pick ever takes it. An infiltrator is the one
+    /// exception the sim makes: a neutral has no treasury to rob, so the sim
+    /// turns it away and the cursor does not offer it. And only what the local
+    /// seat is shown (P8-5, P8-6): a neutral is shown everywhere, an enemy only
+    /// where it is drawn.
+    /// </summary>
+    private bool ContactCanAct(int unitType, in SnapshotInterpolator.ViewEntity t)
+    {
+        var verb = ContactOf(unitType);
+        if (verb == ContactVerb.None || !t.Alive) return false;
+        if (!World.IsStructure(t.Kind) || World.IsBarrier(t.Kind) || t.Kind == EntityKind.Bridge) return false;
+        if (t.PlayerId >= 0 && !IsHostileSeat(t.PlayerId)) return false;   // own or allied
+        if (verb == ContactVerb.Theft && t.PlayerId < 0) return false;    // nothing to rob
+        return DrawnForLocalSeat(t);
+    }
+
+    /// <summary>The structure under the cursor a unit of this type would walk
+    /// into, or -1, at PickHostile's radius.</summary>
+    private int PickContactTarget(Vector2 screen, int unitType) =>
+        PickEntity(screen, 0.8f, v => ContactCanAct(unitType, v));
+
+    /// <summary>Decision D23: a neutral bridge span is attacked ONLY by the
+    /// explicit force-attack gesture, Ctrl (or Cmd) plus right click, because
+    /// felling one is irreversible. This is the one pick that gesture makes;
+    /// no other pick takes a bridge, so an ordinary right click on a span is
+    /// ground.</summary>
+    private int PickNeutralBridge(Vector2 screen) =>
+        PickEntity(screen, 0.8f, v => v.Kind == EntityKind.Bridge && v.PlayerId < 0 && DrawnForLocalSeat(v));
+
+    /// <summary>Does this unit carry a gun? The sim's own test (CombatSystem
+    /// skips WeaponId 0), read off the sim entity.</summary>
+    private bool Armed(int id) => id >= 0 && id < _world.EntityCount && _world.Entities[id].WeaponId != 0;
 
     /// <summary>Struct type 8, the Service Depot, named because the repair
     /// prompt quotes its price and a bare 8 in a readout is a number nobody can
@@ -2626,7 +2695,10 @@ public partial class SkirmishLive : Node3D
 
     // ---- TICKET-P6-CURSOR-01 verification surface: the resolver itself and
     // what is actually applied, never a recomputation.
-    public string CursorNameAt(Vector2 screen) => CursorFor(screen).ToString();
+    public string CursorNameAt(Vector2 screen) => CursorFor(screen, ctrl: false).ToString();
+    /// <summary>P8-8: the resolver with the force-attack modifier held, as the
+    /// harness cannot hold a real key.</summary>
+    public string CursorNameAt(Vector2 screen, bool ctrl) => CursorFor(screen, ctrl).ToString();
     public string CursorShownName => _cursorShown.ToString();
     public bool CursorTextureLoaded(string kindName) =>
         System.Enum.TryParse<GameCursor>(kindName, out var k)
@@ -3940,8 +4012,11 @@ public partial class SkirmishLive : Node3D
                 _dragRect.Position = tl; _dragRect.Size = br - tl;
                 _dragRect.Visible = (br - tl).Length() > 8;
                 break;
+            // P8-8, decision D23: Ctrl (or Cmd) on the click is force-attack,
+            // read off the EVENT like the group-assign modifier, so the
+            // harness can drive it.
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
-                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift));
+                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
                 break;
         }
     }
@@ -5548,6 +5623,12 @@ public partial class SkirmishLive : Node3D
         _UnhandledInput(new InputEventMouseButton
         { ButtonIndex = MouseButton.Right, Pressed = true, Position = at });
 
+    /// <summary>P8-8: the force-attack gesture, a right click with Ctrl on the
+    /// event, through the same real input path.</summary>
+    public void PressRightClickWithCtrl(Vector2 at) =>
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Right, Pressed = true, Position = at, CtrlPressed = true });
+
     /// <summary>P8-1 (inputgate): the Commands a gesture has queued and the
     /// next tick has not yet drained. Read where they sit, because once a tick
     /// takes them they are gone, and a check of WHAT the gesture asked for has
@@ -5865,7 +5946,10 @@ public partial class SkirmishLive : Node3D
         return slots;
     }
 
-    public void IssueOrder(Vector2 screen, bool queued)
+    /// <summary>The right click. `force` is decision D23's force-attack
+    /// modifier (Ctrl or Cmd on the click): it changes the order only over a
+    /// neutral bridge span, which nothing else attacks.</summary>
+    public void IssueOrder(Vector2 screen, bool queued, bool force = false)
     {
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
@@ -5905,8 +5989,11 @@ public partial class SkirmishLive : Node3D
         // P5-ECON-06: computed ONCE for the whole click, not per selected unit,
         // and the answer decides whether the order is sent at all.
         bool hasRef = HasLiveRefinery();
+        // P8-8, decision D23: the force-attack target, a neutral bridge span,
+        // and only under the explicit gesture.
+        int forced = force ? PickNeutralBridge(screen) : -1;
         bool deniedHarvest = false, deniedBoard = false;
-        int issued = 0, boarded = 0;
+        int issued = 0, boarded = 0, struck = -1;
         // ADR-018: a plain move (not an attack on an enemy) arranges the selected
         // combat units into a formation. Resolved once for the click; harvesters
         // are never members and keep the shared anchor below.
@@ -5914,7 +6001,21 @@ public partial class SkirmishLive : Node3D
         foreach (int id in _selection)
         {
             if (!_latest.TryGetValue(id, out var me)) continue;
-            if (enemy >= 0)
+            // P8-8: a contact unit walks into a structure it can act on, a
+            // neutral outpost included, which PickHostile rightly never takes.
+            int contact = Mobile(me.Kind) && ContactOf(me.UnitType) != ContactVerb.None
+                ? PickContactTarget(screen, me.UnitType) : -1;
+            if (forced >= 0 && Mobile(me.Kind) && Armed(id))
+            {
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, forced, queued));
+                struck = forced;
+            }
+            else if (contact >= 0)
+            {
+                _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, contact, queued));
+                struck = contact;
+            }
+            else if (enemy >= 0)
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, enemy, queued));
             else if (carrier >= 0 && id != carrier && CanBoard(in me))
             {
@@ -5972,9 +6073,10 @@ public partial class SkirmishLive : Node3D
         if (issued == 0) return;
         // W3-17: contracting acknowledgement ring at the order point, colour
         // coded by order type (attack rings sit on the target itself).
-        // P8-7: a boarding acknowledges in gold on the Carrier itself.
-        int mk = enemy >= 0 ? 1 : (boarded > 0 || (field >= 0 && hasRef) ? 2 : 0);
-        int markOn = enemy >= 0 ? enemy : boarded > 0 ? carrier : -1;
+        // P8-7: a boarding acknowledges in gold on the Carrier itself. P8-8: a
+        // walk-in or a force-attack rings its target like any attack.
+        int mk = enemy >= 0 || struck >= 0 ? 1 : (boarded > 0 || (field >= 0 && hasRef) ? 2 : 0);
+        int markOn = enemy >= 0 ? enemy : struck >= 0 ? struck : boarded > 0 ? carrier : -1;
         Vector3 mpos = markOn >= 0 && _latest.TryGetValue(markOn, out var ev2)
             ? new Vector3((float)ev2.X, 0, (float)ev2.Y)
             : new Vector3(p.X, 0, p.Z);
