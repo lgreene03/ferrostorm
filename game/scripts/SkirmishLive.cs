@@ -162,6 +162,8 @@ public partial class SkirmishLive : Node3D
     private Vector2 _dragStart;
     private bool _dragging;
     private Sidebar _sidebar = null!;
+    // The POWERS strip (SupportPowerBar), fed each frame like the minimap.
+    private SupportPowerBar _powerBar = null!;
     private AudioDirector _audio = null!;
     private CombatEffects _effects = null!;
     // W3-19: production-complete flyout toast beside the sidebar.
@@ -208,6 +210,15 @@ public partial class SkirmishLive : Node3D
     // structure charge, and have no way to use it. Armed like attack-move,
     // because it is the same two-step shape: press the key, pick the ground.
     private bool _superArmed;
+    // The support powers' target picker, the superweapon's shape a second
+    // time and for the same reason: UseSupportPower (P7-21) was issued by the
+    // AI and the battery and never by the client, so five shipped powers had
+    // no human trigger. It holds the structure AND the power, because a
+    // Bastion grants two and the command must name which (P7-23's AuxId).
+    // Null means nothing is armed. It is one of the armed-order family:
+    // every site that clears attack-move, patrol and the superweapon clears
+    // this too, and arming it clears them.
+    private (int Structure, int Power)? _powerArmed;
     // ADR-015: patrol arms the same way attack-move does - the key selects the
     // order and the next left click supplies endpoint B - because a patrol needs
     // its far point chosen, not read off wherever the cursor happens to sit.
@@ -1549,6 +1560,13 @@ public partial class SkirmishLive : Node3D
             // W3-11: minimap clicks glide instead of teleporting.
             _cam.FlyTo(new Vector3(world.X, 0, world.Y));
         });
+
+        // The support powers' strip, under the same CanvasLayer as the sidebar
+        // and minimap so LookDev's HUD toggle hides it with them. It issues
+        // nothing itself: a press comes back here, where the Commands are made.
+        _powerBar = new SupportPowerBar();
+        hud.AddChild(_powerBar);
+        _powerBar.Init(OnSupportPowerButton);
     }
     private IReadOnlyList<(int Cx, int Cy)> _mapBlocked = System.Array.Empty<(int, int)>();
 
@@ -2230,6 +2248,7 @@ public partial class SkirmishLive : Node3D
             UnitLine(_factoryId), UnitLine(_barracksId),
             supply, draw, PrereqsMetForLocal,
             new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
+        RefreshSupportPowerBar();
 
         if (_placingType > 0)
         {
@@ -2446,7 +2465,7 @@ public partial class SkirmishLive : Node3D
             return CanPlace(Mathf.FloorToInt(p.X), Mathf.FloorToInt(p.Z), _placingType)
                 ? GameCursor.Select : GameCursor.Invalid;
         }
-        if (_superArmed || _attackMoveArmed || _patrolArmed) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
+        if (_superArmed || _attackMoveArmed || _patrolArmed || _powerArmed != null) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
         bool anyMobile = false, anyHarvester = false, anyEngineer = false, anyCombat = false;
@@ -3690,6 +3709,11 @@ public partial class SkirmishLive : Node3D
             case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } sw when _superArmed:
                 CommitSuperweaponStrike(sw.Position);
                 break;
+            // An armed support power consumes the next left click the same way,
+            // for the same reason and in the same place in the order.
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } sp when _powerArmed != null:
+                CommitSupportPower(sp.Position);
+                break;
             // TICKET-P5-SET-01: armed attack-move consumes the next left click,
             // and is tested before the drag-select case that would otherwise
             // swallow it. Classic two-step: press the key, pick the ground.
@@ -3761,6 +3785,7 @@ public partial class SkirmishLive : Node3D
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
             if (_superArmed) { DisarmSuperweapon("SUPERWEAPON TARGETING CANCELLED"); return true; }
+            if (_powerArmed != null) { DisarmSupportPower("SUPPORT POWER TARGETING CANCELLED"); return true; }
             if (_attackMoveArmed) { DisarmAttackMove("attack-move cancelled"); return true; }
             if (_patrolArmed) { DisarmPatrol("patrol cancelled"); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
@@ -3769,6 +3794,10 @@ public partial class SkirmishLive : Node3D
         }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
         if (ev.IsActionPressed("launch_super")) { ArmSuperweapon(); return true; }
+        // The support powers' key: arms the first READY power, and cycles to
+        // the next ready one while armed. Always consumed, because a refusal is
+        // explained by toast rather than passed on (the superweapon's rule).
+        if (ev.IsActionPressed("support_power")) { CycleSupportPower(); return true; }
         if (ev.IsActionPressed("stop")) { IssueStop(); return true; }
         // ADR-015 / TICKET-P6-C1a: the three unit command stances. Each is a
         // presentation-only issue of the one sim SetStance command (ADR-001
@@ -4088,6 +4117,7 @@ public partial class SkirmishLive : Node3D
         if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
         _patrolArmed = false;                      // ADR-015: the armed orders are exclusive
+        DisarmSupportPower();                      // ...and the support power is one of them
         _attackMoveArmed = true;
         ShowToast($"ATTACK-MOVE: PICK A DESTINATION   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
@@ -4113,6 +4143,7 @@ public partial class SkirmishLive : Node3D
         }
         DisarmAttackMove();
         DisarmPatrol();
+        DisarmSupportPower();
         _superArmed = true;
         ShowToast("SUPERWEAPON ARMED: PICK A TARGET");
         _audio.Play("ui_click", -10);
@@ -4141,6 +4172,209 @@ public partial class SkirmishLive : Node3D
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("ui_confirm", -6);
         ShowToast("SUPERWEAPON LAUNCHED");
+    }
+
+    // -------- P7-21..P7-26: the support powers' fire control --------
+    // The superweapon picker's shape, mirrored: a button or the key ARMS a
+    // targeted power, the next left click on the ground fires it, and every
+    // refusal says why. RADAR JAMMING has no target and fires from its button.
+
+    private readonly List<int> _powerStructIds = new();
+    private readonly List<SupportPowerBar.Entry> _powerEntries = new();
+
+    /// <summary>
+    /// Every power the local seat can reach right now: one entry per (owned
+    /// structure, power its def grants), in ascending structure id and then
+    /// the def's own order, so the strip and the cycling key read the same
+    /// from frame to frame. Structures are found through the interpolated
+    /// view (the FindOwnStructure idiom) and the charge is read LIVE from the
+    /// world. Asked of the def's SupportPowerIds and never of a kind or a type
+    /// id: the Shroud Nest is an Emplacement by kind, and a building grants a
+    /// power the day its file says so (World.GrantsPower's rule, read off the
+    /// public def because GrantsPower itself is internal).
+    /// </summary>
+    private List<SupportPowerBar.Entry> CollectSupportPowers()
+    {
+        _powerStructIds.Clear();
+        foreach (var v in _view)
+            if (v.Alive && v.PlayerId == LocalPlayerId && World.IsStructure(v.Kind)
+                && v.Id >= 0 && v.Id < _world.EntityCount)
+                _powerStructIds.Add(v.Id);
+        _powerStructIds.Sort();
+        _powerEntries.Clear();
+        foreach (int id in _powerStructIds)
+        {
+            var e = _world.Entities[id];
+            if (!e.Alive || e.PlayerId != LocalPlayerId) continue;
+            var powers = _world.GetStructureType(e.StructType).SupportPowerIds;
+            if (powers == null) continue;
+            foreach (int p in powers) _powerEntries.Add(new SupportPowerBar.Entry(id, p, e.ChargeTicks));
+        }
+        return _powerEntries;
+    }
+
+    /// <summary>The strip's per-frame handover, made beside the sidebar's.</summary>
+    private void RefreshSupportPowerBar() =>
+        _powerBar.Refresh(CollectSupportPowers(), _powerArmed, _replay is null);
+
+    /// <summary>Does this structure type's live def grant this power? The
+    /// sim's GrantsPower question, asked of the same def.</summary>
+    private bool StructureGrants(int structType, int powerId)
+    {
+        var powers = _world.GetStructureType(structType).SupportPowerIds;
+        if (powers == null) return false;
+        foreach (int p in powers) if (p == powerId) return true;
+        return false;
+    }
+
+    /// <summary>Why this power cannot be used right now, or null if it can.
+    /// The sim's own refusals (World.cs, UseSupportPower), asked of the same
+    /// live state so the client never offers what the sim would drop in
+    /// silence: the building must still stand, still be this seat's and still
+    /// grant the power, and its SHARED charge must be full.</summary>
+    private string? SupportPowerRefusal(int structureId, int powerId)
+    {
+        string name = SupportPowerBar.NameOf(powerId);
+        if (structureId < 0 || structureId >= _world.EntityCount) return $"{name} UNAVAILABLE: ITS BUILDING IS LOST";
+        var e = _world.Entities[structureId];
+        if (!e.Alive || e.PlayerId != LocalPlayerId || !World.IsStructure(e.Kind) || !StructureGrants(e.StructType, powerId))
+            return $"{name} UNAVAILABLE: ITS BUILDING IS LOST";
+        if (e.ChargeTicks > 0)
+            return $"{name} CHARGING   {Mathf.CeilToInt(e.ChargeTicks / (float)World.TicksPerSecond)}s";
+        return null;
+    }
+
+    /// <summary>A press on the strip. A targeted power ARMS, and the next left
+    /// click on the ground fires it; RADAR JAMMING fires on the press, because
+    /// it has nothing to aim at. Pressing the armed power's own button again
+    /// stands it down, which is the toggle a button reading ARMED promises.</summary>
+    private void OnSupportPowerButton(int structureId, int powerId)
+    {
+        if (_replay != null) return;               // a spectator issues no orders
+        if (_powerArmed is { } a && a.Structure == structureId && a.Power == powerId)
+        {
+            DisarmSupportPower($"{SupportPowerBar.NameOf(powerId)} TARGETING CANCELLED");
+            return;
+        }
+        if (SupportPowerRefusal(structureId, powerId) is { } why) { ShowToast(why); return; }
+        if (SupportPowerBar.IsTargeted(powerId)) ArmSupportPower(structureId, powerId);
+        else FireSupportPower(structureId, powerId, null);
+    }
+
+    /// <summary>
+    /// The support_power key. Arms the first READY power in strip order; while
+    /// one is armed, the next press moves on to the next ready power after it,
+    /// wrapping, so one key walks every choice the strip offers.
+    ///
+    /// RADAR JAMMING is in the cycle and is ARMED rather than fired. A key
+    /// that fired whichever power it landed on would spend the jam the moment
+    /// a player cycled past it on the way to the decoys, so from the key it
+    /// waits for a confirming left click like the rest; the click's position
+    /// is ignored, exactly as the sim ignores it.
+    /// </summary>
+    private void CycleSupportPower()
+    {
+        if (_replay != null) return;               // a spectator issues no orders
+        var all = CollectSupportPowers();
+        if (all.Count == 0) { ShowToast("NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE"); return; }
+        int start = 0;
+        if (_powerArmed is { } a)
+            for (int i = 0; i < all.Count; i++)
+                if (all[i].StructureId == a.Structure && all[i].PowerId == a.Power) { start = i + 1; break; }
+        for (int k = 0; k < all.Count; k++)
+        {
+            var e = all[(start + k) % all.Count];
+            if (!e.Ready) continue;
+            ArmSupportPower(e.StructureId, e.PowerId);
+            return;
+        }
+        // Nothing ready: name the soonest, so the refusal is an answer.
+        var soonest = all[0];
+        foreach (var e in all) if (e.ChargeTicks < soonest.ChargeTicks) soonest = e;
+        ShowToast($"NO SUPPORT POWER READY   {SupportPowerBar.NameOf(soonest.PowerId)} IN "
+                  + $"{Mathf.CeilToInt(soonest.ChargeTicks / (float)World.TicksPerSecond)}s");
+    }
+
+    private void ArmSupportPower(int structureId, int powerId)
+    {
+        if (_placingType > 0) ExitPlacement();     // placement would take the click first
+        DisarmAttackMove();                        // the armed orders are exclusive
+        DisarmPatrol();
+        DisarmSuperweapon();
+        _powerArmed = (structureId, powerId);
+        string name = SupportPowerBar.NameOf(powerId);
+        ShowToast(SupportPowerBar.IsTargeted(powerId)
+            ? $"{name} ARMED: PICK A TARGET"
+            : $"{name} ARMED: CLICK TO FIRE");
+        _audio.Play("ui_click", -10);
+    }
+
+    private void DisarmSupportPower(string? toast = null)
+    {
+        if (_powerArmed == null) return;
+        _powerArmed = null;
+        if (toast != null) ShowToast(toast);
+    }
+
+    /// <summary>The armed power's left click. It differs from
+    /// CommitSupportPowerAt only by the screen-to-ground ray, so the harness
+    /// can fire through every line of the commit a mouse click runs.</summary>
+    private void CommitSupportPower(Vector2 screen)
+    {
+        if (GroundPoint(screen) is not { } p) { DisarmSupportPower(); return; }
+        CommitSupportPowerAt(p.X, p.Z);
+    }
+
+    /// <summary>
+    /// Readiness is re-read here rather than trusted from the arm: the
+    /// building can die, change hands, or have its shared charge spent by its
+    /// other power between the two steps. Those refusals disarm, because no
+    /// second aim can fix them.
+    ///
+    /// TUNNEL DEPLOYMENT is refused on ground the player cannot see. That is
+    /// the sim's own rule (ApplyTunnelDeployment, P7-25), but there a blind aim
+    /// SPENDS the charge and moves nobody. The client can tell beforehand, so
+    /// it says so and keeps the power armed for a second pick rather than
+    /// letting one click waste a full charge.
+    /// </summary>
+    private void CommitSupportPowerAt(float x, float z)
+    {
+        if (_powerArmed is not { } armed) return;
+        if (SupportPowerRefusal(armed.Structure, armed.Power) is { } why)
+        {
+            _powerArmed = null;
+            ShowToast(why);
+            return;
+        }
+        // Clamped inside the map, so the cell asked about below is a real cell
+        // and the one the order will name.
+        float cx = Mathf.Clamp(x, 0f, _mapW - 0.01f), cz = Mathf.Clamp(z, 0f, _mapH - 0.01f);
+        if (armed.Power == World.TunnelDeploymentPowerId
+            && !_world.IsVisible(LocalPlayerId, Mathf.FloorToInt(cx), Mathf.FloorToInt(cz)))
+        {
+            ShowToast("TUNNEL DEPLOYMENT NEEDS GROUND YOU CAN SEE");
+            return;
+        }
+        _powerArmed = null;
+        FireSupportPower(armed.Structure, armed.Power, new Vector2(cx, cz));
+    }
+
+    /// <summary>The one place a support-power Command is made, carrying
+    /// LocalPlayerId like every other. A targeted power carries the ground
+    /// point and acknowledges in the attack colour, the superweapon's; jamming
+    /// carries zero, which its sim handler ignores.</summary>
+    private void FireSupportPower(int structureId, int powerId, Vector2? at)
+    {
+        Fix64 fx = Fix64.Zero, fy = Fix64.Zero;
+        if (at is { } g && SupportPowerBar.IsTargeted(powerId))
+        {
+            fx = Fix64.FromFraction((int)(g.X * 100), 100);
+            fy = Fix64.FromFraction((int)(g.Y * 100), 100);
+            _effects.OrderMarker(new Vector3(g.X, 0, g.Y), 1);
+        }
+        _pending.Add(new Command(0, LocalPlayerId, CommandType.UseSupportPower, structureId, fx, fy, powerId));
+        _audio.Play("ui_confirm", -6);
+        ShowToast($"{SupportPowerBar.NameOf(powerId)} ORDERED");
     }
 
     private void DisarmAttackMove(string? toast = null)
@@ -4213,6 +4447,7 @@ public partial class SkirmishLive : Node3D
         DisarmAttackMove();
         DisarmPatrol();
         DisarmSuperweapon();
+        DisarmSupportPower();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
@@ -4237,6 +4472,7 @@ public partial class SkirmishLive : Node3D
         if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();
         _attackMoveArmed = false;                  // the armed orders are exclusive
+        DisarmSupportPower();
         _patrolArmed = true;
         ShowToast($"PATROL: PICK THE FAR POINT   ({movers} UNITS)");
         _audio.Play("ui_click", -10);
@@ -4280,10 +4516,13 @@ public partial class SkirmishLive : Node3D
         // and Escape clears both. So arming a patrol, changing your mind and
         // pressing stop left the patrol ARMED - the units halted, the cursor
         // stayed on the attack glyph, and the next left click issued the patrol
-        // to the whole selection and marched them straight back out.
+        // to the whole selection and marched them straight back out. The
+        // support power joined the family later and is cleared here for
+        // exactly that reason.
         DisarmAttackMove();
         DisarmPatrol();
         DisarmSuperweapon();
+        DisarmSupportPower();
         int n = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var me) && Mobile(me.Kind))
@@ -4976,6 +5215,31 @@ public partial class SkirmishLive : Node3D
     public bool AttackMoveArmed => _attackMoveArmed;
 
     public bool SuperArmed => _superArmed;
+    /// <summary>Verification reads for the support powers: the armed
+    /// (structure, power), or null, and the strip itself, read as SHOWN.</summary>
+    public (int Structure, int Power)? SupportPowerArmed => _powerArmed;
+    public SupportPowerBar SupportPowerView => _powerBar;
+    /// <summary>Verification hook: the strip's per-frame refresh, the shipped
+    /// call AfterTicks makes. The harness works inside one frame, so after
+    /// PumpActorsForTest has refreshed the view, this is what hands the strip
+    /// its entries.</summary>
+    public void PumpSupportPowersForTest() => RefreshSupportPowerBar();
+    /// <summary>Verification hook: the armed power's ground click, through
+    /// CommitSupportPowerAt, which is everything a mouse click does after the
+    /// screen-to-ground ray.</summary>
+    public void FireArmedSupportPowerAtForTest(float x, float z) => CommitSupportPowerAt(x, z);
+    /// <summary>Verification read: support-power Commands queued and not yet
+    /// stepped. Counted where they sit, because once drained into a tick they
+    /// are gone and a count taken afterwards counts nothing.</summary>
+    public int PendingSupportPowerCommandsForTest
+    {
+        get
+        {
+            int n = 0;
+            foreach (var c in _pending) if (c.Type == CommandType.UseSupportPower) n++;
+            return n;
+        }
+    }
     /// <summary>Verification read: is a patrol armed and waiting for its click?
     /// Stop used to leave this standing, so the next click marched the units
     /// the player had just halted.</summary>
