@@ -1283,6 +1283,9 @@ public partial class VerifyRunner : Node
         // P8-40: the front door, last because it boots a scene of its own that
         // touches no battle and nothing after it reads.
         RunMenuChecks();
+        // P8-11: fault containment, atomic saves, the theatre's dead end and a
+        // full-length match, in scenes of its own.
+        RunFaultContainmentStages();
     }
 
     // ---------------- P8-46: scoregate ----------------
@@ -4150,4 +4153,419 @@ public partial class VerifyRunner : Node
               $"inputgate/front-door: the setup panel holds every row ({need.X:0} x {need.Y:0} px of content in a {boxW:0} x {boxH:0} "
               + $"px box, inside the {windowH} px default window), so it stays centred rather than growing off the screen");
     }
+
+    // ---------------- P8-11: fault containment and its neighbours ----------------
+
+    /// <summary>
+    /// P8-11, one group. A fault inside the tick drain used to escape into
+    /// Godot, which logged it and drained again next frame, so a recurring
+    /// defect threw every frame against a half-stepped world and the player saw
+    /// a frozen battle with no word of why. These drive the REAL drain, the
+    /// frame's _Process, with a fault injected inside the tick body, then read
+    /// what a player and a developer are left with: a halted match, a banner
+    /// with a way out, and one report that rebuilds the match. Beside them,
+    /// atomic saves, the menu's dead end removed, and a full-length match.
+    /// </summary>
+    private void RunFaultContainmentStages()
+    {
+        GD.Print("  --    P8-11: fault containment round the tick drain, atomic saves, the theatre's dead end, a full-length client match");
+        var s = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            // Saves first: they read the world and change nothing in it, so the
+            // fault stage's recording still rebuilds this world exactly.
+            RunAtomicSaveStages(s);
+            RunFaultStages(s);
+        }
+        finally
+        {
+            s.QueueFree();
+        }
+        RunTheatreRemovedStage();
+        RunLongMatchStage();
+    }
+
+    /// <summary>A fresh battle scene on a map, from a seat, stepped only by
+    /// StepTicks or by a frame the check drives itself.</summary>
+    private SkirmishLive BootBattleForStages(string mapRel, int seat)
+    {
+        string? wasMap = MatchConfig.MapPath;
+        try
+        {
+            MatchConfig.MapPath = GameFiles.Abs(mapRel);
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.PendingNet = null;
+            SkirmishLive.LocalSeat = seat;
+            var g = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(g);
+            return g;
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+        }
+    }
+
+    /// <summary>One frame of the real scene, with the drain switched on for
+    /// exactly that frame: _Process is what Godot calls, and with AutoStep on
+    /// it drains the accumulator through the same loop a played match does.</summary>
+    private static void DriveFrame(SkirmishLive g, double seconds)
+    {
+        bool was = SkirmishLive.AutoStep;
+        SkirmishLive.AutoStep = true;
+        try { g._Process(seconds); }
+        finally { SkirmishLive.AutoStep = was; }
+    }
+
+    private static void DeleteSlotFiles(int slot)
+    {
+        foreach (string p in new[] { GameFiles.SlotSave(slot), GameFiles.SlotMeta(slot) })
+        {
+            System.IO.File.Delete(p);
+            System.IO.File.Delete(p + ".tmp");
+        }
+    }
+
+    private static World LoadSaveFile(string path) =>
+        World.Load(new System.IO.MemoryStream(System.IO.File.ReadAllBytes(path)), SkirmishLive.RegisterCatalogue);
+
+    /// <summary>
+    /// Saves are written atomically and the sidecar goes last. A crash is
+    /// simulated exactly where it would land, after a .tmp is written and
+    /// before it is moved into place, through GameFiles' one-shot hook. Slots
+    /// 91 and 92 are outside the menu's four, so a developer's own saves are
+    /// never touched, and both are removed afterwards.
+    /// </summary>
+    private void RunAtomicSaveStages(SkirmishLive s)
+    {
+        const int Overwritten = 91, Fresh = 92;
+        DeleteSlotFiles(Overwritten);
+        DeleteSlotFiles(Fresh);
+        try
+        {
+            // --- An interrupted save leaves the previous one whole -----------
+            s.StepTicks(30);
+            s.SaveToSlot(Overwritten);
+            int savedTick = s.CurrentTick;
+            ulong savedHash = s.StateHash;
+            byte[] savedBytes = System.IO.File.ReadAllBytes(GameFiles.SlotSave(Overwritten));
+            s.StepTicks(30);
+            bool crashed = false;
+            GameFiles.InterruptBeforeMoveForTest = ".fsav";
+            try { s.SaveToSlot(Overwritten); }
+            catch (GameFiles.SimulatedCrashForTest) { crashed = true; }
+            byte[] nowBytes = System.IO.File.ReadAllBytes(GameFiles.SlotSave(Overwritten));
+            bool sameBytes = System.Linq.Enumerable.SequenceEqual(nowBytes, savedBytes);
+            var meta = MatchMeta.Read(GameFiles.SlotMeta(Overwritten));
+            bool offered = meta != null && System.IO.File.Exists(GameFiles.SlotSave(Overwritten));
+            var back = LoadSaveFile(GameFiles.SlotSave(Overwritten));
+            ulong backHash = back.ComputeStateHash();
+            Check(crashed && System.IO.File.Exists(GameFiles.SlotSave(Overwritten) + ".tmp") && sameBytes && offered
+                  && meta!.Tick == savedTick && back.Tick == savedTick && backHash == savedHash,
+                  $"savegate/atomic: a save over slot {Overwritten} interrupted between its .tmp write and the move leaves the previous save "
+                  + $"intact and loadable: the same {savedBytes.Length} bytes ({sameBytes}), offered by the browser ({offered}) with its "
+                  + $"sidecar still reading tick {(meta == null ? -1 : meta.Tick)}, and it loads at tick {back.Tick} on hash 0x{backHash:X16} "
+                  + $"(saved at {savedTick}, 0x{savedHash:X16}); the new bytes sit only in the .tmp");
+
+            // --- The sidecar is written after the save -----------------------
+            // A fresh slot, interrupted while the SAVE is being written: had the
+            // sidecar gone first, a slot would be offered with no save behind it.
+            crashed = false;
+            GameFiles.InterruptBeforeMoveForTest = ".fsav";
+            try { s.SaveToSlot(Fresh); }
+            catch (GameFiles.SimulatedCrashForTest) { crashed = true; }
+            bool noSidecar = !System.IO.File.Exists(GameFiles.SlotMeta(Fresh));
+            bool noSave = !System.IO.File.Exists(GameFiles.SlotSave(Fresh));
+            Check(crashed && noSidecar && noSave,
+                  $"savegate/sidecar-last: a fresh slot interrupted while its save is written is left with no sidecar and no save (sidecar "
+                  + $"present {!noSidecar}, save present {!noSave}), so no slot is ever offered without a complete save behind it");
+            // ...and interrupted while the SIDECAR is written: the save beside
+            // it is already complete, because it was written first.
+            DeleteSlotFiles(Fresh);
+            crashed = false;
+            GameFiles.InterruptBeforeMoveForTest = ".json";
+            try { s.SaveToSlot(Fresh); }
+            catch (GameFiles.SimulatedCrashForTest) { crashed = true; }
+            bool saveThere = System.IO.File.Exists(GameFiles.SlotSave(Fresh));
+            int freshTick = saveThere ? LoadSaveFile(GameFiles.SlotSave(Fresh)).Tick : -1;
+            Check(crashed && saveThere && freshTick == s.CurrentTick && MatchMeta.Read(GameFiles.SlotMeta(Fresh)) == null,
+                  $"savegate/sidecar-last: interrupted while its sidecar is written, the save beside it is already complete and loads at "
+                  + $"tick {freshTick} (live {s.CurrentTick}), and with no sidecar the slot is not offered: the save is written first");
+            // --- And uninterrupted, both land and nothing is left over -------
+            s.SaveToSlot(Fresh);
+            var whole = MatchMeta.Read(GameFiles.SlotMeta(Fresh));
+            Check(whole != null && whole.Tick == s.CurrentTick && LoadSaveFile(GameFiles.SlotSave(Fresh)).Tick == s.CurrentTick
+                  && !System.IO.File.Exists(GameFiles.SlotSave(Fresh) + ".tmp") && !System.IO.File.Exists(GameFiles.SlotMeta(Fresh) + ".tmp"),
+                  "savegate/atomic: an uninterrupted save leaves the save and its sidecar in place at the live tick, and no .tmp behind");
+        }
+        finally
+        {
+            GameFiles.InterruptBeforeMoveForTest = null;
+            DeleteSlotFiles(Overwritten);
+            DeleteSlotFiles(Fresh);
+        }
+    }
+
+    private void RunFaultStages(SkirmishLive s)
+    {
+        s.StepTicks(15);
+        int faultAt = s.CurrentTick;
+        ulong hashAtFault = s.StateHash;   // the world the faulting tick begins from
+        bool wasRecording = s.IsRecording;
+        string dir = GameFiles.FaultsDir;
+        var before = new HashSet<string>(System.IO.Directory.GetFiles(dir, "fault-*.txt"));
+        string escaped = "";
+        int ticksAfter = -1;
+        s.TickFaultForTest = "P8-11 injected fault, thrown by the harness from inside the tick body";
+        try
+        {
+            // The REAL drain: half a second of frame time asks for seven ticks
+            // and the first of them throws.
+            DriveFrame(s, 0.5);
+            // A recurring defect throws on every tick it is given: three more
+            // frames with the fault still armed.
+            for (int i = 0; i < 3; i++) DriveFrame(s, 0.5);
+            // Disarmed, neither the drain nor StepTicks may run another tick.
+            s.TickFaultForTest = null;
+            for (int i = 0; i < 3; i++) DriveFrame(s, 0.5);
+            s.StepTicks(30);
+            ticksAfter = s.CurrentTick;
+        }
+        catch (System.Exception e)
+        {
+            escaped = $"{e.GetType().Name}: {e.Message}";
+        }
+        finally
+        {
+            s.TickFaultForTest = null;
+        }
+        var fresh = new List<string>();
+        foreach (string f in System.IO.Directory.GetFiles(dir, "fault-*.txt"))
+            if (!before.Contains(f)) fresh.Add(f);
+
+        Check(escaped.Length == 0 && s.FaultedForTest && s.FaultTickForTest == faultAt,
+              $"faultgate/containment: an exception thrown inside the frame's tick drain is caught there and halts the match at tick "
+              + $"{faultAt} (halted {s.FaultedForTest}, at tick {s.FaultTickForTest}{(escaped.Length > 0 ? $"; it ESCAPED the drain: {escaped}" : "")})");
+        Check(ticksAfter == faultAt,
+              $"faultgate/containment: no tick advances after the fault, through six more frames of the real drain and 30 StepTicks "
+              + $"(tick {faultAt} then {ticksAfter})");
+        Check(fresh.Count == 1,
+              $"faultgate/report: one fault writes exactly one report, with the fault still thrown on every tick offered for three frames "
+              + $"after it ({fresh.Count} written)");
+
+        string banner = s.FaultBannerTextForTest;
+        string cancel = Settings.KeyName(Settings.BindOf("cancel"));
+        // The hyphen, the en dash and the em dash, by code so this file holds none of them.
+        bool dashFree = banner.IndexOf('-') < 0 && banner.IndexOf((char)0x2013) < 0 && banner.IndexOf((char)0x2014) < 0;
+        Check(s.FaultBannerVisibleForTest && banner.Contains("MATCH HALTED") && banner.Contains("internal error")
+              && banner.Contains("fault report") && banner.Contains("faults folder")
+              && banner.Contains("RETURN TO MAIN MENU") && banner.Contains(cancel) && dashFree,
+              $"faultgate/banner: the banner says the match stopped because of an internal error and where its fault report was saved, "
+              + $"offers RETURN TO MAIN MENU and names the live cancel key ({cancel}), with no dashes (\"{banner.Replace('\n', ' ').Trim()}\")");
+        int left = 0;
+        s.LeaveForMenuForTest = () => left++;
+        s.PressKey(Settings.BindOf("pause_menu"));
+        bool pauseRefused = !s.PauseOpen;
+        s.PressFaultMenuButtonForTest();
+        int byButton = left;
+        s.PressKey(Settings.BindOf("cancel"));
+        s.LeaveForMenuForTest = null;
+        Check(byButton == 1 && left == 2 && pauseRefused && !s.CanSave,
+              $"faultgate/banner: its button and the cancel key both lead back to the menu ({byButton} by the button, {left - byButton} by "
+              + $"the key), and neither the pause menu nor a save can be opened over the halted match (pause refused {pauseRefused}, "
+              + $"can save {s.CanSave})");
+
+        if (fresh.Count == 0) return;
+        string report = System.IO.File.ReadAllText(fresh[0]);
+        var setup = s.Setup;
+        string[] want =
+        {
+            $"tick: {faultAt} ", $"seed: {setup.Seed}", $"map: {setup.MapName} ({setup.MapPath})",
+            $"factions: seat 0 is {setup.Faction}, seat 1 is {setup.OppFaction}", $"difficulty: {setup.AiDifficulty} ",
+            "seats: 2 in play", $"local seat: {s.LocalPlayerId}",
+            "System.InvalidOperationException: P8-11 injected fault", "   at ",
+        };
+        string missing = "";
+        foreach (string w in want) if (!report.Contains(w)) missing += (missing.Length > 0 ? "; " : "") + w;
+        Check(missing.Length == 0,
+              $"faultgate/report: the report holds the exception and its stack, the tick, the seed and the setup (map, factions, "
+              + $"difficulty, seats){(missing.Length > 0 ? $", but is MISSING: {missing}" : "")} ({System.IO.Path.GetFileName(fresh[0])})");
+        RunFaultReproductionStage(report, faultAt, hashAtFault, s.LocalPlayerId, wasRecording);
+        // The harness's own report, not a player's: removed once read.
+        foreach (string f in fresh) System.IO.File.Delete(f);
+    }
+
+    /// <summary>The report is only worth writing if it rebuilds the match, so
+    /// this rebuilds it: the two blocks are saved as a .frep and its sidecar,
+    /// exactly as the report tells a developer to, and played back in a fresh
+    /// scene to the tick that threw.</summary>
+    private void RunFaultReproductionStage(string report, int faultAt, ulong hashAtFault, int seat, bool wasRecording)
+    {
+        string frep = System.IO.Path.Combine(GameFiles.FaultsDir, "harness-reproduce.frep");
+        string side = System.IO.Path.ChangeExtension(frep, ".json");
+        System.IO.File.WriteAllText(frep, FaultReport.Block(report, FaultReport.ReplayHeading, "ferrostorm-replay"));
+        System.IO.File.WriteAllText(side, FaultReport.Block(report, FaultReport.SidecarHeading));
+        SkirmishLive? p = null;
+        try
+        {
+            Replay? rp = null;
+            string loadError = "";
+            try { rp = Replay.Load(frep); }
+            catch (System.Exception e) { loadError = e.Message; }
+            var meta = MatchMeta.Read(side);
+            int commands = 0;
+            if (rp != null) for (int t = 0; t <= faultAt; t++) commands += rp.CommandsFor(t).Count;
+            Check(wasRecording && rp != null && meta != null && rp.Seed == meta.Setup.Seed && commands > 0 && meta.Tick == faultAt + 1,
+                  $"faultgate/reproduce: the report's replay block loads as a .frep holding {commands} commands from tick 0 to {faultAt}, and "
+                  + $"its setup block as the sidecar that runs it to tick {(meta == null ? -1 : meta.Tick)}"
+                  + $"{(loadError.Length > 0 ? $" (the .frep REFUSED: {loadError})" : "")}");
+            if (rp == null || meta == null) return;
+
+            var restore = MatchConfig.CurrentSetup();
+            string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+            var wasStructs = MatchConfig.AllowedStructures;
+            var wasUnits = MatchConfig.AllowedUnits;
+            try
+            {
+                MatchConfig.ApplyFrom(meta);
+                MatchConfig.ReplayPath = frep;
+                MatchConfig.ReplayTicks = meta.Tick;
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.PendingNet = null;
+                SkirmishLive.LocalSeat = seat;
+                p = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(p);
+            }
+            finally
+            {
+                MatchConfig.ApplyFrom(restore);
+                MatchConfig.MissionPath = wasMission;
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.AllowedStructures = wasStructs;
+                MatchConfig.AllowedUnits = wasUnits;
+                MatchConfig.ReplayPath = null;
+            }
+            p.StepTicks(faultAt);
+            ulong got = p.StateHash;
+            Check(p.IsReplay && p.CurrentTick == faultAt && got == hashAtFault,
+                  $"faultgate/reproduce: played back from the report alone, the match reaches tick {p.CurrentTick} on hash 0x{got:X16}, the "
+                  + $"live world's 0x{hashAtFault:X16} at tick {faultAt}, so the tick that threw is rebuilt from the exact state it began in");
+        }
+        finally
+        {
+            p?.QueueFree();
+            System.IO.File.Delete(frep);
+            System.IO.File.Delete(side);
+        }
+    }
+
+    /// <summary>Decision D25: the REPLAY THEATRE button opened a baked-JSON
+    /// scene that showed black with no way out, so the button and its scene
+    /// are gone and REPLAYS stands.</summary>
+    private void RunTheatreRemovedStage()
+    {
+        var menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+        AddChild(menu);
+        try
+        {
+            var buttons = new List<Button>();
+            CollectNodes(menu, buttons);
+            string theatre = "";
+            bool replays = false;
+            foreach (var b in buttons)
+            {
+                // The THEATRE row's picker is an OptionButton showing a map name.
+                if (b is not OptionButton && b.Text.Contains("THEATRE")) theatre = b.Text;
+                if (b.Text == "REPLAYS") replays = true;
+            }
+            bool sceneGone = !ResourceLoader.Exists("res://scenes/Battle3D.tscn");
+            Check(theatre.Length == 0 && replays && sceneGone,
+                  $"inputgate/menu: the main menu has no REPLAY THEATRE button{(theatre.Length > 0 ? $" (found \"{theatre}\")" : "")}, its "
+                  + $"black scene is gone ({sceneGone}), and REPLAYS still offers every recording ({replays}); {buttons.Count} buttons read");
+        }
+        finally
+        {
+            menu.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// F12's long-match stage: the real battle scene on skirmish-07, the
+    /// largest theatre, with BOTH seats commanded, run frame by frame through
+    /// _Process (the drain, the recording, the client's per-tick work and the
+    /// frame's own work) until a side wins or the cap. It asserts nothing
+    /// escaped a frame, nothing faulted, and the match got there.
+    /// </summary>
+    private void RunLongMatchStage()
+    {
+        int cap = LongMatchTickCap;
+        int wasDiff = MatchConfig.AiDifficulty, wasPreset = MatchConfig.AiPreset;
+        SkirmishLive g;
+        try
+        {
+            MatchConfig.AiDifficulty = 1;   // Normal against Normal
+            MatchConfig.AiPreset = 0;
+            g = BootBattleForStages("data/maps/skirmish-07.fmap", seat: 1);
+        }
+        finally
+        {
+            MatchConfig.AiDifficulty = wasDiff;
+            MatchConfig.AiPreset = wasPreset;
+        }
+        try
+        {
+            g.CommandLocalSeatForTest();
+            int t0 = g.CurrentTick, frames = 0, nodes0 = GetTree().GetNodeCount();
+            string escaped = "";
+            bool stalled = false;
+            ulong started = Time.GetTicksMsec();
+            try
+            {
+                while (g.CurrentTick < cap && !g.MatchOverForTest && !g.FaultedForTest)
+                {
+                    int before = g.CurrentTick;
+                    // One second of frame time: the drain runs fifteen ticks, then
+                    // the frame draws them.
+                    DriveFrame(g, 1.0);
+                    frames++;
+                    if (g.CurrentTick == before && !g.MatchOverForTest && !g.FaultedForTest) { stalled = true; break; }
+                }
+            }
+            catch (System.Exception e)
+            {
+                escaped = $"{e.GetType().Name} at tick {g.CurrentTick}: {e.Message}";
+            }
+            ulong ms = Time.GetTicksMsec() - started;
+            int ticks = g.CurrentTick - t0;
+            string end = g.MatchOverForTest ? $"a result at tick {g.CurrentTick} (\"{g.BannerTextForTest.Split('\n')[0]}\")"
+                : g.CurrentTick >= cap ? $"the {cap} tick cap" : $"neither, stopped at tick {g.CurrentTick}";
+            GD.Print($"  --    longmatch: skirmish-07, Normal against Normal, {ticks} ticks in {frames} frames, {ms} ms "
+                     + $"({(ticks > 0 ? (double)ms / ticks : 0):0.00} ms a tick), {GetTree().GetNodeCount() - nodes0} nodes more at the end");
+            Check(escaped.Length == 0,
+                  $"longmatch: no exception escaped a frame across the whole match{(escaped.Length > 0 ? $" (one did: {escaped})" : "")}");
+            Check(!g.FaultedForTest,
+                  $"longmatch: no fault halted the drain{(g.FaultedForTest ? $" (it halted at tick {g.FaultTickForTest}; report {g.FaultReportPathForTest})" : "")}");
+            Check(!stalled && ticks > 0 && (g.CurrentTick >= cap || (g.MatchOverForTest && g.BannerVisibleForTest)),
+                  $"longmatch: the tick advanced from {t0} to {g.CurrentTick} and the match reached {end}");
+        }
+        finally
+        {
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// F12 names a full-length match. MEASURED on skirmish-07 in this harness's
+    /// Debug build: uncapped, Normal against Normal ends in a VICTORY at tick
+    /// 13411 after 72 s, about 5.4 ms a tick and rising with the armies, which
+    /// is more than the harness's budget allows on every run. 7500 ticks (eight
+    /// minutes and twenty seconds of play, past the first contact between ticks
+    /// 4500 and 6000) took 36.3 s, and the whole P8-11 group took the harness
+    /// from 8 s to 46 to 49 s, so that is the default; 9000 added 56 s, too close to
+    /// the 60 s budget to survive a slower runner. VERIFY_LONG_MATCH_TICKS
+    /// raises it on demand, to 27000 for F12's whole thirty minutes, through
+    /// the same stage and with no edit.
+    /// </summary>
+    private static int LongMatchTickCap =>
+        int.TryParse(OS.GetEnvironment("VERIFY_LONG_MATCH_TICKS"), out int n) && n > 0 ? n : 7500;
 }

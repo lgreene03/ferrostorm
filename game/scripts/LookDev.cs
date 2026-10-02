@@ -14,9 +14,9 @@ namespace Ferrostorm.Client;
 /// look at itself again tomorrow.
 ///
 /// It renders the SKIRMISH path and nothing else. game/scenes/Battle3D.tscn
-/// carries its own Sun and Fill while its Theater node runs ReplayTheater,
-/// which calls BuildLightRig and adds three more directionals, so a replay
-/// renders under five directional lights totalling 4.55 energy. That is not
+/// (retired by P8-11) carried its own Sun and Fill while its Theater node ran
+/// ReplayTheater, which called BuildLightRig and added three more directionals,
+/// so a replay rendered under five directional lights totalling 4.55 energy. That was not
 /// the game and a capture taken through it would be a lie (doc 25 s7 note 5).
 /// This harness instantiates res://scenes/Skirmish.tscn, the same scene the
 /// menu launches, and captures its viewport.

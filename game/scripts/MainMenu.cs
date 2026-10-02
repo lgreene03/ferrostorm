@@ -5,7 +5,7 @@ namespace Ferrostorm.Client;
 
 /// <summary>
 /// Entry point in the uplink style: skirmish setup (map, AI temperament,
-/// starting credits), the replay theatre, and quit. Choices flow into
+/// starting credits), saves, replays, and quit. Choices flow into
 /// SkirmishLive via MatchConfig before the scene change.
 /// </summary>
 public partial class MainMenu : Control
@@ -183,7 +183,10 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("REPLAYS", ShowReplays));
         v.AddChild(MenuButton("LAN", ShowLan));
         v.AddChild(MenuButton("SETTINGS", () => GetTree().ChangeSceneToFile("res://scenes/Settings.tscn")));
-        v.AddChild(MenuButton("REPLAY THEATRE", () => GetTree().ChangeSceneToFile("res://scenes/Battle3D.tscn")));
+        // P8-11, decision D25: no REPLAY THEATRE. It opened the baked-JSON
+        // scene, which needed a hand-exported file no build ships and so
+        // showed a black screen with no way out; REPLAYS above already plays
+        // every recording back in the live battle view.
         v.AddChild(MenuButton("STAND DOWN", () => GetTree().Quit()));
 
         // ADR-006: a refused battle explains itself here, in the overlay

@@ -226,7 +226,7 @@ public partial class CombatEffects : Node3D
     private Node3D? _charge;
 
     /// <summary>W3-13: the live scene wires its RtsCamera here so effects can
-    /// feed the trauma pool. ReplayTheater leaves it null.</summary>
+    /// feed the trauma pool. Null means no shake.</summary>
     public RtsCamera? Camera;
 
     // W3-01: at most 8 muzzle omni lights alive at once; the billboard quad
