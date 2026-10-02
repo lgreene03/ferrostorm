@@ -6,8 +6,9 @@ namespace Ferrostorm.Client;
 /// <summary>
 /// Shared battlefield presentation: environment (tonemap/glow/fog), terrain
 /// (cinder ground, Spine ridges, rubble) and per-actor dressing (team rings,
-/// selection rings). Used by both ReplayTheater (replay playback) and
-/// SkirmishLive (live sim). Presentation only - System.Random is fine here.
+/// selection rings). Used by SkirmishLive, which draws live play and replay
+/// playback alike (the baked-JSON ReplayTheater that also used it was retired
+/// by P8-11). Presentation only - System.Random is fine here.
 /// </summary>
 public static class BattlefieldView
 {
@@ -248,7 +249,7 @@ public static class BattlefieldView
 
     /// <summary>Key/fill/rim rig (W1-01): warm key with quality shadows,
     /// cool sky fill, cool rim from the north so silhouettes read against
-    /// the dark ground. Shared by the live scene and the replay theatre.</summary>
+    /// the dark ground. Used by the live scene, which also plays replays back.</summary>
     public static void BuildLightRig(Node3D parent)
     {
         parent.AddChild(new DirectionalLight3D

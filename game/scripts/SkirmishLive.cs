@@ -10,7 +10,7 @@ namespace Ferrostorm.Client;
 /// Live 3D skirmish: the human commands player 0 against a SkirmishAI on
 /// player 1, on the committed map, in the full 3D battlefield. This is the
 /// Main.cs loopback pattern (World stepped at exactly 15 Hz, rendering only
-/// ever from SnapshotInterpolator samples - ADR-001) bound to the Battle3D
+/// ever from SnapshotInterpolator samples - ADR-001) bound to the BattlefieldView
 /// visual layer. The sim is never read mid-tick and never mutated outside
 /// Step's command list.
 ///
@@ -166,7 +166,23 @@ public partial class SkirmishLive : Node3D
     private bool _replayVerified;
     private ulong _replayFinalHash;
     private bool _resumed;
+    /// <summary>The save this scene resumed from, or the recording it is
+    /// playing back; empty for a fresh match. Named in a fault report.</summary>
+    private string _sourcePath = "";
     private PauseMenu? _pauseMenu;
+
+    // P8-11: fault containment round the tick drain. An exception thrown by the
+    // sim step or by the client's work for a tick used to escape into Godot,
+    // which logs it and calls _Process again next frame, so the same broken
+    // tick threw every frame against a world left half stepped. Now the first
+    // one halts the match: no further tick runs, a banner says so and offers
+    // the way back to the menu, and one fault report is written.
+    private bool _faulted;
+    private int _faultTick = -1;
+    private string _faultReportPath = "";
+    private Control? _faultOverlay;
+    private Label? _faultReportNote;
+    private Button? _faultMenuButton;
     // ADR-006: match assembly failed (broken /data, foreign catalogue in a
     // save or replay) and the scene is standing down to the menu. Guards the
     // per-frame callbacks for the deferred frames between refusal and change.
@@ -971,6 +987,7 @@ public partial class SkirmishLive : Node3D
         // none and are never refused.
         var ms = new MemoryStream(File.ReadAllBytes(path));
         _world = World.Load(ms, RegisterCatalogue);
+        _sourcePath = path;
         // The faction re-apply workaround that lived here is gone: the sim
         // round-trips _playerFaction itself as of the Q001 fix (save format
         // v2; the hardened saveload gate pins it). See docs/questions/
@@ -996,6 +1013,7 @@ public partial class SkirmishLive : Node3D
     private void BeginPlayback(string path)
     {
         _replay = Replay.Load(path);
+        _sourcePath = path;
         // ADR-006: a recording made against a different catalogue refuses
         // before a single tick re-simulates, with both checksums named,
         // rather than running to an inevitable DIVERGED verdict. Pre-v3
@@ -1053,8 +1071,10 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>C7b: a LAN match cannot be saved either. A .frep is a command
     /// stream from tick 0 and a save is a snapshot; neither can be resumed back
-    /// into a live lockstep session that the other player is still driving.</summary>
-    public bool CanSave => _replay is null && _net is null;
+    /// into a live lockstep session that the other player is still driving.
+    /// P8-11: nor can a halted match, whose world a fault left in a state
+    /// nobody should be able to resume.</summary>
+    public bool CanSave => _replay is null && _net is null && !_faulted;
 
     public string ModeLine() => _net != null
         // C7b-iv: and it says the battle is STILL RUNNING, because in LAN this
@@ -1069,7 +1089,14 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Write the world (and, in a campaign, the mission's own trigger
     /// state) to a slot, with the sidecar the browser reads. World then mission
-    /// on one stream is the order the campaignsave gate proves.</summary>
+    /// on one stream is the order the campaignsave gate proves.
+    ///
+    /// P8-11: both files are written atomically (a .tmp, then a move), so a
+    /// crash mid-write leaves the previous save whole rather than truncated,
+    /// and the SIDECAR GOES LAST. The load browsers offer a slot only when its
+    /// sidecar exists, so writing it after the save means a slot that is
+    /// offered always has a complete save behind it. The bytes are unchanged:
+    /// this is the client's write path, not the save format.</summary>
     public void SaveToSlot(int slot)
     {
         using var ms = new MemoryStream();
@@ -1079,7 +1106,7 @@ public partial class SkirmishLive : Node3D
             using var bw = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true);
             _mission.Save(bw);
         }
-        File.WriteAllBytes(GameFiles.SlotSave(slot), ms.ToArray());
+        GameFiles.WriteAtomically(GameFiles.SlotSave(slot), ms.ToArray());
         MatchMeta.For(_setup, _world.Tick, _world.Credits(LocalPlayerId)).Write(GameFiles.SlotMeta(slot));
         _audio.Play("ui_confirm", -6);
     }
@@ -1100,8 +1127,16 @@ public partial class SkirmishLive : Node3D
     public void QuitToMenu()
     {
         FinishRecording();
+        if (LeaveForMenuForTest is { } leave) { leave(); return; }
         GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
     }
+
+    /// <summary>P8-11 verification seam: when set, leaving for the menu calls
+    /// this instead of changing scene, because the harness IS the running scene
+    /// and a real change would end it. It lets a check press the fault banner's
+    /// button and the cancel key and see that both lead to the menu. Null in
+    /// every played game; nothing in the client ever sets it.</summary>
+    public System.Action? LeaveForMenuForTest;
 
     /// <summary>Last-ditch finalisation: a window closed mid-match, or a scene
     /// changed by a path that forgot. A half-written recording is worth more
@@ -1116,7 +1151,7 @@ public partial class SkirmishLive : Node3D
     public void TogglePause()
     {
         if (_pauseMenu != null) { ClosePause(); return; }
-        if (_matchOver || _replayDone) return;
+        if (_matchOver || _replayDone || _faulted) return;
         // C7b-iv: a LAN match does NOT stop. _paused halts the accumulator
         // drain, and the drain is the only thing that submits this client's
         // command batch - so pausing would stop the OTHER player's world dead
@@ -1693,6 +1728,10 @@ public partial class SkirmishLive : Node3D
     public override void _Process(double delta)
     {
         if (_refused) return;   // ADR-006: standing down; nothing here exists
+        // P8-11: halted. Nothing per frame reads a world a fault left half
+        // stepped, so the battlefield holds its last frame, the fault banner and
+        // its button stay live, and no error repeats every frame.
+        if (_faulted) return;
         BattlefieldView.TickWater(delta);
         RefreshDesyncNotice();
         UpdateCursor();   // TICKET-P6-CURSOR-01: one resolve per frame
@@ -1722,6 +1761,9 @@ public partial class SkirmishLive : Node3D
             if (_accumulator > TickSeconds * 2) _accumulator = TickSeconds * 2;
             if (!Running) _accumulator = 0;
         }
+        // P8-11: and if this frame's drain is the one that faulted, its frame
+        // work must not read the world the fault just left either.
+        if (_faulted) return;
         AfterTicks(delta);
     }
 
@@ -1734,9 +1776,10 @@ public partial class SkirmishLive : Node3D
     /// writes it.</summary>
     public static bool AutoStep = true;
 
-    /// <summary>Is the sim allowed to advance? A finished match, a pause, and a
-    /// replay that has reached the end of its stream all stop it.</summary>
-    private bool Running => !_matchOver && !_paused && !_replayDone;
+    /// <summary>Is the sim allowed to advance? A finished match, a pause, a
+    /// replay that has reached the end of its stream and (P8-11) a fault all
+    /// stop it.</summary>
+    private bool Running => !_matchOver && !_paused && !_replayDone && !_faulted;
 
     /// <summary>
     /// TICKET-P5-SET-01: raise the match notice if the session has one. Polled
@@ -1829,6 +1872,11 @@ public partial class SkirmishLive : Node3D
             if (c.Type == CommandType.Deploy && c.PlayerId == LocalPlayerId)
                 _pendingDeploys[c.EntityId] = recTick;
         var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
+        // P8-11 verification hook: a fault thrown where the sim's own would be,
+        // after this tick's orders are recorded and before the world steps, on
+        // every tick while it is set, as a recurring defect would. Null in
+        // every played game.
+        if (TickFaultForTest is { } injected) throw new System.InvalidOperationException(injected);
         _world.Step(span);
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
@@ -3962,6 +4010,14 @@ public partial class SkirmishLive : Node3D
     public override void _UnhandledInput(InputEvent ev)
     {
         if (_refused) return;   // ADR-006: standing down; nothing here exists
+        // P8-11: a halted match answers one key, the way back to the menu the
+        // banner names. Nothing else may select, order or open anything over a
+        // world that is no longer running.
+        if (_faulted)
+        {
+            if (ev is InputEventKey { Pressed: true, Echo: false } && ev.IsActionPressed("cancel")) QuitToMenu();
+            return;
+        }
         // TICKET-P5-SET-01: every key this scene answers to is an InputMap
         // action now, so the settings scene can rebind any of them and this
         // method never learns of it. Keys are dispatched before the mouse cases
@@ -5818,6 +5874,50 @@ public partial class SkirmishLive : Node3D
     // the same states by the same code.
     public void StepTicks(int n) { for (int i = 0; i < n && Running; i++) AdvanceOneTick(); }
 
+    // ---- P8-11 verification surface: the containment, read where it lives.
+    /// <summary>While set, every tick throws an InvalidOperationException with
+    /// this message from inside the tick body, where a sim fault would. Null in
+    /// every played game; nothing in the client ever sets it.</summary>
+    public string? TickFaultForTest;
+    public bool FaultedForTest => _faulted;
+    public int FaultTickForTest => _faultTick;
+    public string FaultReportPathForTest => _faultReportPath;
+    public bool FaultBannerVisibleForTest => _faultOverlay is { } o && o.IsInsideTree() && o.Visible;
+    /// <summary>Every word the banner shows, its button included.</summary>
+    public string FaultBannerTextForTest
+    {
+        get
+        {
+            if (_faultOverlay is null) return "";
+            var sb = new System.Text.StringBuilder();
+            void Walk(Node n)
+            {
+                if (n is Label l) sb.Append(l.Text).Append('\n');
+                else if (n is Button b) sb.Append(b.Text).Append('\n');
+                foreach (var c in n.GetChildren()) Walk(c);
+            }
+            Walk(_faultOverlay);
+            return sb.ToString();
+        }
+    }
+    /// <summary>Press the banner's button the way a click does, through the
+    /// signal it emits.</summary>
+    public void PressFaultMenuButtonForTest() => _faultMenuButton?.EmitSignal(BaseButton.SignalName.Pressed);
+    public bool MatchOverForTest => _matchOver;
+
+    /// <summary>P8-11 verification hook: hand the LOCAL seat to a commander as
+    /// well, so a long match plays AI against AI through this scene's own tick
+    /// loop, recording and client work included, with nobody at the keyboard.
+    /// Inserted in seat order, because the commanders' orders share one command
+    /// stream and that order is part of the recording.</summary>
+    public void CommandLocalSeatForTest()
+    {
+        var rung = (AiDifficulty)System.Math.Clamp(_setup.AiDifficulty, 0, 3);
+        int at = 0;
+        while (at < _commanders.Count && _commanders[at].Seat < LocalPlayerId) at++;
+        _commanders.Insert(at, SkirmishAI.Standard(LocalPlayerId, rung, _world));
+    }
+
     /// <summary>
     /// C7b: advance exactly one tick, offline or networked, returning false when
     /// the sim could NOT advance (a lockstep tick whose merged batch has not
@@ -5842,7 +5942,133 @@ public partial class SkirmishLive : Node3D
         if (_winner < 0 && _world.Winner >= 0) EndMatch(_world.Winner);
     }
 
+    /// <summary>
+    /// P8-11: THE CONTAINMENT. Every tick the frame drain or StepTicks runs
+    /// comes through here, so this is the one place a fault in the sim step or
+    /// in the client's work for a tick is caught. The first fault halts the
+    /// match (Running goes false, so neither caller asks for another tick),
+    /// raises the banner and writes one report; returning false tells the drain
+    /// the tick did not happen. Caught here and nowhere else: everything below
+    /// still throws exactly as it always has.
+    /// </summary>
     private bool AdvanceOneTick()
+    {
+        if (_faulted) return false;
+        int tick = _world.Tick;
+        try
+        {
+            return AdvanceOneTickUncontained();
+        }
+        catch (System.Exception e)
+        {
+            Fault(e, tick);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// P8-11: halt on the first fault. The banner goes up BEFORE the report is
+    /// written, so a player is told even if writing the report then fails; and
+    /// that failure is not caught here either, so it reaches Godot's log rather
+    /// than vanishing. Later calls are no-ops: one fault, one report.
+    /// </summary>
+    private void Fault(System.Exception e, int tick)
+    {
+        if (_faulted) return;
+        _faulted = true;
+        _faultTick = tick;
+        _accumulator = 0;
+        GD.PushError($"P8-11: the match was halted at tick {tick} by an internal error: {e}");
+        ClosePause();
+        DisarmAllArmedOrders();
+        _banner.Visible = false;
+        // The battle's cursors describe orders, and no order can be given now.
+        Input.SetCustomMouseCursor(null);
+        ShowFaultBanner();
+        _faultReportPath = WriteFaultReport(e, tick);
+        // Said only once it is true: a write that threw never reaches here.
+        _faultReportNote!.Text = "A fault report with what is needed to reproduce the match has been saved in the faults folder of the game's user data.";
+        _faultReportNote.Visible = true;
+        GD.Print($"P8-11: fault report written to {_faultReportPath}");
+    }
+
+    /// <summary>
+    /// P8-11: the report, holding what reproduces the match. A live match's
+    /// recording ENDS HERE: it goes into the report rather than into REPLAYS,
+    /// because its closing hash would be the hash of a world the fault left
+    /// half stepped, and a replay that can only ever report DIVERGED does not
+    /// belong in the player's list. Its hash line is therefore zero, which the
+    /// report says.
+    /// </summary>
+    private string WriteFaultReport(System.Exception e, int tick)
+    {
+        string path = FaultReport.NewPath(_setup.MapName);
+        string? replay = null;
+        string note;
+        if (_rec != null && !_recDone)
+        {
+            _recDone = true;
+            string tmp = path + ".frep.tmp";
+            _rec.Finish(0, tmp);
+            replay = File.ReadAllText(tmp);
+            File.Delete(tmp);
+            note = "Every command issued from tick 0 up to and including the tick that threw. The closing hash line is zero:\n"
+                 + "the world faulted part way through a tick, so it has no honest final hash, and a playback that runs past\n"
+                 + "the fault without halting will report DIVERGED at its end. What matters is whether it halts on the same tick.";
+        }
+        else if (_net != null)
+            note = "None: a LAN match records no replay. The seed and setup above rebuild its tick 0 on the host's side.";
+        else if (_replay != null)
+            note = $"None written: this was a playback, so the recording being played reproduces it: {_sourcePath}";
+        else if (_resumed)
+            note = $"None: a resumed match records nothing, because a replay starts at tick 0. It resumed from {_sourcePath}";
+        else
+            note = "None: the recording had already been closed.";
+        string mode = _net != null ? "LAN match"
+            : _replay != null ? "replay playback"
+            : _resumed ? "resumed from a save"
+            : "live match, recorded from tick 0";
+        // The sidecar a replay of this match needs, its length set to run the
+        // tick that threw (playback stops once the world reaches it).
+        var meta = MatchMeta.For(_setup, tick + 1, 0);
+        meta.FinalHash = $"{0UL:X16}";
+        string sidecar = System.Text.Encoding.UTF8.GetString(meta.ToJsonBytes());
+        string text = FaultReport.Compose(e, tick, _world.Tick, _setup, LocalPlayerId, _world.PlayerCount,
+            mode, _world.CatalogueChecksum, sidecar, replay, note);
+        GameFiles.WriteAtomically(path, System.Text.Encoding.UTF8.GetBytes(text));
+        return path;
+    }
+
+    /// <summary>P8-11: the halted match's banner, in the uplink overlay's
+    /// clothes, over the frozen battlefield. Its button is the way back to the
+    /// menu, and so is the cancel key, which it names from the live binding.
+    /// The words are deliberately plain and carry no dashes.</summary>
+    private void ShowFaultBanner()
+    {
+        var overlay = UplinkUi.FullOverlay(_hud, 0.82f);
+        overlay.Name = "FaultBanner";
+        _faultOverlay = overlay;
+        var v = UplinkUi.OverlayBox(overlay, "MATCH HALTED", 330, 150);
+        var body = new Label
+        {
+            Text = "The battle stopped because of an internal error, so it has been halted rather than left running.",
+            HorizontalAlignment = HorizontalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(560, 0),
+        };
+        body.AddThemeFontSizeOverride("font_size", 15);
+        body.AddThemeColorOverride("font_color", UplinkUi.Bone);
+        v.AddChild(body);
+        _faultReportNote = UplinkUi.Note("", 12);
+        _faultReportNote.Visible = false;
+        v.AddChild(_faultReportNote);
+        v.AddChild(new HSeparator());
+        _faultMenuButton = UplinkUi.MenuButton("RETURN TO MAIN MENU", QuitToMenu);
+        v.AddChild(_faultMenuButton);
+        v.AddChild(UplinkUi.Note($"or press {Settings.KeyName(Settings.BindOf("cancel"))}", 11));
+    }
+
+    private bool AdvanceOneTickUncontained()
     {
         if (_net == null) { RunOneTick(); return true; }
 

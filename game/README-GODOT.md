@@ -58,6 +58,9 @@ First run:
      the ferrite, and the war, in 3D, camera on WASD/edge/wheel.
 The live-sim binding replaces ReplayTheater's JSON source with
 SnapshotInterpolator later; both speak the same shapes.
+Retired by P8-11 (decision D25): Battle3D.tscn and ReplayTheater.cs are gone,
+and the menu's REPLAY THEATRE button with them. Recordings play back through
+REPLAYS in the live battle scene instead.
 
 ## Bring-up validated (2026-07-12, dev machine)
 

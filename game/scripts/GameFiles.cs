@@ -32,6 +32,52 @@ public static class GameFiles
 
     public static string SavesDir => Dir("saves");
     public static string ReplaysDir => Dir("replays");
+    /// <summary>P8-11: where a halted match leaves its fault report.</summary>
+    public static string FaultsDir => Dir("faults");
+
+    /// <summary>
+    /// P8-11: write a file so that a crash in the middle of the write can never
+    /// leave it truncated. The bytes go to a ".tmp" beside the target, are
+    /// flushed through to the disk, and only then is the tmp moved over the
+    /// target. A move within one directory is a rename, which the file system
+    /// performs whole, so at every instant the target is either the previous
+    /// complete file or the new complete file and never half of one. A crash
+    /// before the move leaves the tmp lying beside an untouched target, and the
+    /// next write simply replaces it.
+    /// </summary>
+    public static void WriteAtomically(string path, byte[] bytes)
+    {
+        string tmp = path + ".tmp";
+        using (var fs = new FileStream(tmp, FileMode.Create, System.IO.FileAccess.Write, FileShare.None))
+        {
+            fs.Write(bytes, 0, bytes.Length);
+            // Through to the disk, not only to the OS cache: without it a power
+            // cut can persist the rename before the data and leave a target of
+            // the right name and no contents, which is the truncation this
+            // exists to prevent.
+            fs.Flush(flushToDisk: true);
+        }
+        if (InterruptBeforeMoveForTest is { } suffix && path.EndsWith(suffix, System.StringComparison.Ordinal))
+        {
+            InterruptBeforeMoveForTest = null;   // one shot, so a forgotten reset cannot break the next save
+            throw new SimulatedCrashForTest(tmp);
+        }
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    /// <summary>P8-11 verification hook: the next atomic write to a path ending
+    /// in this suffix stops after its tmp is written and before the move, which
+    /// is exactly where a crash would leave it, by throwing
+    /// <see cref="SimulatedCrashForTest"/>. Null in every played game; nothing
+    /// in the client ever sets it.</summary>
+    public static string? InterruptBeforeMoveForTest;
+
+    /// <summary>The crash <see cref="InterruptBeforeMoveForTest"/> simulates.
+    /// Its own type, so the harness catches this and nothing else.</summary>
+    public sealed class SimulatedCrashForTest : System.Exception
+    {
+        public SimulatedCrashForTest(string tmp) : base($"simulated crash after writing {tmp} and before moving it into place") { }
+    }
 
     /// <summary>
     /// The directory that holds /data. Running from source that is the repo
@@ -222,7 +268,14 @@ public sealed class MatchMeta
         Stamp = Time.GetDatetimeStringFromSystem(utc: true, useSpace: true),
     };
 
-    public void Write(string path)
+    /// <summary>P8-11: atomically, through a tmp and a move, so a crash while
+    /// the sidecar is being written leaves the previous sidecar whole rather
+    /// than a truncated one that reads as no sidecar at all.</summary>
+    public void Write(string path) => GameFiles.WriteAtomically(path, ToJsonBytes());
+
+    /// <summary>The sidecar's exact bytes. Split from <see cref="Write"/> so a
+    /// fault report can carry the identical JSON a sidecar would.</summary>
+    public byte[] ToJsonBytes()
     {
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
@@ -248,7 +301,7 @@ public sealed class MatchMeta
             if (FinalHash.Length > 0) w.WriteString("final_hash", FinalHash);
             w.WriteEndObject();
         }
-        File.WriteAllBytes(path, ms.ToArray());
+        return ms.ToArray();
     }
 
     /// <summary>Null for a missing or unreadable sidecar. A corrupt sidecar
@@ -312,6 +365,99 @@ public sealed class MatchMeta
 
     /// <summary>One line for a slot button or a replay row.</summary>
     public string Line() => $"{Setup.Describe()}   TICK {Tick}   {Stamp}";
+}
+
+/// <summary>
+/// P8-11: the report a halted match leaves behind. One plain text file per
+/// fault, self-contained, so a player can attach a single file and a developer
+/// can rebuild the match from it: the exception and its stack, the seed and
+/// setup, the tick, the setup again in the exact sidecar JSON, and the replay
+/// so far in the exact .frep format. The two blocks saved as a .json and a
+/// .frep pair in the replays folder play back through REPLAYS like any match.
+/// </summary>
+public static class FaultReport
+{
+    public const string ExceptionHeading = "--- exception ---";
+    public const string SidecarHeading = "--- setup (.json sidecar) ---";
+    public const string ReplayHeading = "--- replay so far (.frep) ---";
+
+    /// <summary>A fresh path in the faults folder, named the way recordings
+    /// are (UTC stamp, then the map) and never reusing an existing name, so a
+    /// second fault cannot overwrite the first one's report.</summary>
+    public static string NewPath(string mapName)
+    {
+        string dir = GameFiles.FaultsDir;
+        string stamp = Time.GetDatetimeStringFromSystem(utc: true).Replace(':', '-');
+        string stem = $"fault-{stamp}-{mapName}";
+        string path = Path.Combine(dir, stem + ".txt");
+        for (int n = 1; File.Exists(path); n++) path = Path.Combine(dir, $"{stem}-{n}.txt");
+        return path;
+    }
+
+    /// <summary>The report's text. Reads nothing from the faulted world: every
+    /// value is handed in, so composing the report cannot trip over the state
+    /// that just threw.</summary>
+    public static string Compose(System.Exception error, int tick, int worldTick, MatchSetup setup,
+        int localSeat, int seatsInPlay, string mode, ulong catalogue, string sidecarJson,
+        string? replay, string replayNote)
+    {
+        var sb = new System.Text.StringBuilder();
+        void L(string s = "") => sb.Append(s).Append('\n');
+        L("FERROSTORM FAULT REPORT");
+        L();
+        L("The match was halted because the simulation step, or the client's work for one tick,");
+        L("threw an exception. Everything needed to reproduce it is below: the setup, the seed and,");
+        L("for a recorded match, every command issued up to and including the tick that threw.");
+        L("To replay it, save the setup block as NAME.json and the replay block as NAME.frep in the");
+        L("game's replays folder and choose it under REPLAYS. Playback re-runs the same commands and");
+        L("should halt on the same tick.");
+        L();
+        L($"written (UTC): {Time.GetDatetimeStringFromSystem(utc: true, useSpace: true)}");
+        L($"tick: {tick} (the tick being simulated when the exception was thrown)");
+        L($"world tick at the fault: {worldTick}");
+        L($"seed: {setup.Seed}");
+        L($"map: {setup.MapName} ({setup.MapPath})");
+        L($"mission: {setup.MissionIndex} (0 is a skirmish)");
+        L($"factions: seat 0 is {setup.Faction}, seat 1 is {setup.OppFaction}, further seats alternate (0 Directorate, 1 Sodality)");
+        L($"difficulty: {setup.AiDifficulty} (0 easy, 1 normal, 2 hard, 3 brutal); ai preset: {setup.AiPreset} (0 standard, 1 rusher, 2 turtle)");
+        L($"seats: {seatsInPlay} in play (the setup asked for {setup.Seats}, and 0 means fill the map); "
+          + $"team mode: {setup.TeamMode} (0 free for all, 1 even sides)");
+        L($"start credits: {setup.StartCredits}");
+        L($"local seat: {localSeat}");
+        L($"mode: {mode}");
+        L($"catalogue checksum: 0x{catalogue:X16}");
+        L();
+        L(ExceptionHeading);
+        L(error.ToString());
+        L();
+        L(SidecarHeading);
+        L(sidecarJson.TrimEnd('\n'));
+        L();
+        L(ReplayHeading);
+        L(replayNote);
+        if (replay != null) sb.Append(replay);
+        return sb.ToString();
+    }
+
+    /// <summary>The text between one heading and the next (or the end), for
+    /// the harness, which rebuilds the match from a report exactly as a
+    /// developer would. The replay block's leading note lines are not part of
+    /// the .frep, so <paramref name="fromLineStartingWith"/> skips to the first
+    /// line that is.</summary>
+    public static string Block(string report, string heading, string? fromLineStartingWith = null)
+    {
+        int at = report.IndexOf(heading + "\n", System.StringComparison.Ordinal);
+        if (at < 0) return "";
+        int start = at + heading.Length + 1;
+        int end = report.IndexOf("\n--- ", start, System.StringComparison.Ordinal);
+        string block = end < 0 ? report[start..] : report[start..(end + 1)];
+        if (fromLineStartingWith != null)
+        {
+            int from = block.IndexOf(fromLineStartingWith, System.StringComparison.Ordinal);
+            block = from < 0 ? "" : block[from..];
+        }
+        return block.Trim('\n') + "\n";
+    }
 }
 
 /// <summary>
