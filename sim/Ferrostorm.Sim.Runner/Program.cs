@@ -11553,13 +11553,24 @@ int AirGate()
     // shoot is a dominant strategy rather than a feature, so "ground weapons
     // cannot touch it" and "the answer kills it" are one claim in two parts and
     // neither is worth having alone.
-    const int Flyer = 15, Flak = 16, Rifle = 2, Tank = 1;
+    const int Flyer = 15, Flak = 16, Rifle = 2, Tank = 1, Howitzer = 8, Bastion = 17;
 
     int SpawnOf(World w, int type, int player, int cx, int cy)
     {
         var d = w.GetUnitType(type);
         return w.SpawnUnit(player, Fix64.FromInt(cx), Fix64.FromInt(cy), d.Speed, d.Hp,
                            d.Armour, d.WeaponId, veterancy: false, unitType: type);
+    }
+
+    // P8-16 (D11): the CONTROL every area stage below stands beside its flyer.
+    // The flyer's own armour and hit points on a ground hull, at the flyer's
+    // own point, so the one property separating the two victims is that one of
+    // them flies. Unarmed, so it cannot start a fight that muddies the reading.
+    int GroundTwin(World w, int player, int cx, int cy)
+    {
+        var fd = w.GetUnitType(Flyer);
+        return w.SpawnUnit(player, Fix64.FromInt(cx), Fix64.FromInt(cy), fd.Speed, fd.Hp,
+                           fd.Armour, weaponId: 0, veterancy: false, unitType: Tank);
     }
 
     // --- 1. Ground weapons cannot engage an aircraft, by AUTO-ACQUIRE. A rifle
@@ -11676,6 +11687,127 @@ int AirGate()
                         + "spawning its flyers directly instead of ordering one.");
         Console.WriteLine($"airgate: a Produce order at an airfield yields a flyer ({built} built), which is the "
                           + "stage this gate lacked while the aircraft was unbuildable by every player in the game");
+    }
+
+    // --- 6 to 9. P8-16 (D11): SPLASH AND AREA EFFECTS SKIP AIRCRAFT. Every
+    //        stage above proved clause 3 for the AIMED shot and none of them put
+    //        a plane under a blast, so the gap sat open beside a green gate:
+    //        finding AI-11 measured 12 hp half-damage hits on Strike Flyers from
+    //        howitzer splash, which handed the opponent an anti-air answer
+    //        nobody designed. Each area stage stands a GroundTwin at the flyer's
+    //        own point and requires it to be hurt, so no stage can pass by the
+    //        blast simply missing.
+
+    // --- 6. Weapon splash. A howitzer shells a ground unit directly under a
+    //        Strike Flyer. Read after ONE tick, so it is one shell and the
+    //        figures are exact.
+    {
+        var w = new World(3105, 64, 64, players: 2);
+        var td = w.GetUnitType(Tank);
+        int struck = w.SpawnUnit(1, Fix64.FromInt(30), Fix64.FromInt(30), td.Speed, td.Hp, td.Armour,
+                                 weaponId: 0, veterancy: false, unitType: Tank);
+        int flyer = SpawnOf(w, Flyer, 1, 30, 30);
+        int twin = GroundTwin(w, 1, 30, 30);
+        // Seven cells: inside the howitzer's 9-cell reach, outside its 3-cell
+        // dead zone, and beyond the flyer's own 4-cell gun, so nothing shoots
+        // back and the one shell is the only damage in the stage.
+        int gun = SpawnOf(w, Howitzer, 0, 23, 30);
+        int struckHp = w.Entities[struck].Hp, flyerHp = w.Entities[flyer].Hp, twinHp = w.Entities[twin].Hp;
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Attack, gun, Fix64.Zero, Fix64.Zero, struck) });
+        if (w.Entities[struck].Hp >= struckHp)
+            return Fail("air splash: the howitzer did not fire at the ground under the flyer, so this stage proves "
+                        + "nothing about splash");
+        var hw = w.GetWeaponType(w.Entities[gun].WeaponId);
+        int splash = w.DamageOf(hw.Damage, hw.Warhead, w.Entities[twin].Armour) * 4 / 8;
+        int twinLost = twinHp - w.Entities[twin].Hp, flyerLost = flyerHp - w.Entities[flyer].Hp;
+        if (twinLost != splash)
+            return Fail($"air splash CONTROL: the ground twin at the flyer's point must take the half-damage splash "
+                        + $"({splash} hp) and took {twinLost}, so the stage cannot tell a skipped aircraft from a "
+                        + "shell that missed");
+        if (flyerLost != 0)
+            return Fail($"air splash: a Strike Flyer directly over a howitzer shell lost {flyerLost} hp while its "
+                        + $"ground twin at the same point lost {twinLost}. D11: splash does not reach aircraft, or "
+                        + "every ground gun with a blast radius is accidental anti-air (AI-11)");
+        Console.WriteLine($"  airgate: a howitzer shell under a Strike Flyer - ground twin at the same point "
+                          + $"-{twinLost} hp, flyer -0");
+    }
+
+    // --- 7. The superweapons, each detonated on the point where a flyer and
+    //        its twin stand. The orbital cannon lands through ApplyAreaDamage,
+    //        which the MINE shares, so this covers that blast too; the seismic
+    //        charge has its own function and so its own assertion.
+    {
+        (int flyerLost, int twinLost, bool flyerAlive) Detonate(ulong seed, int structType)
+        {
+            var w = new World(seed, 64, 64, players: 2);
+            w.SetFaction(0, structType == World.SeismicChargeStructType ? World.FactionSodality
+                                                                         : World.FactionDirectorate);
+            w.SpawnPowerPlant(0, 2, 2, supply: 5000);
+            int flyer = SpawnOf(w, Flyer, 1, 30, 30);
+            int twin = GroundTwin(w, 1, 30, 30);
+            int flyerHp = w.Entities[flyer].Hp, twinHp = w.Entities[twin].Hp;
+            int sw = w.SpawnSuperweapon(0, 10, 2, chargeTicks: 1, structType: structType);
+            w.Step(default);   // the charge completes
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.LaunchSuper, sw, Fix64.FromInt(30), Fix64.FromInt(30)) });
+            for (int t = 0; t < 90; t++) w.Step(default);   // the warning, then the impact
+            return (flyerHp - w.Entities[flyer].Hp, twinHp - w.Entities[twin].Hp, w.Entities[flyer].Alive);
+        }
+        foreach (var (name, type, seed) in new[] { ("orbital cannon", World.OrbitalCannonStructType, 3106UL),
+                                                   ("seismic charge", World.SeismicChargeStructType, 3107UL) })
+        {
+            var (flyerLost, twinLost, flyerAlive) = Detonate(seed, type);
+            if (twinLost <= 0)
+                return Fail($"air area CONTROL: the {name} detonated on a ground twin's point and it lost nothing, "
+                            + "so the stage cannot tell a skipped aircraft from a strike that missed");
+            if (flyerLost != 0 || !flyerAlive)
+                return Fail($"air area: the {name} took {flyerLost} hp off a Strike Flyer directly over ground zero "
+                            + $"while its ground twin lost {twinLost}. D11: no superweapon's area reaches aircraft");
+            Console.WriteLine($"  airgate: the {name} under a Strike Flyer - ground twin -{twinLost} hp, flyer -0");
+        }
+    }
+
+    // --- 8. The precision strike, fired by the Bastion that carries it, on the
+    //        same point.
+    {
+        var w = new World(3108, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        w.SetFaction(1, World.FactionSodality);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int bas = w.SpawnFactionDefence(0, Bastion, 8, 8);
+        int flyer = SpawnOf(w, Flyer, 1, 30, 30);
+        int twin = GroundTwin(w, 1, 30, 30);
+        int flyerHp = w.Entities[flyer].Hp, twinHp = w.Entities[twin].Hp;
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
+                                   Fix64.FromInt(30), Fix64.FromInt(30), World.PrecisionStrikePowerId) });
+        int twinLost = twinHp - w.Entities[twin].Hp, flyerLost = flyerHp - w.Entities[flyer].Hp;
+        if (twinLost <= 0)
+            return Fail("air strike CONTROL: the precision strike landed on a ground twin's point and it lost "
+                        + "nothing, so the stage cannot tell a skipped aircraft from a strike that missed");
+        if (flyerLost != 0)
+            return Fail($"air strike: the precision strike took {flyerLost} hp off a Strike Flyer directly over its "
+                        + $"point while the ground twin lost {twinLost}. D11: the precision strike skips aircraft");
+        Console.WriteLine($"  airgate: the precision strike under a Strike Flyer - ground twin -{twinLost} hp, flyer -0");
+    }
+
+    // --- 9. And the AIMED shot is untouched. D11 takes the blast away from
+    //        aircraft and nothing else: one ordered flak shot lands its FULL
+    //        direct damage on the flyer, read after one tick so the figure is
+    //        exact. Stage 3 shows the flak kills in the end; this shows the rule
+    //        above did not halve or remove the direct hit on the way.
+    {
+        var w = new World(3109, 64, 64, players: 2);
+        int flyer = SpawnOf(w, Flyer, 1, 20, 20);
+        int flak = SpawnOf(w, Flak, 0, 23, 20);
+        int hp = w.Entities[flyer].Hp;
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.Attack, flak, Fix64.Zero, Fix64.Zero, flyer) });
+        var fw = w.GetWeaponType(w.Entities[flak].WeaponId);
+        int direct = w.DamageOf(fw.Damage, fw.Warhead, w.Entities[flyer].Armour);
+        int lost = hp - w.Entities[flyer].Hp;
+        if (lost != direct)
+            return Fail($"air direct: one ordered flak shot must land its full {direct} hp on a Strike Flyer and "
+                        + $"landed {lost}. D11 removes splash from aircraft, never the aimed anti-air shot");
+        Console.WriteLine($"  airgate: one ordered flak shot on a Strike Flyer - flyer -{lost} hp, the full direct hit");
     }
 
     Console.WriteLine("airgate: a rifle squad and a tank standing under an aircraft cannot scratch it, and neither can "

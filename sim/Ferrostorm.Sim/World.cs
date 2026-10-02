@@ -937,7 +937,18 @@ public sealed partial class World
     /// unit type, never from a hashed per-entity flag - a flag would move all
     /// 24 goldens for no behavioural change, which is the cost ADR-012 refused
     /// for FerriteCap. Structures never fly, whatever their type id happens to
-    /// collide with in the unit table.</summary>
+    /// collide with in the unit table.
+    ///
+    /// P8-16 (D11): this is also the ONE question every area effect asks of a
+    /// victim, and an airborne victim is skipped. Weapon splash, the orbital
+    /// cannon (and the mine, which shares ApplyAreaDamage), the seismic charge
+    /// and the precision strike all ask it, so the rule lives here rather than
+    /// in four spellings. Clause 3 makes a plane untouchable by anything not
+    /// built to reach it, and a blast is that same question put to the ground
+    /// around an aim point: without the skip, every gun with a radius was
+    /// accidental anti-air (AI-11 measured 12 hp a shell from howitzer splash).
+    /// The AIMED shot is untouched, so an anti-air weapon still hits the plane
+    /// it targets.</summary>
     public bool IsAirborne(in Entity e)
         => e.Kind == EntityKind.Unit && GetUnitType(e.UnitType).Air;
 
@@ -4904,6 +4915,7 @@ public sealed partial class World
                         var vic = _entities[v];
                         if (!vic.Alive || vic.Kind == EntityKind.FerriteField) continue;
                         if (Fix64.DistSq(vic.X - tp.X, vic.Y - tp.Y) > rr) continue;
+                        if (IsAirborne(in vic)) continue;   // D11: no blast reaches aircraft (see IsAirborne)
                         pendingDamage[v] += DamageOf(w.Damage, w.Warhead, vic.Armour) * (4 + e.Rank) / 8;
                         if (firstAttacker[v] < 0) firstAttacker[v] = i;
                     }
@@ -5977,6 +5989,7 @@ public sealed partial class World
             // take that identity away without a word being written.
             if (t.Kind == EntityKind.FerriteField) continue;
             if (Fix64.DistSq(t.X - x, t.Y - y) > coreSq) continue;
+            if (IsAirborne(in t)) continue;   // D11: no blast reaches aircraft (see IsAirborne)
             t.Hp -= DamageOf(PrecisionStrikeDamage, Warhead.Omni, t.Armour);
             if (t.Hp <= 0)
             {
@@ -5998,6 +6011,7 @@ public sealed partial class World
             if (!t.Alive) continue;
             Fix64 d = Fix64.DistSq(t.X - x, t.Y - y);
             if (d > outerSq) continue;
+            if (IsAirborne(in t)) continue;   // D11: no blast reaches aircraft (see IsAirborne)
             if (t.Kind == EntityKind.FerriteField)
             {
                 // The economic-warfare half, and the reason this weapon exists.
@@ -6062,6 +6076,7 @@ public sealed partial class World
             if (!t.Alive || t.Kind == EntityKind.FerriteField) continue;
             Fix64 d = Fix64.DistSq(t.X - x, t.Y - y);
             if (d > outerSq) continue;
+            if (IsAirborne(in t)) continue;   // D11: no blast reaches aircraft (see IsAirborne)
             int dmg = DamageOf(baseDamage, Warhead.Omni, t.Armour);
             if (d > innerSq) dmg /= 2;
             t.Hp -= dmg;
