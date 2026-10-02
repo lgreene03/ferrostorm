@@ -1415,11 +1415,6 @@ public partial class VerifyRunner : Node
             + "at the four-cell crowd-arrival radius (World.StepToward), outside LoadTransport's two-cell reach, so it "
             + "never boards however often the order is re-sent (measured from 3, 4, 6 and 10 cells)",
             "a sim row to be raised (found by P8-7; sim/Ferrostorm.Sim is outside the client lane)"),
-        ("SetRally/Airfield", CommandType.SetRally, false,
-            "right-clicking with an Airfield selected sets no rally: the client offers a rally on the Factory and Barracks only", "P8-9"),
-        ("Produce/Airfield", CommandType.Produce, false,
-            "the AIRCRAFT tab's buttons read the Factory's line, so with an Airfield standing and no Factory the Strike "
-            + "Flyer has no button", "P8-9"),
     };
 
     /// <summary>The sim's contact effects. ContactEffect is private to World,
@@ -2042,6 +2037,7 @@ public partial class VerifyRunner : Node
         // the gate once every stage has had its say.
         RunCarrierStages(g);
         RunNeutralTargetStages(g);
+        RunAirfieldStages(g);
         RunInputGateCoverage();
         g.QueueFree();
     }
@@ -2597,6 +2593,119 @@ public partial class VerifyRunner : Node
              + $"{forceAttacks} Attack queued, the span "
              + $"{(lw.Entities[span].Alive ? "still STANDS after" : "falls after")} {fell} ticks, and its cell is "
              + $"{(blocked ? "now impassable" : "still open")}");
+        g.ClearSelectionForTest();
+    }
+
+    /// <summary>
+    /// P8-9: the Airfield. The sim has accepted a Produce at an airfield since
+    /// ADR-028's follow-up and the panel has had an AIRCRAFT tab, but the tab's
+    /// buttons read the Factory's line: with only an Airfield standing the
+    /// Strike Flyer had no button, and with both standing its button showed
+    /// the Factory's queue while its order went to the Airfield. And the
+    /// client offered a rally on the Factory and Barracks only. The Factory the
+    /// SetRally stage stood up is still standing here, which is the case that
+    /// tells the two lines apart.
+    /// </summary>
+    private void RunAirfieldStages(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-9): the Airfield's production line and its rally point");
+        var lw = g.LiveWorld;
+        var sb = g.SidebarView;
+        int me = g.LocalPlayerId;
+        int flyer = UnitCatalogue.TypeIdOf("com_strike_flyer");
+        (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+        bool ClickSelect(int id)
+        {
+            var (x, z) = PosOf(id);
+            g.FocusCameraOn(x, z, 22f);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(x, z), g.ScreenOf(x, z));
+            return g.SelectionCount == 1 && g.IsSelected(id);
+        }
+        int ProducesAt(int producer)
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest)
+                if (c.Type == CommandType.Produce && c.AuxId == flyer && c.EntityId == producer) n++;
+            return n;
+        }
+        int ProducesAnywhere()
+        {
+            int n = 0;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Produce && c.AuxId == flyer) n++;
+            return n;
+        }
+
+        int factory = g.FindEntity(EntityKind.Factory, me);
+        if (factory < 0)
+        {
+            Check(false, "inputgate/Produce/Airfield: the SetRally stage's Factory still stands (the precondition)");
+            return;
+        }
+        g.StepOneTick();                     // the frame half refreshes the panel
+        string emptyNote = sb.TabEmptyNote(Sidebar.TabAircraft);
+        bool hiddenWithFactory = factory >= 0 && g.FindEntity(EntityKind.Airfield, me) < 0 && !sb.UnitButtonVisible(flyer);
+        g.QueueUnit(flyer);                  // the button's own handler, pressed with no Airfield
+        int strayProduces = ProducesAnywhere();
+        string toast = g.ToastText;
+        Gate(hiddenWithFactory && emptyNote == "REQUIRES AN AIRFIELD" && strayProduces == 0 && toast.StartsWith("NO AIRFIELD"),
+             "Produce/Airfield",
+             $"with a Factory standing and no Airfield the Strike Flyer has no button, the AIRCRAFT tab says \"{emptyNote}\", "
+             + $"and its handler pressed anyway queues nothing ({strayProduces} Produce) and says so (\"{toast}\")");
+
+        // --- An Airfield beside the Factory: the button reads ITS line ------
+        var site = g.FindPlacementCell(World.AirfieldStructType);
+        if (site is not { } a)
+        {
+            Check(false, "inputgate/Produce/Airfield: a site for the Airfield (none found: a fixture failure, not a product one)");
+            return;
+        }
+        int airfield = lw.SpawnAirfield(me, a.X, a.Y);
+        // Power and credits enough that the line runs: the stage is about
+        // which line the button reads, not about a brown-out or a treasury.
+        if (g.FindPlacementCell(1) is { } pp) lw.SpawnPowerPlant(me, pp.X, pp.Y, supply: 1000);
+        if (lw.Credits(me) < 3000) lw.GrantCredits(me, 3000 - lw.Credits(me));
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.StepOneTick();
+        g.StepOneTick();
+        int fq0 = lw.QueueLength(factory), aq0 = lw.QueueLength(airfield);
+        bool shown = sb.UnitButtonVisible(flyer) && sb.TabOfUnit(flyer) == Sidebar.TabAircraft;
+        bool pressed = sb.PressUnitButton(flyer);
+        int atAirfield = ProducesAt(airfield), atFactory = ProducesAt(factory);
+        g.StepTicks(1);
+        bool onAirfield = lw.QueueLength(airfield) == aq0 + 1 && lw.QueueLength(factory) == fq0;
+        g.StepTicks(30);
+        g.StepOneTick();                     // the frame half writes the button and the tab
+        string suffix = sb.UnitButtonQueueSuffixForTest(flyer);
+        string tab = sb.TabTitle(Sidebar.TabAircraft);
+        bool progressing = lw.Entities[airfield].BuildProgress > 0;
+        // The head's suffix is its seconds left, "  Ns", which only the line
+        // that holds the flyer can give.
+        bool readsLine = suffix.Trim().EndsWith("s") && suffix.Trim().Length > 1 && tab == "AIRCRAFT 1";
+        Gate(shown && pressed && atAirfield == 1 && atFactory == 0 && onAirfield && progressing && readsLine,
+             "Produce/Airfield",
+             $"with an Airfield beside the Factory the Strike Flyer's button shows under AIRCRAFT and queues at the "
+             + $"AIRFIELD ({atAirfield} Produce there, {atFactory} at the Factory; queues airfield {aq0} -> "
+             + $"{lw.QueueLength(airfield)}, factory {fq0} -> {lw.QueueLength(factory)}), and shows that line's progress "
+             + $"(button \"{suffix.Trim()}\", tab \"{tab}\", progress {lw.Entities[airfield].BuildProgress})");
+
+        // --- The Airfield takes a rally --------------------------------------
+        bool selAirfield = ClickSelect(airfield);
+        var (afx, afz) = PosOf(airfield);
+        float rx = Mathf.Clamp(afx + 3f, 1.5f, lw.Map.Width - 2.5f), rz = Mathf.Clamp(afz + 3f, 1.5f, lw.Map.Height - 2.5f);
+        g.FocusCameraOn(rx, rz, 22f);
+        g.PressRightClick(g.ScreenOf(rx, rz));
+        int rallyCmds = 0;
+        foreach (var c in g.PendingForTest) if (c.Type == CommandType.SetRally && c.EntityId == airfield) rallyCmds++;
+        g.StepTicks(1);
+        var ae = lw.Entities[airfield];
+        bool rallied = ae.HasRally && Mathf.Abs(Fx(ae.RallyX) - rx) + Mathf.Abs(Fx(ae.RallyY) - rz) < 1.5f;
+        g.StepOneTick();
+        string readout = g.SelInfoText;
+        Gate(selAirfield && rallyCmds == 1 && rallied && readout.Contains("right-click: rally"), "SetRally/Airfield",
+             $"a click selects the Airfield, its readout offers the rally (\"{readout}\"), and a right click on the ground "
+             + $"sets its rally point in the sim ({rallyCmds} SetRally, rally held {rallied})");
         g.ClearSelectionForTest();
     }
 

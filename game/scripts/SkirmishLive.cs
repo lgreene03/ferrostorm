@@ -197,7 +197,7 @@ public partial class SkirmishLive : Node3D
     // ADR-009 clause 6: one cached producer id per unit-producing struct type.
     // The barracks joins the factory because the sidebar's INFANTRY tab reads
     // its queue, exactly as VEHICLES reads the factory's.
-    private int _yardId = -1, _factoryId = -1, _barracksId = -1;
+    private int _yardId = -1, _factoryId = -1, _barracksId = -1, _airfieldId = -1;
     // DEF-01: the ghost's own range ring (a child of the ghost, so it tracks
     // the cursor for free) plus a dim ring on every own armed structure while
     // placing - the coverage-gap read that makes turret siting a decision.
@@ -455,9 +455,11 @@ public partial class SkirmishLive : Node3D
     private int _autoHarvestIssues;
 
     /// <summary>Producers the CLIENT offers a rally click on (TICKET-P5-BD-14
-    /// clause 5). The two that SPAWN units: the Factory and, since ADR-009
-    /// clause 5, the Barracks - infantry want a rally most of all. The
-    /// Airfield joins when it exists.
+    /// clause 5). The three that SPAWN units: the Factory, since ADR-009
+    /// clause 5 the Barracks (infantry want a rally most of all), and since
+    /// P8-9 the Airfield. This comment said the Airfield would join "when it
+    /// exists", and it existed from ADR-028 on while nobody came back, so a
+    /// player could build aircraft and never point them anywhere.
     ///
     /// The Construction Yard is deliberately still absent, which settles the
     /// question B2 deferred to this wave. The sim's SetRally accepts a CY
@@ -467,7 +469,7 @@ public partial class SkirmishLive : Node3D
     /// Depot dead affordance again, which TICKET-P5-REP-10 retired on purpose.
     /// The sim keeps accepting the command because refusing it would be a
     /// behaviour change for nothing; the client simply declines to offer it.</summary>
-    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.Barracks;
+    private static bool Ralliable(EntityKind k) => k is EntityKind.Factory or EntityKind.Barracks or EntityKind.Airfield;
 
     // W2-01 ActorRig: named child nodes become animation handles. Turrets
     // slew (TICKET-P4-SLICE-01) and recoil; wheels spin; dishes rotate;
@@ -1354,12 +1356,31 @@ public partial class SkirmishLive : Node3D
         // live catalogue the sim gates on. Sending every unit to the factory
         // would now be sending the infantry somewhere that refuses them, and
         // it would do it silently, which is REP-D1's sin.
-        int producer = FindOwnStructureByType(_world.GetUnitType(unitType).ProducedAt);
+        int producedAt = _world.GetUnitType(unitType).ProducedAt;
+        int producer = FindOwnStructureByType(producedAt);
         if (producer >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
             _audio.Play("ui_confirm", -6);
         }
+        else
+        {
+            // P8-9: no producer standing is said, never swallowed. The panel
+            // hides a unit whose producer is gone, but the producer can fall
+            // between the frame that drew the button and the press, and a
+            // press that did nothing in silence is REP-D1's sin. The NO
+            // REFINERY denial's words and sound.
+            ShowToast($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
+            _audio.Play("ui_click", -12);
+        }
+    }
+
+    /// <summary>The producing building's name off the catalogue (AIRFIELD,
+    /// FACTORY, BARRACKS), for the no-producer toast.</summary>
+    private static string ProducerNameOf(int structType)
+    {
+        try { return StructureCatalogue.DisplayNameOf(structType); }
+        catch (System.FormatException) { return "PRODUCER"; }
     }
 
     /// <summary>C3 (ADR-020): the last queue index of a type in a producer's
@@ -2308,6 +2329,10 @@ public partial class SkirmishLive : Node3D
         _yardId = FindOwnStructure(EntityKind.ConstructionYard);
         _factoryId = FindOwnStructureByType(World.FactoryStructType);
         _barracksId = FindOwnStructureByType(World.BarracksStructType);
+        // P8-9: the AIRCRAFT tab's line. It read the Factory's, so with only an
+        // Airfield standing the Strike Flyer had no button, and with both its
+        // button showed the Factory's queue and progress.
+        _airfieldId = FindOwnStructureByType(World.AirfieldStructType);
         int ready = _yardId >= 0 ? _world.Entities[_yardId].ReadyStructure : 0;
         // W3-15: hand the sidebar the full queue contents plus the head's
         // build fraction (BuildProgress counts percent-ticks, total is
@@ -2339,7 +2364,7 @@ public partial class SkirmishLive : Node3D
             ? laneSt.Progress / (_world.GetStructureType(laneQ[0]).BuildTicks * 100f) : 0f;
         _sidebar.Refresh(_world.Credits(LocalPlayerId), ready,
             new Sidebar.ProducerLine(_yardId >= 0, yardQ, yardProg),
-            UnitLine(_factoryId), UnitLine(_barracksId),
+            UnitLine(_factoryId), UnitLine(_barracksId), UnitLine(_airfieldId),
             supply, draw, PrereqsMetForLocal,
             new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
         RefreshSupportPowerBar();

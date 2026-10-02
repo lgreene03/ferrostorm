@@ -10,20 +10,18 @@ namespace Ferrostorm.Client;
 /// TABS since ADR-009 clause 6, replacing the two flat arrays under two
 /// headers: BUILDINGS and DEFENCE queue at the Construction Yard and place
 /// from the ready slot, INFANTRY queues at a Barracks, VEHICLES queues at a
-/// Factory. Reads sim state through public accessors only; emits commands
-/// through the scene's pending list.
+/// Factory, and AIRCRAFT, GDD line 86's fifth name, queues at an Airfield.
+/// Reads sim state through public accessors only; emits commands through the
+/// scene's pending list.
 ///
-/// AIRCRAFT is the fifth name on GDD line 86 and is still deliberately ABSENT,
-/// though the reason has MOVED and the old one is no longer true. ADR-009
-/// clause 10 kept the airfield out of that wave entirely and clause 6 said the
-/// tab waits with it; ADR-028 has since shipped the airfield, so that argument
-/// has expired. What holds the tab back now is one rung lower down: the sim's
-/// own producer predicate covers the Factory, the Construction Yard and the
-/// Barracks, so a Produce command sent to an airfield is dropped in silence and
-/// the strike flyer cannot be built by anybody at all. A tab over it would be a
-/// tab of buttons that do nothing, and this panel's contract is that what it
-/// offers is what the sim accepts. Widening the sim's predicate is a sim change
-/// with an ADR behind it; the tab lands with that, not before it.
+/// Each unit tab reads ITS OWN producer's line (P8-9). The AIRCRAFT tab and
+/// the sim's acceptance of a Produce at an airfield (World.IsProducer) both
+/// landed with ADR-028's follow-up, but this panel kept reading the Factory's
+/// line for every unit that was not infantry, so with only an Airfield
+/// standing the Strike Flyer had no button, and with both standing its button
+/// showed the Factory's queue and progress while its order went to the
+/// Airfield. The AIRCRAFT tab now reads the Airfield, titles itself with that
+/// line's queue and, when empty, says it requires one.
 ///
 /// Struct type 11 is the BARRACKS. Unit type 11 is the ENGINEER. Different
 /// namespaces, no clash, and both appear in this file within a few lines of
@@ -150,18 +148,12 @@ public partial class Sidebar : PanelContainer
 
     /// <summary>Does this panel have a tab for the producer this unit names?
     /// Asked of the CATALOGUE's produced_at, never of a list of ids, so the
-    /// answer follows what /data declares.
-    ///
-    /// One producer says no today, and it is the AIRFIELD, which the strike
-    /// flyer names. Two things would have to change before an aircraft could
-    /// carry a button honestly: this panel needs a tab for it (GDD line 86's
-    /// fifth name, see the class comment), and the SIM needs to accept the
-    /// order at all - World's own producer predicate covers the Factory, the
-    /// Construction Yard and the Barracks and nothing else, so a Produce sent
-    /// to an airfield is dropped without a word. A button here before both of
-    /// those would be a button that does nothing, which is worse than an absent
-    /// one: the panel's whole contract is that what it offers is what the sim
-    /// accepts.</summary>
+    /// answer follows what /data declares. All three unit producers have one:
+    /// the Barracks (INFANTRY), the Factory (VEHICLES) and the Airfield
+    /// (AIRCRAFT). The panel's contract is that what it offers is what the sim
+    /// accepts, and the sim accepts a Produce at each of the three
+    /// (World.IsProducer), so a unit naming any other producer would get no
+    /// button rather than one that does nothing.</summary>
     private bool HasTabFor(int producedAt)
         => producedAt == World.BarracksStructType || producedAt == World.FactoryStructType
            || producedAt == World.AirfieldStructType;
@@ -283,8 +275,9 @@ public partial class Sidebar : PanelContainer
         _powerBar.AddChild(_powerTick);
         v.AddChild(_powerBar);
 
-        // ADR-009 clause 6: five tabs become four VBoxes inside a TabContainer,
-        // styled to the same closed doc 16 palette as everything else here.
+        // ADR-009 clause 6: GDD line 86's five tabs, one VBox each inside a
+        // TabContainer, styled to the same closed doc 16 palette as everything
+        // else here.
         _tabs = new TabContainer { SizeFlagsVertical = SizeFlags.ExpandFill };
         _tabs.AddThemeFontSizeOverride("font_size", 10);
         _tabs.AddThemeColorOverride("font_selected_color", FerriteGold);
@@ -525,7 +518,7 @@ public partial class Sidebar : PanelContainer
     /// implementations of the tech tree agree only until one is edited, and the
     /// failure mode is a lit button whose order the sim silently drops.</summary>
     public void Refresh(long credits, int readyStructureType,
-        ProducerLine yard, ProducerLine factory, ProducerLine barracks,
+        ProducerLine yard, ProducerLine factory, ProducerLine barracks, ProducerLine airfield,
         int supply, int draw, System.Func<int[]?, bool> prereqsMet,
         ProducerLine yardLane2 = default, int readyStructureType2 = 0)
     {
@@ -609,7 +602,9 @@ public partial class Sidebar : PanelContainer
             // LIVING PRODUCER of the right produced_at. That clause is what
             // makes an empty INFANTRY tab teach the player to build a
             // barracks, which is the whole point of the tab existing.
-            var line = _unitProducedAt(typeId) == World.BarracksStructType ? barracks : factory;
+            // P8-9: and the line is the unit's OWN producer's, the Airfield's
+            // for an aircraft, never the Factory's by default.
+            var line = LineFor(_unitProducedAt(typeId), factory, barracks, airfield);
             if (b.Visible || _prereqHiddenUnits.Contains(typeId))
             {
                 bool met = line.Live && prereqsMet(_unitPrereqs(typeId));
@@ -629,20 +624,30 @@ public partial class Sidebar : PanelContainer
         ((ColorRect)_placeButton.GetNode("Fill")).OffsetRight = 0;
         // BD-10 clause 5's queue counters, now on the TABS that own those
         // queues: BUILDINGS and DEFENCE both read the yard, INFANTRY the
-        // barracks, VEHICLES the factory. Credits still appear once, on the
-        // status line, where they were already.
+        // barracks, VEHICLES the factory, AIRCRAFT the airfield. Credits still
+        // appear once, on the status line, where they were already.
         // ADR-023: the yard's badge is both lanes, since both are its line.
         SetTabTitle(TabBuildings, yardQ.Count + laneQ.Count);
         SetTabTitle(TabDefence, yardQ.Count + laneQ.Count);
         SetTabTitle(TabInfantry, barracks.Queue.Count);
         SetTabTitle(TabVehicles, factory.Queue.Count);
+        SetTabTitle(TabAircraft, airfield.Queue.Count);
         // An empty tab is the teaching moment, but a blank panel teaches
         // nothing, so each empty tab says what would fill it.
         UpdateEmptyNote(TabBuildings, hasYard ? "NO BUILDINGS AVAILABLE YET" : "REQUIRES A CONSTRUCTION YARD");
         UpdateEmptyNote(TabDefence, hasYard ? "REQUIRES A POWER PLANT" : "REQUIRES A CONSTRUCTION YARD");
         UpdateEmptyNote(TabInfantry, "REQUIRES A BARRACKS");
         UpdateEmptyNote(TabVehicles, "REQUIRES A FACTORY");
+        UpdateEmptyNote(TabAircraft, "REQUIRES AN AIRFIELD");
     }
+
+    /// <summary>P8-9: the producer line a unit tab reads, by the unit's own
+    /// produced_at. Anything that is neither infantry nor aircraft is a
+    /// vehicle, which is HasTabFor's three-way split read the other way.</summary>
+    private static ProducerLine LineFor(int producedAt, ProducerLine factory, ProducerLine barracks, ProducerLine airfield)
+        => producedAt == World.BarracksStructType ? barracks
+         : producedAt == World.AirfieldStructType ? airfield
+         : factory;
 
     // Buttons hidden by the live tree, so Refresh knows to reconsider them
     // when the base grows. Without this the visibility test could only ever
@@ -762,6 +767,12 @@ public partial class Sidebar : PanelContainer
     /// for the same reason - visibility IS the faction gate, so it is what a
     /// test must read.</summary>
     public bool UnitButtonVisible(int typeId) => _unitButtons.TryGetValue(typeId, out var b) && b.Visible;
+    /// <summary>P8-9: what Refresh appended to a unit button's label, the
+    /// queue count and the head's seconds left (QueueSuffix), so a check can
+    /// read which line the button is showing. Empty when nothing of the type
+    /// is queued on that line.</summary>
+    public string UnitButtonQueueSuffixForTest(int typeId) =>
+        _unitButtons.TryGetValue(typeId, out var b) && b.Text.StartsWith(_baseText[b]) ? b.Text.Substring(_baseText[b].Length) : "";
     /// <summary>How many unit buttons the panel actually built. The number the
     /// hand-kept table used to fix at thirteen while the catalogue grew to
     /// twenty, so it is the measurement that would have caught the gap.</summary>
