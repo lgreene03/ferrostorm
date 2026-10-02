@@ -1414,7 +1414,7 @@ public partial class VerifyRunner : Node
             "infantry ordered onto a Carrier from more than two cells away is walked towards it by the sim and settles "
             + "at the four-cell crowd-arrival radius (World.StepToward), outside LoadTransport's two-cell reach, so it "
             + "never boards however often the order is re-sent (measured from 3, 4, 6 and 10 cells)",
-            "a sim row to be raised (found by P8-7; sim/Ferrostorm.Sim is outside the client lane)"),
+            "P8-56 (found by P8-7; the fix is in sim/Ferrostorm.Sim, outside the client lane)"),
     };
 
     /// <summary>The sim's contact effects. ContactEffect is private to World,
