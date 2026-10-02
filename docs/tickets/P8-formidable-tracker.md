@@ -290,6 +290,21 @@ PV-ADJ-01). Reverses if: legal-review finds a document whose function needs a
 name, in which case the list grows by that one path with its reason; or counsel
 rules the phrasing scope too narrow, in which case the check widens.
 
+**D32. How F3 reads "at least one harvester survives" (P8-17).** Decision:
+`aiairgate` counts the commander's harvesters at the moment the raid is answered,
+when the last flyer dies, and prints the end-of-window count and a replay of the
+same match with no raid beside it. Reason: the no-raid control shows that the
+end of the 6000-tick window measures the GROUND war, not the air answer. The
+Normal Sodality commander ends that window with no harvester even when no flyer
+is ever launched (seat 1's ground units, then its orbital cannon on the refinery,
+then no rebuy), so an end-of-window reading could not pass with any air answer
+and would bind P8-17 to P8-18 and P8-22. F3's own words are "the flyers die and
+at least one harvester survives", which is the moment the flyers die. Reverses
+if: P8-18 and P8-22 land and the no-raid control keeps a harvester to the end of
+the window in every cell, in which case the gate also asserts the end-of-window
+count, so a commander that wins the raid and then loses its economy to the
+flyers' aftermath cannot pass.
+
 ## Ordering principle
 
 Rows are ordered by PLAY IMPACT per unit of work. A missing or unreachable system
