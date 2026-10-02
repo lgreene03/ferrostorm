@@ -150,8 +150,10 @@ since: catrefuse, spawngate, prodgate, regrowthgate, stancegate, repairgate,
 outpostgate, lanegate, bridgegate, mapgate, lanpoll, lansetup. **The header of
 `Program.cs` is the authoritative list**; this one has lagged before.
 
-The balance tool (`tools/Ferrostorm.Balance`) is a 4x4 matchup matrix plus a
-tempo baseline with hard expectations.
+The balance tool (`tools/Ferrostorm.Balance`) is, since P8-14, an engagement
+matrix over all 20 unit types at four budgets in two arenas, plus a faction war
+PLAYED on three maps in both orientations to a result or 27000 ticks. Its F10
+and F11 thresholds bind from rows P8-32 and P8-33.
 
 CI (.github/workflows/determinism.yml) is THREE jobs and any of them red blocks
 the merge: `banned-tokens` (purity grep, ADR-004 portability grep, the
