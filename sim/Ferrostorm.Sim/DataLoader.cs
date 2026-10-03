@@ -775,21 +775,26 @@ public static class StructureCatalogue
         int[]? powers = SupportPowerIdsOf(s.SupportPowers);
         bool Grants(int power) => powers != null && Array.IndexOf(powers, power) >= 0;
         bool superweapon = kind == EntityKind.Superweapon;
-        void Pacing(string key, int value, bool readHere, string where)
+        // P8-18 audit: and each is bounded above by World's ceilings, which the
+        // schema states too, so a file cannot overflow DamageOf or ask for a
+        // charge no match would ever see the end of.
+        void Pacing(string key, int value, bool readHere, int max, string where)
         {
             if (readHere && value < 1)
                 throw new FormatException($"'{s.Id}' must author {key} of at least 1: the sim reads it as {where}.");
             if (!readHere && value != 0)
                 throw new FormatException($"'{s.Id}' authors {key}, which the sim reads only as {where}, so here "
                                           + "it would be authored and never applied.");
+            if (value > max)
+                throw new FormatException($"'{s.Id}' authors {key} {value}, above the ceiling of {max}.");
         }
-        Pacing("charge_ticks", s.ChargeTicks, superweapon,
+        Pacing("charge_ticks", s.ChargeTicks, superweapon, World.MaxChargeTicks,
                "a superweapon's charge (a support power's charge is the compiled SupportPowerChargeTicks)");
         // The seismic charge strikes too, but its damage is the compiled
         // SeismicDamage until P8-19 reworks its impact, so it is refused there.
         Pacing("strike_damage", s.StrikeDamage, (superweapon && !s.DestroysFields) || Grants(World.PrecisionStrikePowerId),
-               "the orbital cannon's blast or a precision strike");
-        Pacing("reveal_ticks", s.RevealTicks, Grants(World.OrbitalScanPowerId), "an orbital scan's reveal");
+               World.MaxStrikeDamage, "the orbital cannon's blast or a precision strike");
+        Pacing("reveal_ticks", s.RevealTicks, Grants(World.OrbitalScanPowerId), World.MaxRevealTicks, "an orbital scan's reveal");
         return new(s.Cost, kind, s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,

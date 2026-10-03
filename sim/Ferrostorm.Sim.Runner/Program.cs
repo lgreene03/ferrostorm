@@ -10563,11 +10563,17 @@ int SupportPowerGate()
     const int Carrier = 12;
     const int TestPower = 1;
 
+    // P8-18 audit (ADR-073): TestPower is the orbital scan, so the carrier
+    // carries the Bastion's REGISTERED reveal as well. Without it the def
+    // registered with RevealTicks 0, and every stage below exercised a scan
+    // that lit the map for at most one tick; registration now refuses that.
+    World.StructureTypeDef Carrying(World w)
+        => w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower }, RevealTicks = w.GetStructureType(17).RevealTicks };
+
     World WithPower(ulong seed, out int bld)
     {
         var w = new World(seed, 64, 64, players: 2);
-        var stock = w.GetStructureType(Carrier);
-        w.RegisterStructureType(Carrier, stock with { SupportPowerIds = new[] { TestPower } });
+        w.RegisterStructureType(Carrier, Carrying(w));
         w.SpawnPowerPlant(0, 4, 4, supply: 5000);
         bld = w.SpawnRadarUplink(0, 20, 20);
         return w;
@@ -10595,7 +10601,7 @@ int SupportPowerGate()
         {
             var w = new World(7050, 64, 64, players: 2);
             if (!superweapon)
-                w.RegisterStructureType(Carrier, w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
+                w.RegisterStructureType(Carrier, Carrying(w));
             w.SpawnPowerPlant(0, 4, 4, supply: 5000);
             _ = superweapon ? w.SpawnSuperweapon(0, 20, 20) : w.SpawnRadarUplink(0, 20, 20);
             var want = superweapon ? GameEventType.SuperweaponReady : GameEventType.SupportPowerReady;
@@ -10648,11 +10654,19 @@ int SupportPowerGate()
         // THE CONTROL FIRST, and without it this stage is satisfied by a power
         // that never works at all - which is a different bug wearing the same
         // passing test (ADR-059 stage 2's rule).
+        if (w.IsVisible(0, 30, 30))
+            return Fail("support power: the aim cell (30,30) is already lit, so stage 3 cannot tell a real reveal from sight");
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
                                    Map.CellCentre(30), Map.CellCentre(30), TestPower) });
         if (!w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
             return Fail("support power: a charged power on a LIVING structure did not fire, so stage 3's kill test "
                         + "would prove nothing - a power that never works passes any counterplay assertion");
+        // P8-18 audit: and it is a REAL reveal, still lit two ticks on. With the
+        // carrier's old zero reveal this cell went dark at once.
+        w.Step(default); w.Step(default);
+        if (!w.IsVisible(0, 30, 30))
+            return Fail("support power: the control scan went dark within two ticks, so the carrier is not exercising "
+                        + "a real reveal (its RevealTicks must be the Bastion's registered value)");
 
         // Now kill the building and try again.
         var w2 = WithPower(7102, out int bld2);
@@ -10682,7 +10696,7 @@ int SupportPowerGate()
         var b = new World(7103, 32, 32, players: 2);
         if (a.CatalogueChecksum != b.CatalogueChecksum)
             return Fail("support power: two identical bare worlds disagree on the catalogue checksum");
-        b.RegisterStructureType(Carrier, b.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
+        b.RegisterStructureType(Carrier, Carrying(b));
         if (a.CatalogueChecksum == b.CatalogueChecksum)
             return Fail("support power: granting a building a support power did NOT move the catalogue checksum, so "
                         + "two peers could hold different powers and the LAN hello would let them play");
@@ -10875,13 +10889,96 @@ int PowerDataGate()
                         + "never reads must be refused, or a file can promise what the game does not do");
     if (Refused(Text("dir_superweapon")) || Refused(Text("dir_bastion")) || Refused(Text("sod_seismic_charge")))
         return Fail("powerdata: the loader refused a shipped file, so stage 4's refusals prove nothing");
+    // The loader's ceiling (P8-18 audit): a strike above World.MaxStrikeDamage
+    // would let DamageOf's baseDamage * pct wrap.
+    if (!Refused(Text("dir_superweapon").Replace("strike_damage: 2500", $"strike_damage: {World.MaxStrikeDamage + 1}")))
+        return Fail($"powerdata: the loader accepted a strike_damage above the ceiling of {World.MaxStrikeDamage}");
+
+    // --- 5. P8-18 audit: REGISTRATION demands the same columns the loader does,
+    //        so a def built in code cannot carry the record's zero defaults
+    //        where the sim reads them. Each refusal must NAME its column.
+    {
+        string? RegRefusal(int type, Func<World.StructureTypeDef, World.StructureTypeDef> edit)
+        {
+            var w = new World(4811);
+            try { w.RegisterStructureType(type, edit(w.GetStructureType(type))); return null; }
+            catch (FormatException e) { return e.Message; }
+        }
+        const int Radar = 12;
+        foreach (var (why, type, column, edit) in new (string, int, string, Func<World.StructureTypeDef, World.StructureTypeDef>)[]
+                 {
+                     ("a superweapon with no charge", Cannon, "ChargeTicks", d => d with { ChargeTicks = 0 }),
+                     ("an orbital cannon with no strike", Cannon, "StrikeDamage", d => d with { StrikeDamage = 0 }),
+                     ("a Bastion with no precision strike damage", Bastion, "StrikeDamage", d => d with { StrikeDamage = 0 }),
+                     ("a Bastion with no scan reveal", Bastion, "RevealTicks", d => d with { RevealTicks = 0 }),
+                     ("a Radar Uplink granted the scan with no reveal (supportpowergate's old carrier)", Radar, "RevealTicks",
+                      d => d with { SupportPowerIds = new[] { World.OrbitalScanPowerId } }),
+                     ("a charge above the ceiling", Cannon, "ChargeTicks", d => d with { ChargeTicks = World.MaxChargeTicks + 1 }),
+                     ("a strike above the ceiling", Cannon, "StrikeDamage", d => d with { StrikeDamage = World.MaxStrikeDamage + 1 }),
+                     ("a reveal above the ceiling", Bastion, "RevealTicks", d => d with { RevealTicks = World.MaxRevealTicks + 1 }),
+                 })
+        {
+            string? msg = RegRefusal(type, edit);
+            if (msg == null)
+                return Fail($"powerdata: registration accepted {why}. A code-built def must meet the loader's rule, or a "
+                            + "fixture can exercise a superweapon or a power that the shipped game could never hold");
+            if (!msg.Contains(column, StringComparison.Ordinal))
+                return Fail($"powerdata: registration refused {why} without naming {column}: {msg}");
+        }
+        // The controls: the seismic charge legitimately has no strike (its
+        // damage is the compiled SeismicDamage), and the ceilings themselves are
+        // legal values.
+        foreach (var (why, type, edit) in new (string, int, Func<World.StructureTypeDef, World.StructureTypeDef>)[]
+                 {
+                     ("the stock seismic charge, which has no strike_damage", World.SeismicChargeStructType, d => d),
+                     ("a cannon at every ceiling", Cannon, d => d with { ChargeTicks = World.MaxChargeTicks, StrikeDamage = World.MaxStrikeDamage }),
+                     ("a Bastion at the reveal ceiling", Bastion, d => d with { RevealTicks = World.MaxRevealTicks }),
+                 })
+            if (RegRefusal(type, edit) is { } refused)
+                return Fail($"powerdata control: registration refused {why}: {refused}");
+    }
+
+    // --- 6. P8-18 audit: F8 HOLDS ON THE REGISTERED CHARGE, asserted here in
+    //        match because pillargate is on demand. Under D33 the commander may
+    //        not buy the weapon before one full charge, so it is placed at about
+    //        charge + build (pillargate measured 6001 = 5400 + 600 + 1) and first
+    //        fires about one charge later (11536 = 6001 + 5400 + 135, the 135
+    //        being power and beat slack). The first launch is therefore at least
+    //        2 x charge_ticks + build_ticks, and F8 needs it at or after 10800:
+    //        2 x 5400 + 600 = 11400, so the bar fails only below a charge of
+    //        5100. The bound drops the measured slack, which only helps, and it
+    //        also assumes D1's economy gate is met before the floor opens
+    //        (measured about t=3170, well before 5100). A /data edit that would
+    //        break F8 turns match, and so CI, red.
+    {
+        bool F8Holds(in World.StructureTypeDef d) => 2 * d.ChargeTicks + d.BuildTicks >= MeasurementHarness.F8FirstLaunchTicks;
+        int superweapons = 0;
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            var d = loaded.GetStructureType(t);
+            if (d.Kind != EntityKind.Superweapon) continue;
+            superweapons++;
+            if (!F8Holds(in d))
+                return Fail($"powerdata: {StructureCatalogue.IdOf(t)} charges in {d.ChargeTicks} and builds in {d.BuildTicks}, "
+                            + $"so under D33 its first launch can come as early as {2 * d.ChargeTicks + d.BuildTicks}, before "
+                            + $"F8's {MeasurementHarness.F8FirstLaunchTicks}. Raise the charge or revisit D33 (ADR-073)");
+        }
+        if (superweapons == 0) return Fail("powerdata: no superweapon def was found, so the F8 bound measured nothing");
+        // And the bound bites: a charge of 5000 (2 x 5000 + 600 = 10600) fails it.
+        if (F8Holds(stockCannon with { ChargeTicks = 5000 }))
+            return Fail("powerdata: the F8 bound passed a 5000-tick charge, so it cannot catch the edit it exists for");
+    }
 
     Console.WriteLine($"powerdatagate: the superweapon's charge ({stockCharge} ticks), the orbital cannon's blast "
                       + $"({stockCannon.StrikeDamage}), the precision strike ({stockBastion.StrikeDamage}) and the scan's "
                       + $"reveal ({stockBastion.RevealTicks} ticks) come from /data/buildings and reproduce the compiled "
                       + $"reference; registered at {OddCharge}, {OddBlast}, {OddStrike} and {OddReveal} the sim built, "
                       + $"recharged, struck and revealed by those numbers instead; each moves the catalogue checksum; "
-                      + "and the loader demands each key where it is read and refuses it everywhere else");
+                      + "the loader demands each key where it is read and refuses it everywhere else; registration in code "
+                      + $"demands the same columns and refuses eight bad defs by name; every ceiling ({World.MaxChargeTicks}, "
+                      + $"{World.MaxStrikeDamage}, {World.MaxRevealTicks}) is enforced; and every registered superweapon keeps "
+                      + $"D33's first launch at or after {MeasurementHarness.F8FirstLaunchTicks} (2 x charge + build = "
+                      + $"{2 * stockCannon.ChargeTicks + stockCannon.BuildTicks} for the cannon)");
     return 0;
 }
 
@@ -11361,7 +11458,11 @@ int SeismicAimGate()
         var w = new World(3805, 96, 96, players: 2);
         w.SetFaction(0, World.FactionSodality);
         var real = w.GetStructureType(Seismic);
-        w.RegisterStructureType(Seismic, real with { DestroysFields = false });
+        // P8-18 audit (ADR-073): a superweapon that does not destroy fields
+        // strikes through ApplyAreaDamage and so needs a strike_damage, which
+        // registration now demands. Its own SeismicDamage is the honest value;
+        // this stage asks only where the commander AIMS.
+        w.RegisterStructureType(Seismic, real with { DestroysFields = false, StrikeDamage = World.SeismicDamage });
         w.SpawnConstructionYard(0, 6, 46);
         w.SpawnPowerPlant(0, 10, 46, supply: 5000, structType: World.SodalityGeneratorStructType);
         w.SpawnSuperweapon(0, 10, 42, chargeTicks: 0, structType: Seismic);
@@ -14767,6 +14868,80 @@ int SaveLoad()
     if (loaded.ComputeStateHash() != hashFull)
         return Fail($"saveload: resumed run diverged (0x{loaded.ComputeStateHash():X16} vs 0x{hashFull:X16})");
     Console.WriteLine($"saveload: {ms.Length} bytes; player 1's Sodality faction survived the round trip; loaded hash exact at the save point; resumed run reached the uninterrupted final hash 0x{hashFull:X16} bit-for-bit");
+
+    // P8-18 audit (ADR-073): A LIVE SUPERWEAPON CROSSES THE SAVE. Under D33 no
+    // commander places one before t=6001, and every save, replay and LAN gate in
+    // CI saves earlier than that, so none carried a strike in flight or a
+    // charge part-run. Two hand-placed weapons: the orbital cannon launched at
+    // a factory and saved with its strike in flight (StrikeTicks, StrikeX and
+    // StrikeY live), and the seismic charge saved mid-way through its own
+    // registered charge. Saved at tick 40, then resumed to tick 200, past the
+    // impact and into the cannon's recharge, against an uninterrupted run.
+    {
+        int cannon = -1, seismic = -1, target = -1;
+        World BuildSw()
+        {
+            var w = new World(seed, 64, 64, players: 2);
+            w.SetFaction(0, World.FactionDirectorate);
+            w.SetFaction(1, World.FactionSodality);
+            w.SpawnPowerPlant(0, 2, 2, supply: 5000);
+            w.SpawnPowerPlant(1, 58, 58, supply: 5000, structType: World.SodalityGeneratorStructType);
+            cannon = w.SpawnSuperweapon(0, 10, 2, chargeTicks: 1);
+            seismic = w.SpawnSuperweapon(1, 50, 58, structType: World.SeismicChargeStructType);
+            target = w.SpawnFactory(1, 30, 30);
+            return w;
+        }
+        void StepSw(World w, int to)
+        {
+            while (w.Tick < to)
+            {
+                // Launched on tick 1, the tick after its one-tick charge ends.
+                if (w.Tick == 1)
+                    w.Step(new[] { new Command(w.Tick, 0, CommandType.LaunchSuper, cannon, Map.CellCentre(30), Map.CellCentre(30)) });
+                else w.Step(default);
+            }
+        }
+        const int swSave = 40, swEnd = 200;
+        var swRef = BuildSw();
+        StepSw(swRef, swEnd);
+        ulong swHashEnd = swRef.ComputeStateHash();
+
+        var swLive = BuildSw();
+        StepSw(swLive, swSave);
+        var c0 = swLive.Entities[cannon];
+        var s0 = swLive.Entities[seismic];
+        if (c0.StrikeTicks <= 0)
+            return Fail($"saveload: the cannon's strike is not in flight at the save (StrikeTicks {c0.StrikeTicks}), so the stage proves nothing");
+        int seismicCharge = swLive.GetStructureType(World.SeismicChargeStructType).ChargeTicks;
+        if (s0.ChargeTicks <= 0 || s0.ChargeTicks >= seismicCharge)
+            return Fail($"saveload: the seismic charge is not mid-charge at the save ({s0.ChargeTicks} of {seismicCharge})");
+        ulong swHashMid = swLive.ComputeStateHash();
+        using var swMs = new MemoryStream();
+        swLive.Save(swMs);
+        swMs.Position = 0;
+        var swLoaded = World.Load(swMs);
+        var c1 = swLoaded.Entities[cannon];
+        var s1 = swLoaded.Entities[seismic];
+        if (c1.StrikeTicks != c0.StrikeTicks || c1.StrikeX != c0.StrikeX || c1.StrikeY != c0.StrikeY || c1.ChargeTicks != c0.ChargeTicks)
+            return Fail($"saveload: the cannon's strike did not round-trip (StrikeTicks {c0.StrikeTicks} -> {c1.StrikeTicks}, "
+                        + $"StrikeX {c0.StrikeX} -> {c1.StrikeX}, StrikeY {c0.StrikeY} -> {c1.StrikeY}, ChargeTicks {c0.ChargeTicks} -> {c1.ChargeTicks})");
+        if (s1.ChargeTicks != s0.ChargeTicks || s1.StrikeTicks != s0.StrikeTicks)
+            return Fail($"saveload: the seismic charge's charge did not round-trip ({s0.ChargeTicks} -> {s1.ChargeTicks})");
+        if (swLoaded.ComputeStateHash() != swHashMid)
+            return Fail($"saveload: superweapon world loaded to 0x{swLoaded.ComputeStateHash():X16}, saved at 0x{swHashMid:X16}");
+        StepSw(swLoaded, swEnd);
+        if (swLoaded.ComputeStateHash() != swHashEnd)
+            return Fail($"saveload: the superweapon world resumed to 0x{swLoaded.ComputeStateHash():X16} against the uninterrupted 0x{swHashEnd:X16}");
+        var hit = swLoaded.Entities[target];
+        if (hit.Alive && hit.Hp >= hit.MaxHp)
+            return Fail("saveload: the strike saved in flight never landed on its factory after the load");
+        if (swLoaded.Entities[cannon].ChargeTicks <= 0)
+            return Fail("saveload: the cannon did not begin its recharge after the strike that crossed the save");
+        Console.WriteLine($"saveload: a live superweapon crossed the save - the orbital cannon's strike in flight (StrikeTicks "
+                          + $"{c0.StrikeTicks} at ({c0.StrikeX}, {c0.StrikeY})) and the seismic charge mid-charge ({s0.ChargeTicks} "
+                          + $"of its {seismicCharge} ticks still to run) round-tripped exactly; the resumed run landed the strike, "
+                          + $"began the recharge and reached the uninterrupted hash 0x{swHashEnd:X16} at tick {swEnd}");
+    }
     return 0;
 }
 

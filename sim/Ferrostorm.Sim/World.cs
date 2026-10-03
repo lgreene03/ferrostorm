@@ -1624,7 +1624,54 @@ public sealed partial class World
     public void RegisterStructureType(int typeId, StructureTypeDef def)
     {
         if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
+        ValidatePacing(typeId, in def);
         _structTypes[typeId] = def;
+    }
+
+    /// <summary>
+    /// P8-18 audit (ADR-073): the generous ceilings on the three pacing columns.
+    /// A superweapon charge of two hours (108000 ticks, twenty times GDD s8's six
+    /// minutes); a strike of 100000 (forty times the orbital cannon's 2500, and
+    /// small enough that DamageOf's baseDamage * pct stays exact for any matrix
+    /// percentage up to 21474, against a shipped maximum of 100); a reveal of a
+    /// whole 30-minute match (27000 ticks, GDD pillar 2's ceiling). The /data
+    /// loader and the schema state the same numbers.
+    /// </summary>
+    public const int MaxChargeTicks = 108000, MaxStrikeDamage = 100000, MaxRevealTicks = 27000;
+
+    /// <summary>
+    /// P8-18 audit (ADR-073): the pacing columns are REQUIRED where the sim reads
+    /// them, for a def built in code exactly as for one loaded from /data. The
+    /// loader (StructureCatalogue.ToTypeDef) already demanded them, but a code
+    /// caller registering a def got the record's zero defaults unchecked: a
+    /// superweapon with no charge spawns ready and recharges to nothing, firing
+    /// every warning-length cycle, and a building granting the scan with no
+    /// reveal lights the map for at most one tick, which is how a support-power
+    /// gate's fixture silently stopped exercising a real reveal. The rules mirror
+    /// the loader's: a superweapon needs a charge; a superweapon that does not
+    /// destroy fields, or a building granting the precision strike, needs a
+    /// strike; a building granting the orbital scan needs a reveal. Each is also
+    /// bounded above by the ceilings beside it. A column the sim does not read on
+    /// this def is left alone here, where the loader refuses it, because a file
+    /// is an authoring surface and a code-built def's unread column is inert.
+    /// </summary>
+    internal static void ValidatePacing(int typeId, in StructureTypeDef d)
+    {
+        bool superweapon = d.Kind == EntityKind.Superweapon;
+        Bound("ChargeTicks", d.ChargeTicks, superweapon, MaxChargeTicks, "a superweapon's charge");
+        Bound("StrikeDamage", d.StrikeDamage,
+              (superweapon && !d.DestroysFields) || GrantsPower(in d, PrecisionStrikePowerId),
+              MaxStrikeDamage, "the orbital cannon's blast or a precision strike");
+        Bound("RevealTicks", d.RevealTicks, GrantsPower(in d, OrbitalScanPowerId), MaxRevealTicks, "an orbital scan's reveal");
+
+        void Bound(string column, int value, bool readHere, int max, string what)
+        {
+            if (value < 0 || value > max)
+                throw new FormatException($"structure type {typeId} was registered with {column} {value}, outside 0 to {max}");
+            if (readHere && value < 1)
+                throw new FormatException($"structure type {typeId} was registered with {column} {value}, and the sim reads "
+                                          + $"it as {what}, so it must be 1 to {max}");
+        }
     }
 
     /// <summary>

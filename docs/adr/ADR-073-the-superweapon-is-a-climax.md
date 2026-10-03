@@ -430,6 +430,61 @@ replay-compatibility break, ratified under D1, D2 and D33 as stated above.
 - The decoupling reverses only if a later decision wants the powers to move
   with the superweapon again, in which case it should say so explicitly.
 
+## Audit follow-ups
+
+A determinism audit of this row found D33 and the sim diff clean for
+determinism and save/load, and raised five follow-ups, landed in one
+commit. No golden moves and no catalogue value changes.
+
+1. **Registration demands what the loader demands.** `RegisterStructureType`
+   now calls `World.ValidatePacing`, which refuses by column name a
+   superweapon with `ChargeTicks` below 1, a superweapon that does not destroy
+   fields or a building granting the precision strike with `StrikeDamage`
+   below 1, and a building granting the orbital scan with `RevealTicks` below
+   1. The seismic charge stays legal with no strike, as in the loader. Before
+   this, a code-built def took the record's zero defaults unchecked, and
+   `supportpowergate`'s carrier (the scan on a Radar Uplink) had been firing
+   a scan that lit for at most one tick. The carrier now takes the Bastion's
+   registered reveal, and stage 3 asserts the aim cell is still lit two ticks
+   after firing (a one-tick reveal fails it, measured). `seismicaimgate`
+   stage 5's field-sparing seismic charge carries `SeismicDamage` as its
+   strike. `powerdatagate` stage 5 proves eight refusals by name and three
+   controls; with the check removed it fails on the first.
+2. **Ceilings.** `charge_ticks` at most **108000** (two hours at 15 Hz,
+   twenty times GDD s8's six minutes); `strike_damage` at most **100000**
+   (forty times the cannon's 2500, so `DamageOf`'s `baseDamage * pct` stays
+   exact for any matrix percentage up to 21474, against a shipped maximum of
+   100; it would wrap above about 21.47 million at 100); `reveal_ticks` at most
+   **27000** (a whole 30-minute match). The same numbers are
+   `World.MaxChargeTicks`, `MaxStrikeDamage` and `MaxRevealTicks`, enforced
+   by registration, by the loader and stated as schema maxima.
+3. **A live superweapon crosses a save in CI.** `saveload` gains a stage
+   with the orbital cannon saved with its strike in flight (StrikeTicks 36 at
+   (30.5, 30.5)) and the seismic charge saved mid-charge (5360 of 5400 still
+   to run). Both round-trip exactly, the loaded hash equals the saved one, and
+   the resumed run lands the strike, begins the recharge and reaches the
+   uninterrupted hash at tick 200. The golden scenarios are untouched.
+4. **F8 holds on the registered charge, in CI.** `powerdatagate` (in
+   `match`) asserts for every superweapon def loaded from /data that
+   **2 x charge_ticks + build_ticks >= 10800**. Derivation from `pillargate`:
+   under D33 the weapon is placed at about charge plus build (6001 = 5400 +
+   600 + 1) and first fires about one charge later (11536 = 6001 + 5400 +
+   135, the 135 being power and beat slack), so the first launch is at least
+   2 x charge + build. Dropping the slack only makes the bound stricter, and
+   it assumes D1's economy gate is met before the floor (measured about
+   t=3170). Today it reads 11400; it fails below a charge of 5100, and a
+   5000-tick charge (10600) is shown to fail it.
+5. **The checks re-run** after these fixes. `pillargate` PASS while binding
+   on both halves (median first launch 11536, 66 of 72 launching, at most 3.6
+   launches per seat per 30 minutes). With `charge_ticks: 1500` in a copy of
+   /data, `pillargate --bind` exits 1 on both halves (median 4801, a seat at
+   15.0); the repository's files were never changed. `aiairgate`,
+   `cheesegate` and `powerdatagate` PASS. `match 2026` exits 0 in 61 s on
+   this machine. `aisuper` still tests its name (placed at t=6001, fired at
+   the standing refinery at t=11536, aim asserted, refinery destroyed), and
+   so does `aifactiongate` (each side's commander reaches its own
+   superweapon, types 6 and 22). Goldens 24 of 24 byte-identical to the file.
+
 ## Consequences
 
 **What gets better.** The superweapon no longer opens the match: the
