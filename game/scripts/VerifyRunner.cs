@@ -3916,8 +3916,10 @@ public partial class VerifyRunner : Node
     /// harmless: it fires only when it sees the squad alive inside reach or the
     /// Carrier moved by more than a cell, and the sim boards a walker on the
     /// very tick it closes to reach, so neither can be seen while the Carrier
-    /// is parked. The stage records both, so what it proves is that the ONE
-    /// order the click sent is what boarded the squad.
+    /// is parked. The stage COUNTS the re-sends (SkirmishLive's
+    /// BoardingResendsForTest) across the whole walk and requires none, so
+    /// what it proves is that the ONE order the click sent is what boarded the
+    /// squad, measured rather than inferred from the triggers.
     /// </summary>
     private void RunBoardingWalkStage(SkirmishLive g)
     {
@@ -3950,6 +3952,7 @@ public partial class VerifyRunner : Node
         float cx = Fx(parkedX), cz = Fx(parkedY);
         g.FocusCameraOn(cx, cz, 22f);
         int hold0 = lw.CargoOf(carrier).Count;
+        int resends0 = g.BoardingResendsForTest;
         g.PressRightClick(g.ScreenOf(cx, cz));
         int loads = 0;
         foreach (var c in g.PendingForTest)
@@ -3958,21 +3961,20 @@ public partial class VerifyRunner : Node
         // Twice the straight walk at the squad's own speed: derived, not chosen.
         int bound = 2 * (Fix64.FromInt(6) / lw.GetUnitType(2).Speed).ToIntRound();
         int took = 0;
-        bool seenInReach = false;
         while (took < bound && lw.Entities[squad].Alive)
         {
             g.StepTicks(1);
             took++;
-            if (lw.Entities[squad].Alive && GapSq() <= reachSq) seenInReach = true;
         }
         bool parked = Fix64.DistSq(lw.Entities[carrier].X - parkedX, lw.Entities[carrier].Y - parkedY) <= Fix64.One;
         bool aboard = !lw.Entities[squad].Alive && lw.CargoOf(carrier).Count == hold0 + 1;
         g.StepTicks(1);                      // the tick after: the client lets the finished boarding go
-        Gate(selected && outOfReach && loads == 1 && aboard && !seenInReach && parked && g.PendingBoardingsForTest == 0,
+        int resends = g.BoardingResendsForTest - resends0;
+        Gate(selected && outOfReach && loads == 1 && aboard && resends == 0 && parked && g.PendingBoardingsForTest == 0,
              "LoadTransport/out-of-reach",
              $"a squad six cells from its parked Carrier, ordered aboard by one right click, walks in and boards: hold "
-             + $"{hold0} -> {lw.CargoOf(carrier).Count} after {took} ticks (bound {bound}), {loads} LoadTransport, and the "
-             + $"client's re-send never fired (seen alive in reach {seenInReach}, Carrier parked {parked}; selected "
+             + $"{hold0} -> {lw.CargoOf(carrier).Count} after {took} ticks (bound {bound}), {loads} LoadTransport sent "
+             + $"by the click and {resends} re-sent by the client, counted (Carrier parked {parked}; selected "
              + $"{selected}, out of reach {outOfReach}, boardings still held {g.PendingBoardingsForTest})");
         g.ClearSelectionForTest();
     }

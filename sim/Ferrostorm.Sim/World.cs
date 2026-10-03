@@ -969,13 +969,16 @@ public sealed partial class World
     /// and this needs neither. Every reader that asks "is there an attack
     /// target" asks only whether the value is negative, so combat, capture,
     /// the ADR-071 dock route and the AI all see a boarding walker exactly as
-    /// they saw the plain walk that stood here before, and the two places that
-    /// must tell the walks apart ask by name: StepToward's crowd-arrival rule
-    /// and BoardingSystem. A save written before this row never holds a value
-    /// below -1, so it loads unchanged. And why not ExplicitTarget = c itself:
-    /// an explicit Attack on your own Carrier already means exactly that
-    /// (CanTarget is a stealth test, not a hostility test), and it must go on
-    /// meaning a force-fire rather than turning into a boarding.
+    /// they saw the plain walk that stood here before, and the three places
+    /// that must tell the walks apart ask by name: StepToward's crowd-arrival
+    /// rule, BoardingSystem, and SeparationSystem's ADR-014 backstop, which
+    /// leaves a boarding walk's give-up to BoardingSystem. A save written
+    /// before this row never holds a value below -1, so it loads unchanged.
+    /// And why not ExplicitTarget = c itself: an explicit Attack on your own
+    /// Carrier already means exactly that (CanTarget is a stealth test, not a
+    /// hostility test), and it must go on meaning a force-fire rather than
+    /// turning into a boarding. The full argument, with the alternatives and
+    /// the replay-compatibility statement, is ADR-074.
     /// </summary>
     private static int BoardingWalk(int carrierId) => -2 - carrierId;
 
@@ -1000,8 +1003,22 @@ public sealed partial class World
         return CargoOf(carrierId).Count < CarrierCapacity;
     }
 
-    /// <summary>P7-3: the boarding itself, for a unit BoardingOpen admitted and
-    /// that stands within reach.</summary>
+    /// <summary>
+    /// P7-3: the boarding itself, for a unit BoardingOpen admitted and that
+    /// stands within reach. The ONE place a boarding happens, reached from the
+    /// LoadTransport order in reach and from BoardingSystem's walk-in alike, so
+    /// anything a boarding must also do (an event, a counter) is added here once.
+    ///
+    /// P8-56 (ADR-074): it also ends every order the unit held, so the two
+    /// paths leave the despawned entity in the same state. The walk-in arrives
+    /// having had its attack-move and any Guard or Patrol post cleared by the
+    /// order, and holding its walk in ExplicitTarget; the in-reach order could
+    /// arrive holding an attack target, an attack-move or a post. The entity is
+    /// dead either way, but every field of a dead entity is still hashed, so a
+    /// residue that depended on the path would make the same boarding hash two
+    /// ways. HoldFire stays, as it does across a Move: it is fire discipline,
+    /// not an order.
+    /// </summary>
     private void Board(ref Entity e, int carrierId)
     {
         if (!_cargo.TryGetValue(carrierId, out var hold)) _cargo[carrierId] = hold = new List<CargoUnit>();
@@ -1013,6 +1030,9 @@ public sealed partial class World
         // three times.
         e.Alive = false;
         e.Moving = false;
+        e.ExplicitTarget = -1;
+        e.AMove = false;
+        CancelPositionalStance(ref e);
         // D34: Boarded, not Died, A the unit and B the Carrier. Nothing in the
         // sim reads, hashes or saves its own events, so the type is free to be
         // honest. Raised here and nowhere else, so the in-reach order and
@@ -1030,6 +1050,22 @@ public sealed partial class World
     /// changed hands or filled, the order lapses back to -1 and the walk already
     /// in flight finishes as a plain one, so the squad settles beside where its
     /// Carrier was, as an attacker does when its target dies.
+    ///
+    /// ADR-074: and it GIVES UP, by ADR-014's own rule. Re-asserting the walk
+    /// each tick would otherwise outlast every movement backstop: a Carrier the
+    /// squad cannot path to stops the walk inside StepToward every tick and
+    /// this would restart it every tick, for the rest of the match. So the
+    /// walker's nearest approach to its Carrier is tracked in the ADR-014
+    /// fields it already carries (NearestApproachSq, NoProgressTicks), and a
+    /// walker that has not bettered it for NoProgressDeadline ticks lapses to a
+    /// plain stop: no order, not moving, counters re-armed, exactly the bench
+    /// that backstop applies to any other walk. This system is the counters'
+    /// only writer during a boarding walk (SeparationSystem's backstop skips
+    /// one), so the deadline is counted once per tick, against the Carrier
+    /// where it stands now. StallTicks is left as it is: its short leaky net
+    /// fires in the ordinary crowd round a Carrier, where the boarders ahead
+    /// are about to despawn and clear the way, so it only pauses a walk for a
+    /// tick.
     ///
     /// Placed after movement, separation, mines and gates have settled the
     /// tick's positions and before capture and combat, so a squad that closed
@@ -1052,13 +1088,29 @@ public sealed partial class World
             else
             {
                 var carrier = _entities[c];
-                if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) <= BoardingReachSq)
-                {
-                    e.ExplicitTarget = -1;   // the order is spent, so the despawned entity holds no walk
+                Fix64 gapSq = Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y);
+                if (gapSq <= BoardingReachSq)
                     Board(ref e, c);
-                }
                 else
                 {
+                    // ADR-014's watchdog, measured to the Carrier. A Raw-zero
+                    // NearestApproachSq is the sentinel the order left, so the
+                    // walk's first tick seeds it.
+                    if (e.NearestApproachSq.Raw == 0 || gapSq < e.NearestApproachSq)
+                    {
+                        e.NearestApproachSq = gapSq;
+                        e.NoProgressTicks = 0;
+                    }
+                    else if (++e.NoProgressTicks >= NoProgressDeadline)
+                    {
+                        // ADR-074's give-up: ADR-014's bench, and the order with it.
+                        e.ExplicitTarget = -1;
+                        e.Moving = false;
+                        e.NoProgressTicks = 0;
+                        e.NearestApproachSq = Fix64.Zero;
+                        _entities[i] = e;
+                        continue;
+                    }
                     e.TargetX = carrier.X; e.TargetY = carrier.Y;
                     e.Moving = true; e.UseFlow = true;
                 }
@@ -3355,7 +3407,9 @@ public sealed partial class World
                 // two-cell reach, however often it was re-sent. The walk is now
                 // marked in ExplicitTarget (see BoardingWalk), which exempts it
                 // from crowd arrival exactly as an attack order is exempt, and
-                // BoardingSystem follows the Carrier and boards on arrival.
+                // BoardingSystem follows the Carrier and boards on arrival, or
+                // gives up by ADR-014's deadline (ADR-074); zeroing the
+                // counters below arms that deadline afresh for this walk.
                 // Ending a positional stance is the Move and Attack rule: a Guard
                 // leash would otherwise cancel the walk the very next tick.
                 if (Fix64.DistSq(e.X - carrier.X, e.Y - carrier.Y) > BoardingReachSq)
@@ -5802,7 +5856,15 @@ public sealed partial class World
                 // period of orbit regardless of its per-tick churn, where the
                 // leaky net's balance point hides it. Runs only if StallTicks
                 // did not already settle the unit this tick.
-                if (e.Moving)
+                //
+                // ADR-074: not for a walk to board a Carrier. BoardingSystem
+                // keeps these two counters for that walk, measured to the
+                // Carrier, and benches it with the order; counted here as well
+                // it would advance twice a tick, and a bench here alone would be
+                // undone by BoardingSystem re-asserting the walk the same tick.
+                // Identical for every other walk: nothing else holds a value
+                // below -1.
+                if (e.Moving && BoardingCarrierOf(in e) < 0)
                 {
                     Fix64 curSq = Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y);
                     if (e.NearestApproachSq.Raw == 0 || curSq < e.NearestApproachSq)

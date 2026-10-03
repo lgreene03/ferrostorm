@@ -470,6 +470,10 @@ public partial class SkirmishLive : Node3D
     // See ReissueBoardings.
     private readonly Dictionary<int, (int Carrier, Fix64 X, Fix64 Y)> _boarding = new();
     private readonly List<int> _boardingKeys = new();
+    // P8-56: every LoadTransport ReissueBoardings has queued, the
+    // _autoHarvestIssues pattern, so the harness COUNTS the backstop's re-sends
+    // rather than inferring from its triggers that none fired.
+    private int _boardingResends;
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
     // carry the identical destination (see SendMobilesToDepot for why exact
     // equality matters: the sim's arrival contagion keys on it).
@@ -1390,7 +1394,10 @@ public partial class SkirmishLive : Node3D
             foreach (var c in _pending)
                 if (c.Type == CommandType.LoadTransport && c.EntityId == u) { alreadySent = true; break; }
             if (!alreadySent)
+            {
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier));
+                _boardingResends++;
+            }
             _boarding[u] = (carrier, t.X, t.Y);
         }
     }
@@ -5586,6 +5593,10 @@ public partial class SkirmishLive : Node3D
     /// re-issuing, so a check can see one start and end.</summary>
     public int PendingBoardingsForTest => _boarding.Count;
 
+    /// <summary>P8-56 verification read: how many LoadTransport orders
+    /// ReissueBoardings has re-sent this match, so a check can count them.</summary>
+    public int BoardingResendsForTest => _boardingResends;
+
     private void FinishSelect(Vector2 at, bool add)
     {
         if (!add) _selection.Clear();
@@ -6891,10 +6902,13 @@ public partial class SkirmishLive : Node3D
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, enemy, queued));
             else if (carrier >= 0 && id != carrier && CanBoard(in me))
             {
-                // P8-7: board. The sim walks a unit that is out of reach and
-                // boards one that is within it; ReissueBoardings sends the order
-                // again on the tick it can land. A full Carrier is refused here,
-                // said by toast, rather than sent orders the sim would drop.
+                // P8-7: board. Since P8-56 this one order is the whole boarding:
+                // the sim boards a unit within reach at once, and walks one from
+                // farther in to the Carrier, following it, and boards it on
+                // arrival (World.BoardingSystem). The _boarding entry below feeds
+                // ReissueBoardings, kept only as a harmless backstop. A full
+                // Carrier is refused here, said by toast, rather than sent orders
+                // the sim would drop.
                 if (carrierFull) { deniedBoard = true; continue; }
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, id, Fix64.Zero, Fix64.Zero, carrier, queued));
                 if (!queued) _boarding[id] = (carrier, _world.Entities[carrier].X, _world.Entities[carrier].Y);

@@ -12612,9 +12612,12 @@ int TransportGate()
                       + "unit with its health and rank and PRUNES the hold; and a destroyed carrier takes its cargo with "
                       + "it, so the hold is not somewhere to hide an army; and a v9 save round-trips the hold in order, "
                       + "hash-identical; and (P8-56) a squad ordered aboard ONCE from out of reach walks in and boards, "
-                      + "following a Carrier that drives off, lapsing when its Carrier fills or dies, resuming from a "
-                      + "save, ending a Guard stance, and resuming after it stops to shoot with a shift-queued order "
-                      + "held behind it, while a plain move to the same point still settles short");
+                      + "boarding a Carrier that drove beyond the reach of where the order found it, lapsing when its "
+                      + "Carrier fills or dies, resuming from a save, ending a Guard stance, and resuming after it stops "
+                      + "to shoot with a shift-queued order held behind it, while a plain move to the same point still "
+                      + "settles short; and (ADR-074) a walk to a Carrier it cannot reach, or one that outruns it, gives "
+                      + "up at ADR-014's deadline and stops, and both boarding paths leave the boarded unit holding no "
+                      + "order");
     return 0;
 
     // P8-56: ordered aboard from OUT OF REACH, the squad boards. Until this row
@@ -12622,9 +12625,9 @@ int TransportGate()
     // rule settled it at four cells, outside the two-cell reach, and nothing
     // boarded however often the order was re-sent (P8-7 measured 3, 4, 6 and 10
     // cells, 300 ticks each). Every boarding order below is issued ONCE, by
-    // Board or by hand, and every bound is twice the straight walk at the
-    // squad's own speed: derived from the catalogue, so it needs no defence and
-    // cannot drift from it.
+    // Board or by hand. Every bound on a boarding is twice the straight walk at
+    // the squad's own speed, and the bound on a give-up is ADR-014's own
+    // deadline: both derived, so they need no defence and cannot drift.
     int BoardingWalkStages()
     {
         static string Cells(Fix64 sq) => Fix64.Sqrt(sq).ToString();
@@ -12732,9 +12735,15 @@ int TransportGate()
                               + $"{Cells(Gap(w, walker, carrier))} cells from the wreck, and nothing aboard");
         }
 
-        // --- 11. The Carrier drives off mid-walk: the walk FOLLOWS it and
-        //         boards. Driven twelve cells south, so it ends well outside the
-        //         reach of the point where the order found it.
+        // --- 11. The Carrier drives off mid-walk. It is ordered twelve cells
+        //         south on the tick after the boarding order, and the stage
+        //         asserts exactly two things: the squad boards within the bound,
+        //         and on the tick it boards the Carrier stands more than the
+        //         two-cell reach from where the order found it. So the squad
+        //         boarded the Carrier where it had driven to, which it could not
+        //         have done from the order's own point. It does NOT assert the
+        //         route the squad took, nor that the Carrier had finished its
+        //         drive: it is still moving when the squad boards.
         {
             var w = Fresh(out int carrier);
             Fix64 sx = w.Entities[carrier].X, sy = w.Entities[carrier].Y;
@@ -12745,14 +12754,16 @@ int TransportGate()
             var ce = w.Entities[carrier];
             Fix64 moved = Fix64.DistSq(ce.X - sx, ce.Y - sy);
             if (w.Entities[walker].Alive || w.CargoOf(carrier).Count != 1)
-                return Fail($"transport walk: a squad ordered aboard a Carrier that then drives off must follow it and board "
-                            + $"within {bound} ticks; after {took} it stands {Cells(Gap(w, walker, carrier))} cells off, "
-                            + $"hold {w.CargoOf(carrier).Count}");
+                return Fail($"transport walk: a squad ordered aboard a Carrier that is then ordered twelve cells away must "
+                            + $"board it within {bound} ticks; after {took} it stands {Cells(Gap(w, walker, carrier))} cells "
+                            + $"off, hold {w.CargoOf(carrier).Count}");
             if (moved <= Fix64.FromInt(4))
-                return Fail($"transport walk: the Carrier must have driven out of the walk's starting reach for this stage "
-                            + $"to test following ({Cells(moved)} cells)");
-            Console.WriteLine($"  transportgate: a Carrier drove off mid-walk and the squad followed and boarded in {took} "
-                              + $"ticks (bound {bound}), {Cells(moved)} cells from where the order found it");
+                return Fail($"transport walk: when the squad boards, the Carrier must stand beyond the two-cell reach of "
+                            + $"where the order found it, or this stage proves nothing about a Carrier that moved "
+                            + $"({Cells(moved)} cells)");
+            Console.WriteLine($"  transportgate: a Carrier ordered twelve cells south mid-walk was boarded in {took} ticks "
+                              + $"(bound {bound}), on a tick it stood {Cells(moved)} cells from where the order found it, "
+                              + "beyond the reach of that point");
         }
 
         // --- 12. A save taken mid-walk resumes it. The walk lives in fields the
@@ -12828,6 +12839,163 @@ int TransportGate()
                             + $"{Cells(Gap(w, u, carrier))} cells off, hold {w.CargoOf(carrier).Count}");
             Console.WriteLine($"  transportgate: a walker fired {shots} shot(s) at a hostile beside its route and still "
                               + $"boarded in {took} ticks (bound {bound}), the shift-queued move held behind it");
+        }
+
+        // --- 15. ADR-074: a Carrier the squad cannot path to. It stands inside
+        //         a sealed ring of blocked cells three out from its own, and the
+        //         squad, ordered aboard ONCE from ten cells, has no route in.
+        //         Before ADR-074 BoardingSystem restarted the walk every tick,
+        //         StepToward stopped it every tick, and the order never ended.
+        //         Now the walker's nearest approach to its Carrier is ADR-014's
+        //         watchdog: not bettered for NoProgressDeadline ticks, the
+        //         boarding lapses to a plain stop. The upper bound is that
+        //         deadline plus the one tick that seeds the watchdog; the lower
+        //         bound is the deadline itself, so what ends the walk is the
+        //         backstop and not a refusal on the order's tick. After the lapse
+        //         the squad must stay where it stopped, with no order, for a
+        //         second full deadline.
+        {
+            var w = Fresh(out int carrier);
+            int ccx = Map.CellOf(w.Entities[carrier].X), ccy = Map.CellOf(w.Entities[carrier].Y);
+            for (int dy = -3; dy <= 3; dy++)
+                for (int dx = -3; dx <= 3; dx++)
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) == 3) w.Map.SetBlocked(ccx + dx, ccy + dy, true);
+            w.InvalidateFlowCache();
+            int u = Board(w, carrier, Rifle, ccx + 10, ccy);
+            if (!w.Entities[u].Alive || w.Entities[u].ExplicitTarget > -2)
+                return Fail($"transport give-up: the precondition needs a boarding walk started from ten cells (alive "
+                            + $"{w.Entities[u].Alive}, target {w.Entities[u].ExplicitTarget})");
+            int deadline = World.NoProgressDeadline, bound = deadline + 1, took = 1;
+            while (took < bound && w.Entities[u].ExplicitTarget != -1) { w.Step(default); took++; }
+            var we = w.Entities[u];
+            if (we.ExplicitTarget != -1)
+                return Fail($"transport give-up: a squad ordered aboard a Carrier it cannot reach must give the order up by "
+                            + $"ADR-014's deadline, {bound} ticks; after {took} it still holds it (target {we.ExplicitTarget}, "
+                            + $"moving {we.Moving}, {Cells(Gap(w, u, carrier))} cells off)");
+            if (took < deadline)
+                return Fail($"transport give-up: the walk lapsed after {took} ticks, before ADR-014's {deadline}-tick "
+                            + "deadline, so something other than the no-progress backstop ended it");
+            if (!we.Alive || we.Moving || w.CargoOf(carrier).Count != 0)
+                return Fail($"transport give-up: the lapse must be a plain stop with the squad alive and nothing aboard "
+                            + $"(alive {we.Alive}, moving {we.Moving}, hold {w.CargoOf(carrier).Count})");
+            Fix64 lx = we.X, ly = we.Y;
+            for (int t = 0; t < deadline; t++) w.Step(default);
+            var after = w.Entities[u];
+            Fix64 drift = Fix64.DistSq(after.X - lx, after.Y - ly);
+            if (after.ExplicitTarget != -1 || after.Moving || drift != Fix64.Zero)
+                return Fail($"transport give-up: a squad whose boarding lapsed must stay stopped; {deadline} ticks later "
+                            + $"it holds target {after.ExplicitTarget}, moving {after.Moving}, {Cells(drift)} cells from "
+                            + "where it stopped");
+            Console.WriteLine($"  transportgate: a squad ordered aboard ONCE a Carrier walled off from it gave the order up "
+                              + $"after {took} ticks (ADR-014's deadline {deadline}, bound {bound}) and stood "
+                              + $"{Cells(Gap(w, u, carrier))} cells off, stopped, for {deadline} ticks more");
+        }
+
+        // --- 16. ADR-074: the same give-up while the walker MOVES. An engineer
+        //         is ordered aboard a Carrier three cells ahead of it that is
+        //         driving away down an open row, faster than an engineer walks,
+        //         so the squad chases and never gains. It must give the order up
+        //         at ADR-014's deadline and NOT before: the deadline is counted
+        //         once a tick, by BoardingSystem alone, against the Carrier where
+        //         it stands (SeparationSystem's backstop skips a boarding walk,
+        //         or the two would count the same counter twice). The Carrier
+        //         must still be driving when the order lapses, so this is the
+        //         chase and not a squad that caught a parked Carrier late. This
+        //         is the consequence ADR-074 records and names a reversal for: a
+        //         Carrier driven away from a slower squad for longer than the
+        //         deadline loses the boarding.
+        {
+            var w = new World(3000, 64, 64, players: 2);
+            var cd = w.GetUnitType(Carrier);
+            var ed = w.GetUnitType(Engineer);
+            if (ed.Speed >= cd.Speed)
+                return Fail($"transport give-up: the chase needs a carryable unit slower than the Carrier (engineer "
+                            + $"{ed.Speed}, Carrier {cd.Speed}): a fixture failure, not a product one");
+            int carrier = w.SpawnUnit(0, Fix64.FromInt(6), Fix64.FromInt(32), cd.Speed, cd.Hp, cd.Armour, 0,
+                                      veterancy: false, unitType: Carrier);
+            int u = w.SpawnUnit(0, Fix64.FromInt(3), Fix64.FromInt(32), ed.Speed, ed.Hp, ed.Armour, ed.WeaponId,
+                                veterancy: false, unitType: Engineer);
+            w.Step(new[]
+            {
+                new Command(w.Tick, 0, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier),
+                new Command(w.Tick, 0, CommandType.PathMove, carrier, Fix64.FromInt(60), Fix64.FromInt(32)),
+            });
+            int deadline = World.NoProgressDeadline, cap = 2 * deadline, took = 1;
+            while (took < cap && w.Entities[u].ExplicitTarget != -1 && w.Entities[u].Alive) { w.Step(default); took++; }
+            var we = w.Entities[u];
+            if (!we.Alive || we.ExplicitTarget != -1 || we.Moving || w.CargoOf(carrier).Count != 0)
+                return Fail($"transport give-up: an engineer chasing a Carrier that outruns it must give the order up as a "
+                            + $"plain stop within {cap} ticks; after {took} it is alive {we.Alive}, target "
+                            + $"{we.ExplicitTarget}, moving {we.Moving}, hold {w.CargoOf(carrier).Count}");
+            if (took < deadline)
+                return Fail($"transport give-up: the chase lapsed after {took} ticks, before ADR-014's {deadline}-tick "
+                            + "deadline, so the no-progress counter advanced faster than once a tick");
+            if (!w.Entities[carrier].Moving)
+                return Fail($"transport give-up: the Carrier had stopped by the lapse at {took} ticks, so this was not a "
+                            + "chase of a Carrier still driving away");
+            Console.WriteLine($"  transportgate: an engineer chasing a Carrier that outran it gave the order up after {took} "
+                              + $"ticks (ADR-014's deadline {deadline}), {Cells(Gap(w, u, carrier))} cells behind it, with "
+                              + "the Carrier still driving");
+        }
+
+        // --- 17. ADR-074: both boarding paths leave the boarded unit in the
+        //         same state, because Board() alone writes it. Path A is the
+        //         order landing IN reach, on two squads holding orders of kinds
+        //         the walk-in never carries: one on Guard engaging a hostile in
+        //         its leash (an attack target and a post), one attack-moving.
+        //         Path B is BoardingSystem's walk-in from six cells. Compared on
+        //         the despawned entities: the order state (alive, moving, attack
+        //         target, attack-move, stance with its post and patrol geometry),
+        //         which is everything that says what a unit is doing. Position
+        //         and the movement counters record where each one happened to
+        //         be, so they differ by construction and are not compared. The
+        //         hostile is an unarmed Carrier, so nothing shoots back, and the
+        //         walk's tick count is not under test, so its cap is generous.
+        {
+            var w = Fresh(out int carrier);
+            var cd = w.GetUnitType(Carrier);
+            int bait = w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(23), cd.Speed, cd.Hp, cd.Armour, 0,
+                                   veterancy: false, unitType: Carrier);
+            int guard = Rifleman(w, 21, 20), amover = Rifleman(w, 20, 21), walker = Rifleman(w, 26, 20);
+            w.Step(new[]
+            {
+                new Command(w.Tick, 0, CommandType.SetStance, guard, Fix64.Zero, Fix64.Zero, (int)Stance.Guard),
+                new Command(w.Tick, 0, CommandType.AttackMove, amover, Fix64.FromInt(20), Fix64.FromInt(40)),
+                new Command(w.Tick, 0, CommandType.LoadTransport, walker, Fix64.Zero, Fix64.Zero, carrier),
+            });
+            w.Step(default);
+            var g0 = w.Entities[guard];
+            var a0 = w.Entities[amover];
+            if (g0.Stance != Stance.Guard || g0.ExplicitTarget != bait || !a0.AMove
+                || Gap(w, guard, carrier) > Fix64.FromInt(4) || Gap(w, amover, carrier) > Fix64.FromInt(4))
+                return Fail($"transport paths: the precondition needs, in reach, a squad on Guard engaging the hostile "
+                            + $"(stance {g0.Stance}, target {g0.ExplicitTarget}, {Cells(Gap(w, guard, carrier))} cells off) "
+                            + $"and one attack-moving (amove {a0.AMove}, {Cells(Gap(w, amover, carrier))} cells off)");
+            w.Step(new[]
+            {
+                new Command(w.Tick, 0, CommandType.LoadTransport, guard, Fix64.Zero, Fix64.Zero, carrier),
+                new Command(w.Tick, 0, CommandType.LoadTransport, amover, Fix64.Zero, Fix64.Zero, carrier),
+            });
+            Run(w, walker, 2 * Bound(w, 10));
+            if (w.Entities[guard].Alive || w.Entities[amover].Alive || w.Entities[walker].Alive
+                || w.CargoOf(carrier).Count != 3)
+                return Fail($"transport paths: the precondition needs all three squads aboard (guard "
+                            + $"{!w.Entities[guard].Alive}, attack-mover {!w.Entities[amover].Alive}, walker "
+                            + $"{!w.Entities[walker].Alive}, hold {w.CargoOf(carrier).Count})");
+            static string OrderState(in Entity e)
+                => $"alive {e.Alive}, moving {e.Moving}, target {e.ExplicitTarget}, amove {e.AMove}, stance {e.Stance}, "
+                   + $"post ({e.PostX}, {e.PostY}), patrol ({e.PatrolX}, {e.PatrolY}, {e.PatrolOutbound})";
+            string walked = OrderState(w.Entities[walker]);
+            foreach (var (what, id) in new[] { ("on Guard engaging a hostile", guard), ("attack-moving", amover) })
+            {
+                string inReach = OrderState(w.Entities[id]);
+                if (inReach != walked)
+                    return Fail($"transport paths: a squad {what} ordered aboard in reach must be left exactly as a "
+                                + $"walk-in is left. In reach: {inReach}. Walk-in: {walked}");
+            }
+            Console.WriteLine($"  transportgate: boarded in reach while on Guard engaging a hostile, in reach while "
+                              + $"attack-moving, and by the walk-in from 6 cells, all three despawned entities hold the "
+                              + $"same order state: {walked}");
         }
         return 0;
     }
