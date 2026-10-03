@@ -294,6 +294,19 @@ public enum GameEventType : byte
     // and audio warning to the SUPERWEAPON specifically, and a minor power that
     // announced itself to its victim would have no surprise left to trade on.
     SupportPowerUsed = 15,
+    // P8-10 (decision D34): A the unit, B the Carrier it boarded. LoadTransport
+    // raised Died for this from P7-3 until now, so every client read a squad
+    // climbing into a Carrier as a casualty: death flash, smoke, scorch and the
+    // casualty line. It is the Sabotaged and Robbed argument again - an alert
+    // that says the wrong thing is worse than no alert - and the client
+    // inferring boardings from Died could never be exact. The unit still
+    // despawns (Alive false); only the event that says so is honest now.
+    Boarded = 16,
+    // P8-10 (decision D34): A the Carrier, B the number set down, at (X, Y)
+    // the Carrier's position. UnloadTransport raised ProductionComplete per
+    // unit for this, so clients toasted "CARRIER DEPLOYED" with the unit-ready
+    // line, chimed, and opened factory doors. An unload is not production.
+    Unloaded = 17,
 }
 public readonly record struct GameEvent(GameEventType Type, int A, int B, Fix64 X = default, Fix64 Y = default, int C = -1);
 
@@ -3117,7 +3130,9 @@ public sealed partial class World
                 // three times.
                 e.Alive = false;
                 e.Moving = false;
-                _events.Add(new GameEvent(GameEventType.Died, c.EntityId, -1));
+                // D34: Boarded, not Died. Nothing in the sim reads, hashes or
+                // saves its own events, so the type is free to be honest.
+                _events.Add(new GameEvent(GameEventType.Boarded, c.EntityId, c.AuxId));
                 break;
             }
             case CommandType.UnloadTransport:
@@ -3150,9 +3165,11 @@ public sealed partial class World
                     landed.Rank = cu.Rank;          // a veteran does not lose its rank in transit
                     landed.Hp = cu.Hp;
                     _entities[id] = landed;
-                    _events.Add(new GameEvent(GameEventType.ProductionComplete, c.EntityId, id));
                     placed++;
                 }
+                // D34: one Unloaded for the act, carrying how many were set down
+                // and where, in place of a ProductionComplete per unit.
+                if (placed > 0) _events.Add(new GameEvent(GameEventType.Unloaded, c.EntityId, placed, e.X, e.Y));
                 hold.RemoveRange(0, placed);
                 // PRUNE on empty, which is what makes the hash fold sound: no
                 // entry provably means nothing carried.

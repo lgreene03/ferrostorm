@@ -342,8 +342,7 @@ public partial class CombatEffects : Node3D
             switch (ev.Type)
             {
                 case GameEventType.Fired: OnFired(ev, actors, audio, weaponOf); break;
-                case GameEventType.Died: OnDied(ev, actors, audio); break;
-                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
+                case GameEventType.Died: OnDied(ev, actors, audio); break;                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
                 // P8-10 (FEEL-07): NO production chime here any more. This
                 // played production_done for EVERY ProductionComplete, so the
                 // local speakers announced each enemy and allied completion
@@ -929,9 +928,9 @@ public partial class CombatEffects : Node3D
     private static readonly BoxMesh ReticleBarMesh = new() { Size = new Vector3(1.0f, 0.02f, 0.06f) };
     private readonly Dictionary<int, (Node3D Node, MeshInstance3D Ring, int Total)> _reticles = new();
 
-    /// <summary>Put a reticle on the aim point of the strike `launcherId` just
-    /// launched. `totalTicks` is the launcher's StrikeTicks at launch, so the
-    /// ring closes over whatever warning the sim actually gives.</summary>
+    /// <summary>Put a reticle on the aim point of `launcherId`'s strike.
+    /// `totalTicks` is the warning the ring closes over, which the scene reads
+    /// from the sim (SkirmishLive.ReconcileStrikeReticles).</summary>
     public void ShowStrikeReticle(int launcherId, Vector3 at, int totalTicks)
     {
         ClearStrikeReticle(launcherId);

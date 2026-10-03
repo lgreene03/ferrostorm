@@ -29,6 +29,11 @@ public sealed record Alert(string Text, AlertPriority Priority = AlertPriority.R
     public Color PingColour { get; init; }
     /// <summary>Record the ping position for the jump-to-event key.</summary>
     public bool Jump { get; init; }
+    /// <summary>What the message is ABOUT: an entity id, or a seat for a
+    /// seat-level message; -1 for neither. Part of the de-duplication key with
+    /// the text and the ping position, so two sabotaged plants or two fallen
+    /// commanders are two lines while a repeat about the same one is one.</summary>
+    public int Subject { get; init; } = -1;
 }
 
 /// <summary>
@@ -44,10 +49,13 @@ public sealed record Alert(string Text, AlertPriority Priority = AlertPriority.R
 /// STACKED. Up to Capacity toasts show at once, one line each, so two things
 /// happening together are both read.
 ///
-/// DE-DUPLICATED. The same text raised again inside DedupeSeconds refreshes
+/// DE-DUPLICATED. The same message raised again inside DedupeSeconds refreshes
 /// the toast already standing (its life restarts and it moves to the top of
-/// its band) and replays nothing: no second cue, voice or ping. A key pressed
-/// five times is one line, not five.
+/// its band) and replays nothing: no second cue, voice or ping. "The same" is
+/// the text AND the subject AND the ping position, never the text alone: a key
+/// pressed five times is one line, but two plants sabotaged in the same tick
+/// carry the same words about two buildings, and each keeps its own line,
+/// ping, cue and jump record.
 ///
 /// PRIORITY ORDERED. Higher priorities sit above lower ones, newest first
 /// within a band, and a toast is only ever pushed out by one of its own
@@ -95,6 +103,8 @@ public partial class AlertService : VBoxContainer
     private sealed class Entry
     {
         public string Text = "";
+        public int Subject = -1;
+        public Vector2? PingAt;
         public AlertPriority Priority;
         public double RaisedAt;
         public double ShownAt = -1;
@@ -144,7 +154,7 @@ public partial class AlertService : VBoxContainer
         double now = _now();
         Prune(now);
         LastSaid = a.Text;
-        var same = Find(_live, a.Text, now) ?? Find(_waiting, a.Text, now);
+        var same = Find(_live, a, now) ?? Find(_waiting, a, now);
         if (same != null)
         {
             DedupedCount++;
@@ -156,7 +166,10 @@ public partial class AlertService : VBoxContainer
             return false;
         }
         RaisedCount++;
-        var e = new Entry { Text = a.Text, Priority = a.Priority, RaisedAt = now, Seq = ++_seq };
+        var e = new Entry
+        {
+            Text = a.Text, Subject = a.Subject, PingAt = a.PingAt, Priority = a.Priority, RaisedAt = now, Seq = ++_seq,
+        };
         if (_live.Count < Capacity) Show(e, now);
         else
         {
@@ -194,10 +207,13 @@ public partial class AlertService : VBoxContainer
         }
     }
 
-    private static Entry? Find(List<Entry> list, string text, double now)
+    /// <summary>A standing toast that is the SAME message: text, subject and
+    /// ping position all equal, raised inside the window.</summary>
+    private static Entry? Find(List<Entry> list, Alert a, double now)
     {
         foreach (var e in list)
-            if (e.Text == text && now - e.RaisedAt < DedupeSeconds) return e;
+            if (e.Text == a.Text && e.Subject == a.Subject && e.PingAt == a.PingAt
+                && now - e.RaisedAt < DedupeSeconds) return e;
         return null;
     }
 
