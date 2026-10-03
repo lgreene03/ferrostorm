@@ -1640,6 +1640,25 @@ public sealed partial class World
     public const int MaxChargeTicks = 108000, MaxStrikeDamage = 100000, MaxRevealTicks = 27000;
 
     /// <summary>
+    /// P8-18 (ADR-073, Architect condition C7): WHICH pacing columns the sim
+    /// reads on a building, defined ONCE. StructureCatalogue.ToTypeDef asks it
+    /// before the def exists (from the authored kind, field rule and powers) and
+    /// ValidatePacing asks it of a registered def, so the loader and registration
+    /// cannot disagree about where a column is required. A superweapon reads its
+    /// charge; a superweapon that does not destroy fields, or a building granting
+    /// the precision strike, reads its strike; a building granting the orbital
+    /// scan reads its reveal. P8-19 changes the strike rule here, in one place,
+    /// when the seismic charge's damage moves into strike_damage.
+    /// </summary>
+    internal static (bool Charge, bool Strike, bool Reveal) PacingColumnsRead(EntityKind kind, bool destroysFields, int[]? supportPowerIds)
+    {
+        bool superweapon = kind == EntityKind.Superweapon;
+        bool grantsStrike = supportPowerIds != null && Array.IndexOf(supportPowerIds, PrecisionStrikePowerId) >= 0;
+        bool grantsScan = supportPowerIds != null && Array.IndexOf(supportPowerIds, OrbitalScanPowerId) >= 0;
+        return (superweapon, (superweapon && !destroysFields) || grantsStrike, grantsScan);
+    }
+
+    /// <summary>
     /// P8-18 audit (ADR-073): the pacing columns are REQUIRED where the sim reads
     /// them, for a def built in code exactly as for one loaded from /data. The
     /// loader (StructureCatalogue.ToTypeDef) already demanded them, but a code
@@ -1657,12 +1676,10 @@ public sealed partial class World
     /// </summary>
     internal static void ValidatePacing(int typeId, in StructureTypeDef d)
     {
-        bool superweapon = d.Kind == EntityKind.Superweapon;
-        Bound("ChargeTicks", d.ChargeTicks, superweapon, MaxChargeTicks, "a superweapon's charge");
-        Bound("StrikeDamage", d.StrikeDamage,
-              (superweapon && !d.DestroysFields) || GrantsPower(in d, PrecisionStrikePowerId),
-              MaxStrikeDamage, "the orbital cannon's blast or a precision strike");
-        Bound("RevealTicks", d.RevealTicks, GrantsPower(in d, OrbitalScanPowerId), MaxRevealTicks, "an orbital scan's reveal");
+        var read = PacingColumnsRead(d.Kind, d.DestroysFields, d.SupportPowerIds);
+        Bound("ChargeTicks", d.ChargeTicks, read.Charge, MaxChargeTicks, "a superweapon's charge");
+        Bound("StrikeDamage", d.StrikeDamage, read.Strike, MaxStrikeDamage, "the orbital cannon's blast or a precision strike");
+        Bound("RevealTicks", d.RevealTicks, read.Reveal, MaxRevealTicks, "an orbital scan's reveal");
 
         void Bound(string column, int value, bool readHere, int max, string what)
         {

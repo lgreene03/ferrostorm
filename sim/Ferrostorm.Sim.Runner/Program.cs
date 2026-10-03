@@ -59,7 +59,7 @@ using Ferrostorm.Sim;
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
-//   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes and the median first launch is at or after 10800 (both binding, ADR-073, D33); on demand, not in match
+//   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); on demand, not in match
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. None is in golden, match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -10732,7 +10732,12 @@ int PowerDataGate()
     //        reference for the three columns, including the 0 that most of them
     //        carry, so a value cannot appear on the wrong building either.
     var loaded = new World(4800);
-    try { CatalogueFiles.RegisterUnitsAndStructures(loaded, Path.Combine(dataDir, "units"), buildingsDir); }
+    try
+    {
+        CatalogueFiles.RegisterUnitsAndStructures(loaded, Path.Combine(dataDir, "units"), buildingsDir);
+        // Architect condition C3 reads the blast through the /data matrix.
+        CatalogueFiles.RegisterDamageMatrix(loaded, Path.Combine(dataDir, "combat"));
+    }
     catch (Exception e) { return Fail($"powerdata: /data would not load: {e.Message}"); }
     for (int t = 1; t <= World.MaxStructType; t++)
     {
@@ -10969,6 +10974,22 @@ int PowerDataGate()
             return Fail("powerdata: the F8 bound passed a 5000-tick charge, so it cannot catch the edit it exists for");
     }
 
+    // --- 7. Architect condition C3: D2's ONE-STRIKE REFINERY KILL holds on the
+    //        /data catalogue. The orbital cannon's strike, through the /data
+    //        matrix's Omni row against Structure armour, must reach a refinery's
+    //        hit points at ground zero, or D2's reason (one strike per charge
+    //        ends a refinery) is no longer true and its reversal cannot be read.
+    int refineryHp = loaded.GetStructureType(3).Hp;   // com_refinery
+    bool OneStrikeRefinery(int strike) => loaded.DamageOf(strike, Warhead.Omni, ArmourClass.Structure) >= refineryHp;
+    int cannonStrike = loaded.GetStructureType(Cannon).StrikeDamage;
+    if (!OneStrikeRefinery(cannonStrike))
+        return Fail($"powerdata: the orbital cannon's strike_damage {cannonStrike} deals "
+                    + $"{loaded.DamageOf(cannonStrike, Warhead.Omni, ArmourClass.Structure)} to a structure at ground zero, short "
+                    + $"of com_refinery's {refineryHp} hp, so D2's one-strike refinery kill no longer holds (ADR-073)");
+    // The control: one point less (2499 Omni at 80 per cent is 1999) fails it.
+    if (OneStrikeRefinery(2499))
+        return Fail($"powerdata: the one-strike check passed strike_damage 2499, so it cannot catch a cannon that no longer kills a refinery");
+
     Console.WriteLine($"powerdatagate: the superweapon's charge ({stockCharge} ticks), the orbital cannon's blast "
                       + $"({stockCannon.StrikeDamage}), the precision strike ({stockBastion.StrikeDamage}) and the scan's "
                       + $"reveal ({stockBastion.RevealTicks} ticks) come from /data/buildings and reproduce the compiled "
@@ -10978,7 +10999,10 @@ int PowerDataGate()
                       + $"demands the same columns and refuses eight bad defs by name; every ceiling ({World.MaxChargeTicks}, "
                       + $"{World.MaxStrikeDamage}, {World.MaxRevealTicks}) is enforced; and every registered superweapon keeps "
                       + $"D33's first launch at or after {MeasurementHarness.F8FirstLaunchTicks} (2 x charge + build = "
-                      + $"{2 * stockCannon.ChargeTicks + stockCannon.BuildTicks} for the cannon)");
+                      + $"{2 * stockCannon.ChargeTicks + stockCannon.BuildTicks} for the cannon); and the cannon's strike "
+                      + $"kills a refinery in one blow on the /data catalogue ({loaded.DamageOf(cannonStrike, Warhead.Omni, ArmourClass.Structure)} "
+                      + $"Omni against com_refinery's {refineryHp} hp, where strike_damage 2499 would deal "
+                      + $"{loaded.DamageOf(2499, Warhead.Omni, ArmourClass.Structure)} and fail)");
     return 0;
 }
 
@@ -15531,8 +15555,26 @@ MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = nu
                         r.Income[e.PlayerId] += World.OutpostIncomePerSecond;
                 }
         }
+        // P8-18 (ADR-073, D2's reversal): a strike's kills are the Died events
+        // that directly follow its SuperweaponImpact in the tick's event list
+        // (the impact functions emit nothing else), each also checked to lie
+        // within the widest blast's 6-cell reach of the impact point.
+        bool afterImpact = false;
+        Fix64 impactX = Fix64.Zero, impactY = Fix64.Zero;
         foreach (var ev in w.Events)
         {
+            if (ev.Type == GameEventType.SuperweaponImpact) { afterImpact = true; impactX = ev.X; impactY = ev.Y; }
+            else if (ev.Type != GameEventType.Died) afterImpact = false;
+            else if (ev.A >= 0 && ev.A < w.EntityCount)
+            {
+                var dead = w.Entities[ev.A];
+                if (dead.Kind == EntityKind.ConstructionYard && dead.PlayerId is 0 or 1)
+                {
+                    r.LastYardDeath[dead.PlayerId] = w.Tick;
+                    r.LastYardBySuperweapon[dead.PlayerId] = afterImpact
+                        && Fix64.DistSq(dead.X - impactX, dead.Y - impactY) <= Fix64.FromInt(36);
+                }
+            }
             switch (ev.Type)
             {
                 case GameEventType.Fired:
@@ -16220,9 +16262,18 @@ PillarF8Figures PillarF8(MeasuredMatch[] results)
             if (busiest == null || rate > maxRate) { maxRate = rate; busiest = r; }
         }
     var most = results.OrderByDescending(r => r.Launches[0] + r.Launches[1]).First();
+    // D2's reversal figure (P8-18, ADR-073): of the matches with a winner, how
+    // many saw the loser's last Construction Yard die to a superweapon impact.
+    int decided = 0, yardBySw = 0;
+    foreach (var r in results)
+    {
+        if (r.Winner is not (0 or 1)) continue;
+        decided++;
+        if (r.LastYardBySuperweapon[1 - r.Winner]) yardBySw++;
+    }
     return new PillarF8Figures(firstLaunch.Count, MedianOf(firstLaunch),
         firstLaunch.Count == 0 ? double.NaN : firstLaunch.Min(), firstLaunch.Count == 0 ? double.NaN : firstLaunch.Max(),
-        MedianOf(rates), rates.Count == 0 ? 0 : rates.Max(), busiest, most);
+        MedianOf(rates), rates.Count == 0 ? 0 : rates.Max(), busiest, most, decided, yardBySw);
 }
 
 void PrintPillarF8(PillarF8Figures f, int matches)
@@ -16234,6 +16285,10 @@ void PrintPillarF8(PillarF8Figures f, int matches)
     Console.WriteLine($"  launches per seat per 30 minutes: median {f.MedianRate:F1}, max {f.MaxRate:F1}; most in one match "
         + $"{most.Launches[0] + most.Launches[1]} ({most.Spec.Map} {FactionLetter(most.Spec.F0)}{FactionLetter(most.Spec.F1)} o{(most.Spec.Swap ? 1 : 0)}, "
         + $"{most.EndTick} ticks)");
+    // D2's reversal reads this line (the tracker names it).
+    Console.WriteLine($"  loser's last yard to a superweapon: {f.YardBySuperweapon} of {f.Decided} decided matches "
+        + $"({(f.Decided == 0 ? 0 : 100.0 * f.YardBySuperweapon / f.Decided):F0} per cent; D2 reverses above "
+        + $"{MeasurementHarness.D2YardBySuperweaponPercent} per cent)");
 }
 
 int PillarGate()
@@ -16265,8 +16320,9 @@ int PillarGate()
     int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
     var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
     Console.WriteLine($"pillargate: F8 over {specs.Count} shipped-setup matches, Normal against Normal, to "
-        + $"{MeasurementHarness.WindowCloseTicks} ticks or a result. Bars: median first launch at or after "
-        + $"{MeasurementHarness.F8FirstLaunchTicks}; at most {MeasurementHarness.F8MaxLaunchesPerWindow} launches per seat per 30 minutes.");
+        + $"{MeasurementHarness.WindowCloseTicks} ticks or a result. Bars: median first launch from "
+        + $"{MeasurementHarness.F8FirstLaunchTicks} to {MeasurementHarness.F8MaxFirstLaunchTicks} with at least half the "
+        + $"matches launching; at most {MeasurementHarness.F8MaxLaunchesPerWindow} launches per seat per 30 minutes.");
     var sw = Stopwatch.StartNew();
     var results = RunOrdered(specs.Count, jobs, i => PlayMeasured(root, specs[i]), (_, r) => Console.WriteLine(PillarLine(r)));
     sw.Stop();
@@ -16285,14 +16341,26 @@ int PillarGate()
                          + $"{b.EndTick} ticks), over {MeasurementHarness.F8MaxLaunchesPerWindow}");
     var firstFailures = new List<string>();
     if (none != null) firstFailures.Add(none);
-    else if (f8.MedianFirst < MeasurementHarness.F8FirstLaunchTicks)
-        firstFailures.Add($"median first launch {f8.MedianFirst} is before {MeasurementHarness.F8FirstLaunchTicks} "
-                          + $"(earliest {f8.EarliestFirst}, over {f8.Launched} of {results.Length} matches)");
+    else
+    {
+        if (f8.MedianFirst < MeasurementHarness.F8FirstLaunchTicks)
+            firstFailures.Add($"median first launch {f8.MedianFirst} is before {MeasurementHarness.F8FirstLaunchTicks} "
+                              + $"(earliest {f8.EarliestFirst}, over {f8.Launched} of {results.Length} matches)");
+        // Architect condition C4: the other edge of D1's and D33's band, and
+        // D33's own "fewer than half launch" threshold. A climax that arrives
+        // after minute 16, or in a minority of matches, is an absent weapon.
+        if (f8.MedianFirst > MeasurementHarness.F8MaxFirstLaunchTicks)
+            firstFailures.Add($"median first launch {f8.MedianFirst} is after {MeasurementHarness.F8MaxFirstLaunchTicks} "
+                              + $"(minute 16, the top of D1's and D33's band)");
+        if (2 * f8.Launched < results.Length)
+            firstFailures.Add($"only {f8.Launched} of {results.Length} matches launched, fewer than half (D33's reversal)");
+    }
     int rate = MeasureVerdict("pillargate (F8 rate)", "P8-18", MeasurementHarness.PillarGateRateBinding || bindAll,
         rateFailures, $"At most {f8.MaxRate:F1} launches per seat per 30 minutes (bar {MeasurementHarness.F8MaxLaunchesPerWindow}).");
     int first = MeasureVerdict("pillargate (F8 first launch)", "P8-18 (D33)",
         MeasurementHarness.PillarGateFirstLaunchBinding || bindAll, firstFailures,
-        $"Median first launch {f8.MedianFirst} (bar {MeasurementHarness.F8FirstLaunchTicks}).");
+        $"Median first launch {f8.MedianFirst} (band {MeasurementHarness.F8FirstLaunchTicks} to "
+        + $"{MeasurementHarness.F8MaxFirstLaunchTicks}), {f8.Launched} of {results.Length} matches launched (at least half).");
     return rate != 0 ? rate : first;
 }
 
@@ -16605,12 +16673,25 @@ static class MeasurementHarness
     /// <summary>F8's two bars: the median first launch at or after minute 12,
     /// and at most five launches per seat per 30 minutes.</summary>
     public const int F8FirstLaunchTicks = 10800, F8MaxLaunchesPerWindow = 5;
+
+    /// <summary>P8-18 (ADR-073, Architect condition C4): the first-launch half
+    /// also fails above minute 16, the upper edge of D1's and D33's reversal
+    /// band, or when fewer than half the sweep's matches launch at all (D33's
+    /// reversal threshold), so a charge long enough to make the weapon absent
+    /// cannot pass as a climax.</summary>
+    public const int F8MaxFirstLaunchTicks = 14400;
+
+    /// <summary>P8-18 (ADR-073, Architect condition C2): D2 reverses when the
+    /// loser's last Construction Yard died to a superweapon impact in more than
+    /// this share of the sweep's decided matches.</summary>
+    public const int D2YardBySuperweaponPercent = 25;
 }
 
 /// <summary>P8-18: F8's figures over one sweep (pillarprobe prints them,
 /// pillargate binds them). Ticks are sim ticks; NaN means no match launched.</summary>
 record PillarF8Figures(int Launched, double MedianFirst, double EarliestFirst, double LatestFirst,
-                       double MedianRate, double MaxRate, MeasuredMatch? Busiest, MeasuredMatch Most);
+                       double MedianRate, double MaxRate, MeasuredMatch? Busiest, MeasuredMatch Most,
+                       int Decided = 0, int YardBySuperweapon = 0);
 
 /// <summary>P8-13: one measured match's setup. Swap exchanges the map's starts
 /// 0 and 1; P0 and P1 are personalities (0 standard, 1 rusher, 2 turtle).</summary>
@@ -16629,6 +16710,10 @@ sealed class MeasuredMatch
     public long StockStart, Stock9000, Stock13500;
     public readonly long[] Income = new long[2], Credits = new long[2];
     public readonly int[] Structs = new int[2], Army = new int[2], Harvesters = new int[2];
+    /// <summary>P8-18 (ADR-073, D2's reversal): the tick each seat's most recent
+    /// Construction Yard died, and whether a superweapon impact killed it.</summary>
+    public readonly int[] LastYardDeath = { -1, -1 };
+    public readonly bool[] LastYardBySuperweapon = new bool[2];
 }
 
 /// <summary>P8-13: how one cheese raid ended (aiairgate, cheesegate).</summary>

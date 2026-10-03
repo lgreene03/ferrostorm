@@ -156,7 +156,14 @@ recharges, strikes and reveals by them, each beside a stock control; each
 column moves the checksum; and the loader refuses seven malformed files (a
 superweapon with no charge, a cannon or a Bastion with no strike, a Bastion
 with no reveal, a turret with a charge, a seismic charge with a strike, a
-Watch Post with a reveal) while accepting the shipped three.
+Watch Post with a reveal) while accepting the shipped three. Since the audit
+and the Architect's review it also proves registration's refusals and the
+ceilings (stage 5), that every superweapon's registered charge keeps F8
+reachable under D33 (stage 6), and that on the /data catalogue the orbital
+cannon's strike, through the /data matrix's Omni row against Structure
+armour, reaches com_refinery's hit points (stage 7: 2000 against 2000, with
+a control showing strike_damage 2499 deals 1999 and fails). Stage 7 is D2's
+reason held in CI.
 
 **`pillargate`** (new, on demand): F8 over `pillarprobe`'s sweep, through the
 same function (`PillarF8`), which `pillarprobe` now calls too, so the gate's
@@ -166,8 +173,13 @@ figure is the probe's by construction. Two halves with their own switches in
 - **rate** (at most 5 launches per seat per 30 minutes): **binding** from
   D1. At a 5400-tick charge it holds by construction, and the gate keeps it
   held.
-- **first launch** (median at or after 10800): **binding** from D33. It was
-  registered non-binding between steps 4 and 7, printing WOULD-FAIL at 8701.
+- **first launch**: **binding** from D33. It fails when the median first
+  launch is before 10800 (F8), after 14400 (minute 16, the top of D1's and
+  D33's band), or when fewer than half the sweep's matches launch at all
+  (D33's reversal), so a charge long enough to make the weapon absent cannot
+  pass as a climax. The last two clauses are the Architect's condition C4. It
+  was registered non-binding between steps 4 and 7, printing WOULD-FAIL at
+  8701.
 
 A sweep with no launch fails both halves (P8-13's rule: a stage that measured
 nothing fails), so the binding half cannot pass on silence. Not in `match`:
@@ -196,7 +208,41 @@ superweapon.
 **Put all six numbers in /data, the support-power charge and the jam
 included.** That is where they will probably end up, but no decision moves
 them, and doing it here would widen the row and the catalogue change for no
-behavioural reason. Recorded as a follow-up rather than done.
+behavioural reason. Recorded as tracker row P8-61 (the Architect's carried
+condition C6) rather than done.
+
+**A purchase floor enforced in the SIM for every seat** (a minimum match tick
+before a superweapon may be queued or launched, or a heavier prerequisite).
+It would bind a human exactly as it binds the commander. Rejected for four
+reasons. GDD s8's only timing rule for the weapon is its charge, behind the
+radar prerequisite, so a timed unlock is a new rule for every player where
+D33 is commander doctrine. A sim floor moves what every command does: it
+would refuse the `superweapon` golden's 90-tick launch and the early launches
+in `factionsuperweapongate`, `seismicaimgate`, `airgate` and the client
+harness's LaunchSuper stage, each of which would need re-timing and a
+golden or hash move, where D33 moved only the two commander goldens. The
+human's head start is a real trade, not a free one: a player who rushes the
+radar and buys the weapon as early as the pre-D33 commander did (placed at
+t=3166) first fires at about t=8701 (the median that commander measured doing
+exactly that), against the commander's 11536 under D33,
+which is about 2835 ticks (3.1 minutes; the Architect's estimate was about
+2600), and pays 4000 credits and 150 power at minute 3.5 instead of an army.
+And D33 names the playtest that would find that early strike decisive as its
+own reversal.
+
+**Reading R1 of D1: "a wave beyond the home garrison" (`army >= wave size +
+garrison`).** Measured as an experiment on the step-4 build: placed at a
+median 3376 (Directorate) and 3451 (Sodality), median first launch **8911**,
+at most 4.2 launches per seat per 30 minutes. Rejected: it misses F8 by 1889
+ticks, because the commander stands a wave plus its garrison only about 200
+ticks after it stands a wave.
+
+**Reading R2 of D1: "after the commander's first wave has gone".** Measured
+the same way: placed at a median 3391 and 3466, median first launch
+**8956**, at most 4.0 launches per seat per 30 minutes. Rejected: it misses
+F8 by 1844 ticks, because every commander launches its first wave at about
+t=3400. Any condition met by the first wave lands the first launch near
+t=9000; only the charge floor (D33) reaches the band.
 
 **A world-level "powers" file (a new /data kind) rather than columns on the
 structure def.** One file would state "one superweapon per faction on the
@@ -246,6 +292,18 @@ pacing exactly):
 >
 > `FAIL: pillargate (F8 first launch) (binding): 1 failure(s): median first
 > launch 4801 is before 10800 (earliest 4726, over 72 of 72 matches)`
+
+**Proved to bite at the other edge** (the Architect's condition C4). The
+same build with `charge_ticks: 8000` in a scratch copy of /data, run
+`pillargate --bind`, exits 1 on the first-launch half with both new clauses,
+while the rate half passes (at most 2.1):
+
+> `median first launch per match: 16756 (earliest 16756, latest 16951; 26 of
+> 72 matches launched)`
+>
+> `FAIL: pillargate (F8 first launch) (binding): 2 failure(s): median first
+> launch 16756 is after 14400 (minute 16, the top of D1's and D33's band);
+> only 26 of 72 matches launched, fewer than half (D33's reversal)`
 
 ### F6, as a side effect (`pillarprobe` and `endgate`, not this row's criterion)
 
@@ -336,13 +394,13 @@ build (cannon 900, scan 75), and the third was then taken as D33:
 | purchase condition (all also need the radar and 4500 credits) | placed (median, Dir / Sod) | median first launch | max rate |
 |---|---|---|---|
 | D1 as written: two refineries, army of one wave | 3166 / 3196 | **8701** | 4.3 |
-| C1: a wave beyond the home garrison (`army >= wave + garrison`) | 3376 / 3451 | 8911 | 4.2 |
-| C2: as written, and after the commander's first wave has gone | 3391 / 3466 | 8956 | 4.0 |
-| C3, now D33: as written, and not before one full charge into the match (`Tick >= charge_ticks`) | 6001 / 6001 | **11536** | 3.6 |
+| R1: a wave beyond the home garrison (`army >= wave + garrison`) | 3376 / 3451 | 8911 | 4.2 |
+| R2: as written, and after the commander's first wave has gone | 3391 / 3466 | 8956 | 4.0 |
+| R3, now D33: as written, and not before one full charge into the match (`Tick >= charge_ticks`) | 6001 / 6001 | **11536** | 3.6 |
 
-C1 and C2 are disproved as fixes, so neither should be retried: any condition
+R1 and R2 are disproved as fixes, so neither should be retried: any condition
 the commander meets with its first wave lands the first launch near t=9000.
-Only C3 met F8 (66 of 72 matches launched under it).
+Only R3 met F8 (66 of 72 matches launched under it).
 
 ## How F8 was closed
 
@@ -358,7 +416,7 @@ its 600-tick build, and the first launch then lands at about placement plus
 earlier than about one full charge into the match", and nothing in today's
 ladder happens that late.
 
-**The decision.** This ADR measured C3 and recommended it without taking it,
+**The decision.** This ADR measured R3 and recommended it without taking it,
 because it is a new rule rather than D1's. The orchestrator took it as
 **D33** under the owner's standing authority, recorded in the tracker after
 D32. Its four edits are steps 7a and 7b: the rung condition; `aisuper`'s
@@ -405,9 +463,27 @@ No golden fires a support power, which is why steps 1, 2 and 6 moved nothing.
 in four steps: the columns folded at today's values (`0x24347943098C8AE3`),
 the charge (`0xCC96BA2C5A4CF833`), the blast (`0xB2BB651A7469F4C1`) and the
 reveal (`0x1255012DCF3D3A68`). Steps 1, 4, 7a and 7b change no catalogue
-value; D33's floor reads the existing `charge_ticks`. Saves
-and replays from before this ADR therefore refuse to load, the same
-pre-first-public-build trade earlier catalogue rows took.
+value; D33's floor reads the existing `charge_ticks`.
+
+**Saves, replays and the LAN hello under the moved checksum** (the
+Architect's condition C5), the same pre-first-public-build trade earlier
+catalogue rows took:
+
+- **Refused.** Every save from format v3 onward (the current format is v14;
+  this ADR adds no version) and every v3 replay records the catalogue
+  checksum it was made under. One made before this ADR carries
+  `0xF384205E0D0BF2D2` (or an older value), and a build at
+  `0x1255012DCF3D3A68` refuses it on load with both checksums named, rather
+  than resuming it into a different game.
+- **Loaded unchecked.** Pre-v3 saves (v1 and v2) and v2 replays carry no
+  checksum, so they cannot be checked and load into the new pacing: a
+  superweapon in one keeps the `ChargeTicks` it was saved with and takes
+  5400 at its next recharge. A missing checksum means do not check, never
+  refuse; `catrefuse` stages 4 and 5 assert exactly that (a v2 save loads
+  under a foreign catalogue; a v2 replay is never refused).
+- **Refused at the hello.** A LAN peer on a build from before this ADR
+  holds the old checksum and is refused before tick 0, with both checksums
+  named on both sides (`catrefuse` stage 3).
 
 **Format.** No Entity field, no save version, no wire change. The state hash
 changes only through the three moved scenarios. Changing their hashes is a
@@ -422,10 +498,17 @@ replay-compatibility break, ratified under D1, D2 and D33 as stated above.
   (14400), fewer than half the sweep's matches launch at all, or a playtest
   reads the AI's superweapon as absent or the human's early first strike as
   decisive. Today: 11536, and 66 of 72 launch.
-- **D2** reverses if one strike per 6 minutes ends matches on its own in
-  `pillarprobe`. Not observed: 6 launches at most in one match, and the
-  six matches with no launch at all are early wins decided before any weapon
-  charged.
+- **D2** reverses if the figure `pillarprobe` prints as **"loser's last yard
+  to a superweapon"** exceeds **25 per cent** of the sweep's decided matches:
+  one strike per 6 minutes ending matches on its own. The figure (added for
+  the Architect's condition C2, runner only, goldens neutral) counts the
+  decided matches in which the loser's last Construction Yard died to a
+  superweapon impact, attributing a death to a strike when its Died event
+  directly follows the SuperweaponImpact in the tick's event list and lies
+  within 6 cells of the impact point. Today: **0 of 68 decided matches**. With
+  the old 1500-tick charge and the same cannon it reads 5 of 45 (11 per
+  cent), which shows the figure counts and that even four-times-faster firing
+  stays well under the threshold. `pillargate` prints the same line.
 - **D15** reverses if the playtest reads 10 seconds as a free map reveal.
 - The decoupling reverses only if a later decision wants the powers to move
   with the superweapon again, in which case it should say so explicitly.
@@ -504,12 +587,23 @@ find that decisive.
 
 **What is now true that was not.** "Shorter timers" is held by a gate rather
 than by arithmetic, and the precision strike and the jam no longer follow the
-numbers they were derived from. CLAUDE.md's "Support powers" paragraph says
-charges are "DERIVED from the superweapon's, never invented", which is no
-longer true; the orchestrator applies the replacement.
+numbers they were derived from. CLAUDE.md's "Support powers" paragraph was
+reworded to match on integration.
 
 **What is not done.** The support-power charge and the jam are still compiled
-absolutes. The seismic charge's damage is still compiled, for P8-19. D32's
-no-raid control loses its Hard Sodality harvester on this base (above), and
-`seatfairgate`'s start split is now visible at 20/8; both are for the rows
+absolutes (tracker row P8-61, the Architect's carried condition C6). The
+seismic charge's damage is still compiled; P8-19's row now names moving
+`SeismicDamage` (350) into its `strike_damage` (also C6), by changing the strike
+rule in the single read predicate `World.PacingColumnsRead`, which the loader
+and registration both call since this ADR (carried condition C7, done here).
+D32's no-raid control loses its Hard Sodality harvester on this base (above),
+and `seatfairgate`'s start split is now visible at 20/8; both are for the rows
 that own them (P8-22, P8-21).
+
+**A rule for later rows until `pillargate` runs in CI** (the Architect's
+carried condition C8). F8 is held in CI only by `powerdatagate`'s charge
+bound; the measured median and launch count are not. So every later row
+whose diff touches `SkirmishAI`'s build ladder or a superweapon def records
+its two `pillargate --bind` verdict lines, the rate half and the first-launch
+half, in its ADR or its PR. P8-52's reissued playtest brief cites this ADR,
+as that row now says.
