@@ -61,7 +61,8 @@ using Ferrostorm.Sim;
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); on demand, not in match
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
-//                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31)
+//                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
+//                        rebaseline=1 prints the proxy budget lines for the matches as they play now
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. None is in golden, match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -16575,8 +16576,18 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
     var w = map.BuildWorld(2026, players: seats, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
     for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
     map.PlaceSkirmishStart(w, 8000);
+    // PlayMeasured's setup step for step, in its order: the commanders from
+    // MeasureCommander, then each seat's StartingCreditHandicap granted. The
+    // grant is zero at Normal today (data/ai/ai_normal.yaml), so it changes no
+    // figure, but it is here so that a tuning change reaches this run exactly
+    // as it reaches every other P8-13 measurement rather than being skipped.
     var ais = new SkirmishAI[seats];
-    for (int p = 0; p < seats; p++) ais[p] = SkirmishAI.Standard(p, AiDifficulty.Normal, w);
+    for (int p = 0; p < seats; p++) ais[p] = MeasureCommander(p, AiDifficulty.Normal, 0, w);
+    for (int p = 0; p < seats; p++)
+    {
+        long handicap = SkirmishAI.StartingCreditHandicap(AiDifficulty.Normal, w);
+        if (handicap > 0) w.GrantCredits(p, handicap);
+    }
     var ms = new List<double>(ticks);
     var builds = new List<int>(ticks);
     var relaxed = new List<long>(ticks);
@@ -16601,19 +16612,31 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
 int LongMatchPerfGate()
 {
     string root = MeasureRoot();
-    var o = MeasureOptions("longmatchperf", true, "maps", "ticks", "jobs");
+    var o = MeasureOptions("longmatchperf", true, "maps", "ticks", "jobs", "rebaseline");
     bool binding = MeasurementHarness.LongMatchPerfBinding || o.ContainsKey("bind");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps") ?? "07,08,09");
     int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
     int jobs = OptInt(o, "jobs", 1);
+    bool rebaseline = o.GetValueOrDefault("rebaseline") switch
+    {
+        null or "0" => false,
+        "1" => true,
+        var v => throw new FormatException($"rebaseline={v}: expected 1 or 0"),
+    };
     bool fullLength = ticks == MeasurementHarness.WindowCloseTicks;
-    Console.WriteLine($"longmatchperf: {maps.Length} map(s), a Normal Standard commander in every seat (Directorate on even seats, "
+    // Every number this gate prints or fails on is formatted in the invariant
+    // culture, so the table and the verdict read the same on every machine (a
+    // decimal comma under a European locale would not).
+    var ic = System.Globalization.CultureInfo.InvariantCulture;
+    string Pct(int part, int whole) => whole == 0 ? "n/a" : string.Create(ic, $"{100.0 * part / whole:F1} per cent");
+    Console.WriteLine(string.Create(ic, $"longmatchperf: {maps.Length} map(s), a Normal Standard commander in every seat (Directorate on even seats, "
         + $"Sodality on odd), shipped setup, to {ticks} ticks or a result; the first {MeasurementHarness.LongMatchSkipTicks} ticks "
         + $"are not recorded. Bar: p999 of the wall time per tick at most {MeasurementHarness.LongMatchTickBudgetMs} ms (F12), "
-        + "and p999 of the cells relaxed per tick within the proxy budget recorded for the map.");
+        + $"and p999 of the cells relaxed per tick within the proxy budget recorded for the map."));
     var sw = Stopwatch.StartNew();
     var failures = new List<string>();
     var rows = new List<string>();
+    var measured = new List<(string Map, long RelaxedP999)>();
     RunOrdered(maps.Length, jobs, i => PlayLongMatchPerf(root, maps[i], ticks), (_, r) =>
     {
         var ms = (double[])r.Ms.Clone();
@@ -16623,11 +16646,11 @@ int LongMatchPerfGate()
         Array.Sort(bu);
         Array.Sort(rx);
         int n = ms.Length;
-        string end = r.Winner >= 0 ? $"seat {r.Winner} wins at t={r.EndTick}" : $"no result at t={r.EndTick}";
-        Console.WriteLine($"  {r.Map} {r.Width}x{r.Height} ({r.Width * r.Height} cells), {r.Seats} seats: {end}, {n} ticks recorded");
+        string end = r.Winner >= 0 ? string.Create(ic, $"seat {r.Winner} wins at t={r.EndTick}") : string.Create(ic, $"no result at t={r.EndTick}");
+        Console.WriteLine(string.Create(ic, $"  {r.Map} {r.Width}x{r.Height} ({r.Width * r.Height} cells), {r.Seats} seats: {end}, {n} ticks recorded"));
         if (n == 0)
         {
-            failures.Add($"{r.Map} recorded no tick past the first {MeasurementHarness.LongMatchSkipTicks}");
+            failures.Add(string.Create(ic, $"{r.Map} recorded no tick past the first {MeasurementHarness.LongMatchSkipTicks}"));
             return;
         }
         int over = 0, overBuilt = 0, built = 0;
@@ -16640,43 +16663,68 @@ int LongMatchPerfGate()
         }
         double msP999 = Percentile(ms, 0.999);
         long rxP999 = Percentile(rx, 0.999);
-        Console.WriteLine($"    wall ms/tick   mean {ms.Average(),8:F3}  p99 {Percentile(ms, 0.99),8:F3}  p999 {msP999,8:F3}  max {ms[^1],8:F3}  "
-            + $"over {MeasurementHarness.LongMatchTickBudgetMs} ms: {over} ticks, {overBuilt} of them built a field");
-        Console.WriteLine($"    builds/tick    mean {bu.Average(),8:F4}  p99 {Percentile(bu, 0.99),8}  p999 {Percentile(bu, 0.999),8}  max {bu[^1],8}  "
-            + $"total {bu.Sum(b => (long)b)} on {built} ticks");
-        Console.WriteLine($"    relaxed/tick   mean {rx.Average(),8:F0}  p99 {Percentile(rx, 0.99),8}  p999 {rxP999,8}  max {rx[^1],8}  "
-            + $"total {rx.Sum()}");
-        Console.WriteLine($"    wall ms on the {built} ticks that built a field: mean {(built == 0 ? 0 : msBuilt / built):F3}; "
-            + $"on the {n - built} that built none: mean {(n == built ? 0 : msNone / (n - built)):F3}");
-        rows.Add($"  {r.Map,-12} {r.Seats,5}  {ms.Average(),7:F3} {Percentile(ms, 0.99),7:F3} {msP999,7:F3} {ms[^1],8:F3}  "
+        long rxTotal = rx.Sum();
+        Console.WriteLine(string.Create(ic, $"    wall ms/tick   mean {ms.Average(),8:F3}  p99 {Percentile(ms, 0.99),8:F3}  p999 {msP999,8:F3}  max {ms[^1],8:F3}"));
+        // Both directions of the over-budget attribution, because one alone
+        // misleads: most slow ticks building a field says nothing about how
+        // many field-building ticks are slow. Both vary run to run with the
+        // wall time; the build count does not.
+        Console.WriteLine(string.Create(ic, $"    over {MeasurementHarness.LongMatchTickBudgetMs} ms: {over} ticks, of which {overBuilt} built a field ({Pct(overBuilt, over)}); "
+            + $"of the {built} ticks that built a field, {overBuilt} were over ({Pct(overBuilt, built)})"));
+        Console.WriteLine(string.Create(ic, $"    builds/tick    mean {bu.Average(),8:F4}  p99 {Percentile(bu, 0.99),8}  p999 {Percentile(bu, 0.999),8}  max {bu[^1],8}  "
+            + $"total {bu.Sum(b => (long)b)} on {built} ticks"));
+        Console.WriteLine(string.Create(ic, $"    relaxed/tick   mean {rx.Average(),8:F0}  p99 {Percentile(rx, 0.99),8}  p999 {rxP999,8}  max {rx[^1],8}  "
+            + $"total {rxTotal}"));
+        Console.WriteLine(string.Create(ic, $"    wall ms on the {built} ticks that built a field: mean {(built == 0 ? 0 : msBuilt / built):F3}; "
+            + $"on the {n - built} that built none: mean {(n == built ? 0 : msNone / (n - built)):F3}"));
+        rows.Add(string.Create(ic, $"  {r.Map,-12} {r.Seats,5}  {ms.Average(),7:F3} {Percentile(ms, 0.99),7:F3} {msP999,7:F3} {ms[^1],8:F3}  "
             + $"{bu.Average(),7:F4} {Percentile(bu, 0.99),3} {Percentile(bu, 0.999),4} {bu[^1],4}  "
-            + $"{rx.Average(),7:F0} {Percentile(rx, 0.99),7} {rxP999,7} {rx[^1],7}");
+            + $"{rx.Average(),7:F0} {Percentile(rx, 0.99),7} {rxP999,7} {rx[^1],7}"));
         if (msP999 > MeasurementHarness.LongMatchTickBudgetMs)
-            failures.Add($"{r.Map} p999 {msP999:F3} ms/tick exceeds {MeasurementHarness.LongMatchTickBudgetMs} ms ({over} ticks over)");
+            failures.Add(string.Create(ic, $"{r.Map} p999 {msP999:F3} ms/tick exceeds {MeasurementHarness.LongMatchTickBudgetMs} ms ({over} ticks over)"));
         // A full match that never routes anything is impossible, so a zero
-        // here means the counter has come unwired (a replacement Build that
-        // does not report its work, say), and a proxy reading zero would sit
-        // inside any budget. P8-13's rule: a stage that measured nothing fails.
+        // means a counter has come unwired (a replacement Build that does not
+        // report its work, say). The guard reads CELLS RELAXED, the counter
+        // the budget below reads, because a relaxed reading of zero sits
+        // inside any budget whatever the build count says: guarding only the
+        // build count let an unwired relaxation count PASS, which the P8-30
+        // audit found. The build count is guarded as well, because the build
+        // columns and the over-budget attribution above read it. P8-13's
+        // rule: a stage that measured nothing fails.
+        if (rxTotal == 0)
+            failures.Add(string.Create(ic, $"{r.Map} recorded no flow-field cell relaxed in {n} ticks, so the proxy the budget reads measured nothing"));
         if (built == 0)
-            failures.Add($"{r.Map} recorded no flow-field build in {n} ticks, so the proxy measured nothing");
+            failures.Add(string.Create(ic, $"{r.Map} recorded no flow-field build in {n} ticks, so the build count measured nothing"));
+        // A zero reading is never offered as a budget.
+        if (fullLength && rxTotal > 0) measured.Add((r.Map, rxP999));
         var budget = Array.Find(MeasurementHarness.LongMatchProxyBudget, x => x.Map == r.Map);
         if (budget.Map is null)
-            Console.WriteLine($"    proxy budget: none recorded for {r.Map}, so only the wall bar applies");
+            Console.WriteLine(string.Create(ic, $"    proxy budget: none recorded for {r.Map}, so only the wall bar applies"));
         else if (!fullLength)
-            Console.WriteLine($"    proxy budget: not applied, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run it was measured on");
+            Console.WriteLine(string.Create(ic, $"    proxy budget: not applied, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run it was measured on"));
         else
         {
             bool inside = rxP999 <= budget.RelaxedP999;
-            Console.WriteLine($"    proxy budget: p999 relaxed/tick {rxP999} against {budget.RelaxedP999}, {(inside ? "inside" : "OVER")}");
-            if (!inside) failures.Add($"{r.Map} p999 relaxed/tick {rxP999} exceeds its proxy budget of {budget.RelaxedP999}");
+            Console.WriteLine(string.Create(ic, $"    proxy budget: p999 relaxed/tick {rxP999} against {budget.RelaxedP999}, {(inside ? "inside" : "OVER")}"));
+            if (!inside) failures.Add(string.Create(ic, $"{r.Map} p999 relaxed/tick {rxP999} exceeds its proxy budget of {budget.RelaxedP999}"));
         }
     });
     sw.Stop();
     Console.WriteLine("  map          seats  ms mean     p99    p999      max  builds mean p99 p999  max  relaxed mean     p99    p999     max");
     foreach (var row in rows) Console.WriteLine(row);
-    Console.WriteLine($"longmatchperf: elapsed {sw.Elapsed.TotalSeconds:F1} s for {maps.Length} match(es) on {jobs} thread(s)");
+    Console.WriteLine(string.Create(ic, $"longmatchperf: elapsed {sw.Elapsed.TotalSeconds:F1} s for {maps.Length} match(es) on {jobs} thread(s)"));
+    // rebaseline=1: the entries MeasurementHarness.LongMatchProxyBudget should
+    // hold for the matches as they play NOW, ready to paste over the old ones.
+    if (rebaseline && !fullLength)
+        Console.WriteLine(string.Create(ic, $"longmatchperf: rebaseline=1 suggests nothing, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run a budget is measured on"));
+    else if (rebaseline)
+    {
+        Console.WriteLine("longmatchperf: suggested MeasurementHarness.LongMatchProxyBudget entries (p999 cells relaxed per tick on this run; "
+            + "a map whose relaxed counter read zero is left out):");
+        foreach (var (map, p999) in measured) Console.WriteLine(string.Create(ic, $"        (\"{map}\", {p999}),"));
+    }
     return MeasureVerdict("longmatchperf", "P8-31", binding, failures,
-        $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds.");
+        string.Create(ic, $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds."));
 }
 
 return args.Length == 0
@@ -16851,7 +16899,19 @@ static class MeasurementHarness
     /// whole of F12's wall-time gain must then come from each relaxation
     /// costing less. The figures belong to the matches as they play today,
     /// so a row that changes those matches (any row moving the commander
-    /// goldens) re-measures them in the same change, as it does its goldens.</summary>
+    /// goldens) re-measures them in the same change, as it does its goldens.
+    ///
+    /// RE-BASELINING. This is a hand-maintained list of one day's figures,
+    /// and the rows that change what the AI does will move it: P8-27 (per-seat
+    /// streams, openings and wave jitter), P8-28 (the AI fields the roster)
+    /// and P8-29 (the AI cannot count undetected cloak), and any later row
+    /// that moves the commander goldens. Such a row runs
+    ///   dotnet run --project sim/Ferrostorm.Sim.Runner -c Release -- longmatchperf rebaseline=1
+    /// which prints these entries as measured on that run, pastes them over
+    /// the ones below, and records the old and new figures in its tracker
+    /// evidence. The proxy is deterministic, so any machine and any jobs=
+    /// gives the same lines. P8-31 does NOT re-baseline: a parity-proven
+    /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
         ("skirmish-07", 313104),
