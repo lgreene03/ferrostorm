@@ -1118,6 +1118,23 @@ public sealed partial class World
     /// <summary>For scenario/campaign terrain scripting that edits Map directly: cached routes must be discarded.</summary>
     public void InvalidateFlowCache() => _flow.Clear();
 
+    /// <summary>P8-30: flow fields built by this world OBJECT so far: the
+    /// deterministic proxy `longmatchperf` reads for pathfinding cost.
+    ///
+    /// OBSERVATION ONLY. The count depends on this object's history, not on
+    /// the match state: it is never read by the sim (only the runner reads
+    /// it), never hashed and never saved, InvalidateFlowCache does not reset
+    /// it, and a world made by Load starts at ZERO whatever the saved world
+    /// had built. Two worlds in the same state can therefore disagree here,
+    /// which is why no rule may ever read it; a reader takes the difference
+    /// across ticks of one world, as longmatchperf does.</summary>
+    public long FlowFieldBuilds => _flow.Builds;
+    /// <summary>P8-30: the cells the relaxations behind <see cref="FlowFieldBuilds"/>
+    /// lowered, the figure longmatchperf's proxy budget reads. The same terms
+    /// apply: observation only, never read by the sim, never hashed or saved,
+    /// and reset to zero on load.</summary>
+    public long FlowCellsRelaxed => _flow.CellsRelaxed;
+
     /// <summary>Queued build count for a factory (UI and AI read this; 0 for anything else).</summary>
     public int QueueLength(int factoryId)
         => _queues.TryGetValue(factoryId, out var q) ? q.Count : 0;

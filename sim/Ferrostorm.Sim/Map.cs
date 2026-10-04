@@ -69,7 +69,12 @@ public sealed class FlowField
     /// footprint fields only: a single-target field marks its own target 255.</summary>
     public bool Reaches(Map map, int cx, int cy) => _next[map.CellIndex(cx, cy)] != Unreachable;
 
-    public static FlowField Build(Map map, int targetCx, int targetCy)
+    public static FlowField Build(Map map, int targetCx, int targetCy) => Build(map, targetCx, targetCy, out _);
+
+    /// <summary>P8-30: Build, also reporting how many cells the relaxation
+    /// lowered (see Relax). The field is the same field; the count is only an
+    /// observation of the work done to make it.</summary>
+    public static FlowField Build(Map map, int targetCx, int targetCy, out int relaxed)
     {
         int n = map.Width * map.Height;
         var dist = new int[n];
@@ -80,7 +85,7 @@ public sealed class FlowField
         int target = map.CellIndex(targetCx, targetCy);
         dist[target] = 0;
 
-        Relax(map, dist, next, new List<(int D, int C)> { (0, target) });
+        relaxed = Relax(map, dist, next, new List<(int D, int C)> { (0, target) });
         return new FlowField(target, next);
     }
 
@@ -99,7 +104,10 @@ public sealed class FlowField
     /// Relaxation never overwrites a source (it has distance 0 and every step
     /// costs at least 2), so a goal cell keeps its mark.
     /// </summary>
-    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size)
+    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size) => BuildToFootprint(map, ax, ay, size, out _);
+
+    /// <summary>P8-30: BuildToFootprint, also reporting the relaxation count, as Build does.</summary>
+    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size, out int relaxed)
     {
         int n = map.Width * map.Height;
         var dist = new int[n];
@@ -119,14 +127,23 @@ public sealed class FlowField
                 heap.Add((0, c));
             }
 
-        Relax(map, dist, next, heap);
+        relaxed = Relax(map, dist, next, heap);
         return new FlowField(map.CellIndex(ax, ay), next);
     }
 
     /// <summary>The Dijkstra relaxation both shapes share, from whatever the
-    /// heap was seeded with. Moved here unchanged from Build by ADR-071.</summary>
-    private static void Relax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
+    /// heap was seeded with. Moved here unchanged from Build by ADR-071.
+    ///
+    /// P8-30: returns the number of RELAXATIONS, the times a cell's distance
+    /// was lowered (each one a heap push). That is the build's unit of work,
+    /// and it depends only on the grid, the seeds and the pop order, so it is
+    /// the same on every machine; a replacement that pops in the same order
+    /// (P8-31's ordered buckets) relaxes the same cells and reports the same
+    /// count. The count is returned, never stored here, and nothing in the
+    /// relaxation reads it.</summary>
+    private static int Relax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
     {
+        int relaxed = 0;
         // Array binary min-heap of (dist, cell); ties broken by lower cell index.
         void Push((int, int) item)
         {
@@ -179,9 +196,11 @@ public sealed class FlowField
                     // Direction FROM neighbour TOWARD c is the opposite of k.
                     next[nc] = Opposite[k];
                     Push((nd, nc));
+                    relaxed++;
                 }
             }
         }
+        return relaxed;
     }
 }
 
@@ -193,13 +212,33 @@ public sealed class FlowFieldCache
     // dictionary so a footprint key can never collide with a target-cell key.
     private readonly Dictionary<int, FlowField> _footprints = new();
 
+    /// <summary>
+    /// P8-30: how many fields this cache has built, of either shape, and how
+    /// many cells their relaxations lowered in total, since the cache was made.
+    /// A deterministic proxy for the pathfinding cost that wall-clock time
+    /// measures only noisily: the same commands produce the same counts on
+    /// every machine, so a runner can assert on them where it cannot assert on
+    /// milliseconds (`longmatchperf`).
+    ///
+    /// AN OBSERVATION AND NOTHING MORE. Nothing in the sim reads either count,
+    /// neither is hashed or saved, and Clear does not reset them (they count
+    /// work done, not fields held). A loaded world therefore starts at zero
+    /// whatever the saved one had done, which is right for a figure that
+    /// describes this process's work rather than the match's state.
+    /// </summary>
+    public long Builds { get; private set; }
+    /// <summary>P8-30: the relaxations behind <see cref="Builds"/> (FlowField.Relax's unit of work).</summary>
+    public long CellsRelaxed { get; private set; }
+
     public FlowField Get(Map map, int targetCx, int targetCy)
     {
         int key = map.CellIndex(targetCx, targetCy);
         if (!_fields.TryGetValue(key, out var f))
         {
-            f = FlowField.Build(map, targetCx, targetCy);
+            f = FlowField.Build(map, targetCx, targetCy, out int relaxed);
             _fields[key] = f;
+            Builds++;
+            CellsRelaxed += relaxed;
         }
         return f;
     }
@@ -211,8 +250,10 @@ public sealed class FlowFieldCache
         int key = map.CellIndex(ax, ay) * 8 + size;
         if (!_footprints.TryGetValue(key, out var f))
         {
-            f = FlowField.BuildToFootprint(map, ax, ay, size);
+            f = FlowField.BuildToFootprint(map, ax, ay, size, out int relaxed);
             _footprints[key] = f;
+            Builds++;
+            CellsRelaxed += relaxed;
         }
         return f;
     }
