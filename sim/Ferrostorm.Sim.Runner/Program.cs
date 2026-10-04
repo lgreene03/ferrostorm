@@ -12616,7 +12616,8 @@ int TransportGate()
                       + "Carrier fills or dies, resuming from a save, ending a Guard stance, and resuming after it stops "
                       + "to shoot with a shift-queued order held behind it, while a plain move to the same point still "
                       + "settles short; and (ADR-074) a walk to a Carrier it cannot reach, or one that outruns it, gives "
-                      + "up at ADR-014's deadline and stops, and both boarding paths leave the boarded unit holding no "
+                      + "up at ADR-014's deadline and stops, a walker whose Carrier is lost mid-chase settles within the "
+                      + "crowd radius of where it stood, and both boarding paths leave the boarded unit holding no "
                       + "order and raise one Boarded and no Died (D34)");
     return 0;
 
@@ -13022,6 +13023,66 @@ int TransportGate()
             Console.WriteLine($"  transportgate: boarded in reach while on Guard engaging a hostile, in reach while "
                               + $"attack-moving, and by the walk-in from 6 cells, all three despawned entities hold the "
                               + $"same order state: {walked}; and each raised one Boarded naming its Carrier and no Died");
+        }
+
+        // --- 18. ADR-074: a walker whose Carrier is LOST mid-chase settles
+        //         within the four-cell crowd radius of where its Carrier stood.
+        //         Stage 16's chase, with the Carrier taken away ten ticks before
+        //         the deadline would have run out. BoardingSystem's lapse hands
+        //         the walk back as a plain one to the point where the Carrier
+        //         stood, and from the next tick SeparationSystem's ADR-014
+        //         backstop counts it. Had the lapse kept the two counters, that
+        //         backstop would inherit a no-progress run counted against a
+        //         Carrier driving away and a nearest approach measured to it,
+        //         and bench the walker within a few ticks, short of the crowd
+        //         radius. The lapse re-arms both, so this walk ends where any
+        //         walk to that point ends. The removal tick is derived from the
+        //         deadline, so it cannot drift from it. The Carrier is removed
+        //         by fiat: a fixture, not the code under test, because the lapse
+        //         reads only BoardingOpen (alive, owned, room in the hold), and
+        //         stage 10 already loses a Carrier through the real death path.
+        {
+            var w = new World(3000, 64, 64, players: 2);
+            var cd = w.GetUnitType(Carrier);
+            var ed = w.GetUnitType(Engineer);
+            if (ed.Speed >= cd.Speed)
+                return Fail($"transport lapse: the chase needs a carryable unit slower than the Carrier (engineer "
+                            + $"{ed.Speed}, Carrier {cd.Speed}): a fixture failure, not a product one");
+            int carrier = w.SpawnUnit(0, Fix64.FromInt(6), Fix64.FromInt(32), cd.Speed, cd.Hp, cd.Armour, 0,
+                                      veterancy: false, unitType: Carrier);
+            int u = w.SpawnUnit(0, Fix64.FromInt(3), Fix64.FromInt(32), ed.Speed, ed.Hp, ed.Armour, ed.WeaponId,
+                                veterancy: false, unitType: Engineer);
+            w.Step(new[]
+            {
+                new Command(w.Tick, 0, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier),
+                new Command(w.Tick, 0, CommandType.PathMove, carrier, Fix64.FromInt(60), Fix64.FromInt(32)),
+            });
+            int deadline = World.NoProgressDeadline, removeAt = deadline - 10, took = 1;
+            while (took < removeAt && w.Entities[u].Alive && w.Entities[u].ExplicitTarget <= -2) { w.Step(default); took++; }
+            var chasing = w.Entities[u];
+            Fix64 behind = Gap(w, u, carrier);
+            if (!chasing.Alive || chasing.ExplicitTarget > -2 || !w.Entities[carrier].Moving || behind <= Fix64.FromInt(16))
+                return Fail($"transport lapse: the precondition needs, {took} ticks in, an engineer still chasing a Carrier "
+                            + $"still driving, beyond the four-cell crowd radius of it (alive {chasing.Alive}, target "
+                            + $"{chasing.ExplicitTarget}, Carrier moving {w.Entities[carrier].Moving}, {Cells(behind)} cells "
+                            + "behind)");
+            var lost = w.Entities[carrier];
+            Fix64 sx = lost.X, sy = lost.Y;
+            lost.Alive = false;
+            w.SetEntityForTest(carrier, lost);
+            int settled = 0;
+            while (settled < deadline && w.Entities[u].Moving) { w.Step(default); settled++; }
+            var we = w.Entities[u];
+            Fix64 off = Fix64.DistSq(we.X - sx, we.Y - sy);
+            if (!we.Alive || we.ExplicitTarget != -1 || we.Moving || off > Fix64.FromInt(16))
+                return Fail($"transport lapse: an engineer whose Carrier was lost {took} ticks into a chase must finish the "
+                            + "walk as a plain one and settle within the four-cell crowd radius of where the Carrier "
+                            + $"stood; {settled} ticks later it is alive {we.Alive}, target {we.ExplicitTarget}, moving "
+                            + $"{we.Moving}, {Cells(off)} cells from that point. A lapse that keeps the watchdog counters "
+                            + "counted against the moving Carrier benches it short of the radius");
+            Console.WriteLine($"  transportgate: an engineer {Cells(behind)} cells behind a Carrier lost {took} ticks into a "
+                              + $"chase settled {Cells(off)} cells from where the Carrier stood, {settled} ticks later, "
+                              + "inside the four-cell crowd radius");
         }
         return 0;
     }

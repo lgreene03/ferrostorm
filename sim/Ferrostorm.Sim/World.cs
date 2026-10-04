@@ -114,7 +114,12 @@ public struct Entity
     public ArmourClass Armour;
     public int WeaponId;         // 0 = unarmed
     public int Cooldown;
-    public int ExplicitTarget;   // -1 = auto-acquire; below -1 = walking to board a Carrier (P8-56, World.BoardingWalk)
+    // -1 = no order to finish (auto-acquire); 0 and above = an attack target;
+    // below -1 = walking to board own Carrier (P8-56, ADR-074). A value below
+    // -1 is written only through World.BoardingWalk (a save restores what that
+    // wrote, nothing else), and any read that must tell -1 from the boarding
+    // range goes through the named predicates beside it.
+    public int ExplicitTarget;
     public Fix64 Sight;          // cells
 
     // Economy
@@ -966,24 +971,53 @@ public sealed partial class World
     ///
     /// Why a range of an existing field rather than a side collection: the
     /// collection would be new hashed and saved state, a save format change,
-    /// and this needs neither. Every reader that asks "is there an attack
-    /// target" asks only whether the value is negative, so combat, capture,
-    /// the ADR-071 dock route and the AI all see a boarding walker exactly as
-    /// they saw the plain walk that stood here before, and the three places
-    /// that must tell the walks apart ask by name: StepToward's crowd-arrival
-    /// rule, BoardingSystem, and SeparationSystem's ADR-014 backstop, which
-    /// leaves a boarding walk's give-up to BoardingSystem. A save written
-    /// before this row never holds a value below -1, so it loads unchanged.
-    /// And why not ExplicitTarget = c itself: an explicit Attack on your own
-    /// Carrier already means exactly that (CanTarget is a stealth test, not a
-    /// hostility test), and it must go on meaning a force-fire rather than
-    /// turning into a boarding. The full argument, with the alternatives and
-    /// the replay-compatibility statement, is ADR-074.
+    /// and this needs neither. A save written before this row never holds a
+    /// value below -1, so it loads unchanged. And why not ExplicitTarget = c
+    /// itself: an explicit Attack on your own Carrier already means exactly
+    /// that (CanTarget is a stealth test, not a hostility test), and it must go
+    /// on meaning a force-fire rather than turning into a boarding. The full
+    /// argument, with the alternatives and the replay-compatibility statement,
+    /// is ADR-074.
+    ///
+    /// THE VALUE-RANGE CONTRACT (ADR-074 clause 1). A value below -1 is written
+    /// only through this function (a load restores one a save recorded, and
+    /// nothing else writes one). The comparisons that tell -1 from that range
+    /// live only in the three predicates below (HoldsBoardingWalk,
+    /// HoldsNoOrderToFinish, BoardingCarrierOf), and every range-aware read
+    /// goes through one of them. The reads, which a grep for those three names
+    /// finds, are:
+    ///   1. StepToward's crowd-arrival rule settles a flow walk only when the
+    ///      walker HoldsNoOrderToFinish, so a boarding walk closes to its
+    ///      two-cell reach as an attack closes to weapon range;
+    ///   2. IsBusy counts any order to finish (not HoldsNoOrderToFinish), for
+    ///      OrderDispatchSystem and for ApplyCommand's shift-queue append, so a
+    ///      queued order waits behind a boarding walk halted for a tick;
+    ///   3. BoardingSystem visits only an entity that HoldsBoardingWalk;
+    ///   4. BoardingSystem reads that entity's Carrier through BoardingCarrierOf;
+    ///   5. SeparationSystem's ADR-014 backstop skips an entity that
+    ///      HoldsBoardingWalk, leaving that walk's give-up to BoardingSystem.
+    /// Every other reader asks only "is there an attack target", as zero and
+    /// above or as ValidId: CombatSystem, CaptureSystem, DestinationStructureOf
+    /// (the ADR-071 dock route) and SkirmishAI. Each sees a boarding walker as
+    /// holding no attack target, exactly as it saw the plain walk that stood
+    /// here before, so none of them is range-aware. The hash fold, the save and
+    /// the load copy the value whole. `git grep -nE` for a raw comparison of
+    /// ExplicitTarget against -1 or -2 under sim/Ferrostorm.Sim matches only
+    /// the predicates' own lines; a match anywhere else breaks this contract.
     /// </summary>
     private static int BoardingWalk(int carrierId) => -2 - carrierId;
 
+    /// <summary>P8-56 (ADR-074): is this entity walking to board a Carrier,
+    /// the range BoardingWalk writes (below -1)?</summary>
+    private static bool HoldsBoardingWalk(in Entity e) => e.ExplicitTarget <= -2;
+
+    /// <summary>P8-56 (ADR-074): does this entity hold no order to finish at
+    /// all, neither an attack target nor a boarding walk? Exactly -1, the value
+    /// every order that ends a unit's business writes.</summary>
+    private static bool HoldsNoOrderToFinish(in Entity e) => e.ExplicitTarget == -1;
+
     /// <summary>P8-56: the Carrier this entity is walking to board, or -1.</summary>
-    private static int BoardingCarrierOf(in Entity e) => e.ExplicitTarget <= -2 ? -2 - e.ExplicitTarget : -1;
+    private static int BoardingCarrierOf(in Entity e) => HoldsBoardingWalk(in e) ? -2 - e.ExplicitTarget : -1;
 
     /// <summary>
     /// P7-3's boarding rule, asked in ONE place by the order and by the walk,
@@ -1062,10 +1096,14 @@ public sealed partial class World
     /// that backstop applies to any other walk. This system is the counters'
     /// only writer during a boarding walk (SeparationSystem's backstop skips
     /// one), so the deadline is counted once per tick, against the Carrier
-    /// where it stands now. StallTicks is left as it is: its short leaky net
+    /// where it stands now, and a lapse re-arms both before handing the walk
+    /// back to that backstop. StallTicks is left as it is: its short leaky net
     /// fires in the ordinary crowd round a Carrier, where the boarders ahead
-    /// are about to despawn and clear the way, so it only pauses a walk for a
-    /// tick.
+    /// are about to despawn and clear the way, and for a boarding walk it does
+    /// not even pause the walk, because this system runs after
+    /// SeparationSystem and sets the walker moving again in the same tick;
+    /// all the net does there is reset its own counter. Range-aware reads 3
+    /// and 4 of ADR-074's contract (see BoardingWalk).
     ///
     /// Placed after movement, separation, mines and gates have settled the
     /// tick's positions and before capture and combat, so a squad that closed
@@ -1079,12 +1117,23 @@ public sealed partial class World
     {
         for (int i = 0; i < _entities.Count; i++)
         {
-            if (_entities[i].ExplicitTarget > -2) continue;
+            if (!HoldsBoardingWalk(_entities[i])) continue;
             var e = _entities[i];
             if (!e.Alive) continue;
             int c = BoardingCarrierOf(in e);
             if (!BoardingOpen(in e, c))
+            {
+                // The lapse: the walk finishes as a plain one, and from the
+                // next tick SeparationSystem's ADR-014 backstop counts it. Both
+                // counters are re-armed here, because what this system left in
+                // them was measured against a Carrier that may have been
+                // driving away, and inherited by that backstop they would bench
+                // the walker short of the crowd radius round where its Carrier
+                // stood (ADR-074 clause 3; transportgate stage 18).
                 e.ExplicitTarget = -1;
+                e.NearestApproachSq = Fix64.Zero;
+                e.NoProgressTicks = 0;
+            }
             else
             {
                 var carrier = _entities[c];
@@ -2950,8 +2999,9 @@ public sealed partial class World
 
     // P8-56: any order to finish, so a boarding walk (BoardingWalk) halted for
     // one tick by a shot holds a shift-queue back exactly as an attack does.
+    // Range-aware read 2 of ADR-074's value-range contract (see BoardingWalk).
     private static bool IsBusy(in Entity e)
-        => e.Moving || e.AMove || e.ExplicitTarget != -1 || e.HState != HarvestState.Idle;
+        => e.Moving || e.AMove || !HoldsNoOrderToFinish(in e) || e.HState != HarvestState.Idle;
 
     /// <summary>
     /// Pop the next queued order for every idle entity. Runs after incoming
@@ -4474,11 +4524,12 @@ public sealed partial class World
             // leave the factory mouth - without the guard any rally (or
             // default exit) within 4 cells of the spawn cell is a silent
             // no-op and the spawn ring saturates (SPAWN-D3).
-            // P8-56: -1, not "any negative", because a walk to board a Carrier
-            // (BoardingWalk, the values below -1) must close to its two-cell
-            // reach for the reason an attacker must close to weapon range.
-            // Identical for every other walk: nothing else holds a value below -1.
-            if (e.Kind == EntityKind.Unit && e.ExplicitTarget == -1 && !e.AMove && !e.Departing
+            // P8-56: no order to finish, not "no attack target", because a walk
+            // to board a Carrier (BoardingWalk, the values below -1) must close
+            // to its two-cell reach for the reason an attacker must close to
+            // weapon range. Identical for every other walk: nothing else holds
+            // a value below -1. Range-aware read 1 of ADR-074's contract.
+            if (e.Kind == EntityKind.Unit && HoldsNoOrderToFinish(in e) && !e.AMove && !e.Departing
                 && Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y) <= Fix64.FromInt(16))
             { e.Moving = false; return; }
 
@@ -5863,8 +5914,8 @@ public sealed partial class World
                 // it would advance twice a tick, and a bench here alone would be
                 // undone by BoardingSystem re-asserting the walk the same tick.
                 // Identical for every other walk: nothing else holds a value
-                // below -1.
-                if (e.Moving && BoardingCarrierOf(in e) < 0)
+                // below -1. Range-aware read 5 of ADR-074's contract.
+                if (e.Moving && !HoldsBoardingWalk(in e))
                 {
                     Fix64 curSq = Fix64.DistSq(e.TargetX - e.X, e.TargetY - e.Y);
                     if (e.NearestApproachSq.Raw == 0 || curSq < e.NearestApproachSq)
