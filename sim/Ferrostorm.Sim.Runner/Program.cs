@@ -16892,7 +16892,9 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED at 3633913, which
+    /// F12's wall bar uses. Each figure is the one MEASURED at 9dd23cd (main
+    /// after P8-18, whose AI purchase floor moved every commander match; the
+    /// first baseline, at 3633913, read 313104, 66271 and 155801), which
     /// is the value P8-31 must meet or beat: a parity-proven replacement pops
     /// in the same order, relaxes the same cells and so meets it exactly,
     /// which makes an unchanged proxy part of the parity evidence, and the
@@ -16914,9 +16916,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 313104),
-        ("skirmish-08", 66271),
-        ("skirmish-09", 155801),
+        ("skirmish-07", 313713),
+        ("skirmish-08", 77278),
+        ("skirmish-09", 120756),
     };
 }
 
