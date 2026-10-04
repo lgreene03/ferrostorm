@@ -184,6 +184,7 @@ public partial class AudioDirector : Node
     /// value (W3-21).</summary>
     public void Play(string name, float volumeDb = 0, float pitch = 1f)
     {
+        CountRequest(name);
         if (!TryGetStream(name, out var stream) || _uiPool.Count == 0)
             return;
 
@@ -200,6 +201,7 @@ public partial class AudioDirector : Node
     /// <summary>Play a positional battlefield sound at a world position.</summary>
     public void PlayAt(string name, Vector3 pos, float pitch = 1f)
     {
+        CountRequest(name);
         if (!TryGetStream(name, out var stream) || _positionalPool.Count == 0)
             return;
 
@@ -428,6 +430,16 @@ public partial class AudioDirector : Node
     /// this cue? Play answers a missing name with a warning and silence, so a
     /// test that only calls Play proves nothing about the asset existing.</summary>
     public bool Has(string name) => _streams.ContainsKey(name);
+
+    // P8-10: how many times each SFX name was ASKED for, through Play or
+    // PlayAt, before the pool or the asset had any say. A request is the
+    // client's decision to make a sound, which is what a rule such as "the
+    // production chime is the local seat's alone" is about; whether a pooled
+    // player was free to voice it is a separate question. Never read in play.
+    private readonly Dictionary<string, int> _requests = new();
+    private void CountRequest(string name) => _requests[name] = _requests.GetValueOrDefault(name) + 1;
+    /// <summary>Verification read: requests for this SFX name so far.</summary>
+    public int PlayRequests(string name) => _requests.GetValueOrDefault(name);
 
     // ---- TICKET-P6-MUSIC-01 / TICKET-P6-VO-01 verification reads: the state
     // of the shipped players, never a recomputation of it. P8-46 kept the four

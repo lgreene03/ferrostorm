@@ -1274,6 +1274,8 @@ public partial class VerifyRunner : Node
         // P8-1: in a scene of its own, so the spawns above cannot reach it and
         // its own cannot reach anything after it.
         RunInputGate();
+        // P8-10: the event gate, in a teamed four-seat scene of its own.
+        RunEventGate();
 
         RunLanChecks();
         // P8-4: after the LAN scenes on purpose. The joiner's scene was handed
@@ -1286,6 +1288,1346 @@ public partial class VerifyRunner : Node
         // P8-11: fault containment, atomic saves, the theatre's dead end and a
         // full-length match, in scenes of its own.
         RunFaultContainmentStages();
+    }
+
+    // ---------------- P8-10: eventgate ----------------
+
+    private void EventGate(bool ok, string stage, string what) => Check(ok, $"eventgate/{stage}: {what}");
+
+    /// <summary>The GameEventTypes a stage has driven and whose reaction it
+    /// asserted, for the coverage check that closes the gate.</summary>
+    private readonly HashSet<GameEventType> _eventsCovered = new();
+
+    /// <summary>
+    /// THE SILENT TABLE, in the inputgate's KNOWN-MISSING shape (F15: every
+    /// event the sim raises is consumed or listed). Each line is a type, or a
+    /// case of a type, that the client deliberately does not surface, with the
+    /// reason. ByDesign lines print as EXCEPTION and are decisions; the others
+    /// print as KNOWN-MISSING and name the row that owes them. WholeType marks
+    /// a line that is the type's only story; the coverage check accepts it in
+    /// place of a stage and refuses it once a stage for that type exists. A
+    /// null Type is a gap that spans every type.
+    /// </summary>
+    private static readonly (string Stage, GameEventType? Type, bool WholeType, bool ByDesign, string Why, string Owner)[] EventGateSilent =
+    {
+        ("StructurePlaced", GameEventType.StructurePlaced, true, false,
+            "a placement has no cue of its own: the PLACE click and the building rising out of the ground (W2-05) are "
+            + "its whole reaction",
+            "P8-44 (the placement cue, with bespoke promotion and deploy sounds in place of P8-10's interim ones)"),
+        ("SuperweaponReady/unseen-enemy", GameEventType.SuperweaponReady, false, true,
+            "an enemy superweapon this seat has never SEEN comes ready in silence and stays off the gauge: GDD s8 makes "
+            + "only the launch global, so announcing an unseen weapon's charge would be a maphack",
+            "by design (P8-10)"),
+        ("SupportPowerReady/not-own", GameEventType.SupportPowerReady, false, true,
+            "another seat's minor power coming ready is never announced: GDD s8 gives the warning to the superweapon "
+            + "alone, and a minor power's surprise is its design",
+            "by design (P8-10)"),
+        ("SupportPowerUsed/enemy-unseen", GameEventType.SupportPowerUsed, false, true,
+            "an enemy power aimed where this seat cannot see, or not aimed at all, is not announced for the same reason; "
+            + "a radar jam on this seat is told by the jammed radar itself (eventgate/jam)",
+            "by design (P8-10)"),
+        ("Promoted/not-own", GameEventType.Promoted, false, true,
+            "another seat's promotion shows only on its rank pips", "by design (P8-10)"),
+        ("every type/LAN", null, false, false,
+            "in a LAN match no event reaches the client's sweep at all: AfterNetTick snapshots, updates the fog and checks "
+            + "the winner, but never runs RunOneTick's post-step event handling, so a networked match draws no shot, "
+            + "death or alert and raises no toast",
+            "P8-58 (found by P8-10; the fix is the post-step sweep as one method both tick paths call)"),
+    };
+
+    /// <summary>Quiet ground for a fixture near a seat's own yard (QuietGround's
+    /// empty box), or null.</summary>
+    private static (int X, int Y)? GroundNear(SkirmishLive g, int seat)
+    {
+        int yard = g.FindEntity(EntityKind.ConstructionYard, seat);
+        if (yard < 0) return null;
+        var (x, y) = g.CellOfForTest(yard);
+        return QuietGround(g.LiveWorld, x, y);
+    }
+
+    /// <summary>An open cell within a contact unit's reach (1.75 cells, World's
+    /// CaptureSystem) of a structure's centre, so a fixture acts on its first tick.</summary>
+    private static (int X, int Y)? ContactCell(World lw, int structId)
+    {
+        var t = lw.Entities[structId];
+        int cx = Map.CellOf(t.X), cy = Map.CellOf(t.Y);
+        var reach = Fix64.FromFraction(49, 16);
+        for (int r = 1; r <= 3; r++)
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    int x = cx + dx, y = cy + dy;
+                    if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1 || lw.Map.IsBlocked(x, y)) continue;
+                    if (Fix64.DistSq(Map.CellCentre(x) - t.X, Map.CellCentre(y) - t.Y) <= reach) return (x, y);
+                }
+        return null;
+    }
+
+    /// <summary>Take a fixture off the board without a death event, so what a
+    /// stage leaves behind cannot act in the next one.</summary>
+    private static void RemoveFixture(World lw, int id)
+    {
+        var e = lw.Entities[id];
+        e.Alive = false;
+        e.Moving = false;
+        lw.SetEntityForTest(id, e);
+    }
+
+    /// <summary>Step one tick at a time until an event matches, and return it.</summary>
+    private static GameEvent? StepUntilEvent(SkirmishLive g, System.Func<GameEvent, bool> match, int maxTicks)
+    {
+        var lw = g.LiveWorld;
+        for (int i = 0; i < maxTicks; i++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events) if (match(ev)) return ev;
+        }
+        return null;
+    }
+
+    private static bool TickHad(World lw, System.Func<GameEvent, bool> match)
+    {
+        foreach (var ev in lw.Events) if (match(ev)) return true;
+        return false;
+    }
+
+    private static string JoinLines(List<string> s) => string.Join(" | ", s);
+
+    /// <summary>
+    /// P8-10: THE EVENT GATE. P8-7 found a boarded squad mourned as a casualty
+    /// and an unload toasting DEPLOYED; the lenses found SuperweaponReady,
+    /// Sabotaged, Promoted, Deployed and both support-power events raised and
+    /// consumed by nothing, enemy production chiming on the local speakers, a
+    /// radar jam wearing the uplink-lost face, and one toast that the next
+    /// overwrote. Every GameEventType is driven here, from seat 1 of a teamed
+    /// four-seat match (an ally at seat 3, enemies at 0 and 2, so "own",
+    /// "allied" and "hostile" are three different answers), and the reaction a
+    /// player would see or hear is asserted: the toast, its priority, the cue,
+    /// the voice line, the gauge, the reticle, the dim. An ENEMY seat's one-off
+    /// act (a jam, a sabotage, a production) is put into the tick's stream
+    /// through ScriptCommandForTest, the mission-script channel, so no stage
+    /// waits on an AI's judgement. The silent table lists what is deliberately
+    /// not surfaced, and the coverage check refuses any type in neither place.
+    /// </summary>
+    private void RunEventGate()
+    {
+        GD.Print("  --    eventgate (P8-10): every event the sim raises is seen or heard, or listed as silent");
+        _eventsCovered.Clear();
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        SkirmishLive g;
+        try
+        {
+            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-09.fmap");
+            MatchConfig.TeamMode = MatchSetup.TeamsEvenSides;
+            MatchConfig.Seats = 0;                 // fill the map: four seats
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.LocalSeat = 1;
+            SkirmishLive.PendingNet = null;
+            g = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(g);
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.Seats = wasSeats;
+        }
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId, ally = -1, foe = -1, foe2 = -1;
+        for (int p = 0; p < lw.PlayerCount; p++)
+        {
+            if (p == me) continue;
+            if (!g.IsHostileSeat(p)) ally = p;
+            else if (foe < 0) foe = p;
+            else foe2 = p;
+        }
+        bool scene = me == 1 && lw.PlayerCount == 4 && ally >= 0 && foe >= 0 && foe2 >= 0;
+        EventGate(scene, "scene", $"a fresh four-seat EVEN SIDES match driven from seat 1, with an ally and two enemies "
+                                  + $"(seat {me} of {lw.PlayerCount}, ally {ally}, enemies {foe} and {foe2})");
+        if (!scene) { g.QueueFree(); return; }
+        g.StepOneTick();
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        // A powered base on each side that charges anything, so a stage is never
+        // held by a brown-out the fixture did not mean to test.
+        if (GroundNear(g, me) is not { } mp || GroundNear(g, foe) is not { } fp)
+        {
+            EventGate(false, "scene", "quiet ground beside my yard and the enemy's for the power fixtures (none: a fixture failure)");
+            g.QueueFree();
+            return;
+        }
+        lw.SpawnPowerPlant(me, mp.X, mp.Y, supply: 3000);
+        lw.SpawnPowerPlant(foe, fp.X, fp.Y, supply: 3000);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+
+        RunAlertStackStages(g);
+        RunProductionChimeStages(g, me, ally, foe);
+        RunFactoryDoorStage(g, me, foe);          // after the barracks the Carrier needs
+        RunCarrierEventStages(g, me, foe);
+        RunBoardingPairStage(g, me, foe);
+        RunPromotionAndDeployStages(g, me, foe);
+        RunContactEventStages(g, me, foe);
+        RunCloakDimStage(g, me, foe);
+        RunJamStages(g, me, foe);
+        RunSupportPowerEventStages(g, me, foe);
+        // Late, because strikes land, and last of all the elimination, which
+        // removes a whole seat.
+        RunSuperweaponStages(g, me, foe);
+        RunCaptureAttributionStage(g, me, foe);
+        RunSuperweaponResumeStage(g, me, foe);
+        RunEliminationStage(g, foe2);
+        RunEventGateCoverage();
+        g.QueueFree();
+    }
+
+    /// <summary>The one alert service's three rules, on the scene's own
+    /// instance: stacked, de-duplicated, priority ordered.</summary>
+    private void RunAlertStackStages(SkirmishLive g)
+    {
+        var a = g.AlertsView;
+        a.ResetForTest();
+        a.Raise(new Alert("EVENTGATE FIRST"));
+        a.Raise(new Alert("EVENTGATE SECOND"));
+        var s = a.StackTexts();
+        EventGate(s.Count == 2 && s[0] == "EVENTGATE SECOND" && s[1] == "EVENTGATE FIRST", "alerts",
+                  $"two toasts raised together are BOTH on screen, newest on top; one Label kept only the last ({JoinLines(s)})");
+
+        a.ResetForTest();
+        int cue0 = g.AudioRequests("ui_click"), dd0 = a.DedupedCount;
+        var rep = new Alert("EVENTGATE REPEAT") { Cue = "ui_click", CueDb = -40f };
+        bool first = a.Raise(rep), second = a.Raise(rep), third = a.Raise(rep);
+        s = a.StackTexts();
+        int cues = g.AudioRequests("ui_click") - cue0;
+        EventGate(first && !second && !third && s.Count == 1 && a.DedupedCount == dd0 + 2 && cues == 1, "alerts",
+                  $"the same toast raised three times inside {AlertService.DedupeSeconds} s is ONE line with ONE cue "
+                  + $"({s.Count} line, {cues} cue, {a.DedupedCount - dd0} folded)");
+
+        // P8-10 review, item 2: the same WORDS about two different subjects are
+        // two messages. Two commanders falling together (a subject per seat) are
+        // two lines and two cues, while a repeat about the same one still folds.
+        a.ResetForTest();
+        int sub0 = g.AudioRequests("ui_click");
+        a.Raise(new Alert("EVENTGATE SAME WORDS") { Subject = 2, Cue = "ui_click", CueDb = -40f });
+        a.Raise(new Alert("EVENTGATE SAME WORDS") { Subject = 3, Cue = "ui_click", CueDb = -40f });
+        a.Raise(new Alert("EVENTGATE SAME WORDS") { Subject = 3, Cue = "ui_click", CueDb = -40f });
+        s = a.StackTexts();
+        int sameLines = s.FindAll(t => t == "EVENTGATE SAME WORDS").Count;
+        int sameCues = g.AudioRequests("ui_click") - sub0;
+        EventGate(sameLines == 2 && sameCues == 2, "alerts",
+                  $"the same words about two subjects (two seats) are two lines with two cues, and a repeat about the same "
+                  + $"subject still folds ({sameLines} lines, {sameCues} cues)");
+        // ...and the same words at two PLACES are two lines, two pings and a
+        // jump record at the later one.
+        a.ResetForTest();
+        int pings0 = g.MinimapView.PingCountForTest;
+        a.Raise(new Alert("EVENTGATE TWO PLACES") { PingAt = new Vector2(10, 12), PingColour = Colors.Red, Jump = true });
+        a.Raise(new Alert("EVENTGATE TWO PLACES") { PingAt = new Vector2(30, 34), PingColour = Colors.Red, Jump = true });
+        s = a.StackTexts();
+        int placeLines = s.FindAll(t => t == "EVENTGATE TWO PLACES").Count;
+        int placePings = g.MinimapView.PingCountForTest - pings0;
+        var jump = g.LastAlertPos;
+        EventGate(placeLines == 2 && placePings == 2 && Mathf.IsEqualApprox(jump.X, 30f) && Mathf.IsEqualApprox(jump.Z, 34f),
+                  "alerts", $"...and the same words at two places are two lines with two pings, and the jump key goes to the "
+                  + $"later ({placeLines} lines, {placePings} pings, jump {jump.X:0},{jump.Z:0})");
+
+        a.ResetForTest();
+        a.Raise(new Alert("EVENTGATE CRITICAL", AlertPriority.Critical));
+        for (int i = 1; i <= 8; i++) a.Raise(new Alert($"EVENTGATE ROUTINE {i}"));
+        s = a.StackTexts();
+        EventGate(s.Count == AlertService.Capacity && s[0] == "EVENTGATE CRITICAL" && s[1] == "EVENTGATE ROUTINE 8"
+                  && !s.Contains("EVENTGATE ROUTINE 1"), "alerts",
+                  $"a critical alert stays on top through eight routine toasts, which push out only each other ({JoinLines(s)})");
+
+        a.ResetForTest();
+        for (int i = 1; i <= AlertService.Capacity; i++) a.Raise(new Alert($"EVENTGATE CRITICAL {i}", AlertPriority.Critical));
+        a.Raise(new Alert("EVENTGATE LATE ROUTINE"));
+        s = a.StackTexts();
+        EventGate(s.Count == AlertService.Capacity && !s.Contains("EVENTGATE LATE ROUTINE") && a.WaitingCount == 1, "alerts",
+                  $"with every line held by a critical alert, a routine toast WAITS for a free line rather than evicting one "
+                  + $"({a.WaitingCount} waiting)");
+        a.ResetForTest();
+    }
+
+    /// <summary>FEEL-07: the completion chime is the local seat's alone. Three
+    /// barracks finish a rifle squad in the same window, mine through the
+    /// sidebar's own QueueUnit, an enemy's and an ally's through scripted
+    /// Produce orders; every completion of the window is tallied by owner, the
+    /// AIs' own included.</summary>
+    private void RunProductionChimeStages(SkirmishLive g, int me, int ally, int foe)
+    {
+        var lw = g.LiveWorld;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        if (GroundNear(g, me) is not { } m || GroundNear(g, ally) is not { } al || GroundNear(g, foe) is not { } f)
+        {
+            EventGate(false, "ProductionComplete", "quiet ground for three barracks (none: a fixture failure)");
+            return;
+        }
+        int mine = lw.SpawnBarracks(me, m.X, m.Y);
+        int allied = lw.SpawnBarracks(ally, al.X, al.Y);
+        int hostile = lw.SpawnBarracks(foe, f.X, f.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.GrantCreditsForTest(5000);
+        lw.GrantCredits(ally, 5000);
+        lw.GrantCredits(foe, 5000);
+        g.AlertsView.ResetForTest();
+        int chime0 = g.AudioRequests("production_done"), ready0 = g.VoRequests("vo_unit_ready");
+        g.QueueUnit(rifle);
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.Produce, hostile, Fix64.Zero, Fix64.Zero, rifle));
+        g.ScriptCommandForTest(new Command(0, ally, CommandType.Produce, allied, Fix64.Zero, Fix64.Zero, rifle));
+        int own = 0, enemy = 0, friend = 0;
+        bool ownDone = false, foeDone = false, allyDone = false;
+        string toastAtOwn = "";
+        for (int t = 0; t < 900 && !(ownDone && foeDone && allyDone); t++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+            {
+                if (ev.Type != GameEventType.ProductionComplete || ev.C < 0 || ev.A < 0 || ev.A >= lw.EntityCount) continue;
+                int owner = lw.Entities[ev.A].PlayerId;
+                if (owner == me) own++;
+                else if (g.IsHostileSeat(owner)) enemy++;
+                else friend++;
+                if (ev.C == mine) { ownDone = true; toastAtOwn = g.ToastText; }
+                if (ev.C == hostile) foeDone = true;
+                if (ev.C == allied) allyDone = true;
+            }
+        }
+        int chimes = g.AudioRequests("production_done") - chime0;
+        int readies = g.VoRequests("vo_unit_ready") - ready0;
+        string want = $"{g.UnitNameForTest(rifle)} DEPLOYED";
+        EventGate(ownDone && foeDone && allyDone, "ProductionComplete",
+                  $"precondition: my barracks, an enemy's and an ally's each finished a rifle squad ({ownDone}, {foeDone}, {allyDone})");
+        EventGate(ownDone && toastAtOwn == want && readies == own, "ProductionComplete",
+                  $"my own completion toasts and speaks (\"{toastAtOwn}\", vo_unit_ready asked {readies} times for {own})");
+        EventGate(ownDone && enemy > 0 && friend > 0 && chimes == own, "ProductionComplete/own-only-chime",
+                  $"the production chime is MINE alone: {chimes} chimes asked for across my {own} completions and the "
+                  + $"{enemy} enemy and {friend} allied ones in the same ticks (FEEL-07)");
+        _eventsCovered.Add(GameEventType.ProductionComplete);
+    }
+
+    /// <summary>P8-7's finding: a boarding raised Died and an unload raised
+    /// ProductionComplete. Since D34 they are the sim's own Boarded and
+    /// Unloaded; neither may read as what it is not, and a real death beside
+    /// them still reads as one (the control).</summary>
+    private void RunCarrierEventStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "Boarded", "quiet ground for the Carrier (none: a fixture failure)");
+            return;
+        }
+        int carrier = SpawnOfType(lw, me, World.CarrierUnitType, s.X + 1, s.Y);
+        int r1 = SpawnOfType(lw, me, rifle, s.X, s.Y);
+        int r2 = SpawnOfType(lw, me, rifle, s.X, s.Y + 1);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.AlertsView.ResetForTest();
+        int bursts0 = g.DeathBursts, lost0 = g.VoRequests("vo_unit_lost"), boarded0 = g.Boardings;
+        g.QueueCommandForTest(CommandType.LoadTransport, r1, carrier);
+        g.QueueCommandForTest(CommandType.LoadTransport, r2, carrier);
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool aboard = lw.CargoOf(carrier).Count == 2 && !lw.Entities[r1].Alive && !lw.Entities[r2].Alive
+                      && TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == r1 && ev.B == carrier)
+                      && TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == r2 && ev.B == carrier)
+                      && !TickHad(lw, ev => ev.Type == GameEventType.Died && (ev.A == r1 || ev.A == r2));
+        EventGate(aboard, "Boarded",
+                  $"precondition: both squads boarded, which the sim now reports as Boarded and never as Died (D34; hold "
+                  + $"{lw.CargoOf(carrier).Count})");
+        EventGate(aboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 2, "Boarded",
+                  $"boarding a Carrier draws NO death: no flash, smoke or scorch ({g.DeathBursts - bursts0} bursts); both "
+                  + $"squads shrink into the hold rather than sinking as the dead do ({g.Boardings - boarded0})");
+        EventGate(aboard && g.VoRequests("vo_unit_lost") == lost0 && g.ToastText == $"BOARDED: CARGO 2/{World.CarrierCapacity}",
+                  "Boarded", $"...asks for no casualty line (vo_unit_lost asked {g.VoRequests("vo_unit_lost") - lost0} "
+                  + $"times) and says what did happen (\"{g.ToastText}\")");
+
+        // The control: a squad SHOT dead gets everything a death gets.
+        if (GroundNear(g, me) is not { } d)
+        {
+            EventGate(false, "Died", "quiet ground for the control (none: a fixture failure)");
+            return;
+        }
+        int victim = SpawnOfType(lw, me, rifle, d.X, d.Y);
+        var ve = lw.Entities[victim];
+        ve.Hp = 1;
+        lw.SetEntityForTest(victim, ve);
+        int gunner = SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), d.X + 2, d.Y);
+        g.PumpActorsForTest();
+        bursts0 = g.DeathBursts; lost0 = g.VoRequests("vo_unit_lost"); boarded0 = g.Boardings;
+        bool fired = false;
+        float intensityAtShot = -1f;
+        for (int t = 0; t < 150 && lw.Entities[victim].Alive; t++)
+        {
+            g.StepTicks(1);
+            if (!fired && TickHad(lw, ev => ev.Type == GameEventType.Fired && ev.B == victim))
+            {
+                fired = true;
+                intensityAtShot = g.CombatIntensity;
+            }
+        }
+        g.PumpActorsForTest();
+        bool dead = !lw.Entities[victim].Alive;
+        EventGate(dead && g.DeathBursts == bursts0 + 1 && g.Boardings == boarded0 && g.VoRequests("vo_unit_lost") == lost0 + 1,
+                  "Died", $"the control: a squad shot dead draws the burst ({g.DeathBursts - bursts0}), is not taken for a "
+                  + $"boarder ({g.Boardings - boarded0}) and asks for the casualty line ({g.VoRequests("vo_unit_lost") - lost0})");
+        EventGate(fired && intensityAtShot >= 0.999f, "Fired",
+                  $"a shot at my squad snaps the combat score's intensity signal to full ({intensityAtShot:0.00})");
+        _eventsCovered.Add(GameEventType.Fired);
+        _eventsCovered.Add(GameEventType.Died);
+        RemoveFixture(lw, gunner);
+
+        // The unload: one Unloaded event (D34), where it was a ProductionComplete
+        // per unit on the Carrier.
+        g.AlertsView.ResetForTest();
+        int chime0 = g.AudioRequests("production_done"), ready0 = g.VoRequests("vo_unit_ready");
+        int doors0 = _eventGateFactory >= 0 ? g.DoorOpeningsForTest(_eventGateFactory) : -1;
+        g.QueueCommandForTest(CommandType.UnloadTransport, carrier, -1);
+        g.StepOneTick();
+        int landed = -1;
+        foreach (var ev in lw.Events) if (ev.Type == GameEventType.Unloaded && ev.A == carrier) landed = ev.B;
+        bool asProduction = TickHad(lw, ev => ev.Type == GameEventType.ProductionComplete && ev.A == carrier);
+        var stack = g.AlertsView.StackTexts();
+        bool down = landed == 2 && lw.CargoOf(carrier).Count == 0 && !asProduction;
+        EventGate(down, "Unloaded", $"precondition: the Carrier set both squads down, which the sim reports as ONE Unloaded "
+                                    + $"carrying the count and no ProductionComplete (D34; {landed} set down)");
+        EventGate(down && g.ToastText == "CARRIER UNLOADED: 2 SET DOWN" && !stack.Exists(t => t.Contains("DEPLOYED")),
+                  "Unloaded", $"an unload says what happened (\"{g.ToastText}\") and toasts no DEPLOYED ({JoinLines(stack)})");
+        EventGate(down && g.AudioRequests("production_done") == chime0 && g.VoRequests("vo_unit_ready") == ready0
+                  && (doors0 < 0 || g.DoorOpeningsForTest(_eventGateFactory) == doors0),
+                  "Unloaded", "...and asks for neither the completion chime nor vo_unit_ready, and opens no factory's doors");
+        _eventsCovered.Add(GameEventType.Boarded);
+        _eventsCovered.Add(GameEventType.Unloaded);
+    }
+
+    /// <summary>The factory the door stage built for the local seat, so the
+    /// unload can check it opens no doors. -1 until the door stage runs.</summary>
+    private int _eventGateFactory = -1;
+
+    private static void HoldFire(World lw, int id)
+    {
+        var e = lw.Entities[id];
+        e.Stance = Stance.HoldFire;
+        lw.SetEntityForTest(id, e);
+    }
+
+    /// <summary>P8-10 review, item 7: a completion opens only its OWN factory's
+    /// doors. They opened every factory on the map for any ProductionComplete
+    /// at all, every seat's and every yard's. My factory and an enemy's each
+    /// build a Carrier in the same window, while every other completion of the
+    /// window (the AIs' own included) is counted too.</summary>
+    private void RunFactoryDoorStage(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        if (GroundNear(g, me) is not { } m || GroundNear(g, foe) is not { } f)
+        {
+            EventGate(false, "doors", "quiet ground for two factories (none: a fixture failure)");
+            return;
+        }
+        int mine = lw.SpawnFactory(me, m.X, m.Y);
+        int theirs = lw.SpawnFactory(foe, f.X, f.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        _eventGateFactory = mine;
+        int doorsMine = g.DoorCountForTest(mine), doorsTheirs = g.DoorCountForTest(theirs);
+        EventGate(doorsMine > 0 && doorsTheirs > 0, "doors",
+                  $"precondition: both factories' rigs carry doors, so the check can fail ({doorsMine} and {doorsTheirs})");
+        int m0 = g.DoorOpeningsForTest(mine), t0 = g.DoorOpeningsForTest(theirs);
+        lw.GrantCredits(me, 3000);
+        lw.GrantCredits(foe, 3000);
+        g.QueueCommandForTest(CommandType.Produce, mine, World.CarrierUnitType);
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.Produce, theirs, Fix64.Zero, Fix64.Zero, World.CarrierUnitType));
+        int byMine = 0, byTheirs = 0, elsewhere = 0;
+        for (int t = 0; t < 600 && (byMine == 0 || byTheirs == 0); t++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+            {
+                if (ev.Type != GameEventType.ProductionComplete) continue;
+                if (ev.C == mine) byMine++;
+                else if (ev.C == theirs) byTheirs++;
+                else elsewhere++;
+            }
+        }
+        int openedMine = g.DoorOpeningsForTest(mine) - m0, openedTheirs = g.DoorOpeningsForTest(theirs) - t0;
+        EventGate(byMine > 0 && byTheirs > 0 && openedMine == byMine && openedTheirs == byTheirs, "doors",
+                  $"a completion opens only its OWN factory's doors: mine opened {openedMine} times for its {byMine} "
+                  + $"completions and the enemy's {openedTheirs} for its {byTheirs}, through {elsewhere} other completions");
+    }
+
+    /// <summary>P8-10 review, item 1, under decision D34: boarding is the sim's
+    /// own Boarded event, so the client no longer infers it, and these are the
+    /// cases the inference got wrong. Two Carriers two cells apart load in the
+    /// same tick (a first-fit guess handed the second squad to the first
+    /// Carrier and read the first squad as dead); a same-seat squad is crushed
+    /// beside them in that tick with its hit points still above zero (the
+    /// guess could hand it a Carrier's leftover growth); and an ENEMY squad
+    /// boards in my sight.</summary>
+    private void RunBoardingPairStage(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "Boarded/two-carriers", "quiet ground for two Carriers (none: a fixture failure)");
+            return;
+        }
+        int x = s.X, y = s.Y;
+        int c1 = SpawnOfType(lw, me, World.CarrierUnitType, x, y);
+        int c2 = SpawnOfType(lw, me, World.CarrierUnitType, x + 2, y);
+        int a = SpawnOfType(lw, me, rifle, x - 2, y);            // two cells from C1, four from C2
+        int b = SpawnOfType(lw, me, rifle, x + 2, y + 1);        // beside C2, and within three cells of C1
+        int victim = SpawnOfType(lw, me, rifle, x + 3, y + 2);   // beside C2, to be crushed
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        // An enemy Bulwark (heavy armour) on the victim's own spot, rolling east:
+        // SeparationSystem crushes foot infantry within 0.4 cells of a moving
+        // heavy enemy, in the same tick as the two boardings.
+        int tank = SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_bulwark_tank"), x + 3, y + 2);
+        var te = lw.Entities[tank];
+        te.Moving = true;
+        te.UseFlow = false;
+        te.AMove = false;
+        te.TargetX = Map.CellCentre(x + 5);
+        te.TargetY = te.Y;
+        te.Stance = Stance.HoldFire;
+        lw.SetEntityForTest(tank, te);
+        g.AlertsView.ResetForTest();
+        int bursts0 = g.DeathBursts, lost0 = g.VoRequests("vo_unit_lost"), boarded0 = g.Boardings;
+        g.QueueCommandForTest(CommandType.LoadTransport, b, c2);   // B's order FIRST, the order that fooled first-fit
+        g.QueueCommandForTest(CommandType.LoadTransport, a, c1);
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool pairs = TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == a && ev.B == c1)
+                     && TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == b && ev.B == c2)
+                     && lw.CargoOf(c1).Count == 1 && lw.CargoOf(c2).Count == 1;
+        bool crushed = !lw.Entities[victim].Alive && lw.Entities[victim].Hp > 0
+                       && TickHad(lw, ev => ev.Type == GameEventType.Died && ev.A == victim);
+        EventGate(pairs && crushed, "Boarded/two-carriers",
+                  $"precondition: in one tick A boarded C1 and B boarded C2 (holds {lw.CargoOf(c1).Count} and "
+                  + $"{lw.CargoOf(c2).Count}), and a same-seat squad beside C2 was crushed with hit points still above zero "
+                  + $"(crushed {crushed})");
+        var st = g.AlertsView.StackTexts();
+        int lines = st.FindAll(t => t == $"BOARDED: CARGO 1/{World.CarrierCapacity}").Count;
+        EventGate(pairs && g.Boardings == boarded0 + 2 && lines == 2, "Boarded/two-carriers",
+                  $"two Carriers two cells apart loading in the same tick: both squads shrink into their holds "
+                  + $"({g.Boardings - boarded0}) and each Carrier says so on its own line ({lines})");
+        EventGate(crushed && g.DeathBursts == bursts0 + 1 && g.VoRequests("vo_unit_lost") == lost0 + 1, "Died/crush",
+                  $"the squad crushed beside them in that tick is read as a death, one burst ({g.DeathBursts - bursts0}) and "
+                  + $"the casualty line ({g.VoRequests("vo_unit_lost") - lost0}), and neither boarding is");
+        RemoveFixture(lw, tank);
+
+        // An ENEMY boarding where I can see it. Decided: no toast for another
+        // seat's boarding (it is not my news), and its squad shrinks into the
+        // hold like any boarder rather than dying.
+        if (GroundNear(g, me) is not { } e)
+        {
+            EventGate(false, "Boarded/enemy", "quiet ground for the enemy Carrier (none: a fixture failure)");
+            return;
+        }
+        int eyes = SpawnOfType(lw, me, rifle, e.X - 2, e.Y);
+        int ec = SpawnOfType(lw, foe, World.CarrierUnitType, e.X + 1, e.Y);
+        int es = SpawnOfType(lw, foe, rifle, e.X, e.Y);
+        HoldFire(lw, eyes);
+        HoldFire(lw, ec);
+        HoldFire(lw, es);
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool seen = g.ActorShownForTest(es);
+        g.AlertsView.ResetForTest();
+        bursts0 = g.DeathBursts; lost0 = g.VoRequests("vo_unit_lost"); boarded0 = g.Boardings;
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.LoadTransport, es, Fix64.Zero, Fix64.Zero, ec));
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool enemyAboard = TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == es && ev.B == ec);
+        var est = g.AlertsView.StackTexts();
+        EventGate(seen && enemyAboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 1
+                  && !est.Exists(t => t.StartsWith("BOARDED")), "Boarded/enemy",
+                  $"an ENEMY squad boarding in my sight draws no death ({g.DeathBursts - bursts0} bursts), shrinks into its "
+                  + $"hold ({g.Boardings - boarded0}) and tells me nothing, by decision (seen {seen})");
+    }
+
+    /// <summary>P8-10 review, item 4: the sabotage dim and P8-6's detected wash
+    /// share MaterialOverlay. A detected cloaked enemy building that is then
+    /// sabotaged wears the dim, which takes precedence, and wears the wash
+    /// again when the dim lifts.</summary>
+    private void RunCloakDimStage(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "Sabotaged/cloak", "quiet ground for the Shroud Nest (none: a fixture failure)");
+            return;
+        }
+        int nest = lw.SpawnFactionDefence(foe, 18, s.X, s.Y);   // 18: the Shroud Nest, a cloaked building
+        HoldFire(lw, nest);
+        int scout = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("dir_sentinel_scout"), s.X - 2, s.Y);
+        HoldFire(lw, scout);
+        g.StepOneTick();
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool detected = lw.Entities[nest].Stealth && (lw.Entities[nest].DetectedMask & (1 << me)) != 0;
+        EventGate(detected && g.ActorDetectedTintForTest(nest) && !g.ActorDimmedForTest(nest), "Sabotaged/cloak",
+                  "precondition: a detected enemy Shroud Nest wears P8-6's detected wash and no dim");
+        if (ContactCell(lw, nest) is not { } c)
+        {
+            EventGate(false, "Sabotaged/cloak", "a cell within contact reach of the nest (none: a fixture failure)");
+            return;
+        }
+        int sab = SpawnOfType(lw, me, World.SaboteurUnitType, c.X, c.Y);
+        g.QueueCommandForTest(CommandType.Attack, sab, nest);
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool dark = lw.IsDisabled(nest);
+        EventGate(dark && g.ActorDimmedForTest(nest) && !g.ActorDetectedTintForTest(nest), "Sabotaged/cloak",
+                  "sabotaged while detected, it wears the DIM, which takes precedence over the wash instead of fighting it "
+                  + $"for the overlay (dark {dark})");
+        for (int t = 0; t < World.SabotageDurationTicks + 5 && lw.IsDisabled(nest); t++) g.StepTicks(1);
+        g.PumpActorsForTest();
+        EventGate(!lw.IsDisabled(nest) && !g.ActorDimmedForTest(nest) && g.ActorDetectedTintForTest(nest), "Sabotaged/cloak",
+                  "...and when the dim lifts the wash is back, because the nest is still detected: neither look wiped the other");
+    }
+
+    /// <summary>P8-10 review, item 6: an enemy launches its superweapon and I
+    /// capture it in the same tick. The launch applies before the capture, so
+    /// it is still the enemy's strike, and the klaxon must say so; reading the
+    /// owner after the tick credited it to me and said nothing.</summary>
+    private void RunCaptureAttributionStage(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "SuperweaponLaunched/capture", "quiet ground for the weapon (none: a fixture failure)");
+            return;
+        }
+        int w = lw.SpawnSuperweapon(foe, s.X, s.Y, chargeTicks: 0);
+        var we = lw.Entities[w];
+        we.PowerDraw = 0;
+        lw.SetEntityForTest(w, we);
+        if (ContactCell(lw, w) is not { } c || GroundNear(g, me) is not { } aim)
+        {
+            EventGate(false, "SuperweaponLaunched/capture", "a contact cell and an aim point (none: a fixture failure)");
+            return;
+        }
+        int engineer = SpawnOfType(lw, me, World.EngineerUnitType, c.X, c.Y);
+        g.AlertsView.ResetForTest();
+        int la0 = g.LaunchAlerts;
+        g.QueueCommandForTest(CommandType.Attack, engineer, w);
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.LaunchSuper, w, Map.CellCentre(aim.X), Map.CellCentre(aim.Y)));
+        g.StepOneTick();
+        bool launched = TickHad(lw, ev => ev.Type == GameEventType.SuperweaponLaunched && ev.A == w);
+        bool taken = lw.Entities[w].PlayerId == me && TickHad(lw, ev => ev.Type == GameEventType.Captured && ev.A == w);
+        var st = g.AlertsView.StackTexts();
+        EventGate(launched && taken && g.LaunchAlerts == la0 + 1 && st.Contains("ENEMY STRIKE INBOUND: BRACE"),
+                  "SuperweaponLaunched/capture",
+                  "an enemy launch and my capture of the same weapon in ONE tick: the strike is still credited to the enemy who "
+                  + $"fired it, with the klaxon, because its owner is read at the launch (launched {launched}, captured {taken}, "
+                  + $"{g.LaunchAlerts - la0} launch alert)");
+    }
+
+    private void RunPromotionAndDeployStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        if (GroundNear(g, me) is not { } p)
+        {
+            EventGate(false, "Promoted", "quiet ground for the veteran (none: a fixture failure)");
+            return;
+        }
+        // Two kills banked, so the third earns the first rank (World's 3 and 6).
+        int vet = SpawnOfType(lw, me, rifle, p.X, p.Y);
+        var v = lw.Entities[vet];
+        v.Kills = 2;
+        v.VetEnabled = true;
+        lw.SetEntityForTest(vet, v);
+        int prey = SpawnOfType(lw, foe, rifle, p.X + 2, p.Y);
+        var pr = lw.Entities[prey];
+        pr.Hp = 1;
+        lw.SetEntityForTest(prey, pr);
+        g.PumpActorsForTest();
+        g.AlertsView.ResetForTest();
+        int cues0 = g.PromotionCues, confirm0 = g.AudioRequests("ui_confirm");
+        var promoted = StepUntilEvent(g, ev => ev.Type == GameEventType.Promoted && ev.A == vet, 150);
+        string want = $"{g.UnitNameForTest(rifle)} PROMOTED: VETERAN";
+        var stack = g.AlertsView.StackTexts();
+        EventGate(promoted != null, "Promoted", "precondition: my squad's third kill promoted it");
+        EventGate(promoted != null && g.PromotionCues == cues0 + 1 && stack.Contains(want)
+                  && g.AlertsView.PriorityShown(want) == AlertPriority.Notice && g.AudioRequests("ui_confirm") > confirm0,
+                  "Promoted", $"a promotion is said (\"{want}\" on screen: {stack.Contains(want)}) and heard (its cue), and a "
+                  + "gold ring marks the unit");
+        _eventsCovered.Add(GameEventType.Promoted);
+        if (lw.Entities[prey].Alive) RemoveFixture(lw, prey);
+
+        if (GroundNear(g, me) is not { } q)
+        {
+            EventGate(false, "Deployed", "quiet ground for the MCV (none: a fixture failure)");
+            return;
+        }
+        int mcv = SpawnOfType(lw, me, World.McvUnitType, q.X + 1, q.Y + 1);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.AlertsView.ResetForTest();
+        int dep0 = g.DeployCues;
+        g.IssueDeploy(mcv);
+        g.StepOneTick();
+        bool deployed = TickHad(lw, ev => ev.Type == GameEventType.Deployed && ev.A == mcv);
+        EventGate(deployed, "Deployed", "precondition: the MCV unpacked");
+        EventGate(deployed && g.DeployCues == dep0 + 1 && g.ToastText == "CONSTRUCTION YARD ESTABLISHED", "Deployed",
+                  $"an MCV unpacking is said and heard, not only refused when it fails (\"{g.ToastText}\")");
+        _eventsCovered.Add(GameEventType.Deployed);
+    }
+
+    /// <summary>FEEL-03 and the contact effects: an enemy saboteur, infiltrator
+    /// and engineer each walk into a building of mine.</summary>
+    private void RunContactEventStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        // --- Sabotage ---------------------------------------------------------
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "Sabotaged", "quiet ground for the plant (none: a fixture failure)");
+            return;
+        }
+        int plant = lw.SpawnPowerPlant(me, s.X, s.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        if (ContactCell(lw, plant) is not { } c)
+        {
+            EventGate(false, "Sabotaged", "a cell within contact reach of the plant (none: a fixture failure)");
+            return;
+        }
+        int sab = SpawnOfType(lw, foe, World.SaboteurUnitType, c.X, c.Y);
+        g.PumpActorsForTest();
+        g.AlertsView.ResetForTest();
+        int sab0 = g.SabotageAlerts, vo0 = g.VoRequests("vo_sabotaged");
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, sab, Fix64.Zero, Fix64.Zero, plant));
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        string name = StructureCatalogue.DisplayNameOf(lw.Entities[plant].StructType);
+        string text = $"{name} SABOTAGED: DARK FOR {World.SabotageDurationTicks / World.TicksPerSecond}s";
+        bool dark = lw.IsDisabled(plant);
+        EventGate(dark, "Sabotaged", "precondition: an enemy Saboteur switched my plant off");
+        EventGate(dark && g.SabotageAlerts == sab0 + 1 && g.ToastText == text
+                  && g.AlertsView.PriorityShown(text) == AlertPriority.Urgent && g.VoRequests("vo_sabotaged") == vo0 + 1,
+                  "Sabotaged", $"...and I am told, urgently, with the countdown and the voice (\"{g.ToastText}\")");
+        EventGate(dark && g.ActorDimmedForTest(plant), "Sabotaged/dim",
+                  "...and the plant WEARS the offline wash while it is dark (read off its meshes)");
+        // End to end: five real refusals pressed straight after it cannot push
+        // the urgent alert off the stack.
+        g.ClearSelectionForTest();
+        foreach (var action in new[] { "guard", "patrol", "hold_fire", "attack_move", "launch_super" })
+            g.PressKey(Settings.BindOf(action));
+        var st = g.AlertsView.StackTexts();
+        EventGate(st.Count == AlertService.Capacity && st[0] == text, "alerts",
+                  $"five refusals pressed after it leave the sabotage alert on screen and on top; routine lines push out only "
+                  + $"routine lines ({JoinLines(st)})");
+        for (int t = 0; t < World.SabotageDurationTicks + 5 && lw.IsDisabled(plant); t++) g.StepTicks(1);
+        g.PumpActorsForTest();
+        EventGate(!lw.IsDisabled(plant) && !g.ActorDimmedForTest(plant), "Sabotaged/dim",
+                  "...and the wash lifts on the tick the sim brings the plant back");
+        _eventsCovered.Add(GameEventType.Sabotaged);
+
+        // P8-10 review, item 2, with real events: two plants sabotaged in the
+        // SAME tick raise the same words about two buildings. De-duplicating on
+        // the text alone kept one line and lost the second ping, cue and voice.
+        if (GroundNear(g, me) is { } s2)
+        {
+            int pa = lw.SpawnPowerPlant(me, s2.X, s2.Y);
+            int pb = lw.SpawnPowerPlant(me, s2.X + 3, s2.Y);
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            if (ContactCell(lw, pa) is { } ca && ContactCell(lw, pb) is { } cb && ca != cb)
+            {
+                int sa = SpawnOfType(lw, foe, World.SaboteurUnitType, ca.X, ca.Y);
+                int sb = SpawnOfType(lw, foe, World.SaboteurUnitType, cb.X, cb.Y);
+                g.AlertsView.ResetForTest();
+                int two0 = g.SabotageAlerts, cue0 = g.AudioRequests("alert_low_power"), ping0 = g.MinimapView.PingCountForTest;
+                g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, sa, Fix64.Zero, Fix64.Zero, pa));
+                g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, sb, Fix64.Zero, Fix64.Zero, pb));
+                g.StepOneTick();
+                bool bothDark = lw.IsDisabled(pa) && lw.IsDisabled(pb);
+                var st2 = g.AlertsView.StackTexts();
+                int twin = st2.FindAll(t => t == text).Count;
+                int cues2 = g.AudioRequests("alert_low_power") - cue0, pings2 = g.MinimapView.PingCountForTest - ping0;
+                EventGate(bothDark && g.SabotageAlerts == two0 + 2 && twin == 2 && cues2 == 2 && pings2 == 2, "Sabotaged/two",
+                          $"two plants sabotaged in the same tick are TWO alerts with the same words: two lines ({twin}), two "
+                          + $"cues ({cues2}) and two pings ({pings2}), because a message is its words AND its building");
+            }
+            else EventGate(false, "Sabotaged/two", "two cells within contact reach of the two plants (none: a fixture failure)");
+        }
+        else EventGate(false, "Sabotaged/two", "quiet ground for two plants (none: a fixture failure)");
+
+        // --- Robbery ----------------------------------------------------------
+        if (GroundNear(g, me) is not { } b)
+        {
+            EventGate(false, "Robbed", "quiet ground for the bank (none: a fixture failure)");
+            return;
+        }
+        int bank = lw.SpawnPowerPlant(me, b.X, b.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        if (ContactCell(lw, bank) is { } bc)
+        {
+            int thief = SpawnOfType(lw, foe, World.InfiltratorUnitType, bc.X, bc.Y);
+            g.AlertsView.ResetForTest();
+            int rob0 = g.RobberyAlerts;
+            g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, thief, Fix64.Zero, Fix64.Zero, bank));
+            g.StepOneTick();
+            int taken = -1;
+            foreach (var ev in lw.Events) if (ev.Type == GameEventType.Robbed && ev.A == bank) taken = ev.C;
+            string robbed = $"CREDITS STOLEN: {taken}";
+            EventGate(taken > 0 && g.RobberyAlerts == rob0 + 1 && g.ToastText == robbed
+                      && g.AlertsView.PriorityShown(robbed) == AlertPriority.Urgent, "Robbed",
+                      $"an enemy Infiltrator's theft is told urgently, through the one service (\"{g.ToastText}\")");
+            _eventsCovered.Add(GameEventType.Robbed);
+        }
+        else EventGate(false, "Robbed", "a cell within contact reach of the bank (none: a fixture failure)");
+
+        // --- Capture: a tick between the spawn and the act, so the owner cache
+        // has the building as mine (DR-20's "I lost it" needs the old owner).
+        if (GroundNear(g, me) is not { } k)
+        {
+            EventGate(false, "Captured", "quiet ground for the prize (none: a fixture failure)");
+            return;
+        }
+        int prize = lw.SpawnPowerPlant(me, k.X, k.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        if (ContactCell(lw, prize) is { } kc)
+        {
+            int engineer = SpawnOfType(lw, foe, World.EngineerUnitType, kc.X, kc.Y);
+            g.StepTicks(1);
+            g.AlertsView.ResetForTest();
+            int cap0 = g.CaptureAlerts;
+            g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, engineer, Fix64.Zero, Fix64.Zero, prize));
+            g.StepOneTick();
+            const string lost = "STRUCTURE LOST TO CAPTURE";
+            bool taken = lw.Entities[prize].PlayerId == foe;
+            EventGate(taken && g.CaptureAlerts == cap0 + 1 && g.ToastText == lost
+                      && g.AlertsView.PriorityShown(lost) == AlertPriority.Critical, "Captured",
+                      $"a building taken by an enemy engineer is a CRITICAL alert (\"{g.ToastText}\", owner now {lw.Entities[prize].PlayerId})");
+            _eventsCovered.Add(GameEventType.Captured);
+        }
+        else EventGate(false, "Captured", "a cell within contact reach of the prize (none: a fixture failure)");
+    }
+
+    /// <summary>FEEL-09: an enemy's RADAR JAMMING is not the uplink failing.
+    /// Proved against the control of losing the uplink itself.</summary>
+    private void RunJamStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        var mm = g.MinimapView;
+        if (GroundNear(g, me) is not { } r || GroundNear(g, foe) is not { } w)
+        {
+            EventGate(false, "jam", "quiet ground for the uplink and the enemy Watch Post (none: a fixture failure)");
+            return;
+        }
+        int uplink = g.SpawnRadarForTest(r.X, r.Y);
+        int post = lw.SpawnWatchPost(foe, w.X, w.Y);
+        var pe = lw.Entities[post];
+        pe.ChargeTicks = 0;
+        lw.SetEntityForTest(post, pe);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.StepOneTick();
+        int uplinks = 0;
+        for (int i = 0; i < lw.EntityCount; i++)
+            if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == me && lw.Entities[i].Kind == EntityKind.RadarUplink) uplinks++;
+        bool live = uplinks == 1 && g.RadarLive && g.MinimapRadarShown && !lw.IsRadarJammed(me);
+        EventGate(live, "jam", $"precondition: my one uplink stands powered and the minimap is live ({uplinks} uplink)");
+        if (!live) return;
+
+        g.AlertsView.ResetForTest();
+        int jam0 = g.JamAlerts, lost0 = g.RadarAlerts;
+        int cueJ = g.AudioRequests("alert_jammed"), cueL = g.AudioRequests("alert_radar");
+        int voJ = g.VoRequests("vo_radar_jammed"), voL = g.VoRequests("vo_radar_offline");
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.UseSupportPower, post, Fix64.Zero, Fix64.Zero, World.RadarJammingPowerId));
+        g.StepOneTick();
+        bool jammed = lw.IsRadarJammed(me);
+        int secs = Mathf.CeilToInt((lw.RadarJamEndsAt(me) - lw.Tick) / (float)World.TicksPerSecond);
+        EventGate(jammed, "jam", "precondition: the enemy's RADAR JAMMING landed on my seat");
+        EventGate(jammed && g.JamAlerts == jam0 + 1 && g.RadarAlerts == lost0 && g.ToastText == $"UPLINK JAMMED: BLIND FOR {secs}s",
+                  "jam", $"a jam raises the JAMMED alert with its countdown off World.RadarJamEndsAt, and not the uplink-lost "
+                  + $"alert (\"{g.ToastText}\"; {g.JamAlerts - jam0} jam, {g.RadarAlerts - lost0} lost)");
+        EventGate(jammed && mm.JammedFaceShown && mm.DarkCaptionShown == $"UPLINK JAMMED  {secs}s" && !g.MinimapRadarShown,
+                  "jam", $"...the minimap wears the JAMMED face, static under \"{mm.DarkCaptionShown}\", not the uplink-lost face");
+        EventGate(jammed && g.AudioRequests("alert_jammed") == cueJ + 1 && g.AudioRequests("alert_radar") == cueL
+                  && g.VoRequests("vo_radar_jammed") == voJ + 1 && g.VoRequests("vo_radar_offline") == voL,
+                  "jam", "...with its own cue and voice (alert_jammed, vo_radar_jammed) and neither of the uplink-lost pair");
+        g.StepTicks(45);
+        g.StepOneTick();
+        int secs2 = Mathf.CeilToInt((lw.RadarJamEndsAt(me) - lw.Tick) / (float)World.TicksPerSecond);
+        EventGate(lw.IsRadarJammed(me) && secs2 < secs && mm.DarkCaptionShown == $"UPLINK JAMMED  {secs2}s", "jam",
+                  $"...and its countdown follows the sim ({secs}s, then \"{mm.DarkCaptionShown}\" three seconds later)");
+        for (int t = 0; t < 400 && lw.IsRadarJammed(me); t++) g.StepTicks(1);
+        g.StepOneTick();
+        EventGate(g.RadarLive && g.MinimapRadarShown && g.ToastText == "JAMMING LIFTED: THE UPLINK SEES AGAIN", "jam",
+                  $"when the jam lifts the map comes back and says so (\"{g.ToastText}\")");
+
+        // The control: the uplink itself lost.
+        int lost1 = g.RadarAlerts, jam1 = g.JamAlerts;
+        RemoveFixture(lw, uplink);
+        g.StepOneTick();
+        EventGate(g.RadarAlerts == lost1 + 1 && g.JamAlerts == jam1 && g.ToastText == "UPLINK LOST: WE ARE BLIND"
+                  && mm.DarkCaptionShown == "UPLINK LOST" && !mm.JammedFaceShown, "jam",
+                  "the control: losing the uplink raises the uplink-lost alert and face, which a jam no longer does");
+    }
+
+    /// <summary>P8-3's owed toasts: a power coming ready and a power used.</summary>
+    private void RunSupportPowerEventStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        if (GroundNear(g, me) is not { } w || GroundNear(g, foe) is not { } b)
+        {
+            EventGate(false, "SupportPowerReady", "quiet ground for the Watch Post and the Bastion (none: a fixture failure)");
+            return;
+        }
+        int post = lw.SpawnWatchPost(me, w.X, w.Y);
+        var pe = lw.Entities[post];
+        pe.ChargeTicks = 3;
+        lw.SetEntityForTest(post, pe);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.AlertsView.ResetForTest();
+        int n0 = g.SupportPowerNotices;
+        var readyEv = StepUntilEvent(g, ev => ev.Type == GameEventType.SupportPowerReady && ev.A == post, 30);
+        const string readyText = "RADAR JAMMING READY";
+        EventGate(readyEv != null && g.SupportPowerNotices == n0 + 1 && g.ToastText == readyText
+                  && g.AlertsView.PriorityShown(readyText) == AlertPriority.Notice, "SupportPowerReady",
+                  $"my own power coming ready is said (\"{g.ToastText}\")");
+        _eventsCovered.Add(GameEventType.SupportPowerReady);
+
+        // Fired from its own button on the strip, the gesture a player uses.
+        g.PumpActorsForTest();
+        g.PumpSupportPowersForTest();
+        var bar = g.SupportPowerView;
+        int i = bar.IndexOf(post, World.RadarJammingPowerId);
+        if (i >= 0) bar.PressEntryForTest(i);
+        g.StepOneTick();
+        bool used = TickHad(lw, ev => ev.Type == GameEventType.SupportPowerUsed && ev.A == post);
+        EventGate(i >= 0 && used && g.ToastText == "RADAR JAMMING USED" && g.SupportPowerNotices == n0 + 2,
+                  "SupportPowerUsed", $"...and pressing it, the sim's acceptance is said in words that claim no effect, "
+                  + $"since the event is raised whether or not the power found anything (\"{g.ToastText}\")");
+
+        // An enemy's precision strike where I can see it.
+        int bastion = lw.SpawnFactionDefence(foe, StructureCatalogue.TypeIdOf("dir_bastion"), b.X, b.Y);
+        var be = lw.Entities[bastion];
+        be.ChargeTicks = 0;
+        lw.SetEntityForTest(bastion, be);
+        var (ycx, ycy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+        bool seen = lw.IsVisible(me, ycx, ycy);
+        g.AlertsView.ResetForTest();
+        int n1 = g.SupportPowerNotices;
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.UseSupportPower, bastion,
+            Map.CellCentre(ycx), Map.CellCentre(ycy), World.PrecisionStrikePowerId));
+        g.StepOneTick();
+        bool struck = TickHad(lw, ev => ev.Type == GameEventType.SupportPowerUsed && ev.A == bastion);
+        const string sighted = "ENEMY PRECISION STRIKE SIGHTED";
+        EventGate(seen && struck && g.ToastText == sighted && g.SupportPowerNotices == n1 + 1
+                  && g.AlertsView.PriorityShown(sighted) == AlertPriority.Urgent, "SupportPowerUsed/enemy-sighted",
+                  $"an enemy power that lands where I can see is an urgent alert (\"{g.ToastText}\")");
+        _eventsCovered.Add(GameEventType.SupportPowerUsed);
+    }
+
+    /// <summary>FEEL-02: the superweapon speaks. Its charge bar reads the sim,
+    /// its READY is said, a launch puts a reticle on the aim point, and an
+    /// enemy's is warned of only once it has been SEEN.</summary>
+    private void RunSuperweaponStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        var gauge = g.SuperweaponGaugeView;
+        int total = g.SuperweaponChargeTotalForTest;
+        if (GroundNear(g, me) is not { } s)
+        {
+            EventGate(false, "superweapon/charge", "quiet ground for the superweapon (none: a fixture failure)");
+            return;
+        }
+        int sw = lw.SpawnSuperweapon(me, s.X, s.Y, chargeTicks: total / 2);
+        var e = lw.Entities[sw];
+        e.PowerDraw = 0;                 // charges whatever the grid; a fixture, not the test
+        lw.SetEntityForTest(sw, e);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        g.StepOneTick();
+        string name = StructureCatalogue.DisplayNameOf(lw.Entities[sw].StructType);
+        int row = gauge.IndexOf(sw);
+        int charge = lw.Entities[sw].ChargeTicks;
+        float want = 1f - charge / (float)total;
+        string text = row >= 0 ? gauge.RowText(row) : "absent";
+        float fill = row >= 0 ? gauge.RowFillDrawn(row) : -1f;
+        EventGate(row >= 0 && gauge.RowOwn(row) && text == $"{name}   CHARGING {SuperweaponGauge.Clock(charge)}"
+                  && Mathf.Abs(fill - want) < 0.01f, "superweapon/charge",
+                  $"my superweapon has a charge bar that reads the SIM's charge (\"{text}\", filled {fill:0.000} with "
+                  + $"{charge} of {total} ticks left)");
+        e = lw.Entities[sw];
+        e.ChargeTicks = total / 4;
+        lw.SetEntityForTest(sw, e);
+        g.StepOneTick();
+        charge = lw.Entities[sw].ChargeTicks;
+        want = 1f - charge / (float)total;
+        fill = row >= 0 ? gauge.RowFillDrawn(row) : -1f;
+        text = row >= 0 ? gauge.RowText(row) : "absent";
+        EventGate(row >= 0 && Mathf.Abs(fill - want) < 0.01f && text.EndsWith(SuperweaponGauge.Clock(charge)), "superweapon/charge",
+                  $"...and when the sim's charge moves the bar follows it ({fill:0.000}, \"{text}\"), so no duration lives in "
+                  + "the client");
+
+        // READY: said, heard and shown with the live key.
+        e = lw.Entities[sw];
+        e.ChargeTicks = 2;
+        lw.SetEntityForTest(sw, e);
+        g.AlertsView.ResetForTest();
+        int r0 = g.SuperweaponReadyAlerts, vo0 = g.VoRequests("vo_superweapon_ready");
+        var ready = StepUntilEvent(g, ev => ev.Type == GameEventType.SuperweaponReady && ev.A == sw, 10);
+        string toastAtReady = g.ToastText;
+        string key = Settings.KeyName(Settings.BindOf("launch_super"));
+        string readyText = $"{name} READY: PRESS {key}";
+        EventGate(ready != null && toastAtReady == readyText && g.SuperweaponReadyAlerts == r0 + 1
+                  && g.VoRequests("vo_superweapon_ready") == vo0 + 1 && g.AlertsView.PriorityShown(readyText) == AlertPriority.Urgent,
+                  "SuperweaponReady", $"my superweapon coming ready is an urgent alert naming the live key, with its voice "
+                  + $"(\"{toastAtReady}\")");
+        g.StepOneTick();
+        EventGate(row >= 0 && gauge.RowText(row) == $"{name}   READY   [{key}]", "SuperweaponReady",
+                  $"...and the gauge reads READY ({(row >= 0 ? gauge.RowText(row) : "absent")})");
+
+        // The launch, by the key and a left click on quiet ground.
+        if (GroundNear(g, me) is { } t)
+        {
+            float ax = t.X + 0.5f, az = t.Y + 0.5f;
+            g.FocusCameraOn(ax, az, 22f);
+            g.PumpActorsForTest();
+            g.PressKey(Settings.BindOf("launch_super"));
+            bool armed = g.SuperArmed;
+            g.PressLeftClick(g.ScreenOf(ax, az));
+            g.StepOneTick();
+            GameEvent? launch = null;
+            foreach (var ev in lw.Events) if (ev.Type == GameEventType.SuperweaponLaunched && ev.A == sw) launch = ev;
+            var ret = g.StrikeReticleAt(sw);
+            bool onAim = launch is { } l && ret is { } rp && Mathf.Abs(rp.X - Fx(l.X)) < 0.02f && Mathf.Abs(rp.Z - Fx(l.Y)) < 0.02f
+                         && Mathf.Abs(rp.X - ax) < 1f && Mathf.Abs(rp.Z - az) < 1f;
+            EventGate(armed && launch != null && onAim, "SuperweaponLaunched",
+                      $"my launch, by the key and a left click, puts a reticle on its aim point (reticle {ret}, clicked {ax:0.0},{az:0.0})");
+            var impact = StepUntilEvent(g, ev => ev.Type == GameEventType.SuperweaponImpact && ev.A == sw, 150);
+            EventGate(impact != null && g.StrikeReticleAt(sw) == null && g.MinimapView.PingCountForTest > 0, "SuperweaponImpact",
+                      "...which comes down with the impact, where the minimap pings");
+            _eventsCovered.Add(GameEventType.SuperweaponLaunched);
+            _eventsCovered.Add(GameEventType.SuperweaponImpact);
+        }
+        else EventGate(false, "SuperweaponLaunched", "quiet ground to aim at (none: a fixture failure)");
+        _eventsCovered.Add(GameEventType.SuperweaponReady);
+
+        // An enemy weapon in the fog: its READY is silent, its LAUNCH is global.
+        if (GroundNear(g, foe) is not { } u)
+        {
+            EventGate(false, "SuperweaponReady/unseen-enemy", "quiet ground by the enemy yard (none: a fixture failure)");
+            return;
+        }
+        bool fogged = !lw.IsVisible(me, u.X, u.Y);
+        int esw = lw.SpawnSuperweapon(foe, u.X, u.Y, chargeTicks: 3);
+        var ee = lw.Entities[esw];
+        ee.PowerDraw = 0;
+        lw.SetEntityForTest(esw, ee);
+        g.AlertsView.ResetForTest();
+        int ea0 = g.EnemySuperweaponAlerts, la0 = g.LaunchAlerts;
+        bool readySeen = false, spottedAtReady = true, aimedScript = false;
+        int alertsAtReady = -1, launchesAtLaunch = -1;
+        string toastAtLaunch = "";
+        GameEvent? eLaunch = null;
+        Vector3? eReticle = null;
+        for (int k = 0; k < 300 && eLaunch == null; k++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+            {
+                if (ev.Type == GameEventType.SuperweaponReady && ev.A == esw)
+                {
+                    readySeen = true;
+                    alertsAtReady = g.EnemySuperweaponAlerts;
+                    spottedAtReady = g.SuperweaponSpotted(esw);
+                }
+                if (ev.Type == GameEventType.SuperweaponLaunched && ev.A == esw)
+                {
+                    eLaunch = ev;
+                    toastAtLaunch = g.ToastText;
+                    launchesAtLaunch = g.LaunchAlerts;
+                    eReticle = g.StrikeReticleAt(esw);
+                }
+            }
+            // If the enemy's commander has not fired it by itself, its order is
+            // scripted, aimed at quiet ground on my side: the launch is the event
+            // under test, not the AI's choice of when.
+            if (readySeen && eLaunch == null && !aimedScript && GroundNear(g, me) is { } aim)
+            {
+                aimedScript = true;
+                g.ScriptCommandForTest(new Command(0, foe, CommandType.LaunchSuper, esw,
+                    Map.CellCentre(aim.X), Map.CellCentre(aim.Y)));
+            }
+        }
+        g.StepOneTick();
+        EventGate(fogged && readySeen && alertsAtReady == ea0 && !spottedAtReady && gauge.IndexOf(esw) < 0,
+                  "SuperweaponReady/unseen-enemy", "an enemy superweapon I have never seen comes ready in SILENCE and stays "
+                  + $"off my gauge (fogged {fogged}, alerts {alertsAtReady - ea0}, spotted {spottedAtReady})");
+        bool eOnAim = eLaunch is { } el && eReticle is { } er && Mathf.Abs(er.X - Fx(el.X)) < 0.02f && Mathf.Abs(er.Z - Fx(el.Y)) < 0.02f;
+        EventGate(eLaunch != null && launchesAtLaunch == la0 + 1 && toastAtLaunch == "ENEMY STRIKE INBOUND: BRACE" && eOnAim,
+                  "SuperweaponLaunched/enemy", $"...but its LAUNCH is global: the klaxon alert (\"{toastAtLaunch}\") and a "
+                  + "reticle on its aim point");
+        var eImpact = StepUntilEvent(g, ev => ev.Type == GameEventType.SuperweaponImpact && ev.A == esw, 150);
+        EventGate(eImpact != null && g.StrikeReticleAt(esw) == null, "SuperweaponImpact/enemy", "...gone with its impact");
+
+        // An enemy weapon IN SIGHT: spotted, its charge on my gauge, its READY critical.
+        if (GroundNear(g, me) is not { } v)
+        {
+            EventGate(false, "superweapon/enemy-spotted", "quiet ground in my sight (none: a fixture failure)");
+            return;
+        }
+        SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), v.X - 2, v.Y);   // eyes on it
+        int esw2 = lw.SpawnSuperweapon(foe, v.X, v.Y, chargeTicks: 90);
+        var e2 = lw.Entities[esw2];
+        e2.PowerDraw = 0;
+        lw.SetEntityForTest(esw2, e2);
+        g.AlertsView.ResetForTest();
+        int ea1 = g.EnemySuperweaponAlerts, voS = g.VoRequests("vo_enemy_superweapon");
+        g.StepOneTick();
+        string ename = StructureCatalogue.DisplayNameOf(lw.Entities[esw2].StructType);
+        int c2 = lw.Entities[esw2].ChargeTicks;
+        EventGate(g.SuperweaponSpotted(esw2) && g.EnemySuperweaponAlerts == ea1 + 1
+                  && g.ToastText.StartsWith($"ENEMY {ename} SPOTTED: CHARGING") && g.VoRequests("vo_enemy_superweapon") == voS + 1,
+                  "superweapon/enemy-spotted", $"an enemy superweapon coming into SIGHT is warned of, with its voice "
+                  + $"(\"{g.ToastText}\")");
+        int erow = gauge.IndexOf(esw2);
+        int etotal = System.Math.Max(total, c2);
+        EventGate(erow >= 0 && !gauge.RowOwn(erow) && gauge.RowText(erow) == $"ENEMY {ename}   {SuperweaponGauge.Clock(c2)}"
+                  && Mathf.Abs(gauge.RowFillDrawn(erow) - (1f - c2 / (float)etotal)) < 0.01f, "superweapon/enemy-spotted",
+                  $"...and from then its charge is on my gauge (\"{(erow >= 0 ? gauge.RowText(erow) : "absent")}\")");
+        int er0 = g.EnemySuperweaponAlerts, voR = g.VoRequests("vo_enemy_superweapon_ready");
+        GameEvent? r2 = null;
+        string toastAtR2 = "";
+        for (int k = 0; k < 200 && r2 == null; k++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events)
+                if (ev.Type == GameEventType.SuperweaponReady && ev.A == esw2) { r2 = ev; toastAtR2 = g.ToastText; }
+        }
+        string rtext = $"ENEMY {ename} READY";
+        EventGate(r2 != null && toastAtR2 == rtext && g.EnemySuperweaponAlerts == er0 + 1
+                  && g.VoRequests("vo_enemy_superweapon_ready") == voR + 1 && g.AlertsView.PriorityShown(rtext) == AlertPriority.Critical,
+                  "SuperweaponReady/enemy-spotted", $"...and its READY is a CRITICAL alert with its voice (\"{toastAtR2}\")");
+
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        // P8-10 review, item 3: an enemy weapon FIRST SEEN with its strike
+        // already in flight. Charge is zero during the warning window, so this
+        // was announced as "CHARGING, 0:00 LEFT".
+        if (GroundNear(g, foe) is { } u3 && GroundNear(g, me) is { } aim3)
+        {
+            int e3 = lw.SpawnSuperweapon(foe, u3.X, u3.Y, chargeTicks: 0);
+            var e3e = lw.Entities[e3];
+            e3e.PowerDraw = 0;
+            lw.SetEntityForTest(e3, e3e);
+            g.ScriptCommandForTest(new Command(0, foe, CommandType.LaunchSuper, e3, Map.CellCentre(aim3.X), Map.CellCentre(aim3.Y)));
+            g.StepOneTick();
+            bool inFlightUnseen = lw.Entities[e3].StrikeTicks >= 0 && !g.SuperweaponSpotted(e3);
+            HoldFire(lw, SpawnOfType(lw, me, rifle, u3.X - 2, u3.Y));   // eyes on it, mid-strike
+            g.AlertsView.ResetForTest();
+            g.StepOneTick();
+            string n3 = StructureCatalogue.DisplayNameOf(lw.Entities[e3].StructType);
+            EventGate(inFlightUnseen && g.SuperweaponSpotted(e3) && g.ToastText == $"ENEMY {n3} SPOTTED: STRIKE INBOUND",
+                      "superweapon/spotted-in-flight", $"an enemy superweapon first seen with its strike in flight is announced "
+                      + $"as STRIKE INBOUND, not as charging (\"{g.ToastText}\")");
+        }
+        else EventGate(false, "superweapon/spotted-in-flight", "quiet ground by the enemy yard and on my side (none: a fixture failure)");
+
+        // ...and one seen on the very tick it comes READY: one alert, the
+        // READY, with one voice line; it was SPOTTED and READY together, two
+        // Critical klaxons and two voices.
+        if (GroundNear(g, foe) is { } u4)
+        {
+            int e4 = lw.SpawnSuperweapon(foe, u4.X, u4.Y, chargeTicks: 1);
+            var e4e = lw.Entities[e4];
+            e4e.PowerDraw = 0;
+            lw.SetEntityForTest(e4, e4e);
+            HoldFire(lw, SpawnOfType(lw, me, rifle, u4.X - 2, u4.Y));   // seen in the same tick it charges
+            g.AlertsView.ResetForTest();
+            int ea4 = g.EnemySuperweaponAlerts;
+            int spotVo = g.VoRequests("vo_enemy_superweapon"), readyVo = g.VoRequests("vo_enemy_superweapon_ready");
+            g.StepOneTick();
+            string n4 = StructureCatalogue.DisplayNameOf(lw.Entities[e4].StructType);
+            bool together = TickHad(lw, ev => ev.Type == GameEventType.SuperweaponReady && ev.A == e4) && g.SuperweaponSpotted(e4);
+            var st4 = g.AlertsView.StackTexts();
+            int aboutIt = st4.FindAll(t => t.StartsWith($"ENEMY {n4}")).Count;
+            EventGate(together && g.EnemySuperweaponAlerts == ea4 + 1 && aboutIt == 1 && g.ToastText == $"ENEMY {n4} READY"
+                      && g.VoRequests("vo_enemy_superweapon") == spotVo && g.VoRequests("vo_enemy_superweapon_ready") == readyVo + 1,
+                      "superweapon/spotted-on-ready", $"an enemy superweapon seen on the tick it comes ready raises ONE alert, "
+                      + $"its READY, with one voice line ({g.EnemySuperweaponAlerts - ea4} alert, {aboutIt} line, \"{g.ToastText}\")");
+        }
+        else EventGate(false, "superweapon/spotted-on-ready", "quiet ground by the enemy yard (none: a fixture failure)");
+    }
+
+    /// <summary>
+    /// P8-10 review, item 3: a save and a resume. Before the save, an enemy
+    /// weapon is seen and then lost to the fog, another stands in sight
+    /// charging, and my own has a strike in flight. After the resume (decided:
+    /// a resumed player knows what its seat can SEE on the first tick, quietly,
+    /// and nothing from fogged state): the seen weapon is back on the gauge
+    /// with no fresh SPOTTED alert, the fogged one is not carried over, my
+    /// strike in flight wears its reticle, and the seen weapon's READY still
+    /// raises its klaxon.
+    /// </summary>
+    private void RunSuperweaponResumeStage(SkirmishLive g, int me, int foe)
+    {
+        const int Slot = 94;
+        var lw = g.LiveWorld;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        int Weapon(int seat, (int X, int Y) at, int charge)
+        {
+            int w = lw.SpawnSuperweapon(seat, at.X, at.Y, chargeTicks: charge);
+            var e = lw.Entities[w];
+            e.PowerDraw = 0;
+            lw.SetEntityForTest(w, e);
+            return w;
+        }
+        if (GroundNear(g, foe) is not { } f1)
+        {
+            EventGate(false, "superweapon/resume", "quiet ground by the enemy yard (none: a fixture failure)");
+            return;
+        }
+        int e1 = Weapon(foe, f1, 4000);                                  // seen, then lost to the fog
+        int w1 = SpawnOfType(lw, me, rifle, f1.X - 2, f1.Y);
+        HoldFire(lw, w1);
+        g.StepOneTick();
+        bool e1Seen = g.SuperweaponSpotted(e1);
+        RemoveFixture(lw, w1);
+        g.StepOneTick();
+        bool e1Fogged = !g.DrawnForLocalSeatForTest(e1) && g.SuperweaponSpotted(e1);
+        if (GroundNear(g, me) is not { } m2)
+        {
+            EventGate(false, "superweapon/resume", "quiet ground in my sight (none: a fixture failure)");
+            return;
+        }
+        int e2 = Weapon(foe, m2, 150);                                   // in sight, charging
+        HoldFire(lw, SpawnOfType(lw, me, rifle, m2.X - 2, m2.Y));
+        g.StepOneTick();
+        bool e2Seen = g.SuperweaponSpotted(e2);
+        if (GroundNear(g, me) is not { } m3 || GroundNear(g, me) is not { } aim)
+        {
+            EventGate(false, "superweapon/resume", "quiet ground for my weapon and its aim (none: a fixture failure)");
+            return;
+        }
+        int own = Weapon(me, m3, 0);                                     // mine, launched before the save
+        var aimAt = QuietGround(lw, aim.X, aim.Y, m3, 10) ?? aim;
+        g.ScriptCommandForTest(new Command(0, me, CommandType.LaunchSuper, own, Map.CellCentre(aimAt.X), Map.CellCentre(aimAt.Y)));
+        g.StepOneTick();
+        bool inFlight = lw.Entities[own].StrikeTicks >= 0;
+        EventGate(e1Seen && e1Fogged && e2Seen && inFlight && g.CanSave, "superweapon/resume",
+                  $"precondition: one enemy weapon seen then fogged ({e1Seen}, {e1Fogged}), one in sight ({e2Seen}), and my strike "
+                  + $"in flight ({inFlight}) when the match is saved");
+        DeleteSlotFiles(Slot);
+        g.SaveToSlot(Slot);
+        int savedTick = g.CurrentTick;
+        var meta = MatchMeta.Read(GameFiles.SlotMeta(Slot));
+        if (meta == null)
+        {
+            EventGate(false, "superweapon/resume", "the save's sidecar reads back (it did not)");
+            return;
+        }
+        var restore = MatchConfig.CurrentSetup();
+        string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        SkirmishLive r;
+        try
+        {
+            MatchConfig.ApplyFrom(meta);
+            MatchConfig.LoadPath = GameFiles.SlotSave(Slot);
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.PendingNet = null;
+            SkirmishLive.LocalSeat = me;
+            r = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(r);
+        }
+        finally
+        {
+            MatchConfig.ApplyFrom(restore);
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+        }
+        try
+        {
+            bool resumed = r.Resumed && r.CurrentTick == savedTick && r.LocalPlayerId == me;
+            r.StepOneTick();
+            var rw = r.LiveWorld;
+            var gauge = r.SuperweaponGaugeView;
+            EventGate(resumed && r.SuperweaponSpotted(e2) && gauge.IndexOf(e2) >= 0 && r.EnemySuperweaponAlerts == 0,
+                      "superweapon/resume", $"after the resume the enemy weapon in sight is known again and on the gauge, "
+                      + $"quietly ({r.EnemySuperweaponAlerts} alerts), because it was news before the save (resumed {resumed})");
+            EventGate(resumed && !r.SuperweaponSpotted(e1) && gauge.IndexOf(e1) < 0 && !r.DrawnForLocalSeatForTest(e1),
+                      "superweapon/resume", "...and the one lost to the fog before the save is NOT carried over from fogged state");
+            var ret = r.StrikeReticleAt(own);
+            var oe = rw.Entities[own];
+            int orow = gauge.IndexOf(own);
+            bool onAim = ret is { } rp && Mathf.Abs(rp.X - Fx(oe.StrikeX)) < 0.02f && Mathf.Abs(rp.Z - Fx(oe.StrikeY)) < 0.02f;
+            EventGate(resumed && oe.StrikeTicks >= 0 && onAim && orow >= 0 && gauge.RowText(orow).Contains("STRIKE IN"),
+                      "superweapon/resume", $"...and my strike still in flight has its reticle on its aim point (reticle {ret}) "
+                      + $"while the gauge reads \"{(orow >= 0 ? gauge.RowText(orow) : "absent")}\"");
+            GameEvent? ready = null;
+            string toastAtReady = "";
+            for (int k = 0; k < 300 && ready == null; k++)
+            {
+                r.StepTicks(1);
+                foreach (var ev in rw.Events)
+                    if (ev.Type == GameEventType.SuperweaponReady && ev.A == e2) { ready = ev; toastAtReady = r.ToastText; }
+            }
+            string en = StructureCatalogue.DisplayNameOf(rw.Entities[e2].StructType);
+            EventGate(ready != null && r.EnemySuperweaponAlerts == 1 && toastAtReady == $"ENEMY {en} READY", "superweapon/resume",
+                      $"...and that weapon's READY still raises its critical alert after the resume (\"{toastAtReady}\")");
+        }
+        finally
+        {
+            r.QueueFree();
+            DeleteSlotFiles(Slot);
+        }
+    }
+
+    /// <summary>Another commander falling is news, said differently for a foe
+    /// and a friend; my own fall is the verdict (checked elsewhere).</summary>
+    private void RunEliminationStage(SkirmishLive g, int foe2)
+    {
+        var lw = g.LiveWorld;
+        g.AlertsView.ResetForTest();
+        int n0 = g.EliminationNotices;
+        for (int i = 0; i < lw.EntityCount; i++)
+            if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == foe2) RemoveFixture(lw, i);
+        var gone = StepUntilEvent(g, ev => ev.Type == GameEventType.PlayerEliminated && ev.B == foe2, 5);
+        const string news = "AN ENEMY COMMANDER IS OUT OF THE WAR";
+        EventGate(gone != null && !g.MatchOverForTest && g.EliminationNotices == n0 + 1 && g.ToastText == news, "PlayerEliminated",
+                  $"an enemy seat eliminated while the war goes on is said (\"{g.ToastText}\"), where it used to pass in silence");
+        _eventsCovered.Add(GameEventType.PlayerEliminated);
+    }
+
+    /// <summary>The closing check: every GameEventType has a stage or a whole
+    /// line in the silent table, never both, and the table is printed.</summary>
+    private void RunEventGateCoverage()
+    {
+        string uncovered = "", stale = "";
+        var all = System.Enum.GetValues<GameEventType>();
+        foreach (var t in all)
+        {
+            bool staged = _eventsCovered.Contains(t);
+            bool whole = System.Array.Exists(EventGateSilent, x => x.Type == t && x.WholeType);
+            if (!staged && !whole) uncovered += $" {t}";
+            if (staged && whole) stale += $" {t}";
+        }
+        Check(uncovered.Length == 0,
+              $"eventgate/coverage: all {all.Length} GameEventType values have a stage that drives the event and asserts what "
+              + $"the player sees or hears, or a line in the silent table (F15){(uncovered.Length > 0 ? $" (in neither:{uncovered})" : "")}");
+        Check(stale.Length == 0,
+              $"eventgate/coverage: no type with a stage is still listed as wholly silent{(stale.Length > 0 ? $" (delete the line for:{stale})" : "")}");
+        foreach (var k in EventGateSilent)
+            GD.Print($"  {(k.ByDesign ? "EXCEPTION" : "KNOWN-MISSING")}  eventgate/{k.Stage}: {k.Why} [{k.Owner}]");
     }
 
     // ---------------- P8-46: scoregate ----------------

@@ -201,8 +201,6 @@ public partial class SkirmishLive : Node3D
     private AudioDirector _audio = null!;
     private CombatEffects _effects = null!;
     // W3-19: production-complete flyout toast beside the sidebar.
-    private Label _toast = null!;
-    private Tween? _toastTween;
     // TICKET-P5-SET-01: the LAN desync notice (doc 18 Phase D: "desync notice
     // surfaced in the HUD"). Driven by NetSession, latched, never fades.
     private Label _desyncNotice = null!;
@@ -393,12 +391,13 @@ public partial class SkirmishLive : Node3D
     // covers draw - GDD line 48's below-100 clause, deliberately NOT the 75
     // per cent turret threshold: radar is the first thing a brown-out takes.
     // Edge-triggered on the LOSS crossing only, the _wasBrownOut pattern with
-    // the flag starting false, so the radarless opening fires no alert: the
-    // alert marks LOSING the eye, not never having had one.
-    private bool _wasRadarLive;
+    // the state starting dark, so the radarless opening fires no alert: the
+    // alert marks LOSING the eye, not never having had one. P8-10 keeps that
+    // and splits the dark state in two (_radarFace): a JAM has its own alert,
+    // cue, face and countdown, and only a real loss raises this one.
     private Vector2 _lastUplinkPos;
     /// <summary>Verification read (the LowPowerAlerts pattern): how many times
-    /// the RADAR OFFLINE alert fired.</summary>
+    /// the uplink-lost alert fired. A jam is JamAlerts, never this.</summary>
     public int RadarAlerts { get; private set; }
     /// <summary>Verification read: the radar-live predicate as last computed.</summary>
     public bool RadarLive { get; private set; }
@@ -413,6 +412,41 @@ public partial class SkirmishLive : Node3D
     // four-seat map seats 2 and 3 were never tallied and never dimmed.
     private bool[] _ownerBrownedOut = System.Array.Empty<bool>();
     private readonly HashSet<int> _offlineDimmed = new();
+
+    // ---------------- P8-10: critical events speak ----------------
+    /// <summary>The one alert service: every toast and alert goes through it.</summary>
+    private AlertService _alerts = null!;
+    /// <summary>The superweapon readout, above the support power strip.</summary>
+    private SuperweaponGauge _swGauge = null!;
+    private readonly List<SuperweaponGauge.Row> _swRows = new();
+    /// <summary>Hostile superweapons the local seat has SEEN, by entity id.
+    /// Once seen, a weapon's charge is shown and its READY is announced; one
+    /// never seen stays as unknown as the rest of the fog (GDD s8 makes only
+    /// the LAUNCH global). Presentation state: never saved, never read by the
+    /// sim, and it forgets nothing until the weapon dies.</summary>
+    private readonly HashSet<int> _spottedSuperweapons = new();
+    /// <summary>Every boarder (a Boarded event, D34) whose actor is standing,
+    /// so the actor shrinks into its Carrier rather than sinking like the dead.
+    /// Pruned as the actor goes.</summary>
+    private readonly HashSet<int> _boardedIds = new();
+    /// <summary>The radar's three faces. Offline wins over Jammed: with no
+    /// uplink, or no power for it, the map is dark for a reason in your own
+    /// base, and a jam on top changes nothing you can act on.</summary>
+    private enum RadarFace { Live, Offline, Jammed }
+    private RadarFace _radarFace = RadarFace.Offline;
+    /// <summary>Verification reads (the LowPowerAlerts pattern): alerts that
+    /// actually fired, counted where they are raised.</summary>
+    public int JamAlerts { get; private set; }
+    public int SabotageAlerts { get; private set; }
+    public int SuperweaponReadyAlerts { get; private set; }
+    public int EnemySuperweaponAlerts { get; private set; }
+    public int PromotionCues { get; private set; }
+    public int DeployCues { get; private set; }
+    public int EliminationNotices { get; private set; }
+    public int SupportPowerNotices { get; private set; }
+    /// <summary>Actors retired as boarders (shrunk into their Carrier), counted
+    /// in SyncActors.</summary>
+    public int Boardings { get; private set; }
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
     private double _repairConfirmUntil = -1;
@@ -1637,22 +1671,26 @@ public partial class SkirmishLive : Node3D
         _objective.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
         hud.AddChild(_objective);
 
-        // W3-19: flyout toast just left of the sidebar, below the top status
-        // row; ShowToast animates it in and fades it out. The offsets follow
-        // Sidebar.PanelWidth rather than a copied literal, so the toast cannot
-        // slide under the panel the next time it is resized (it nearly did
-        // when ADR-009's tab bar widened it).
-        _toast = new Label
+        // W3-19: flyout toasts just left of the sidebar, below the top status
+        // row. The offsets follow Sidebar.PanelWidth rather than a copied
+        // literal, so a toast cannot slide under the panel the next time it is
+        // resized (it nearly did when ADR-009's tab bar widened it).
+        //
+        // P8-10: a STACK now, owned by the one alert service, where it was a
+        // single Label the next toast overwrote. It grows leftwards, away from
+        // the sidebar, when a line is longer than the column.
+        _alerts = new AlertService
         {
-            Name = "Toast",
-            Visible = false,
             AnchorLeft = 1, AnchorRight = 1, AnchorTop = 0,
             OffsetLeft = -(Sidebar.PanelWidth + 330f), OffsetRight = -(Sidebar.PanelWidth + 15f), OffsetTop = 84,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            GrowHorizontal = Control.GrowDirection.Begin,
         };
-        _toast.AddThemeFontSizeOverride("font_size", 15);
-        _toast.AddThemeColorOverride("font_color", new Color(0.79f, 0.63f, 0.36f));
-        hud.AddChild(_toast);
+        hud.AddChild(_alerts);
+        _alerts.Init(
+            (cue, db) => _audio.Play(cue, db),
+            PlayVo,
+            (at, colour) => _minimap.Ping(at, colour),
+            at => RecordAlert(at, Time.GetTicksMsec() / 1000.0));
 
         _dragRect = new Panel { Visible = false, MouseFilter = Control.MouseFilterEnum.Ignore };
         var style = new StyleBoxFlat
@@ -1711,8 +1749,24 @@ public partial class SkirmishLive : Node3D
         // The support powers' strip, under the same CanvasLayer as the sidebar
         // and minimap so LookDev's HUD toggle hides it with them. It issues
         // nothing itself: a press comes back here, where the Commands are made.
+        //
+        // P8-10: it shares the top-left corner with the superweapon gauge, in
+        // one column so the two can never overlap: the gauge above (the weapon
+        // that ends matches), the minor powers below. The column sits where
+        // the strip alone used to.
+        var topLeft = new VBoxContainer
+        {
+            Name = "PowersColumn",
+            Position = new Vector2(16, 40),
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        topLeft.AddThemeConstantOverride("separation", 8);
+        hud.AddChild(topLeft);
+        _swGauge = new SuperweaponGauge();
+        topLeft.AddChild(_swGauge);
+        _swGauge.Init();
         _powerBar = new SupportPowerBar();
-        hud.AddChild(_powerBar);
+        topLeft.AddChild(_powerBar);
         _powerBar.Init(OnSupportPowerButton);
     }
     private IReadOnlyList<(int Cx, int Cy)> _mapBlocked = System.Array.Empty<(int, int)>();
@@ -1877,6 +1931,11 @@ public partial class SkirmishLive : Node3D
         // every tick while it is set, as a recurring defect would. Null in
         // every played game.
         if (TickFaultForTest is { } injected) throw new System.InvalidOperationException(injected);
+        // P8-10 review: the owner cache as it stands BEFORE this step, so the
+        // sweep reads every event against the owner at that moment even on the
+        // first tick of a resumed match or after a building appeared between
+        // ticks (DR-20 refreshes it after the sweep as well).
+        RememberStructureOwners();
         _world.Step(span);
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
@@ -1891,9 +1950,23 @@ public partial class SkirmishLive : Node3D
         // W3-01: resolve attacker ids to sim WeaponIds so effects can
         // pick per-weapon families. Reading _world.Entities after Step
         // is precedented by the rally code below; the sim is not
-        // modified.
+        // modified. (P8-10, D34: a boarding is Boarded and an unload Unloaded,
+        // so every Died here is a death and every ProductionComplete a
+        // production; the effects layer draws them as such.)
         _effects.OnTickEvents(_world.Events, _actors, _audio,
             id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
+        // P8-10: before the sweep, so a weapon first seen this tick is known
+        // when its READY is read in the same tick. The first tick of a RESUMED
+        // match learns silently (see SpotSuperweapons for what a resumed player
+        // remembers).
+        SpotSuperweapons(silent: _resumed && !_spottingSeeded);
+        _spottingSeeded = true;
+        // P8-10: who owned each structure AT EACH EVENT, not after the tick. The
+        // pre-step owner cache, updated as the sweep passes each Captured event,
+        // so a launch or a power used before a capture in the same tick is
+        // credited to the seat that used it, and a READY raised after the
+        // capture to the seat that holds it.
+        _tickOwner.Clear();
         foreach (var ev in _world.Events)
         {
             // DEF-08 clause 3: a placed or destroyed barrier changes its
@@ -1903,18 +1976,14 @@ public partial class SkirmishLive : Node3D
                 && ev.A >= 0 && ev.A < _world.EntityCount
                 && _world.Entities[ev.A].Kind == EntityKind.Wall)
                 _wallsDirty = true;
-            if (ev.Type == GameEventType.ProductionComplete)
-                foreach (var (fid2, frig2) in _rigs)
-                    if (frig2.Doors.Count > 0 && _latest.TryGetValue(fid2, out var fv2) && fv2.Kind == EntityKind.Factory)
-                    {
-                        frig2.DoorTw?.Kill();
-                        frig2.DoorTw = _actors[fid2].CreateTween();
-                        foreach (var (d, home) in frig2.Doors)
-                            frig2.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
-                        frig2.DoorTw.TweenInterval(1.4);
-                        foreach (var (d, home) in frig2.Doors)
-                            frig2.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
-                    }
+            // P8-10: the PRODUCING factory's doors, and only for a real
+            // production. This opened every factory's doors on the map for any
+            // ProductionComplete at all: every other seat's completions, every
+            // yard's building, and (until D34 gave it its own event) every
+            // Carrier unload. C names the producer on every completion, and
+            // OpenFactoryDoors opens nothing that is not a Factory.
+            if (ev.Type == GameEventType.ProductionComplete && ev.C >= 0)
+                OpenFactoryDoors(ev.C);
             // ADR-007: the sim owns the rally now. The produced unit already
             // left the factory with its sim-side exit move, so the PathMove
             // this block used to issue is gone with the `_rally` dictionary.
@@ -1935,6 +2004,14 @@ public partial class SkirmishLive : Node3D
             // completions ev.A is the yard and ev.B the structure
             // type; for unit completions ev.A is the new unit (the
             // same convention the rally handler relies on).
+            //
+            // P8-10: and ONLY production. A Carrier's unload used to raise
+            // ProductionComplete too, so every unload toasted "CARRIER
+            // DEPLOYED" with the unit-ready line; since D34 it raises Unloaded,
+            // handled on its own below. The completion chime is this toast's
+            // cue now, which is what makes it the local seat's alone: it used
+            // to play in the effects layer for every seat's completions
+            // (FEEL-07).
             if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var pe = _world.Entities[ev.A];
@@ -1948,11 +2025,14 @@ public partial class SkirmishLive : Node3D
                         ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY"
                             + (_replay is null ? "  -  PLACE >>" : "")
                         : $"{UnitNameOf(pe.UnitType)} DEPLOYED";
-                    ShowToast(msg);
                     // TICKET-P6-VO-01: the battlefield voice, ALONGSIDE the
                     // toast, never instead of it (doc 24's rule for every line).
-                    PlayVo(pe.Kind == EntityKind.ConstructionYard
-                        ? "vo_construction_complete" : "vo_unit_ready");
+                    Raise(new Alert(msg)
+                    {
+                        Subject = ev.A,
+                        Cue = "production_done", CueDb = -6f,
+                        Vo = pe.Kind == EntityKind.ConstructionYard ? "vo_construction_complete" : "vo_unit_ready",
+                    });
                 }
             }
             // TICKET-P6-MUSIC-01: the combat-intensity signal. Any exchange of
@@ -1973,6 +2053,27 @@ public partial class SkirmishLive : Node3D
                 if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
                     PlayVo("vo_unit_lost");
             }
+            // P8-10, decision D34: a BOARDING is its own event (A the unit, B the
+            // Carrier) where it used to be a Died, so it draws no death and asks
+            // for no casualty line by construction. Its actor shrinks into the
+            // hold (SyncActors) for any seat, since that is what the eye sees.
+            // The player is told about their OWN Carriers only; another seat's
+            // boarding gets no toast, because it is not news to this player and
+            // the squad visibly climbing in already says it (decided, P8-10).
+            if (ev.Type == GameEventType.Boarded && ev.A >= 0 && ev.A < _world.EntityCount
+                && ev.B >= 0 && ev.B < _world.EntityCount)
+            {
+                if (_actors.ContainsKey(ev.A)) _boardedIds.Add(ev.A);
+                if (_world.Entities[ev.B].PlayerId == LocalPlayerId)
+                    Raise(new Alert($"BOARDED: CARGO {_world.CargoOf(ev.B).Count}/{World.CarrierCapacity}") { Subject = ev.B });
+            }
+            // P8-10, decision D34: an UNLOAD is its own event (A the Carrier, B
+            // how many were set down) where it was a ProductionComplete per
+            // unit, so it toasts no DEPLOYED, chimes nothing and opens no
+            // factory doors. Said for the local seat's own Carriers.
+            if (ev.Type == GameEventType.Unloaded && ev.A >= 0 && ev.A < _world.EntityCount
+                && _world.Entities[ev.A].PlayerId == LocalPlayerId)
+                Raise(new Alert($"CARRIER UNLOADED: {ev.B} SET DOWN") { Subject = ev.A });
             if (ev.Type == GameEventType.Fired && _latest.TryGetValue(ev.B, out var tgt))
             {
                 _aim[ev.A] = (new Vector3((float)tgt.X, 0, (float)tgt.Y), _now + 1.6);
@@ -1997,8 +2098,25 @@ public partial class SkirmishLive : Node3D
             // elimination that IS a verdict for this client is its own, and
             // OnEliminated handles that promptly rather than waiting for the
             // survivors to finish.
+            //
+            // P8-10: and news is SAID. Another commander falling was silent, so
+            // in a free-for-all or a team game a seat could vanish from the war
+            // with nothing on screen. Hostile and allied falls read differently,
+            // because one is good news and the other is not. My own fall is the
+            // verdict, which OnEliminated already gives.
             if (ev.Type == GameEventType.PlayerEliminated)
+            {
+                if (ev.B != LocalPlayerId && ev.B >= 0 && !_matchOver)
+                {
+                    EliminationNotices++;
+                    // Keyed on the SEAT: two commanders falling together are
+                    // two pieces of news, not one line.
+                    Raise(IsHostileSeat(ev.B)
+                        ? new Alert("AN ENEMY COMMANDER IS OUT OF THE WAR", AlertPriority.Notice) { Cue = "ui_confirm", CueDb = -6f, Subject = ev.B }
+                        : new Alert("AN ALLIED COMMANDER HAS FALLEN", AlertPriority.Urgent) { Cue = "alert_harvester", CueDb = -6f, Subject = ev.B });
+                }
                 OnEliminated(ev.B);
+            }
             // Base under attack: own structure took fire, cooled alert.
             // Harvester under attack is a SECOND alert, not a variant of this
             // one: GDD s7 line 85 and s2 line 19 both name it in its own right,
@@ -2026,13 +2144,14 @@ public partial class SkirmishLive : Node3D
                 if (ownStructure && now - _lastAttackAlert > 12.0)
                 {
                     _lastAttackAlert = now;
-                    _audio.Play("alert_attack", -4);
-                    ShowToast("HOSTILES ARE HITTING THE BASE");
-                    PlayVo("vo_base_under_attack");   // TICKET-P6-VO-01: with the klaxon, not instead
-                    // W3-20: red minimap ping at the struck structure.
-                    var basePos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
-                    _minimap.Ping(basePos, new Color(0.85f, 0.25f, 0.2f));
-                    RecordAlert(basePos, now);
+                    // TICKET-P6-VO-01: the voice with the klaxon, not instead.
+                    // W3-20: red minimap ping at the struck structure. P8-10:
+                    // CRITICAL, so no routine toast can push it off the stack.
+                    Raise(new Alert("HOSTILES ARE HITTING THE BASE", AlertPriority.Critical)
+                    {
+                        Subject = ev.B, Cue = "alert_attack", Vo = "vo_base_under_attack",
+                        PingAt = MapPos(target.X, target.Y), PingColour = PingThreat, Jump = true,
+                    });
                 }
                 else if (ownHarvester && now - _lastHarvesterAlert > 12.0)
                 {
@@ -2042,21 +2161,22 @@ public partial class SkirmishLive : Node3D
                     // two-blip motif against the klaxon's falling alternation,
                     // art/audio/synth.py), so the pitch shift that stood in for
                     // it while alert_attack was the only alert asset is gone.
-                    _audio.Play("alert_harvester", -4);
-                    ShowToast("HARVESTER IS TAKING FIRE");
-                    PlayVo("vo_harvester_under_attack");   // TICKET-P6-VO-01
                     // Amber rather than the base alert's red: the minimap should
                     // say which of the two alerts fired without the toast.
-                    var harvPos = new Vector2((float)(target.X.Raw / 4294967296.0), (float)(target.Y.Raw / 4294967296.0));
-                    _minimap.Ping(harvPos, new Color(0.95f, 0.62f, 0.15f));
-                    RecordAlert(harvPos, now);
+                    Raise(new Alert("HARVESTER IS TAKING FIRE", AlertPriority.Urgent)
+                    {
+                        Subject = ev.B, Cue = "alert_harvester", Vo = "vo_harvester_under_attack",
+                        PingAt = MapPos(target.X, target.Y), PingColour = PingHarvester, Jump = true,
+                    });
                 }
             }
-            // W3-20: orange ping where the superweapon lands.
+            // W3-20: orange ping where the superweapon lands. P8-10: and the
+            // strike's reticle comes down with it.
             if (ev.Type == GameEventType.SuperweaponImpact)
-                _minimap.Ping(
-                    new Vector2((float)(ev.X.Raw / 4294967296.0), (float)(ev.Y.Raw / 4294967296.0)),
-                    new Color(0.91f, 0.42f, 0.13f));
+            {
+                _minimap.Ping(MapPos(ev.X, ev.Y), PingStrike);
+                _effects.ClearStrikeReticle(ev.A);
+            }
             // TICKET-P5-ALERT-02: the DETECTION half of GDD s7 line 85's
             // "superweapon detected/launched". The impact ping above tells the
             // player what already happened; this one fires while the five
@@ -2072,25 +2192,43 @@ public partial class SkirmishLive : Node3D
             // superweapons - and pinging the launch site reveals nothing the
             // event does not already carry. No cooldown: a launch happens at
             // most once per charge cycle, minutes apart.
-            if (ev.Type == GameEventType.SuperweaponLaunched
-                && ev.A >= 0 && ev.A < _world.EntityCount
-                && _world.Entities[ev.A].PlayerId != LocalPlayerId)
+            //
+            // P8-10, two changes. Every launch now puts a RETICLE on its aim
+            // point until impact (FEEL-02), so the five seconds can be used: the
+            // target is where to move out of, or, for your own strike, where it
+            // is going. And the klaxon is for a HOSTILE launch: it asked
+            // `PlayerId != LocalPlayerId`, so an ALLY's strike was announced as
+            // "ENEMY STRIKE INBOUND" with the klaxon. An ally's is news. The
+            // reticle itself is laid by ReconcileStrikeReticles after the sweep,
+            // from every launcher's live strike state, so a strike already in
+            // flight when a save is loaded has one too. The launcher's owner is
+            // read AT THE LAUNCH (OwnerAtEvent): a launch applies before the
+            // tick's captures, so a weapon taken later in the same tick is
+            // still the launcher's seat's strike.
+            if (ev.Type == GameEventType.SuperweaponLaunched && ev.A >= 0 && ev.A < _world.EntityCount)
             {
-                LaunchAlerts++;
-                // The hard klaxon, not a new cue: an incoming superweapon is
-                // exactly the "drop everything" register alert_attack owns.
-                _audio.Play("alert_attack", -4);
-                ShowToast("ENEMY STRIKE INBOUND: BRACE");
-                PlayVo("vo_superweapon_launch");   // TICKET-P6-VO-01
                 var sw = _world.Entities[ev.A];
-                // The impact ping's orange: launch and impact are two ends of
-                // the one weapon sequence, and the minimap should read them as
-                // kin. The ping marks the LAUNCH SITE - where to retaliate -
-                // not the aim point; the aim point gets its ping when the
-                // strike lands, as it always has.
-                var launchPos = new Vector2((float)(sw.X.Raw / 4294967296.0), (float)(sw.Y.Raw / 4294967296.0));
-                _minimap.Ping(launchPos, new Color(0.91f, 0.42f, 0.13f));
-                RecordAlert(launchPos, Time.GetTicksMsec() / 1000.0);
+                int launcher = OwnerAtEvent(ev.A);
+                if (IsHostileSeat(launcher))
+                {
+                    LaunchAlerts++;
+                    // The hard klaxon, not a new cue: an incoming superweapon is
+                    // exactly the "drop everything" register alert_attack owns.
+                    // The impact ping's orange: launch and impact are two ends
+                    // of the one weapon sequence, and the minimap should read
+                    // them as kin. The ping marks the LAUNCH SITE - where to
+                    // retaliate - and the reticle marks the aim point.
+                    Raise(new Alert("ENEMY STRIKE INBOUND: BRACE", AlertPriority.Critical)
+                    {
+                        Subject = ev.A, Cue = "alert_attack", Vo = "vo_superweapon_launch",   // TICKET-P6-VO-01
+                        PingAt = MapPos(sw.X, sw.Y), PingColour = PingStrike, Jump = true,
+                    });
+                }
+                else if (launcher != LocalPlayerId)
+                    Raise(new Alert("ALLIED STRIKE AWAY", AlertPriority.Notice)
+                    {
+                        Subject = ev.A, PingAt = MapPos(ev.X, ev.Y), PingColour = PingStrike,
+                    });
             }
 
             // DR-20: the capture alert, the fifth alert. GameEventType.Captured
@@ -2125,33 +2263,38 @@ public partial class SkirmishLive : Node3D
             {
                 var taken = _world.Entities[ev.A];
                 int newOwner = ev.B;
-                int oldOwner = _structureOwner.TryGetValue(ev.A, out int prev) ? prev : -1;
+                // P8-10: the owner as of THIS event, so a building that changes
+                // hands twice in one tick reads each change against the last.
+                int oldOwner = _tickOwner.TryGetValue(ev.A, out int during) ? during
+                             : _structureOwner.TryGetValue(ev.A, out int prev) ? prev : -1;
                 int cx = (int)(taken.X.Raw >> 32), cy = (int)(taken.Y.Raw >> 32);
-                var pos = new Vector2((float)(taken.X.Raw / 4294967296.0), (float)(taken.Y.Raw / 4294967296.0));
-                double now = Time.GetTicksMsec() / 1000.0;
+                var pos = MapPos(taken.X, taken.Y);
 
                 switch (CaptureAlertFor(newOwner, oldOwner, _world.IsVisible(LocalPlayerId, cx, cy)))
                 {
                     case CaptureAlertKind.Gained:
                         CaptureAlerts++;
-                        _audio.Play("alert_harvester", -8);   // the soft cue, quieter: good news
-                        ShowToast("STRUCTURE CAPTURED");
-                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));   // teal: nothing else uses it
-                        RecordAlert(pos, now);
+                        // The soft cue, quieter: good news. Teal: nothing else uses it.
+                        Raise(new Alert("STRUCTURE CAPTURED", AlertPriority.Notice)
+                        {
+                            Subject = ev.A, Cue = "alert_harvester", CueDb = -8f, PingAt = pos, PingColour = PingGain, Jump = true,
+                        });
                         break;
                     case CaptureAlertKind.Lost:
                         CaptureAlerts++;
-                        _audio.Play("alert_attack", -4);      // the klaxon: this is a loss
-                        ShowToast("STRUCTURE LOST TO CAPTURE");
-                        _minimap.Ping(pos, new Color(0.85f, 0.25f, 0.2f));    // the base-alert red
-                        RecordAlert(pos, now);
+                        // The klaxon and the base-alert red: this is a loss.
+                        Raise(new Alert("STRUCTURE LOST TO CAPTURE", AlertPriority.Critical)
+                        {
+                            Subject = ev.A, Cue = "alert_attack", PingAt = pos, PingColour = PingThreat, Jump = true,
+                        });
                         break;
                     case CaptureAlertKind.Witnessed:
                         CaptureAlerts++;
-                        ShowToast("OUTPOST CAPTURED");        // seen, but not yours: no audio
-                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));
+                        // Seen, but not yours: no audio.
+                        Raise(new Alert("OUTPOST CAPTURED", AlertPriority.Notice) { Subject = ev.A, PingAt = pos, PingColour = PingGain });
                         break;
                 }
+                _tickOwner[ev.A] = newOwner;   // every later event this tick reads the new owner
             }
 
             // P7-7a: the robbery alert. Deliberately NOT folded into the
@@ -2167,37 +2310,204 @@ public partial class SkirmishLive : Node3D
             if (ev.Type == GameEventType.Robbed && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var robbed = _world.Entities[ev.A];
-                var pos = new Vector2((float)(robbed.X.Raw / 4294967296.0), (float)(robbed.Y.Raw / 4294967296.0));
-                double now = Time.GetTicksMsec() / 1000.0;
+                var pos = MapPos(robbed.X, robbed.Y);
                 switch (RobberyAlertFor(robbed.PlayerId, ev.B))
                 {
                     case RobberyAlertKind.Robbed:
                         RobberyAlerts++;
-                        _audio.Play("alert_attack", -4);          // the klaxon: a fifth of the treasury
-                        ShowToast($"CREDITS STOLEN: {ev.C}");
-                        _minimap.Ping(pos, new Color(0.85f, 0.25f, 0.2f));
-                        RecordAlert(pos, now);
+                        // The klaxon: a fifth of the treasury.
+                        Raise(new Alert($"CREDITS STOLEN: {ev.C}", AlertPriority.Urgent)
+                        {
+                            Subject = ev.A, Cue = "alert_attack", PingAt = pos, PingColour = PingThreat, Jump = true,
+                        });
                         break;
                     case RobberyAlertKind.Seized:
                         RobberyAlerts++;
-                        _audio.Play("alert_harvester", -8);       // the soft cue: this one went well
-                        ShowToast($"CREDITS SEIZED: {ev.C}");
-                        _minimap.Ping(pos, new Color(0.25f, 0.80f, 0.70f));
+                        // The soft cue: this one went well.
+                        Raise(new Alert($"CREDITS SEIZED: {ev.C}", AlertPriority.Notice)
+                        {
+                            Subject = ev.A, Cue = "alert_harvester", CueDb = -8f, PingAt = pos, PingColour = PingGain,
+                        });
                         break;
                 }
             }
+
+            // P8-10 (FEEL-03): SABOTAGE SPEAKS. A Saboteur switched a building
+            // off for thirty seconds in complete silence: a plant stopped
+            // supplying, a turret held its fire, and the building still looked
+            // healthy and powered, which reads as a bug rather than as being
+            // outplayed. Event semantics (World.cs CaptureSystem): A the
+            // structure, B the saboteur's player, C the tick it comes back. The
+            // victim gets an urgent alert with the countdown and the building
+            // is dimmed while dark (SyncActors); the saboteur's own side gets a
+            // quiet confirmation, the robbery's Seized shape.
+            if (ev.Type == GameEventType.Sabotaged && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var hit = _world.Entities[ev.A];
+                string name = StructureDisplayName(hit.StructType);
+                int secs = Mathf.CeilToInt(System.Math.Max(0, ev.C - _world.Tick) / (float)World.TicksPerSecond);
+                var pos = MapPos(hit.X, hit.Y);
+                // The victim is whoever held it WHEN it was sabotaged.
+                if (OwnerAtEvent(ev.A) == LocalPlayerId)
+                {
+                    SabotageAlerts++;
+                    // The sagging cue: something winding down, which is what a
+                    // building going dark is. The voice says why. Keyed on the
+                    // building, so two plants sabotaged together are two alerts.
+                    Raise(new Alert($"{name} SABOTAGED: DARK FOR {secs}s", AlertPriority.Urgent)
+                    {
+                        Subject = ev.A, Cue = "alert_low_power", Vo = "vo_sabotaged",
+                        PingAt = pos, PingColour = PingThreat, Jump = true,
+                    });
+                }
+                else if (ev.B == LocalPlayerId)
+                    Raise(new Alert($"SABOTAGE STRUCK: {name} DARK FOR {secs}s", AlertPriority.Notice)
+                    {
+                        Subject = ev.A, Cue = "alert_harvester", CueDb = -8f, PingAt = pos, PingColour = PingGain,
+                    });
+            }
+
+            // P8-10 (FEEL-02, PV-12): THE SUPERWEAPON SAYS IT IS READY. The
+            // player learned their weapon was charged only by pressing F and
+            // reading a refusal. Your own: an urgent alert naming the live key.
+            // An enemy's: CRITICAL, but only for a weapon this seat has SEEN,
+            // because GDD s8 makes only the launch global and an unseen weapon
+            // is as hidden as the rest of the fog. An ally's: news.
+            if (ev.Type == GameEventType.SuperweaponReady && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var sw = _world.Entities[ev.A];
+                string name = StructureDisplayName(sw.StructType);
+                var pos = MapPos(sw.X, sw.Y);
+                int holder = OwnerAtEvent(ev.A);   // READY is raised after the tick's captures
+                if (holder == LocalPlayerId)
+                {
+                    SuperweaponReadyAlerts++;
+                    string press = _replay is null ? $": PRESS {Settings.KeyName(Settings.BindOf("launch_super"))}" : "";
+                    Raise(new Alert($"{name} READY{press}", AlertPriority.Urgent)
+                    {
+                        Subject = ev.A, Cue = "ui_confirm", CueDb = -2f, Vo = "vo_superweapon_ready",
+                        PingAt = pos, PingColour = PingPower, Jump = true,
+                    });
+                }
+                else if (IsHostileSeat(holder))
+                {
+                    // One alert for a weapon spotted on the very tick it comes
+                    // ready: SpotSuperweapons stays quiet then and leaves it to
+                    // this, so it is one klaxon and one voice line, not two.
+                    if (_spottedSuperweapons.Contains(ev.A))
+                    {
+                        EnemySuperweaponAlerts++;
+                        Raise(new Alert($"ENEMY {name} READY", AlertPriority.Critical)
+                        {
+                            Subject = ev.A, Cue = "alert_attack", Vo = "vo_enemy_superweapon_ready",
+                            PingAt = pos, PingColour = PingThreat, Jump = true,
+                        });
+                    }
+                }
+                else Raise(new Alert($"ALLIED {name} READY", AlertPriority.Notice) { Subject = ev.A });
+            }
+
+            // P8-10 (P8-3's owed toasts): a minor power coming ready, your own
+            // only. An enemy's minor power is a surprise by GDD s8's design, and
+            // announcing its charge would spend the surprise for them. Powers on
+            // one building share its charge, so the toast names them as the
+            // choice they are.
+            if (ev.Type == GameEventType.SupportPowerReady && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var b = _world.Entities[ev.A];
+                var powers = _world.GetStructureType(b.StructType).SupportPowerIds;
+                if (OwnerAtEvent(ev.A) == LocalPlayerId && powers is { Length: > 0 })
+                {
+                    SupportPowerNotices++;
+                    var names = new List<string>();
+                    foreach (int p in powers) names.Add(SupportPowerBar.NameOf(p));
+                    Raise(new Alert($"{string.Join(" OR ", names)} READY", AlertPriority.Notice)
+                    {
+                        Subject = ev.A, Cue = "ui_confirm", CueDb = -6f,
+                    });
+                }
+            }
+
+            // P8-10: and a power USED. The press already said ORDERED; this says
+            // the sim took the order and spent the charge, and the ping marks
+            // where it was aimed. It says USED, not that anything landed,
+            // because the event is raised whether or not the power found
+            // anything: a tunnel aimed at ground the sim cannot see moves nobody
+            // and a strike on empty ground hits nothing, and the client has no
+            // signal that tells those apart from a hit. An ally's is news. An
+            // enemy's is announced only where you can SEE its target, for the
+            // reason its charge is not: a power's surprise is the design, and a
+            // radar jam on you is told by the jammed radar itself (AfterTicks).
+            // The user is whoever held the building WHEN it was used: a power
+            // applies before the tick's captures.
+            if (ev.Type == GameEventType.SupportPowerUsed && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                string power = SupportPowerBar.NameOf(ev.B);
+                bool aimed = SupportPowerBar.IsTargeted(ev.B);
+                var at = MapPos(ev.X, ev.Y);
+                int user = OwnerAtEvent(ev.A);
+                if (user == LocalPlayerId)
+                {
+                    SupportPowerNotices++;
+                    Raise(aimed
+                        ? new Alert($"{power} USED", AlertPriority.Notice) { Subject = ev.A, PingAt = at, PingColour = PingPower }
+                        : new Alert($"{power} USED", AlertPriority.Notice) { Subject = ev.A });
+                }
+                else if (!IsHostileSeat(user))
+                    Raise(new Alert($"ALLIED {power}") { Subject = ev.A });
+                else if (aimed && _world.IsVisible(LocalPlayerId, Map.CellOf(ev.X), Map.CellOf(ev.Y)))
+                {
+                    SupportPowerNotices++;
+                    Raise(new Alert($"ENEMY {power} SIGHTED", AlertPriority.Urgent)
+                    {
+                        Subject = ev.A, Cue = "alert_attack", CueDb = -8f, PingAt = at, PingColour = PingThreat, Jump = true,
+                    });
+                }
+            }
+
+            // P8-10: a promotion is SEEN and HEARD. The rank pips already
+            // changed, silently; the moment a unit earns its rank is now a
+            // toast, a cue and a gold ring at the unit. Own units only: an
+            // enemy's veterancy shows on its pips, which is information enough.
+            // Bespoke promotion audio is P8-44's; this is the interim cue.
+            if (ev.Type == GameEventType.Promoted && ev.A >= 0 && ev.A < _world.EntityCount)
+            {
+                var u = _world.Entities[ev.A];
+                if (u.PlayerId == LocalPlayerId && u.Alive)
+                {
+                    PromotionCues++;
+                    string rank = ev.B >= 2 ? "ELITE" : "VETERAN";
+                    string who = u.Kind == EntityKind.Unit ? UnitNameOf(u.UnitType) : "HARVESTER";
+                    Raise(new Alert($"{who} PROMOTED: {rank}", AlertPriority.Notice) { Subject = ev.A, Cue = "ui_confirm", CueDb = -8f });
+                    _effects.OrderMarker(new Vector3((float)(u.X.Raw / 4294967296.0), 0, (float)(u.Y.Raw / 4294967296.0)), 2);
+                }
+            }
+
+            // P8-10: an MCV unpacking is an event the player ordered and waits
+            // on, and it finished in silence: the refusal spoke (SPAWN-02) and
+            // the success did not. A, the consumed MCV; B, the new yard.
+            if (ev.Type == GameEventType.Deployed && ev.B >= 0 && ev.B < _world.EntityCount)
+            {
+                var yard = _world.Entities[ev.B];
+                if (yard.PlayerId == LocalPlayerId)
+                {
+                    DeployCues++;
+                    Raise(new Alert("CONSTRUCTION YARD ESTABLISHED", AlertPriority.Notice)
+                    {
+                        Subject = ev.B, Cue = "ui_confirm", CueDb = -6f, PingAt = MapPos(yard.X, yard.Y), PingColour = PingPower,
+                    });
+                    _effects.OrderMarker(new Vector3((float)(yard.X.Raw / 4294967296.0), 0, (float)(yard.Y.Raw / 4294967296.0)), 2);
+                }
+            }
         }
+        ReconcileStrikeReticles();
 
         // DR-20: refresh the owner cache AFTER the event sweep, so the sweep
         // above reads the ownership as it stood BEFORE this tick's captures.
         // Structures only: nothing else can be captured, and walking every
         // entity every tick to cache a field three lines use would be a cost
         // with no reader.
-        for (int i = 0; i < _world.EntityCount; i++)
-        {
-            var e = _world.Entities[i];
-            if (e.Alive && World.IsStructure(e.Kind)) _structureOwner[i] = e.PlayerId;
-        }
+        RememberStructureOwners();
         // TICKET-P5-SPAWN-02: the sim refuses a Deploy on an obstructed
         // foundation by doing nothing at all (World.cs:874-891 - the rule is
         // right, the silence is not). If the ordered MCV is still a live MCV
@@ -2253,25 +2563,23 @@ public partial class SkirmishLive : Node3D
         if (brownOut && !_wasBrownOut)
         {
             LowPowerAlerts++;
-            ShowToast("BROWN-OUT: DEFENCES GOING DARK");
-            PlayVo("vo_low_power");   // TICKET-P6-VO-01
             // GDD s7 line 85's "distinct audio": alert_low_power is its own
             // synthesised cue (a sagging descent, the sound of something
             // winding down - art/audio/synth.py), replacing the 0.82 pitch
             // shift of the klaxon that stood in while alert_attack was the
-            // only alert asset.
-            _audio.Play("alert_low_power", -4);
+            // only alert asset. TICKET-P6-VO-01: the voice beside it.
             // Gold ping at the primary Construction Yard: power is a base
             // problem, and the yard is where the base is. No yard, no ping
             // and no recorded jump position: an alert about nowhere in
             // particular must not overwrite one the player can still fly to.
             int yard = FindOwnStructure(EntityKind.ConstructionYard);
-            if (yard >= 0 && _latest.TryGetValue(yard, out var yv))
+            Vector2? yardPos = yard >= 0 && _latest.TryGetValue(yard, out var yv)
+                ? new Vector2((float)yv.X, (float)yv.Y) : null;
+            Raise(new Alert("BROWN-OUT: DEFENCES GOING DARK", AlertPriority.Urgent)
             {
-                var yardPos = new Vector2((float)yv.X, (float)yv.Y);
-                _minimap.Ping(yardPos, new Color(0.79f, 0.63f, 0.36f));
-                RecordAlert(yardPos, Time.GetTicksMsec() / 1000.0);
-            }
+                Cue = "alert_low_power", Vo = "vo_low_power",
+                PingAt = yardPos, PingColour = PingPower, Jump = true,
+            });
         }
         _wasBrownOut = brownOut;
         // ADR-008 clause 4: the radar-live predicate. The uplink position is
@@ -2294,23 +2602,54 @@ public partial class SkirmishLive : Node3D
         // stream, and it would differ in the direction this project's
         // hardcoded-seat guard exists to catch. LocalPlayerId, so a joiner sees
         // ITS OWN jam rather than the host's.
-        bool radarLive = hasUplink && supply >= draw && !_world.IsRadarJammed(LocalPlayerId);
-        if (!radarLive && _wasRadarLive)
+        //
+        // P8-10 (FEEL-09): THE JAM IS NOT THE UPLINK FAILING. Folded into the
+        // one predicate, a jam raised "UPLINK LOST" with the loss cue and voice,
+        // and the minimap wore the loss face, so an enemy's power read as the
+        // radar breaking for no reason, the interface-bug read ADR-065 feared.
+        // Three faces now, each from the sim: Live; Offline (no uplink, or no
+        // power for it: a problem in your own base, and it wins over a jam,
+        // which would change nothing you can act on); and Jammed (the uplink is
+        // fine and the enemy is blinding it), with its own alert, cue, voice,
+        // static face and a countdown off World.RadarJamEndsAt.
+        bool uplinkUp = hasUplink && supply >= draw;
+        bool radarLive = uplinkUp && !_world.IsRadarJammed(LocalPlayerId);
+        var face = radarLive ? RadarFace.Live : uplinkUp ? RadarFace.Jammed : RadarFace.Offline;
+        int jamSecs = Mathf.CeilToInt(System.Math.Max(0, _world.RadarJamEndsAt(LocalPlayerId) - _world.Tick)
+                                      / (float)World.TicksPerSecond);
+        if (face != _radarFace)
         {
-            // ALERT-02's last clause, through the standard alert plumbing:
-            // toast, its own synthesised cue (a carrier fracturing into
-            // static - signal loss, not a siren), the placeholder VO line,
-            // a gold ping at the uplink (the power-family colour), and the
-            // position recorded for the jump-to-event key.
-            RadarAlerts++;
-            ShowToast("UPLINK LOST: WE ARE BLIND");
-            PlayVo("vo_radar_offline");
-            _audio.Play("alert_radar", -4);
-            _minimap.Ping(_lastUplinkPos, new Color(0.79f, 0.63f, 0.36f));
-            RecordAlert(_lastUplinkPos, Time.GetTicksMsec() / 1000.0);
+            if (face == RadarFace.Offline)
+            {
+                // ALERT-02's last clause, through the alert service: toast, its
+                // own synthesised cue (a carrier fracturing into static - signal
+                // loss, not a siren), the placeholder VO line, a gold ping at the
+                // uplink (the power-family colour), and the position recorded
+                // for the jump-to-event key. Entered from Live or from a jam: an
+                // uplink destroyed while jammed is a real loss, said as one.
+                RadarAlerts++;
+                Raise(new Alert("UPLINK LOST: WE ARE BLIND", AlertPriority.Urgent)
+                {
+                    Cue = "alert_radar", Vo = "vo_radar_offline",
+                    PingAt = _lastUplinkPos, PingColour = PingPower, Jump = true,
+                });
+            }
+            else if (face == RadarFace.Jammed)
+            {
+                JamAlerts++;
+                Raise(new Alert($"UPLINK JAMMED: BLIND FOR {jamSecs}s", AlertPriority.Urgent)
+                {
+                    Cue = "alert_jammed", Vo = "vo_radar_jammed",
+                    PingAt = _lastUplinkPos, PingColour = PingJam, Jump = true,
+                });
+            }
+            else if (_radarFace == RadarFace.Jammed)
+                Raise(new Alert("JAMMING LIFTED: THE UPLINK SEES AGAIN", AlertPriority.Notice));
+            _radarFace = face;
         }
-        _wasRadarLive = radarLive;
         RadarLive = radarLive;
+        _minimap.SetDarkFace(face == RadarFace.Jammed ? $"UPLINK JAMMED  {jamSecs}s" : "UPLINK LOST",
+                             face == RadarFace.Jammed);
         // ADR-008 clause 1's client face: per-owner brown-out for the turret
         // dim and readout, through the same shared predicate as the bar.
         //
@@ -2416,6 +2755,8 @@ public partial class SkirmishLive : Node3D
             supply, draw, PrereqsMetForLocal,
             new Sidebar.ProducerLine(laneQ.Count > 0, laneQ, laneProg), laneSt.Ready);
         RefreshSupportPowerBar();
+        RefreshSuperweaponGauge();   // P8-10
+        ReconcileStrikeReticles();   // P8-10
 
         if (_placingType > 0)
         {
@@ -2498,23 +2839,202 @@ public partial class SkirmishLive : Node3D
     // barracks (catalogued, unbuildable until ADR-009's wave), 12 the radar.
     private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL", "", "BARRACKS", "RADAR UPLINK" };
 
-    /// <summary>W3-19: slide-and-fade production toast. A fresh completion
-    /// retriggers the animation from the top.</summary>
-    private void ShowToast(string msg)
+    /// <summary>W3-19's toast, as a ROUTINE line through the one alert service
+    /// (P8-10). Every acknowledgement and refusal the scene speaks comes
+    /// through here; anything with a cue, a voice, a ping or a priority above
+    /// routine calls Raise with its Alert instead. Either way it is one stack,
+    /// so nothing overwrites anything.</summary>
+    private void ShowToast(string msg) => _alerts.Raise(new Alert(msg));
+
+    /// <summary>P8-10: an alert with everything that goes with it.</summary>
+    private void Raise(Alert a) => _alerts.Raise(a);
+
+    /// <summary>A sim position as a minimap position (world X, Z), the
+    /// rally-marker idiom of raw over 2^32.</summary>
+    private static Vector2 MapPos(Fix64 x, Fix64 y) =>
+        new((float)(x.Raw / 4294967296.0), (float)(y.Raw / 4294967296.0));
+
+    // The ping colours, named once. Red for loss and threat, amber for the
+    // harvester, gold for power and the uplink, teal for gains, and bone for
+    // the jam, which is none of those: interference rather than damage.
+    private static readonly Color PingThreat = new(0.85f, 0.25f, 0.2f);
+    private static readonly Color PingHarvester = new(0.95f, 0.62f, 0.15f);
+    private static readonly Color PingPower = new(0.79f, 0.63f, 0.36f);
+    private static readonly Color PingGain = new(0.25f, 0.80f, 0.70f);
+    private static readonly Color PingStrike = new(0.91f, 0.42f, 0.13f);
+    private static readonly Color PingJam = new(0.84f, 0.82f, 0.77f);
+
+    /// <summary>A structure type's player-facing name off the catalogue (ORBITAL
+    /// CANNON, SEISMIC CHARGE, POWER PLANT).</summary>
+    private static string StructureDisplayName(int structType)
     {
-        _toastTween?.Kill();
-        _toast.Text = msg;
-        _toast.Visible = true;
-        _toast.Modulate = new Color(1, 1, 1, 0);
-        _toast.OffsetTop = 92;
-        _toastTween = _toast.CreateTween();
-        _toastTween.TweenProperty(_toast, "modulate:a", 1f, 0.15f);
-        _toastTween.Parallel().TweenProperty(_toast, "offset_top", 84f, 0.18f)
-            .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
-        _toastTween.TweenInterval(2.2);
-        _toastTween.TweenProperty(_toast, "modulate:a", 0f, 0.5f);
-        _toastTween.TweenCallback(Callable.From(() => _toast.Visible = false));
+        try { return StructureCatalogue.DisplayNameOf(structType); }
+        catch (System.FormatException) { return "STRUCTURE"; }
     }
+
+    /// <summary>
+    /// P8-10: the superweapon's FULL charge, read from the sim. One seam on
+    /// purpose: P8-18 is moving this number from a sim constant into /data
+    /// (1500 to 5400 ticks), and when it lands this line is the only one that
+    /// follows it. Nothing in the client may hold a duration of its own.
+    /// </summary>
+    private static int SuperweaponChargeTotal() => World.SuperweaponChargeTicks;
+
+    /// <summary>DR-20's owner cache: every living structure's owner as the
+    /// world stands now. Structures only: nothing else can be captured.</summary>
+    private void RememberStructureOwners()
+    {
+        for (int i = 0; i < _world.EntityCount; i++)
+        {
+            var e = _world.Entities[i];
+            if (e.Alive && World.IsStructure(e.Kind)) _structureOwner[i] = e.PlayerId;
+        }
+    }
+
+    /// <summary>
+    /// P8-10: learn of hostile superweapons as they come into SIGHT, through
+    /// the drawing predicate itself (fog, cloak and team detection, P8-5 and
+    /// P8-6), so a weapon is known exactly when it could have been seen on
+    /// screen. GDD s10's "superweapon detected" alert fires once per weapon,
+    /// and from then on its charge is on the gauge and its READY is said.
+    /// A weapon that dies is forgotten.
+    ///
+    /// The alert names the state the weapon is IN: charging (with its clock),
+    /// charged, or with a strike already in flight (a weapon first seen during
+    /// its warning window, which reads as neither). A weapon seen on the very
+    /// tick it comes ready is added in silence and left to its READY alert in
+    /// the same sweep, so that moment is one klaxon and one voice line.
+    ///
+    /// WHAT A RESUMED PLAYER REMEMBERS (decided, P8-10 review): a save carries
+    /// no client memory, so on the first tick of a resumed match (`silent`) the
+    /// set is rebuilt from what this seat can SEE then, quietly, because those
+    /// weapons were news before the save and are on the gauge again now. A
+    /// weapon in the fog at the load is NOT carried over from fogged state: it
+    /// is unknown until seen again, and is then announced as new. Reverses if
+    /// a playtest wants the memory kept, when it belongs in the save sidecar.
+    /// </summary>
+    private void SpotSuperweapons(bool silent)
+    {
+        for (int i = 0; i < _world.EntityCount; i++)
+        {
+            var e = _world.Entities[i];
+            if (e.Kind != EntityKind.Superweapon) continue;
+            if (!e.Alive) { _spottedSuperweapons.Remove(i); continue; }
+            if (!IsHostileSeat(e.PlayerId) || _spottedSuperweapons.Contains(i)) continue;
+            if (!ShownToLocalSeat(e.PlayerId, Map.CellOf(e.X), Map.CellOf(e.Y),
+                    e.Stealth || e.FieldCloaked, e.RevealTicks > 0, e.DetectedMask)) continue;
+            _spottedSuperweapons.Add(i);
+            if (silent || TickHasReady(i)) continue;
+            EnemySuperweaponAlerts++;
+            string name = StructureDisplayName(e.StructType);
+            var (text, priority) = e.StrikeTicks >= 0
+                ? ($"ENEMY {name} SPOTTED: STRIKE INBOUND", AlertPriority.Urgent)
+                : e.ChargeTicks == 0
+                    ? ($"ENEMY {name} SPOTTED: CHARGED", AlertPriority.Critical)
+                    : ($"ENEMY {name} SPOTTED: CHARGING, {SuperweaponGauge.Clock(e.ChargeTicks)} LEFT", AlertPriority.Urgent);
+            Raise(new Alert(text, priority)
+            {
+                Subject = i, Cue = "alert_attack", CueDb = -8f, Vo = "vo_enemy_superweapon",
+                PingAt = MapPos(e.X, e.Y), PingColour = PingThreat, Jump = true,
+            });
+        }
+    }
+
+    private bool TickHasReady(int superweapon)
+    {
+        foreach (var ev in _world.Events)
+            if (ev.Type == GameEventType.SuperweaponReady && ev.A == superweapon) return true;
+        return false;
+    }
+
+    /// <summary>P8-10: the gauge's per-frame rows. Own weapons first, then the
+    /// hostile ones this seat has seen; the charge, the total and the strike
+    /// countdown are the sim's, read live.</summary>
+    private void RefreshSuperweaponGauge()
+    {
+        _swRows.Clear();
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < _world.EntityCount; i++)
+            {
+                var e = _world.Entities[i];
+                if (!e.Alive || e.Kind != EntityKind.Superweapon) continue;
+                bool own = e.PlayerId == LocalPlayerId;
+                if (pass == 0 ? !own : own || !IsHostileSeat(e.PlayerId) || !_spottedSuperweapons.Contains(i)) continue;
+                // A fixture or a mission may start a weapon on a longer charge
+                // than the standard one; the bar never reads past empty.
+                int total = System.Math.Max(SuperweaponChargeTotal(), e.ChargeTicks);
+                _swRows.Add(new SuperweaponGauge.Row(i, StructureDisplayName(e.StructType), own,
+                    e.ChargeTicks, total, e.StrikeTicks));
+            }
+        _swGauge.Refresh(_swRows, _replay is null ? Settings.KeyName(Settings.BindOf("launch_super")) : null);
+    }
+
+    /// <summary>
+    /// P8-10: the strike reticles as a DECLARED STATE, reconciled from the sim
+    /// rather than laid by the launch event: every living superweapon with a
+    /// strike in flight (StrikeTicks of zero or more) has a reticle at its
+    /// aim point (StrikeX, StrikeY), closing on its live countdown, and no
+    /// other reticle stands. So a strike already in flight when a save is
+    /// loaded has one, and a launcher killed mid-warning loses its own. Run
+    /// after each tick's sweep (so the launch tick shows it) and every frame.
+    /// A reticle first laid mid-strike closes over the sim's whole warning
+    /// (World.SuperweaponWarningTicks), the most the strike can have had.
+    /// </summary>
+    private void ReconcileStrikeReticles()
+    {
+        for (int i = 0; i < _world.EntityCount; i++)
+        {
+            var e = _world.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Superweapon || e.StrikeTicks < 0) continue;
+            if (_effects.StrikeReticleAt(i) is null)
+                _effects.ShowStrikeReticle(i,
+                    new Vector3((float)(e.StrikeX.Raw / 4294967296.0), 0, (float)(e.StrikeY.Raw / 4294967296.0)),
+                    System.Math.Max(e.StrikeTicks + 1, World.SuperweaponWarningTicks));
+            else
+                _effects.UpdateStrikeReticle(i, e.StrikeTicks);
+        }
+        foreach (int launcher in _effects.ReticleLaunchers)
+        {
+            if (launcher < 0 || launcher >= _world.EntityCount) { _effects.ClearStrikeReticle(launcher); continue; }
+            var l = _world.Entities[launcher];
+            if (!l.Alive || l.StrikeTicks < 0) _effects.ClearStrikeReticle(launcher);
+        }
+    }
+
+    /// <summary>P8-10 review: the owner of a structure AT THE EVENT being read:
+    /// the owner the sweep has reached (a Captured event earlier in this tick's
+    /// list moves it), else the owner before this tick's step, else (a building
+    /// that did not exist then) the owner now. Launches and powers are raised
+    /// before the tick's captures, READY after them, and the sim's own event
+    /// order is what this follows.</summary>
+    private int OwnerAtEvent(int id) =>
+        _tickOwner.TryGetValue(id, out int during) ? during
+        : _structureOwner.TryGetValue(id, out int before) ? before
+        : _world.Entities[id].PlayerId;
+    private readonly Dictionary<int, int> _tickOwner = new();
+    private bool _spottingSeeded;
+
+    /// <summary>P8-10 review: open one factory's doors, the producer's own.
+    /// Counted per factory for the harness.</summary>
+    private void OpenFactoryDoors(int factory)
+    {
+        if (!_rigs.TryGetValue(factory, out var rig) || rig.Doors.Count == 0) return;
+        if (!_latest.TryGetValue(factory, out var fv) || fv.Kind != EntityKind.Factory) return;
+        if (!_actors.TryGetValue(factory, out var node)) return;
+        _doorOpenings[factory] = _doorOpenings.GetValueOrDefault(factory) + 1;
+        rig.DoorTw?.Kill();
+        rig.DoorTw = node.CreateTween();
+        foreach (var (d, home) in rig.Doors)
+            rig.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
+        rig.DoorTw.TweenInterval(1.4);
+        foreach (var (d, home) in rig.Doors)
+            rig.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
+    }
+    private readonly Dictionary<int, int> _doorOpenings = new();
+    /// <summary>Verification reads: how often a factory's doors opened, and how
+    /// many door nodes its rig carries (0 means a door check would be vacuous).</summary>
+    public int DoorOpeningsForTest(int factory) => _doorOpenings.GetValueOrDefault(factory);
+    public int DoorCountForTest(int factory) => _rigs.TryGetValue(factory, out var r) ? r.Doors.Count : -1;
 
     /// <summary>TICKET-P5-ALERT-02: every alert site calls this with the map
     /// position it pinged (the minimap's own coordinate space, world X and Z),
@@ -2555,6 +3075,15 @@ public partial class SkirmishLive : Node3D
         // flicker across the exact boundary.
         ["vo_radar_offline"] = 5.0,
         ["vo_superweapon_launch"] = 0.0,
+        // P8-10. The three superweapon lines fire once per charge cycle or per
+        // weapon seen, minutes apart, so like the launch line they need no
+        // window; the jam is edge-triggered as the uplink alert is; and a
+        // saboteur raid is often several saboteurs, which is one problem.
+        ["vo_superweapon_ready"] = 0.0,
+        ["vo_enemy_superweapon"] = 0.0,
+        ["vo_enemy_superweapon_ready"] = 0.0,
+        ["vo_radar_jammed"] = 5.0,
+        ["vo_sabotaged"] = 8.0,
         ["vo_mission_accomplished"] = 30.0,
         ["vo_mission_failed"] = 30.0,
     };
@@ -2569,6 +3098,11 @@ public partial class SkirmishLive : Node3D
     /// placeholder TTS pending the legal-review check recorded in doc 24.</summary>
     private void PlayVo(string name)
     {
+        // P8-10: counted BEFORE the cooldown. The cooldown decides whether a
+        // line is heard; the request is the client deciding to say it at all,
+        // which is what "a boarding is not a casualty" is about. A check on
+        // plays alone would pass for any wrong request the cooldown swallowed.
+        _voRequests[name] = _voRequests.GetValueOrDefault(name) + 1;
         double now = Time.GetTicksMsec() / 1000.0;
         if (_voLastAt.TryGetValue(name, out double last)
             && now - last < VoCooldownSeconds.GetValueOrDefault(name)) return;
@@ -2582,6 +3116,11 @@ public partial class SkirmishLive : Node3D
     /// test can prove the cooldown held under a massacre (the LowPowerAlerts
     /// counting pattern).</summary>
     public int VoPlays(string name) => _voPlays.GetValueOrDefault(name);
+
+    private readonly Dictionary<string, int> _voRequests = new();
+    /// <summary>P8-10 verification read: how many times a line was ASKED for,
+    /// cooldown or not.</summary>
+    public int VoRequests(string name) => _voRequests.GetValueOrDefault(name);
 
     // ---------------- TICKET-P6-CURSOR-01: contextual cursors ----------------
 
@@ -3195,14 +3734,31 @@ public partial class SkirmishLive : Node3D
     private static readonly HashSet<string> DimExempt = new()
         { "SelRing", "RepairRing", "DmgSmoke", "Blob", "Stain" };
 
-    private static void SetOfflineDim(Node node, bool off)
+    /// <summary>The offline dim on or off. `look` is the cloak look the actor
+    /// is wearing, because the two share MaterialOverlay (see OverlayFor).</summary>
+    private static void SetOfflineDim(Node node, bool off, CloakLook look)
     {
         if (node is GeometryInstance3D g && !DimExempt.Contains(node.Name.ToString()))
-            g.MaterialOverlay = off ? OfflineDimMat : null;
+            g.MaterialOverlay = OverlayFor(off, look);
         foreach (var c in node.GetChildren())
             if (!DimExempt.Contains(((Node)c).Name.ToString()))
-                SetOfflineDim((Node)c, off);
+                SetOfflineDim((Node)c, off, look);
     }
+
+    /// <summary>
+    /// P8-10 review: THE ONE ANSWER to what an actor's MaterialOverlay is. Two
+    /// looks write it: the offline dim (a browned-out turret, and since P8-10
+    /// any structure a Saboteur has switched off) and P8-6's detected wash on a
+    /// cloaked enemy. P8-6 could rely on the two never meeting, because only a
+    /// Turret was ever dimmed; sabotage dims any building, so a detected cloaked
+    /// enemy building can now be both. Precedence, decided: the DIM wins while
+    /// it lasts, because a building that is dark and inert is the bigger news
+    /// and the wash would hide it; when the dim lifts, the wash comes back if
+    /// the building is still detected. Each look's writer asks this rather than
+    /// laying or clearing its own material, so neither can wipe the other.
+    /// </summary>
+    private static Material? OverlayFor(bool dimmed, CloakLook look) =>
+        dimmed ? OfflineDimMat : look == CloakLook.Detected ? DetectedTintMat : null;
 
     // -------- P8-6, decision D24: cloak on screen --------
     // Two looks, and they answer two different questions. TRANSLUCENT is the
@@ -3235,21 +3791,20 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>Paint a cloak look over an actor's meshes, chrome exempt as the
-    /// offline dim exempts it. The detected wash shares MaterialOverlay with
-    /// the offline dim, and only a Turret is ever dimmed while nothing cloaked
-    /// is a Turret, so the two never meet; clearing removes only the wash this
-    /// method laid.</summary>
-    private static void ApplyCloakLook(Node node, CloakLook look)
+    /// offline dim exempts it. Translucency is the meshes' own Transparency;
+    /// the detected wash shares MaterialOverlay with the offline dim, so the
+    /// overlay is whatever OverlayFor says for the pair (`dimmed` is the dim
+    /// the actor is wearing): the two looks compose instead of overwriting.</summary>
+    private static void ApplyCloakLook(Node node, CloakLook look, bool dimmed)
     {
         if (node is GeometryInstance3D g && !DimExempt.Contains(node.Name.ToString()))
         {
             g.Transparency = look == CloakLook.Translucent ? FriendlyCloakTransparency : 0f;
-            if (look == CloakLook.Detected) g.MaterialOverlay = DetectedTintMat;
-            else if (g.MaterialOverlay == DetectedTintMat) g.MaterialOverlay = null;
+            g.MaterialOverlay = OverlayFor(dimmed, look);
         }
         foreach (var c in node.GetChildren())
             if (!DimExempt.Contains(((Node)c).Name.ToString()))
-                ApplyCloakLook((Node)c, look);
+                ApplyCloakLook((Node)c, look, dimmed);
     }
 
     /// <summary>P8-6 verification reads: the look an actor is WEARING, read off
@@ -3639,12 +4194,21 @@ public partial class SkirmishLive : Node3D
             // existing materials, the ghost-tint precedent). Applied to both
             // sides' turrets; the sim state it mirrors is already public in
             // the turret's refusal to fire.
-            if (v.Kind == EntityKind.Turret && (uint)v.PlayerId < (uint)_ownerBrownedOut.Length)
+            //
+            // P8-10 (FEEL-03): and ANY structure a Saboteur has switched off
+            // wears the same wash for exactly as long as the sim keeps it dark
+            // (World.IsDisabled, the sim's own read), on either side: watching
+            // a sabotaged enemy plant go dark is the payoff, and the dark is
+            // already public in what the building stops doing.
+            if (!Mobile(v.Kind) && v.Kind != EntityKind.FerriteField)
             {
-                bool off = _ownerBrownedOut[v.PlayerId];
+                bool brownedOut = v.Kind == EntityKind.Turret && (uint)v.PlayerId < (uint)_ownerBrownedOut.Length
+                                  && _ownerBrownedOut[v.PlayerId];
+                bool sabotaged = v.Id >= 0 && v.Id < _world.EntityCount && _world.IsDisabled(v.Id);
+                bool off = brownedOut || sabotaged;
                 if (off != _offlineDimmed.Contains(v.Id))
                 {
-                    SetOfflineDim(node, off);
+                    SetOfflineDim(node, off, _cloakLook.GetValueOrDefault(v.Id));
                     if (off) _offlineDimmed.Add(v.Id); else _offlineDimmed.Remove(v.Id);
                 }
             }
@@ -3756,7 +4320,7 @@ public partial class SkirmishLive : Node3D
             var look = CloakLookFor(v, node.Visible);
             if (look != _cloakLook.GetValueOrDefault(v.Id))
             {
-                ApplyCloakLook(node, look);
+                ApplyCloakLook(node, look, _offlineDimmed.Contains(v.Id));
                 if (look == CloakLook.None) _cloakLook.Remove(v.Id); else _cloakLook[v.Id] = look;
             }
         }
@@ -3765,10 +4329,24 @@ public partial class SkirmishLive : Node3D
             {
                 // W2-06: mobile dead become tumbling corpses for a moment;
                 // structures sink. Both free themselves via the tween.
+                // P8-10: a squad that BOARDED is not dead, so it neither tumbles
+                // nor sinks: it shrinks away into its Carrier in a quarter second.
+                // (Found, not fixed here, P8-59: `_latest` is rebuilt above from
+                // LIVING entities only, so `wasMobile` is never true for a dead
+                // unit and every death takes the sink branch; the W2-06 tumble
+                // below is unreachable. The boarder's path keys off _boardedIds,
+                // filled from the Boarded event, instead.)
                 var corpse = _actors[id];
                 bool wasMobile = _latest.TryGetValue(id, out var lastV) && Mobile(lastV.Kind);
+                bool boarded = _boardedIds.Remove(id);
                 var tw = corpse.CreateTween();
-                if (wasMobile)
+                if (boarded)
+                {
+                    Boardings++;
+                    tw.TweenProperty(corpse, "scale", Vector3.One * 0.1f, 0.25f)
+                        .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+                }
+                else if (wasMobile)
                 {
                     var rng = new System.Random(id);
                     var tumble = corpse.Rotation + new Vector3(
@@ -5202,8 +5780,45 @@ public partial class SkirmishLive : Node3D
     public bool RefineryLive => HasLiveRefinery();
     public bool IsParked(int harvesterId) => _manuallyStopped.Contains(harvesterId);
     public int AutoHarvestIssues => _autoHarvestIssues;
-    public string ToastText => _toast.Text;
-    public bool ToastVisible => _toast.Visible;
+    /// <summary>The last thing the scene said (P8-10: the alert service's
+    /// LastSaid, which a repeat refreshes), the meaning it always had.</summary>
+    public string ToastText => _alerts.LastSaid;
+    public bool ToastVisible => _alerts.AnyShown;
+
+    // ---- P8-10 verification surface: each read is the live object's own.
+    public AlertService AlertsView => _alerts;
+    public SuperweaponGauge SuperweaponGaugeView => _swGauge;
+    public int DeathBursts => _effects.DeathBursts;
+    public Vector3? StrikeReticleAt(int launcherId) => _effects.StrikeReticleAt(launcherId);
+    /// <summary>SFX requests by name (AudioDirector.PlayRequests).</summary>
+    public int AudioRequests(string name) => _audio.PlayRequests(name);
+    public bool SuperweaponSpotted(int id) => _spottedSuperweapons.Contains(id);
+    /// <summary>The superweapon total the gauge reads, through its one seam.</summary>
+    public int SuperweaponChargeTotalForTest => SuperweaponChargeTotal();
+    /// <summary>Does this structure's actor WEAR the offline wash right now?
+    /// Read off its meshes, not off the bookkeeping set, so a dim recorded and
+    /// never applied would fail.</summary>
+    public bool ActorDimmedForTest(int id)
+    {
+        if (!_actors.TryGetValue(id, out var node)) return false;
+        bool Walk(Node n)
+        {
+            if (n is GeometryInstance3D g && g.MaterialOverlay == OfflineDimMat) return true;
+            foreach (var c in n.GetChildren()) if (Walk((Node)c)) return true;
+            return false;
+        }
+        return Walk(node);
+    }
+    /// <summary>
+    /// P8-10 verification hook: put a Command into the NEXT tick's stream
+    /// through the mission-script channel, the same list MissionRunner's
+    /// scripted orders for other seats travel in, applied after the commanders
+    /// and the player and never recorded. It is how a stage makes an ENEMY
+    /// seat do something exactly once (fire a jam, launch, sabotage) without
+    /// waiting on an AI's judgement. Nothing in a played game calls it, and the
+    /// player's own orders still go through _pending with LocalPlayerId.
+    /// </summary>
+    public void ScriptCommandForTest(Command c) => _missionCmds.Add(c);
     /// <summary>Drive one sim tick exactly as the accumulator does, so a test exercises the shipped loop.</summary>
     public void StepOneTick() { RunOneTick(); AfterTicks(0); }
     public string SidebarStructText(int typeId) => _sidebar.StructButtonText(typeId);

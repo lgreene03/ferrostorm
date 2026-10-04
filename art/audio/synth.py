@@ -393,6 +393,26 @@ def alert_radar():
     return edge_fade(carrier + silence(0.015) + tail, fade_out=0.04)
 
 
+def alert_jammed():
+    """Jamming cue (~800 ms), P8-10: two close carriers near 640 and 680 Hz
+    beating against each other, CHOPPED at 16 Hz into a stutter, with a
+    band of hiss swelling underneath and the whole thing sliding apart in
+    pitch. The sound of a signal being TAMPERED WITH, which is the point:
+    alert_radar is a feed dropping out (a clean carrier that snaps into
+    static), and a jam is the enemy's doing and ends on its own, so it must
+    not sound like the loss (FEEL-09, ADR-065's "interface bug" worry).
+    Original synthesis; no resemblance to the classic games' audio."""
+    rng = random.Random(113)
+    dur = 0.80
+    tone = mix(sine_sweep(dur, 640.0, 612.0), gain(sine_sweep(dur, 677.0, 706.0), 0.8))
+    chop = [1.0 if int(i * 16 / SR) % 2 == 0 else 0.22 for i in range(len(tone))]
+    tone = [t * c for t, c in zip(tone, chop)]
+    tone = envelope(tone, [(0.0, 0.0), (0.04, 1.0), (0.80, 0.7), (1.0, 0.0)])
+    hiss = band_pass(white_noise(dur, rng), 2400.0, q=1.4)
+    hiss = envelope(hiss, [(0.0, 0.0), (0.6, 0.55), (1.0, 0.0)])
+    return edge_fade(mix(tone, gain(hiss, 0.6)), fade_out=0.04)
+
+
 def production_done():
     """Pleasant confirmation chime (~400 ms): a struck bar around G5 with
     second and third harmonics decaying faster than the fundamental, plus a
@@ -1485,6 +1505,7 @@ SOUNDS = [
     ("alert_harvester.wav", alert_harvester),
     ("alert_low_power.wav", alert_low_power),
     ("alert_radar.wav", alert_radar),
+    ("alert_jammed.wav", alert_jammed),
     ("production_done.wav", production_done),
     ("superweapon_charge.wav", superweapon_charge),
     ("superweapon_impact.wav", superweapon_impact),

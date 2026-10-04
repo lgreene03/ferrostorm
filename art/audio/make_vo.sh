@@ -56,5 +56,14 @@ gen vo_radar_offline          "Uplink lost. We are blind."
 gen vo_superweapon_launch     "Enemy strike inbound. Brace."
 gen vo_mission_accomplished   "The field is ours."
 gen vo_mission_failed         "The field is lost. Fall back."
+# P8-10: the critical events that used to happen in silence. Same rule as
+# every line above: the game's own words, no echo of any classic announcer
+# (whose superweapon lines are "<weapon> ready", "<weapon> charging" and
+# "<weapon> detected"; none of these takes that shape).
+gen vo_superweapon_ready       "Our strike is charged. Choose the ground."
+gen vo_enemy_superweapon       "Enemy strike platform sighted. The clock is running."
+gen vo_enemy_superweapon_ready "Enemy strike platform charged. Get clear."
+gen vo_radar_jammed            "Uplink jammed. Static on every band."
+gen vo_sabotaged               "Sabotage. A structure has gone dark."
 
 echo "done: $(ls "$OUT" | grep -c '\.wav$') clips in $OUT"

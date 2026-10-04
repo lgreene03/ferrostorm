@@ -342,9 +342,14 @@ public partial class CombatEffects : Node3D
             switch (ev.Type)
             {
                 case GameEventType.Fired: OnFired(ev, actors, audio, weaponOf); break;
-                case GameEventType.Died: OnDied(ev, actors, audio); break;
-                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
-                case GameEventType.ProductionComplete: audio?.Play("production_done", -6.0f); break;
+                case GameEventType.Died: OnDied(ev, actors, audio); break;                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
+                // P8-10 (FEEL-07): NO production chime here any more. This
+                // played production_done for EVERY ProductionComplete, so the
+                // local speakers announced each enemy and allied completion
+                // (an audio maphack of the opponent's build tempo) and every
+                // Carrier unload. The chime is now the cue of the local seat's
+                // own completion toast in SkirmishLive, where the owner and the
+                // unload are already told apart.
                 case GameEventType.SuperweaponLaunched: OnSuperweaponLaunched(ev, actors, audio); break;
             }
         }
@@ -836,9 +841,14 @@ public partial class CombatEffects : Node3D
 
     // ---- Died: flash + smoke + scars + wrecks + shake (W3-06/07/13) ----
 
+    /// <summary>P8-10 verification read: death bursts drawn (flash, smoke,
+    /// scorch and explosion together), counted where they are spawned.</summary>
+    public int DeathBursts { get; private set; }
+
     private void OnDied(GameEvent ev, IReadOnlyDictionary<int, Node3D> actors, AudioDirector? audio)
     {
         if (!Live(actors, ev.A, out var node)) return;
+        DeathBursts++;
         Vector3 pos = node.GlobalPosition;
 
         // Expanding emissive sphere; the shared material stays orange and the
@@ -905,6 +915,79 @@ public partial class CombatEffects : Node3D
         ltw.TweenProperty(light, "light_energy", 3.0f, 2.0f);
         _charge = charge;
     }
+
+    // ---- P8-10 (FEEL-02): the impact reticle ----
+    // Doc 18's "warning reticle for 75 ticks", which never existed: the launch
+    // glowed on the DISH and the aim point was shown only once it had been hit,
+    // so the five seconds of warning the sim gives could not be used to clear
+    // the ground. A ring and crosshair now sit on the aim point from launch to
+    // impact, closing as the strike nears. Its life is the launcher's own
+    // StrikeTicks, handed in by the scene every frame, never a copied 75.
+
+    private static readonly StandardMaterial3D ReticleMat = Emissive(new Color(0.92f, 0.28f, 0.22f), 3.0f);
+    private static readonly BoxMesh ReticleBarMesh = new() { Size = new Vector3(1.0f, 0.02f, 0.06f) };
+    private readonly Dictionary<int, (Node3D Node, MeshInstance3D Ring, int Total)> _reticles = new();
+
+    /// <summary>Put a reticle on the aim point of `launcherId`'s strike.
+    /// `totalTicks` is the warning the ring closes over, which the scene reads
+    /// from the sim (SkirmishLive.ReconcileStrikeReticles).</summary>
+    public void ShowStrikeReticle(int launcherId, Vector3 at, int totalTicks)
+    {
+        ClearStrikeReticle(launcherId);
+        var node = new Node3D { Name = "StrikeReticle" };
+        AddChild(node);
+        node.GlobalPosition = at + new Vector3(0, 0.12f, 0);
+        var ring = new MeshInstance3D
+        {
+            Mesh = RingMesh,
+            MaterialOverride = ReticleMat,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Scale = new Vector3(3.0f, 0.4f, 3.0f),
+        };
+        node.AddChild(ring);
+        for (int k = 0; k < 2; k++)
+        {
+            var bar = new MeshInstance3D
+            {
+                Mesh = ReticleBarMesh,
+                MaterialOverride = ReticleMat,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                Scale = new Vector3(2.2f, 1f, 1f),
+                Rotation = new Vector3(0, k * Mathf.Pi / 2f, 0),
+            };
+            node.AddChild(bar);
+        }
+        var pulse = ring.CreateTween().SetLoops();
+        pulse.TweenProperty(ring, "transparency", 0.55f, 0.3f);
+        pulse.TweenProperty(ring, "transparency", 0.0f, 0.3f);
+        _reticles[launcherId] = (node, ring, System.Math.Max(1, totalTicks));
+    }
+
+    /// <summary>Close the ring towards the centre as the strike nears.</summary>
+    public void UpdateStrikeReticle(int launcherId, int ticksLeft)
+    {
+        if (!_reticles.TryGetValue(launcherId, out var r) || !IsInstanceValid(r.Node)) return;
+        float t = Mathf.Clamp(ticksLeft / (float)r.Total, 0f, 1f);
+        float s = 1.2f + 1.8f * t;
+        r.Ring.Scale = new Vector3(s, 0.4f, s);
+    }
+
+    public void ClearStrikeReticle(int launcherId)
+    {
+        if (!_reticles.TryGetValue(launcherId, out var r)) return;
+        if (IsInstanceValid(r.Node)) r.Node.QueueFree();
+        _reticles.Remove(launcherId);
+    }
+
+    /// <summary>The launchers that have a reticle standing, so the scene can
+    /// retire one whose strike ended without an impact (its launcher died).</summary>
+    public IEnumerable<int> ReticleLaunchers => new List<int>(_reticles.Keys);
+
+    /// <summary>P8-10 verification read: the reticle standing for this
+    /// launcher's strike, as its ground position, or null.</summary>
+    public Vector3? StrikeReticleAt(int launcherId) =>
+        _reticles.TryGetValue(launcherId, out var r) && IsInstanceValid(r.Node)
+            ? r.Node.GlobalPosition with { Y = 0 } : null;
 
     // Stage 2: sky beam, shockwave ring, column, flash, debris, dust pall,
     // a six-unit scorch and a distance-scaled shake. Stage timing and scale
