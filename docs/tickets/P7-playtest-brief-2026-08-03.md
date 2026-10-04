@@ -141,6 +141,32 @@ the check is that a brief written from memory *will* have holes.
   leaves, should the survivor simply win? This is a rules judgement rather than a
   feel one, so it needs your answer more than it needs a match.
 
+## Added 2026-10-04 for P8: the commander answers air (about fifteen minutes)
+
+**Play skirmish-01 against a Normal AI, either faction. Build a Radar Uplink,
+an Airfield and three Strike Flyers (the AIRCRAFT tab).** P8-17 taught the
+commander to answer aircraft with Flak Tracks, and the Architect's review asked
+for its playtest question to state a number rather than a feeling, so this one
+is a count, not an impression.
+
+- **ADR-072 (the commander answers air).** Scout the AI's base first, and raid
+  only once you have seen its Radar Uplink standing: an earlier raid tests an air
+  rush before the radar, which ADR-072 records it does not answer. Then send all
+  three Strike Flyers at its harvesters. Do it **three times** (rebuild the
+  flyers between raids, or restart). For each raid, write down **how many of its
+  harvesters died before your last flyer fell.**
+  - **0 in every raid:** the answer has made air useless, against GDD line 55's
+    "air is a scalpel". ADR-072 reverses towards a lighter answer.
+  - **2 or more in any raid:** air is still the exploit. ADR-072 reverses
+    towards a heavier answer.
+  - **Anything between** (one harvester, or a mix of none and one): the answer
+    stands as built. `aiairgate` measures at most one per raid.
+- **Q023 (does each faction want an anti-air defence structure?).** No building
+  in the game can shoot an aircraft; only the Flak Track can. If you have a
+  second player on LAN, have them raid YOUR base with flyers before your radar
+  stands. Is there any answer at all, and should a base be able to defend itself
+  from the air? Q023 is waiting on exactly that for the Game Designer.
+
 ## Also open, if you have appetite
 
 - **`dir_bulwark_tank`** loses every matchup the balance tool runs, at 1600

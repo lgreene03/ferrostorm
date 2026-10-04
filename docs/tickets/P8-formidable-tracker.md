@@ -144,7 +144,11 @@ Reverses if: the playtest finds the AI visibly aiming at unscouted ground.
 
 **D10. AI and air.** Decision: the AI answers air (flak, earlier radar, escorts) but
 does not fly in P8. Reason: AI-01 is the exploit; ADR-028 line 111 already records
-the AI not flying. Reverses if: the playtest finds the air layer one-sided.
+the AI not flying. Reverses if: the playtest finds the air layer one-sided, measured
+as ADR-072 states it (restated 2026-10-04, Architect condition C2): a three-flyer
+raid on a Normal commander whose Radar Uplink stands, played three times, that
+kills no harvester in any attempt (lighter answer), or kills two or more harvesters
+before the last flyer falls in any attempt (heavier answer).
 
 **D11. Splash and air.** Decision: all splash and every area effect, superweapons and
 precision strike included, skip airborne victims, as ADR-028 clause 3 says. Reason:
@@ -305,9 +309,10 @@ then no rebuy), so an end-of-window reading could not pass with any air answer
 and would bind P8-17 to P8-18 and P8-22. F3's own words are "the flyers die and
 at least one harvester survives", which is the moment the flyers die. Reverses
 if: P8-18 and P8-22 land and the no-raid control keeps a harvester to the end of
-the window in every cell, in which case the gate also asserts the end-of-window
-count, so a commander that wins the raid and then loses its economy to the
-flyers' aftermath cannot pass.
+the window in every cell, in which case the gate asserts the end-of-window count
+as well as the count at the answer tick, so a commander that wins the raid and
+then loses its economy to the flyers' aftermath cannot pass. (ADR-072's reversal
+paragraph says the same, reconciled 2026-10-04 under Architect condition C1.)
 
 **D33. The commander's superweapon purchase floor (P8-18).** Decision: the
 commander buys its superweapon only once a full charge has elapsed (`Tick >=`

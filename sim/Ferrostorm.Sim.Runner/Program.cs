@@ -1871,6 +1871,140 @@ ulong ScenarioWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? r
          ^ worldG.ComputeStateHash() ^ worldH.ComputeStateHash() ^ worldJ.ComputeStateHash();
 }
 
+ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-072, Architect condition C6: the first golden to hold an aircraft.
+    // Until this scenario no golden, replay, save or LAN check contained one,
+    // which is why ADR-072 landed hash-neutral and also why nothing hashed the
+    // air layer or the commander's answer to it: the cross-platform golden
+    // gate, which CLAUDE.md names as the determinism guarantee, saw none of it.
+    //
+    // A Normal Standard commander holds a working base with no radar and no
+    // turret. Three Strike Flyers appear and hunt its harvesters, as
+    // aiairgate's raid does. The commander must SEE them in its own fog
+    // (clause 1), pull the Radar Uplink forward ahead of the turret its
+    // ordinary ladder builds first (clause 5), order Flak Tracks at its factory
+    // (clause 3), and the flak must shoot at least one flyer down (clause 4).
+    // Seat 1 is sealed behind a blocked column, as aisuper's is, so only the
+    // flyers cross it: the subject is the air answer, not the ground war. A
+    // bare World plays the compiled catalogue and the compiled AI tuning, as
+    // every golden does.
+    //
+    // Appended LAST to the golden list, so the 24 lines above it are untouched
+    // by construction and the cross-platform diff gains exactly one line.
+    var world = new World(seed, 64, 64, players: 2);
+    world.GrantCredits(0, 6000);
+    world.SpawnConstructionYard(0, 8, 30);
+    world.SpawnPowerPlant(0, 12, 30);
+    world.SpawnPowerPlant(0, 8, 26);
+    world.SpawnPowerPlant(0, 4, 26);
+    world.SpawnRefinery(0, 12, 26);
+    world.SpawnBarracks(0, 4, 34);
+    world.SpawnFactory(0, 8, 34);
+    int harv = world.SpawnHarvester(0, Fix64.FromInt(14), Fix64.FromInt(34));
+    int field = world.SpawnFerriteField(Fix64.FromInt(22), Fix64.FromInt(30), 12000);
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(48, y, true);
+    world.SpawnConstructionYard(1, 56, 30);
+    var ai = SkirmishAI.Standard(0);
+    var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
+
+    // The raid lands while the yard is building the second refinery it queued
+    // at t=0, so the yard's NEXT choice is the one clause 5 changes: without
+    // air it is the turret, with air it is the radar. Measured: the commander
+    // first sees the flyers at t=194 and has shot all three down by t=900;
+    // after t=1400 it has spent its treasury on the answer and nothing moves,
+    // so the window ends at 1500.
+    const int RaidAt = 150, Window = 1500, Raiders = 3;
+    int strikeFlyerType = UnitCatalogue.TypeIdOf("com_strike_flyer"), flakTrackType = UnitCatalogue.TypeIdOf("com_flak_track");
+    var flyerDef = world.GetUnitType(strikeFlyerType);
+    var flyers = new List<int>();
+    var firedOnByFlak = new HashSet<int>();
+    int firstSeen = -1, firstFlakOrder = -1, radarPlaced = -1, turretPlaced = -1, firstFlak = -1, firstDown = -1, flakBuilt = 0;
+    for (int t = 0; t < Window; t++)
+    {
+        if (t == RaidAt)
+            for (int k = 0; k < Raiders; k++)
+                flyers.Add(world.SpawnUnit(1, Fix64.FromInt(40), Fix64.FromInt(28 + 2 * k), flyerDef.Speed, flyerDef.Hp, flyerDef.Armour,
+                    flyerDef.WeaponId, flyerDef.SightCells, flyerDef.Stealth, flyerDef.Detector, flyerDef.Veterancy, strikeFlyerType));
+        // The commander's first sighting, read from its own fog exactly as its
+        // census reads it, so the assertion below is about what it could see.
+        if (firstSeen < 0)
+            foreach (int f in flyers)
+            {
+                var fe = world.Entities[f];
+                if (fe.Alive && world.IsVisible(0, Map.CellOf(fe.X), Map.CellOf(fe.Y))) { firstSeen = world.Tick; break; }
+            }
+        ai.Act(world, cmds);
+        if (firstFlakOrder < 0)
+            foreach (var c in cmds)
+                if (c.PlayerId == 0 && c.Type == CommandType.Produce && c.AuxId == flakTrackType) { firstFlakOrder = world.Tick; break; }
+        // The raid: every 30 ticks each live flyer is sent at the nearest live
+        // harvester of seat 0, aiairgate's prey rule.
+        if (t >= RaidAt && t % 30 == 0)
+            foreach (int f in flyers)
+            {
+                if (!world.Entities[f].Alive) continue;
+                int best = -1;
+                Fix64 bestD = Fix64.MaxValue;
+                for (int i = 0; i < world.EntityCount; i++)
+                {
+                    var e = world.Entities[i];
+                    if (!e.Alive || e.PlayerId != 0 || e.Kind != EntityKind.Harvester) continue;
+                    var d = Fix64.DistSq(e.X - world.Entities[f].X, e.Y - world.Entities[f].Y);
+                    if (d < bestD) { bestD = d; best = i; }
+                }
+                if (best >= 0) cmds.Add(new Command(world.Tick, 1, CommandType.Attack, f, Fix64.Zero, Fix64.Zero, best));
+            }
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        foreach (var ev in world.Events)
+        {
+            if (ev.Type == GameEventType.StructurePlaced && world.Entities[ev.A].PlayerId == 0)
+            {
+                if (world.Entities[ev.A].Kind == EntityKind.RadarUplink && radarPlaced < 0) radarPlaced = world.Tick;
+                if (world.Entities[ev.A].Kind == EntityKind.Turret && turretPlaced < 0) turretPlaced = world.Tick;
+            }
+            if (ev.Type == GameEventType.ProductionComplete && ev.A >= 0 && ev.A < world.EntityCount
+                && world.Entities[ev.A].Kind == EntityKind.Unit && world.Entities[ev.A].PlayerId == 0
+                && world.Entities[ev.A].UnitType == flakTrackType)
+            {
+                flakBuilt++;
+                if (firstFlak < 0) firstFlak = world.Tick;
+            }
+            if (ev.Type == GameEventType.Fired && flyers.Contains(ev.B) && world.Entities[ev.A].PlayerId == 0
+                && world.Entities[ev.A].Kind == EntityKind.Unit && world.Entities[ev.A].UnitType == flakTrackType)
+                firedOnByFlak.Add(ev.B);
+            if (ev.Type == GameEventType.Died && flyers.Contains(ev.A) && firstDown < 0) firstDown = world.Tick;
+        }
+        if (t % 300 == 299) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (flyers.Count != Raiders) throw new Exception($"airanswer: the raid must spawn {Raiders} Strike Flyers, and spawned {flyers.Count}");
+    if (firstSeen < 0) throw new Exception("airanswer: the flyers never entered the commander's fog, so nothing was measured");
+    // Clause 1: the census counts only what the commander sees, so no anti-air
+    // order may precede the first sighting.
+    if (firstFlakOrder < 0) throw new Exception($"airanswer: the commander saw the flyers at t={firstSeen} and never ordered a Flak Track");
+    if (firstFlakOrder < firstSeen)
+        throw new Exception($"airanswer: the commander ordered flak at t={firstFlakOrder}, before it could see a flyer (first seen t={firstSeen})");
+    // Clause 5: the radar comes forward, ahead of the turret the ordinary
+    // ladder builds before it.
+    if (radarPlaced < 0) throw new Exception("airanswer: the commander never placed the Radar Uplink the Flak Track waits behind");
+    if (turretPlaced >= 0 && turretPlaced < radarPlaced)
+        throw new Exception($"airanswer: the commander placed a turret at t={turretPlaced} before its radar at t={radarPlaced}; under air the radar must come first (ADR-072 clause 5)");
+    if (firstFlak < 0) throw new Exception($"airanswer: the radar stood at t={radarPlaced} and no Flak Track was ever built");
+    // Clause 4, and the condition itself: at least one flyer shot down, and
+    // every one that fell was fired on by a commander's Flak Track.
+    var downed = flyers.Where(f => !world.Entities[f].Alive).ToList();
+    if (downed.Count == 0) throw new Exception($"airanswer: {flakBuilt} Flak Tracks were built and no Strike Flyer was shot down in {Window} ticks");
+    foreach (int f in downed)
+        if (!firedOnByFlak.Contains(f))
+            throw new Exception($"airanswer: Strike Flyer {f} fell without a commander's Flak Track ever firing on it, so the kill is not the answer");
+    report?.Invoke($"airanswer: the commander first saw the {Raiders} Strike Flyers at t={firstSeen}, placed its Radar Uplink at t={radarPlaced} "
+                   + $"ahead of the turret its ordinary ladder builds first, ordered flak at t={firstFlakOrder}, fielded its first Flak Track at "
+                   + $"t={firstFlak} ({flakBuilt} by t={Window}) and shot the first flyer down at t={firstDown}; {downed.Count} of {Raiders} down, "
+                   + "every one fired on by a commander's Flak Track (ADR-072 C6, the first golden to hold an aircraft)");
+    return world.ComputeStateHash();
+}
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -1897,6 +2031,7 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("mission03", (s, cp) => ScenarioMission03(s, cp)),
     ("depot", (s, cp) => ScenarioDepot(s, cp)),
     ("walls", (s, cp) => ScenarioWalls(s, cp)),
+    ("airanswer", (s, cp) => ScenarioAirAnswer(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -1932,9 +2067,11 @@ int SelfTest()
     // and 4 too - schema.structure.json permits up to 4, and the shipped
     // "- (size - 1)" was off by one for both (silent and fatal, ADR-005:76).
     // No compiled type carries either size, so register test types; the centre
-    // below is FootprintCentre's documented formula, anchor + size/2.
-    fp.RegisterStructureType(98, new World.StructureTypeDef(1, EntityKind.Factory, 1, Footprint: 3));
-    fp.RegisterStructureType(99, new World.StructureTypeDef(1, EntityKind.Factory, 1, Footprint: 4));
+    // below is FootprintCentre's documented formula, anchor + size/2. They are
+    // barriers because ADR-071 (Architect condition C4) refuses a footprint
+    // above 2 on anything a unit walks onto; only the size matters here.
+    fp.RegisterStructureType(98, new World.StructureTypeDef(1, EntityKind.Wall, 1, Footprint: 3));
+    fp.RegisterStructureType(99, new World.StructureTypeDef(1, EntityKind.Wall, 1, Footprint: 4));
     foreach (int size in new[] { 3, 4 })
     {
         int testType = size == 3 ? 98 : 99;
@@ -9234,6 +9371,11 @@ int DockFaceGate()
     //   normal: Loading hands over to ToRefinery with the harvester stopped,
     //   and the next HarvestSystem pass moves it. ML-01 measured seat 1 stuck
     //   for 60 per cent of its harvester-ticks here.
+    //   STAGE 5: the reach guarantee the first three stages rest on is
+    //   ENFORCED (Architect condition C4). A walk onto a building ends within
+    //   1.42 cells of the footprint centre only up to a 2x2, so registration
+    //   refuses a larger footprint on a refinery and on anything a contact
+    //   unit acts on, by code and from /data alike.
     //
     // Additive, as every gate in the battery: a standalone mode and a Match
     // stage, never a golden scenario.
@@ -9398,8 +9540,52 @@ int DockFaceGate()
         }
     }
 
+    // --- 5. The reach guarantee is enforced at registration (Architect C4).
+    {
+        static bool Refused(Action register)
+        {
+            try { register(); return false; }
+            catch (FormatException) { return true; }
+        }
+        var w = new World(3513, 64, 64, players: 2);
+        // Asked of the catalogue by kind rather than named by id.
+        int refineryType = -1, wallType = -1;
+        foreach (int id in w.StructureTypeIds())
+        {
+            var k = w.GetStructureType(id).Kind;
+            if (k == EntityKind.Refinery && refineryType < 0) refineryType = id;
+            if (k == EntityKind.Wall && wallType < 0) wallType = id;
+        }
+        var refinery = w.GetStructureType(refineryType);
+        var plant = w.GetStructureType(World.DirectoratePlantStructType);
+        if (!Refused(() => w.RegisterStructureType(refineryType, refinery with { Footprint = 3 })))
+            return Fail("dockface: a refinery registered with footprint 3 was accepted, so a harvester's walk to it may end beyond the "
+                        + "dock and the contact reach (ADR-071, Architect condition C4)");
+        if (!Refused(() => w.RegisterStructureType(World.DirectoratePlantStructType, plant with { Footprint = 3 })))
+            return Fail("dockface: a power plant registered with footprint 3 was accepted, so a contact unit's walk to it may end beyond "
+                        + "the 1.75-cell reach (ADR-071, Architect condition C4)");
+        // The /data route: the shipped refinery file with its footprint widened,
+        // parsed and converted exactly as CatalogueFiles does before it calls
+        // RegisterStructureType.
+        string yaml = File.ReadAllText(Path.Combine(MeasureRoot(), "data/buildings/com_refinery.yaml"));
+        string widened = yaml.Replace("footprint: 2", "footprint: 3");
+        if (widened == yaml)
+            return Fail("dockface: com_refinery.yaml no longer authors 'footprint: 2', so stage 5's /data half would test nothing");
+        if (!Refused(() => w.RegisterStructureType(refineryType, StructureCatalogue.ToTypeDef(DataLoader.ParseStructure(widened)))))
+            return Fail("dockface: com_refinery.yaml with footprint 3 registered from /data (ADR-071, Architect condition C4)");
+        // Scoped, not blanket: the shipped 2x2 refinery still registers, and a
+        // barrier, which nothing walks onto, keeps the schema's wider range.
+        if (Refused(() => w.RegisterStructureType(refineryType, refinery))
+            || Refused(() => w.RegisterStructureType(wallType, w.GetStructureType(wallType) with { Footprint = 3 })))
+            return Fail("dockface: the reach refusal must refuse only a footprint above 2 on what a unit walks onto, and it refused "
+                        + "the shipped 2x2 refinery or a 3x3 wall");
+        Console.WriteLine($"dockface: stage 5, footprint 3 refused at registration on a refinery (by code and from /data) and on a power "
+                          + $"plant; the shipped 2x2 refinery and a 3x3 wall still register (reach guaranteed up to {World.MaxReachableFootprint})");
+    }
+
     Console.WriteLine("dockfacegate: PASS - any open face of a refinery docks, a sealed refinery falls back to the next, a walk onto a "
-                      + "building reaches an open face, and the commander never seals its own dock");
+                      + "building reaches an open face, the commander never seals its own dock, and no footprint a walk ends at is "
+                      + "registered beyond the reach guarantee");
     return 0;
 }
 
@@ -13814,6 +14000,7 @@ int Match(ulong seed)
     ScenarioMission03(seed, null, Console.WriteLine);
     ScenarioDepot(seed, null, Console.WriteLine);
     ScenarioWalls(seed, null, Console.WriteLine);
+    ScenarioAirAnswer(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
     // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as
