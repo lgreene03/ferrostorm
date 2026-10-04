@@ -203,13 +203,15 @@ untouched. Refused on CLAUDE.md's data rule, that every gameplay number lives
 in /data, and on ADR-032, whose clause 2 puts every number that decides which
 orders a commander issues into the checksum because every LAN peer runs the
 commander itself (ADR-033). The numbers that stay compiled are not new tuning.
-The guard radii (`EconomyGuardSq`, `BaseGuardSq`, `HomeLeashSq`,
-`EscortLeashSq`) and the 60-tick cadence (`DefendCadenceTicks`) are the
-intruder census's own, compiled before this row and only named here, so
-authoring them would give numbers the ground garrison already uses a second
-home; and the plus-one margin is the rule itself ("one more than the most
-flyers seen at once"), not a quantity to turn. The cap and the garrison are
-the two numbers this row introduces that a designer would tune.
+The guard radii (`EconomyGuardSq`, `BaseGuardSq`, `HomeLeashSq`) and the
+60-tick cadence (`DefendCadenceTicks`) are the ground garrison's own, from the
+intruder census, and the escort leash (`EscortLeashSq`) is the Directorate
+sentinel escort's (TICKET-P3-FAC-07). All five were literals before this row
+and are only named here, so authoring them would give numbers the ground
+garrison and the sentinels already use a second home; and the plus-one margin
+is the rule itself ("one more than the most flyers seen at once"), not a
+quantity to tune. The cap and the garrison are the two numbers this row
+introduces that a designer would tune.
 
 **Saving the commander's air memory** (`_airSeen`, `_antiAirStood`) in the
 save format. It would let a commander resume its answer across a load instead
@@ -306,26 +308,23 @@ the flyer), and proves a one-unit change to either moves the checksum.
 No new Entity field, no save change and no wire change. The commander's new
 state is AI-internal and never hashed.
 
-**What old artefacts do** (Architect condition C4).
-
-- **A replay recorded before 387dc39** would re-simulate identically, because
-  playback applies the recorded commander orders and runs no commander, and no
-  golden moved. It is refused anyway, by the catalogue checksum alone: the
-  refusal is the price of ADR-032's fold, not a divergence.
-- **The refusal's advice cannot be followed on this build.** It tells the
-  player to restore the /data files the recording or save was made with, but
-  `DataLoader.ParseAiTuning` now requires both new keys in a personality file,
-  so the old data/ai no longer parses. A pre-change replay or save works only
-  on a pre-change build.
-- **Campaign saves refuse** in the same way.
-- **Builds on either side of 387dc39 refuse each other at the LAN hello**,
-  which compares the catalogue checksum. That is the protection the move buys.
-- **The census reads the visible bitset, which the save does not carry**
-  (World.Serialization writes `_explored` and never `_visible`). So a
-  commander acting on the first tick after a load sees no aircraft, on top of
-  having forgotten its high-water mark. That is a behavioural break across a
-  single-player load, not a desync: LAN peers share one history, and the
-  client's only load site resumes single player and records no replay.
+**What old artefacts do** (Architect condition C4). A replay recorded before
+387dc39 would re-simulate identically, because playback applies the recorded
+commander orders and runs no commander, and no golden moved; it is refused
+anyway, by the catalogue checksum alone, so the refusal is the price of
+ADR-032's fold rather than a divergence. The refusal's advice, to restore the
+/data files the recording or save was made with, cannot be followed on this
+build: `DataLoader.ParseAiTuning` now requires both new keys in a personality
+file, so the old data/ai no longer parses, and a pre-change replay or save
+works only on a pre-change build. Campaign saves refuse in the same way.
+Builds on either side of 387dc39 refuse each other at the LAN hello, which
+compares the catalogue checksum, and that is the protection the move buys.
+Finally, the census reads the visible bitset, which the save does not carry
+(`World.Serialization.cs` writes `_explored` and never `_visible`), so a
+commander acting on the first tick after a load sees no aircraft, on top of
+having forgotten its high-water mark. That is a behavioural break across a
+single-player load, not a desync: LAN peers share one history, and the
+client's only load site resumes single player and records no replay.
 
 ## Consequences
 

@@ -63,8 +63,9 @@ field whenever passability changes.
 
 On a goal cell the unit closes on the nearest point of the footprint. That
 point lies on the boundary its cell shares with the footprint, so the step
-cannot clip a blocked diagonal neighbour. (Corrected 2026-10-04 from "never
-leaves the cell", which the Architect's review found inexact: for a west or
+cannot clip a blocked diagonal neighbour. (Corrected 2026-10-04 from "lies
+on its own cell's boundary", which the Architect's review found inexact, as
+it did the `StepToward` comment's "never leaves the cell": for a west or
 north face that boundary is the integer line `CellOf` assigns to the
 footprint cell. See Amendment.) Every edge point of a 2x2 or smaller
 footprint is within 1.42 cells of its centre, so the walk always ends inside
@@ -289,18 +290,14 @@ ratified under D4 as stated above.
 **What old artefacts do** (Architect condition C1). Nothing refuses them up
 front, because the only compatibility fields any of them carries are the
 catalogue checksum and, for LAN, the setup blob version, and this ADR moved
-neither.
-
-- **A replay recorded before 905b6f0** passes its catalogue check
-  (`Replay.AssertCatalogueMatches`), because the checksum did not move. It then
-  re-simulates under the new rules and ends in a final-hash mismatch, with no
-  up-front refusal.
-- **A save from before 905b6f0** loads without error and plays on under the
-  new rules.
-- **A LAN pair with one peer on each side of 905b6f0** passes the lobby,
-  because setup blob version 4 (`Lan.Version`) and the catalogue checksum are
-  unchanged, and desyncs at the first dock that differs, which the relay's hash
-  comparison catches.
+neither. A replay recorded before 905b6f0 passes its catalogue check
+(`Replay.AssertCatalogueMatches`), because the checksum did not move, then
+re-simulates under the new rules and ends in a final-hash mismatch, with no
+up-front refusal. A save from before 905b6f0 loads without error and plays on
+under the new rules. A LAN pair with one peer on each side of 905b6f0 passes
+the lobby, because setup blob version 4 (`Lan.Version`) and the catalogue
+checksum are unchanged, and desyncs at the first dock that differs, which the
+relay's hash comparison catches.
 
 That gap is systemic rather than this ADR's: no replay header or LAN hello
 carries a sim-rules epoch, so any code-only golden break behaves this way, and
