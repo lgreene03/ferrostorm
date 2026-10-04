@@ -1882,8 +1882,8 @@ ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string
     // A Normal Standard commander holds a working base with no radar and no
     // turret. Three Strike Flyers appear and hunt its harvesters, as
     // aiairgate's raid does. The commander must SEE them in its own fog
-    // (clause 1), pull the Radar Uplink forward ahead of the turret its
-    // ordinary ladder builds first (clause 5), order Flak Tracks at its factory
+    // (clause 1), place the Radar Uplink the Flak Track waits behind, with no
+    // turret placed before it (clause 5), order Flak Tracks at its factory
     // (clause 3), and the flak must shoot at least one flyer down (clause 4).
     // Seat 1 is sealed behind a blocked column, as aisuper's is, so only the
     // flyers cross it: the subject is the air answer, not the ground war. A
@@ -1985,8 +1985,11 @@ ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string
     if (firstFlakOrder < 0) throw new Exception($"airanswer: the commander saw the flyers at t={firstSeen} and never ordered a Flak Track");
     if (firstFlakOrder < firstSeen)
         throw new Exception($"airanswer: the commander ordered flak at t={firstFlakOrder}, before it could see a flyer (first seen t={firstSeen})");
-    // Clause 5: the radar comes forward, ahead of the turret the ordinary
-    // ladder builds before it.
+    // Clause 5: the radar stands, and no turret was placed before it. In this
+    // window the commander places no turret at all, so the turret half is a
+    // guard that would catch a regression, not a demonstration that the radar
+    // displaced one. The counterfactual (no air, so the turret first) is not
+    // measured here.
     if (radarPlaced < 0) throw new Exception("airanswer: the commander never placed the Radar Uplink the Flak Track waits behind");
     if (turretPlaced >= 0 && turretPlaced < radarPlaced)
         throw new Exception($"airanswer: the commander placed a turret at t={turretPlaced} before its radar at t={radarPlaced}; under air the radar must come first (ADR-072 clause 5)");
@@ -1999,7 +2002,7 @@ ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string
         if (!firedOnByFlak.Contains(f))
             throw new Exception($"airanswer: Strike Flyer {f} fell without a commander's Flak Track ever firing on it, so the kill is not the answer");
     report?.Invoke($"airanswer: the commander first saw the {Raiders} Strike Flyers at t={firstSeen}, placed its Radar Uplink at t={radarPlaced} "
-                   + $"ahead of the turret its ordinary ladder builds first, ordered flak at t={firstFlakOrder}, fielded its first Flak Track at "
+                   + $"({(turretPlaced < 0 ? "no turret placed in the window" : $"turret after it at t={turretPlaced}")}), ordered flak at t={firstFlakOrder}, fielded its first Flak Track at "
                    + $"t={firstFlak} ({flakBuilt} by t={Window}) and shot the first flyer down at t={firstDown}; {downed.Count} of {Raiders} down, "
                    + "every one fired on by a commander's Flak Track (ADR-072 C6, the first golden to hold an aircraft)");
     return world.ComputeStateHash();
