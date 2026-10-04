@@ -609,4 +609,4 @@ half, in its ADR or its PR. P8-52's reissued playtest brief cites this ADR,
 as that row now says.
 
 ## Architect sign-off
-Signed off with conditions by the Architect on 2026-10-03, reviewing the branch at 4c153ad. Before-merge conditions C1 to C5 are met in commit 815c74c. Carried conditions C6 (row P8-61 and P8-19's seismic damage), C7 (the single read predicate) and C8 (pillargate verdicts recorded until it runs in CI) are recorded in the tracker and in Consequences.
+Signed off with conditions by the Architect on 2026-10-03, reviewing the P8-18 integration branch with its audit follow-ups applied. Before-merge conditions C1 to C5 are met in the same pull request that lands this ADR (implemented in the row's lane as commit 815c74c, which the squash merge does not preserve). Carried conditions C6 (row P8-61 and P8-19's seismic damage), C7 (the single read predicate) and C8 (pillargate verdicts recorded until it runs in CI) are recorded in the tracker and in Consequences.
