@@ -11,4 +11,4 @@
 # games of the 90s" instead of being listed here.
 
 docs/design/07-competitive-analysis.md  # competitor research: names the competing products and the category they sell in
-docs/design/09-title-and-trademark.md   # trademark clearance: lists the marks the title, store copy and tags must never use
+docs/design/09-title-and-trademark.md   # trademark clearance: the marks the title, store copy and tags must never use, and the second property the metal economy must stay clear of (section 7)

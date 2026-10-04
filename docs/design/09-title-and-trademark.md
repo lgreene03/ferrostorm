@@ -61,3 +61,33 @@ Generate a second batch after audience testing; do not fall in love with #1 on t
 
 - Never use "Command & Conquer", "C&C", "Red Alert", "Tiberium", "Westwood" in the title, subtitle, Steam tags we control, or store copy. "Inspired by the classic RTS games of the 90s" is the approved formulation (doc 00 §5).
 - Trademark the logo/wordmark later as a separate filing only if budget allows post-launch; the word mark is the priority.
+
+## 7. Second property: the metal economy
+
+**7.1 What the patterns guard against.**
+
+The metal economy (doc 32, PROPOSED; its decision becomes D35 once the owner confirms it) was proposed after the owner, in October 2026, named Brandon Sanderson's Mistborn novels as a starting idea. That is the only reason the series is named in this repository, and this section records only what clearance needs.
+
+There is no licence route. Dragonsteel's licensing policy (updated 20 August 2026) turns down digital gaming inquiries. MISTBORN is a live US mark covering electronic games (Reg. 4852186, class 28, renewed October 2025), alongside Reg. 4756692 for the books.
+
+The bare idea that different metals do different things is free (US Copyright Office Circular 33; Nova v Mazooma [2007] EWCA Civ 219). An expressive combination, however, is protected even when renamed (Spry Fox v Lolapps, W.D. Wash. 2012). Doc 32 is built to stay clear of the series' combinations:
+
+- the sixteen-metal table of base metals and alloys, paired as pulls and pushes acting on the self or the world in four groups;
+- the loop of swallowing a metal and consuming it as a personal reserve that powers an ability;
+- one person who uses every metal set against single-metal specialists;
+- the signature imagery: lines drawn to nearby metal, firing and riding coins, deadly nightly mists, falling ash, spiked inquisitors, and the round chart of metal glyphs.
+
+The name patterns in tools/legalgrep-patterns.txt catch the coined terms: the series, universe and company names, the three magic systems and their practitioner titles, the coined metals, peoples, places, gods, characters and book titles. The phrase patterns stop player-facing text from burning or flaring a metal, pushing or pulling on metal or coins, or calling a metal stock a reserve or a vial.
+
+UK and EU registrations of MISTBORN are unchecked. A metal theme also moves the title nearer the author's brand space: DRAGONSTEEL and STORMLIGHT are live marks, and Ferrostorm's Latin root also begins one of the series' coined system names, Feruchemy. The title is therefore re-checked under section 4 if the theme ships.
+
+**7.2 Player-facing vocabulary.** Anything a player reads or hears about metal uses only these words: mine, found, lode, Pithead, ingot, stock, spend and open, plus the real metal names Ferrite, Tungsten and Titanium. Never use reserve, vial, burn, flare, push or pull for metal, and never call Titanium "rarest" or "most precious".
+
+**7.3 Human checklist at Legal sign-off.** Some words cannot be banned by the grep without breaking ordinary text, so a person checks every player-facing string and asset name for them: Thug, Seeker, Soother, Smoker, Rioter, Pulser, Slider, Augur, Oracle, Leecher, Brute, Sentry, Archivist, Spinner, Connector, Pinnacle, Skimmer, Sparker, Gasper, Inquisitor, Survivor, Preservation, Ruin, Harmony, Investiture, Vin, Ham, Breeze, Spook, Marsh, Wax and Wayne. The same check covers the themes mists, ashfall, savant, Snapping, Compounding, tapping and "lost metal". The design items, in this order:
+
+1. Tungsten's item set includes the Phantom Tank, a stealthed unit, by price tier alone, and no metal may be tied to concealment or detection.
+2. Titanium, the contested climax metal, keeps a strictly industrial justification.
+3. Every metal icon and any glyph art is a name, a chemical symbol, an ingot silhouette or a plain shape, and ingots are bars, never coins.
+4. The Pithead's art and every new voice line.
+
+**7.4 Process.** No commit message, PR description or docs/JOURNAL.md entry for the metals work names or describes the series. The legal check reads docs/ but never a commit message. This section stays minimal and factual, and is for legal review if counsel is ever involved.
