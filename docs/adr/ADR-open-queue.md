@@ -161,8 +161,9 @@ the same commit.
   11536, and pillargate binds both F8 halves.
 - ADR-074: PROPOSED 2026-10-04 - ADR-074-a-boarding-walk-closes-to-reach.md
   (P8-56, found by P8-7). Number claimed here per the numbering law, in the
-  same commit as the draft; ADR-073 is held by P8-18 (the superweapon), so
-  this is the next free number. A walk to board a Carrier is marked in
+  same commit as the draft; ADR-073 is held by P8-18 (the superweapon),
+  claimed on that row's own branch and not yet on main, so this entry follows
+  ADR-072 here and 074 is the next free number. A walk to board a Carrier is marked in
   ExplicitTarget's negative range (no new hashed or saved state), closes to
   the two-cell reach and boards on arrival through one Board() that ends
   every order the unit held, and gives up by ADR-014's no-progress deadline

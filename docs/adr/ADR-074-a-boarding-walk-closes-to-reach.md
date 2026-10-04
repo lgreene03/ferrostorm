@@ -24,7 +24,7 @@ The point of the encoding is that it adds **no new hashed state and no new saved
 
 ### 2. Board() is the one place a boarding happens, and it ends every order
 
-Both paths call `Board()`, and Board now writes the boarded unit's whole order state: not alive, not moving, ExplicitTarget -1, no attack-move, and any Guard or Patrol post cancelled (HoldFire stays, as it does across a Move: it is fire discipline, not an order). The walk path arrived in that state already, apart from its own walk marker; the in-reach path now arrives there too, so the despawned entity is the same whichever path boarded it. Because every boarding passes through Board, an event or counter that a boarding must raise is a one-line change there.
+Both paths call `Board()`, and Board now writes the boarded unit's whole order state: not alive, not moving, ExplicitTarget -1, no attack-move, and any Guard or Patrol post cancelled (HoldFire stays, as it does across a Move: it is fire discipline, not an order). The walk path arrived in that state already, apart from its own walk marker; the in-reach path now arrives there too, so the despawned entity is the same whichever path boarded it. Because every boarding passes through Board, an event or counter that a boarding must raise is a one-line change there, and that is where P8-10's `Boarded` event (decision D34: A the unit, B the Carrier) is raised, so each path raises exactly one per boarding and never a Died.
 
 ### 3. The walk gives up by ADR-014's rule
 
@@ -33,6 +33,8 @@ Both paths call `Board()`, and Board now writes the boarded unit's whole order s
 For that walk, BoardingSystem is the counters' only writer: SeparationSystem's ADR-014 block skips a unit whose ExplicitTarget names a boarding walk. Counted in both places, the counter would advance twice a tick against two different references, and a bench in SeparationSystem alone would be undone the same tick by BoardingSystem re-asserting the walk. That is not hypothetical: with the skip removed, the chase stage below never gives up, and its engineer boards at tick 256, after the Carrier parks.
 
 The leaky `StallTicks` net is left alone. It fires in the ordinary crowd round a Carrier, where the boarders ahead are about to despawn and clear the way, so for a boarding walk it pauses the walk for a tick and BoardingSystem resumes it. Only the monotone deadline is terminal.
+
+**The client sends the order once.** P8-7's client re-send (`ReissueBoardings` in game/scripts/SkirmishLive.cs) is removed with this decision. It kept its own memory of a boarding and sent LoadTransport again whenever the Carrier moved more than a cell or came within reach, and the order's handler zeroes both watchdog fields, so in the shipped client a walk the sim had given up was revived the moment its Carrier moved, and a chase could not give up while its Carrier drove. Everything it was for, the sim now does: BoardingSystem boards a walker on the tick it closes to reach and re-aims the walk at the Carrier where it stands every tick, and any move, stop or attack order ends the walk. Keeping it, with its memory dropped once the sim no longer held the walk, was rejected: it would still re-arm the deadline on every Carrier move during a live chase, and the client would have to copy this encoding to know when to let go.
 
 ## Alternatives rejected
 
@@ -62,11 +64,12 @@ So no existing mechanism refuses either case up front. Both are caught after the
 
 ## The proof
 
-`transportgate` (in `match`, so CI runs it) gains three stages beside P8-56's eight, every boarding order issued once.
+`transportgate` (in `match`, so CI runs it) gains three stages beside P8-56's eight, every boarding order issued once, and the client harness (`tools/verify-client.sh`, the CI client-harness job) gains one.
 
 - **Walled off (stage 15).** A Carrier inside a sealed ring of blocked cells three out from its own, a squad ten cells away: the order lapses after **211 ticks**, which is the 210-tick deadline plus the tick that seeds the watchdog, never before the deadline; the squad is alive, stopped, nothing aboard, and is still stopped, with no order and unmoved, 210 ticks later. Before this ADR, the squad still held the walk (target -2, moving) at the 211-tick bound, and still held it 421 ticks after the order, having never moved.
 - **Outrun (stage 16).** An engineer three cells behind a Carrier that is driving away down an open row, faster than an engineer walks: the order lapses after **211 ticks**, the engineer 7.22 cells behind and the Carrier still driving. With SeparationSystem's skip removed, it never lapses, and the engineer boards at tick 256 after the Carrier parks.
-- **Two paths, one state (stage 17).** A squad on Guard engaging a hostile, and a squad attack-moving, each ordered aboard in reach, and a squad walking in from six cells: all three despawned entities hold the same order state (alive false, moving false, target -1, no attack-move, Aggressive, no post). Before this ADR the Guard squad despawned holding target 1, stance Guard and its post (21, 20). Removing one of Board's three clears at a time fails this stage alone, each on the field it clears: without the attack-move clear the attack-mover despawned with attack-move set; without the stance cancel the Guard squad kept stance Guard and its post; without the ExplicitTarget clear the Guard squad held target 1 against the walker's -2.
+- **Two paths, one state (stage 17).** A squad on Guard engaging a hostile, and a squad attack-moving, each ordered aboard in reach, and a squad walking in from six cells: all three despawned entities hold the same order state (alive false, moving false, target -1, no attack-move, Aggressive, no post). Before this ADR the Guard squad despawned holding target 1, stance Guard and its post (21, 20). Removing one of Board's three clears at a time fails this stage alone, each on the field it clears: without the attack-move clear the attack-mover despawned with attack-move set; without the stance cancel the Guard squad kept stance Guard and its post; without the ExplicitTarget clear the Guard squad held target 1 against the walker's -2. The same three boardings must each raise exactly one Boarded naming their Carrier and no Died, tallied on every tick: Board raising Died instead, P8-10's inline Boarded kept in the order beside Board's, or a second Boarded raised in BoardingSystem each fails this stage alone (0 Boarded and 1 Died; 2 Boarded for the Guard squad; 2 for the walk-in).
+- **The client (`inputgate/LoadTransport/lapsed`).** An own Carrier walled off inside a ring of blocked cells, a squad just outside it ordered aboard by one right click: the sim gives the walk up after 211 ticks; the ring is opened and the Carrier driven up beside the squad by a right click, into reach, and on no tick of the window does the squad hold an order, no LoadTransport for it reaches the sim, and nothing boards. With the client re-send put back as it shipped, this stage failed alone (the squad boarded six ticks into the drive); with the re-send firing every tick, the walk never lapsed in 420 ticks.
 
 ## What reverses it
 
@@ -77,7 +80,7 @@ So no existing mechanism refuses either case up front. Both are caught after the
 
 ## Consequences
 
-**Easier.** A squad ordered aboard from anywhere boards with the order given once, and an order that cannot be carried out ends rather than running for the rest of the match. Every boarding passes through one function, so the Boarded event P8-10 adds (decision D34) is wired there in one line.
+**Easier.** A squad ordered aboard from anywhere boards with the order given once, and an order that cannot be carried out ends rather than running for the rest of the match. Every boarding passes through one function, which raises P8-10's Boarded event (decision D34) once per boarding on either path. The client sends the order once and holds no memory of it, so the sim's give-up is the give-up the player sees.
 
 **Harder.** ExplicitTarget now has three meanings by range, and a new reader of it must ask the right question: "is there an attack target" is `>= 0`, "is there any order to finish" is `!= -1`, and "is this a boarding walk" is `BoardingCarrierOf`. The give-up couples the boarding walk to ADR-014's constant.
 

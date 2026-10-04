@@ -12617,7 +12617,7 @@ int TransportGate()
                       + "to shoot with a shift-queued order held behind it, while a plain move to the same point still "
                       + "settles short; and (ADR-074) a walk to a Carrier it cannot reach, or one that outruns it, gives "
                       + "up at ADR-014's deadline and stops, and both boarding paths leave the boarded unit holding no "
-                      + "order");
+                      + "order and raise one Boarded and no Died (D34)");
     return 0;
 
     // P8-56: ordered aboard from OUT OF REACH, the squad boards. Until this row
@@ -12951,19 +12951,39 @@ int TransportGate()
         //         be, so they differ by construction and are not compared. The
         //         hostile is an unarmed Carrier, so nothing shoots back, and the
         //         walk's tick count is not under test, so its cap is generous.
+        //         D34 (P8-10) rides on the same three boardings: each must raise
+        //         exactly one Boarded, A the unit and B its Carrier, and no Died,
+        //         whichever path boarded it, because Board() is the one place a
+        //         boarding raises anything. Tallied on every tick from the first
+        //         order to the last boarding.
         {
             var w = Fresh(out int carrier);
             var cd = w.GetUnitType(Carrier);
             int bait = w.SpawnUnit(1, Fix64.FromInt(22), Fix64.FromInt(23), cd.Speed, cd.Hp, cd.Armour, 0,
                                    veterancy: false, unitType: Carrier);
             int guard = Rifleman(w, 21, 20), amover = Rifleman(w, 20, 21), walker = Rifleman(w, 26, 20);
+            int[] boarders = { guard, amover, walker };
+            string[] boarderNames = { "squad on Guard", "attack-mover", "walk-in" };
+            int[] boardedEv = new int[3], strayEv = new int[3], diedEv = new int[3];
+            void Tally()
+            {
+                foreach (var ev in w.Events)
+                    for (int k = 0; k < boarders.Length; k++)
+                    {
+                        if (ev.A != boarders[k]) continue;
+                        if (ev.Type == GameEventType.Boarded) { if (ev.B == carrier) boardedEv[k]++; else strayEv[k]++; }
+                        else if (ev.Type == GameEventType.Died) diedEv[k]++;
+                    }
+            }
             w.Step(new[]
             {
                 new Command(w.Tick, 0, CommandType.SetStance, guard, Fix64.Zero, Fix64.Zero, (int)Stance.Guard),
                 new Command(w.Tick, 0, CommandType.AttackMove, amover, Fix64.FromInt(20), Fix64.FromInt(40)),
                 new Command(w.Tick, 0, CommandType.LoadTransport, walker, Fix64.Zero, Fix64.Zero, carrier),
             });
+            Tally();
             w.Step(default);
+            Tally();
             var g0 = w.Entities[guard];
             var a0 = w.Entities[amover];
             if (g0.Stance != Stance.Guard || g0.ExplicitTarget != bait || !a0.AMove
@@ -12976,7 +12996,8 @@ int TransportGate()
                 new Command(w.Tick, 0, CommandType.LoadTransport, guard, Fix64.Zero, Fix64.Zero, carrier),
                 new Command(w.Tick, 0, CommandType.LoadTransport, amover, Fix64.Zero, Fix64.Zero, carrier),
             });
-            Run(w, walker, 2 * Bound(w, 10));
+            Tally();
+            for (int t = 0, cap = 2 * Bound(w, 10); t < cap && w.Entities[walker].Alive; t++) { w.Step(default); Tally(); }
             if (w.Entities[guard].Alive || w.Entities[amover].Alive || w.Entities[walker].Alive
                 || w.CargoOf(carrier).Count != 3)
                 return Fail($"transport paths: the precondition needs all three squads aboard (guard "
@@ -12993,9 +13014,14 @@ int TransportGate()
                     return Fail($"transport paths: a squad {what} ordered aboard in reach must be left exactly as a "
                                 + $"walk-in is left. In reach: {inReach}. Walk-in: {walked}");
             }
+            for (int k = 0; k < boarders.Length; k++)
+                if (boardedEv[k] != 1 || strayEv[k] != 0 || diedEv[k] != 0)
+                    return Fail($"transport paths: each boarding must raise exactly one Boarded naming its Carrier and no "
+                                + $"Died (D34), whichever path boarded it; the {boarderNames[k]} raised {boardedEv[k]} "
+                                + $"Boarded, {strayEv[k]} naming another Carrier, and {diedEv[k]} Died");
             Console.WriteLine($"  transportgate: boarded in reach while on Guard engaging a hostile, in reach while "
                               + $"attack-moving, and by the walk-in from 6 cells, all three despawned entities hold the "
-                              + $"same order state: {walked}");
+                              + $"same order state: {walked}; and each raised one Boarded naming its Carrier and no Died");
         }
         return 0;
     }
