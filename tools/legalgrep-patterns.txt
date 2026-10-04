@@ -10,14 +10,19 @@
 # spellings and abbreviations of the same marks and by the announcer's
 # character name, which doc 00 section 5's "associated names, characters"
 # covers. The low-power line is listed in both word orders because the
-# client's toast used the order the retired voice line did not.
+# client's toast used the order the retired voice line did not. The rule names
+# two properties: the classic RTS franchise (the first block) and, since
+# 2026-10-04, the novel series behind the metal economy proposal (the second
+# block, at the foot of this file; clearance in doc 09 section 7).
 #
 # Format: KIND FLAGS REGEX, separated by whitespace, one pattern per line, no
 # trailing comment on a pattern line.
-#   KIND   name    a protected franchise, faction, resource, character, studio
-#                  or publisher name. Scanned over every tree that ships and
-#                  over docs/, minus the allowlist.
-#          phrase  one of the ten retired announcer phrasings. Scanned only
+#   KIND   name    a protected title, coined term, faction, resource, place,
+#                  people, character, studio or publisher name of either
+#                  property. Scanned over every tree that ships and over
+#                  docs/, minus the allowlist.
+#          phrase  a retired announcer phrasing, or a protected expression of
+#                  the second property. Scanned only
 #                  where a player hears or reads it. Word boundaries are added
 #                  by the script, so keep any alternation inside a group.
 #   FLAGS  i case-insensitive, s case-sensitive, w whole word (names only)
@@ -46,3 +51,89 @@ phrase  i    radar[[:space:]]+offline
 phrase  i    superweapon[[:space:]]+launch[[:space:]]+detected
 phrase  i    mission[[:space:]]+accomplished
 phrase  i    mission[[:space:]]+failed
+
+# Second property (2026-10-04): the novel series behind the metal economy
+# proposal, docs/design/32-metal-economy.md. CLAUDE.md's Legal rule names it
+# and is the authority for this block; doc 09 section 7 records the clearance.
+# Names are scanned like the first block's. Phrases are scanned only where a
+# player hears or reads them: no player-facing text burns or flares a metal,
+# pushes or pulls on metal or coins, or calls a metal stock a reserve or a
+# vial. Words too common to grep are on doc 09 section 7.3's human checklist.
+# Tested 2026-10-04: zero hits over every scanned tree and over doc 32.
+name    i    mist(-|[[:space:]]+)?born
+name    i    alloman(c|t)
+name    i    feruchem
+name    i    hemalurg
+name    i    metallic[[:space:]]+arts
+name    i    ars[[:space:]]+arcanum
+name    sw   Mistings?
+name    iw   twinborn
+name    iw   ferrings?
+name    i    coinshots?
+name    iw   lurchers?
+name    iw   tin-?eyes?
+name    i    pewter-?arms?
+name    i    copper-?clouds?
+name    i    nicrobursts?
+name    iw   (aluminium|aluminum|duralumin)[[:space:]]+gnats?
+name    iw   (steelrunner|windwhisper|firesoul|bloodmaker|soulbearer|trueself|subsumer)s?
+name    i    (steel|iron)-?(push|pull)
+name    i    steel-?sight
+name    iw   metal-?minds?
+name    i    coppermind
+name    i    spirit-?webs?
+name    i    realmatic
+name    iw   atium
+name    i    malatium
+name    i    lerasium
+name    i    ettmetal
+name    i    trellium
+name    i    raysium
+name    i    bendalloy
+name    i    nicrosil
+name    iw   koloss
+name    iw   kandras?
+name    i    mist-?wraiths?
+name    i    mist-?cloaks?
+name    iw   skaa
+name    sw   Terris(man|men|woman|women)?
+name    i    steel[[:space:]]+(inquisitors?|ministry)
+name    iw   obligators?
+name    i    survivorism
+name    i    ghostbloods?
+name    i    luthadel
+name    i    elendel
+name    i    scadri(al|an)
+name    i    kredik
+name    i    hathsin
+name    i    fadrex
+name    iw   urteau
+name    i    malwish
+name    i    final[[:space:]]+empire
+name    i    lord[[:space:]]+ruler
+name    i    well[[:space:]]+of[[:space:]]+ascension
+name    i    hero[[:space:]]+of[[:space:]]+ages
+name    i    alloy[[:space:]]+of[[:space:]]+law
+name    i    shadows[[:space:]]+of[[:space:]]+self
+name    i    bands[[:space:]]+of[[:space:]]+mourning
+name    i    cosmere
+name    i    adonalsium
+name    i    dragonsteel
+name    i    stormlight
+name    iw   sanderson
+name    i    kelsier
+name    iw   sazed
+name    iw   rashek
+name    i    tensoon
+name    i    waxillium
+name    iw   ladrian
+name    iw   marasi
+name    iw   tindwyl
+name    iw   oreseur
+name    iw   elend
+name    iw   hoid
+name    iw   khriss
+phrase  i    harmonium
+phrase  i    (burn|burns|burned|burnt|burning|flare|flares|flared|flaring)[[:space:]]+(tin|pewter|steel|iron|zinc|brass|copper|bronze|gold|electrum|cadmium|chromium|aluminium|aluminum|duralumin|tungsten|silver|titanium|ferrite)
+phrase  i    (push|pushes|pushing|pull|pulls|pulling)[[:space:]]+on[[:space:]]+(the[[:space:]]+)?(metal|metals|coins?)
+phrase  i    (metal|metals|tungsten|titanium|ferrite)[[:space:]]+(reserves?|vials?)

@@ -74,4 +74,6 @@ Cache" is already spent on a different concept.
 
 ## Resolution
 
-(unanswered)
+(unanswered; reopened 2026-10-04)
+
+**2026-10-04.** The owner proposed a direction in his own words: "mining different metals around the map is the resource gathering and different metals are for different things." docs/design/32-metal-economy.md is the recommended way to build it, written as a proposal. This question closes, and decision D35 is recorded, only when the owner confirms that document's Decision 1 (its reading of his words). Until then nothing in the economy changes, and ADR-024 stays Proposed.
