@@ -621,7 +621,29 @@ public sealed class SkirmishAI
                    // simply never got a superweapon at all. The comment above
                    // predicted this exact failure for prerequisites and it
                    // arrived through faction instead.
-                   : !hasSuper && superStruct != 0 && w.Credits(_player) >= 4500 ? superStruct
+                   //
+                   // P8-18 (ADR-073, D1): and only once the commander holds
+                   // TWO REFINERIES (GDD s4's floating economy, the count the
+                   // refinery rung above already builds to) and AN ARMY OF AT
+                   // LEAST ONE WAVE. Behind the radar and 4500 credits alone,
+                   // every measured commander bought the weapon at about
+                   // t=3000, before it had fought anyone, so its first strike
+                   // landed before first contact. A weapon bought from a
+                   // standing economy and a standing army is a climax rather
+                   // than an opening. The prerequisite stays the radar.
+                   //
+                   // P8-18 (ADR-073, D33): AND NOT BEFORE ONE FULL CHARGE HAS
+                   // ELAPSED, asked of the weapon's own def. MEASURED: with the
+                   // economy and army gate alone every commander met it by about
+                   // t=3170, so the median first launch was t=8701, short of
+                   // F8's 10800. The floor is derived from the charge itself,
+                   // which makes the first launch at least twice the charge plus
+                   // the build (11536 measured). It times the COMMANDER's
+                   // purchase only: a human may build the weapon whenever the
+                   // radar stands and is bounded by the charge alone.
+                   : !hasSuper && superStruct != 0 && w.Credits(_player) >= 4500
+                     && refineryCount >= RefineriesPerBase && army >= _waveSize
+                     && w.Tick >= w.GetStructureType(superStruct).ChargeTicks ? superStruct
                    : 0;
         int ready = w.Entities[cy].ReadyStructure;
         if (ready != 0)

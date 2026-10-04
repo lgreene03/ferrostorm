@@ -37,7 +37,13 @@ public static class DataLoader
         // cannot arrive without an answer; "none" is the three map-placed
         // buildings and is checked against the sim's own queueability rule in
         // StructureCatalogue.ToTypeDef rather than trusted.
-        string BuildTab = "none");
+        string BuildTab = "none",
+        // P8-18 (ADR-073): the superweapon's charge, the strike damage and the
+        // scan's reveal. Absent means 0, and ToTypeDef demands each exactly
+        // where the sim reads it and refuses it everywhere else.
+        int ChargeTicks = 0,
+        int StrikeDamage = 0,
+        int RevealTicks = 0);
 
     public static Dictionary<string, string> ParseFlatYaml(string text)
     {
@@ -237,6 +243,11 @@ public static class DataLoader
             SupportPowers: m.TryGetValue("support_powers", out var spw)
                 ? ParseInlineList(spw) : new List<string>(),
             BuildTab: buildTab,
+            // P8-18: absent means 0. Whether a building may or must author one
+            // depends on its kind and its powers, which only ToTypeDef knows.
+            ChargeTicks: m.ContainsKey("charge_ticks") ? ReqInt(m, "charge_ticks") : 0,
+            StrikeDamage: m.ContainsKey("strike_damage") ? ReqInt(m, "strike_damage") : 0,
+            RevealTicks: m.ContainsKey("reveal_ticks") ? ReqInt(m, "reveal_ticks") : 0,
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
 
@@ -755,6 +766,36 @@ public static class StructureCatalogue
             throw new FormatException(
                 $"'{s.Id}' authors build_tab: {s.BuildTab} and has no build time, so no Construction Yard will "
                 + "ever queue it and the button would order nothing. Map-placed buildings carry build_tab: none.");
+        // P8-18 (ADR-073): each pacing number is DEMANDED exactly where the sim
+        // reads it and REFUSED everywhere else. Demanded, because a superweapon
+        // with no charge_ticks would be ready the tick it landed and a cannon
+        // with no strike_damage would land a harmless flash. Refused, because a
+        // number authored where nothing reads it is this project's most-repeated
+        // defect: a file promising a charge or a strike the sim never applies.
+        int[]? powers = SupportPowerIdsOf(s.SupportPowers);
+        // Architect condition C7: where each column is read is World's single
+        // predicate, shared with registration's ValidatePacing.
+        var read = World.PacingColumnsRead(kind, s.DestroysFields, powers);
+        // P8-18 audit: and each is bounded above by World's ceilings, which the
+        // schema states too, so a file cannot overflow DamageOf or ask for a
+        // charge no match would ever see the end of.
+        void Pacing(string key, int value, bool readHere, int max, string where)
+        {
+            if (readHere && value < 1)
+                throw new FormatException($"'{s.Id}' must author {key} of at least 1: the sim reads it as {where}.");
+            if (!readHere && value != 0)
+                throw new FormatException($"'{s.Id}' authors {key}, which the sim reads only as {where}, so here "
+                                          + "it would be authored and never applied.");
+            if (value > max)
+                throw new FormatException($"'{s.Id}' authors {key} {value}, above the ceiling of {max}.");
+        }
+        Pacing("charge_ticks", s.ChargeTicks, read.Charge, World.MaxChargeTicks,
+               "a superweapon's charge (a support power's charge is the compiled SupportPowerChargeTicks)");
+        // The seismic charge strikes too, but its damage is the compiled
+        // SeismicDamage until P8-19 reworks its impact, so it is refused there.
+        Pacing("strike_damage", s.StrikeDamage, read.Strike, World.MaxStrikeDamage,
+               "the orbital cannon's blast or a precision strike");
+        Pacing("reveal_ticks", s.RevealTicks, read.Reveal, World.MaxRevealTicks, "an orbital scan's reveal");
         return new(s.Cost, kind, s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
@@ -792,7 +833,9 @@ public static class StructureCatalogue
                // Parsed-and-dropped here would be the loudest instance yet of
                // this project's most-repeated defect: a building advertising an
                // ability in its file that the sim never granted.
-               SupportPowerIdsOf(s.SupportPowers));
+               powers,
+               // P8-18: and the three pacing numbers, validated above.
+               s.ChargeTicks, s.StrikeDamage, s.RevealTicks);
     }
 
     /// <summary>

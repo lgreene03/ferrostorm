@@ -27,13 +27,19 @@ prerequisites: [com_radar_uplink]
 # denial weapon, so the commander hunts enemy ferrite instead of buildings.
 destroys_fields: true
 build_tab: defence
+# P8-18 (ADR-073): the same charge as the orbital cannon, on purpose (see the
+# header). No strike_damage: this weapon's 350 is still the compiled
+# SeismicDamage, because its impact is P8-19's to rework, and the loader
+# refuses the key here so it cannot be authored and never read.
+charge_ticks: 5400
 notes: >
   Shares EntityKind.Superweapon with the orbital cannon, so charging, the ready
   alert, the launch command and the five seconds of warning are the same
   machinery and behave identically. ONLY THE IMPACT DIFFERS, and it branches on
   the structure type.
 
-  Wide and lower-damage, per GDD s8: 350 base against the cannon's 900, over a
+  Wide and lower-damage, per GDD s8: 350 base against the cannon's 2500 (900
+  until P8-18's D2), over a
   3-cell core and a 6-cell fringe against the cannon's 1.5 and 3. Four times the
   area for under half the damage. The damage number is chosen against the
   building table rather than in the abstract: 350 clears infantry, harvesters

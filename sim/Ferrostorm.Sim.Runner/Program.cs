@@ -39,6 +39,7 @@ using Ferrostorm.Sim;
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
 //   aituninggate       - the seven data/ai files reproduce the compiled commander exactly, the sim plays what they say, and a changed AI number moves the catalogue checksum (the LAN desync guard)
+//   powerdatagate      - P8-18, ADR-073: charge_ticks, strike_damage and reveal_ticks reproduce the compiled reference, the sim builds, recharges, strikes and reveals by the REGISTERED numbers, each moves the checksum, and the loader demands each where it is read and refuses it elsewhere
 //   catalogueloadgate  - ONE RegisterAll(world, /data) call loads every kind, an unrecognised /data directory is refused by name, and a bare World still plays the compiled numbers
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
@@ -58,6 +59,7 @@ using Ferrostorm.Sim;
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
+//   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); on demand, not in match
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. None is in golden, match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
@@ -1077,14 +1079,25 @@ ulong ScenarioSuperweapon(ulong seed, Action<int, ulong>? cp = null, Action<stri
         foreach (var ev in world.Events) if (ev.Type == GameEventType.SuperweaponImpact) impactSeen = true;
     }
     if (!impactSeen) throw new Exception("superweapon: impact never arrived");
+    // P8-18 (ADR-073): the expected damage is DERIVED from the def's
+    // strike_damage through the live matrix, exactly as ApplyAreaDamage
+    // computes it (half in the outer ring). It was the literal 360 of the old
+    // 900 blast, which D2 raised to 2500, so the ring now takes 1000.
+    int strike = world.GetStructureType(World.OrbitalCannonStructType).StrikeDamage;
+    int ring = world.DamageOf(strike, Warhead.Omni, ArmourClass.Structure) / 2;
     if (world.Entities[v1].Alive || world.Entities[v2].Alive)
-        throw new Exception("superweapon: ground-zero rifles should be annihilated (720 Omni)");
-    if (world.Entities[vFactory].Hp != 1500 - 360)
-        throw new Exception($"superweapon: outer-ring factory should take exactly 360 (hp {world.Entities[vFactory].Hp})");
+        throw new Exception($"superweapon: ground-zero rifles should be annihilated ({world.DamageOf(strike, Warhead.Omni, ArmourClass.None)} Omni)");
+    if (world.Entities[vFactory].Hp != 1500 - ring)
+        throw new Exception($"superweapon: outer-ring factory should take exactly {ring} (hp {world.Entities[vFactory].Hp})");
     if (world.Entities[bystander].Hp != 100)
         throw new Exception("superweapon: the bystander outside both rings was hit");
-    if (world.Entities[super].ChargeTicks != 1500 - 39 && world.Entities[super].ChargeTicks > 1500)
-        throw new Exception($"superweapon: recharge did not restart properly ({world.Entities[super].ChargeTicks})");
+    // P8-18 (ADR-073): the impact tick restarts the charge at the def's own
+    // charge_ticks, whatever the 90-tick spawn override was, so the check is an
+    // equality. It read "1500 - 39, or anything at most 1500", which a charge
+    // that had restarted at the wrong value below 1500 would also have passed.
+    int recharge = world.GetStructureType(World.OrbitalCannonStructType).ChargeTicks;
+    if (world.Entities[super].ChargeTicks != recharge)
+        throw new Exception($"superweapon: recharge did not restart at the def's {recharge} ({world.Entities[super].ChargeTicks})");
     if (cp != null) cp(world.Tick, world.ComputeStateHash());
     report?.Invoke("superweapon: 90-tick charge exact; premature launch refused; 75-tick warning honoured; ground zero annihilated, outer ring damaged to the point, bystander untouched; recharge restarted");
     return world.ComputeStateHash();
@@ -1142,13 +1155,30 @@ ulong ScenarioAiSuper(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     world.SpawnFactory(0, 8, 34);
     int harv = world.SpawnHarvester(0, Fix64.FromInt(14), Fix64.FromInt(34));
     int field = world.SpawnFerriteField(Fix64.FromInt(22), Fix64.FromInt(30), 12000);
+    // P8-18 (ADR-073, D33): the enemy base is SEALED from the ground by a
+    // blocked column at x=70, so only the superweapon can reach it. D33 holds
+    // the purchase until a full charge has elapsed, and MEASURED without this
+    // column the commander's own waves razed the defenceless enemy refinery at
+    // t=2940 and its yard before t=4000, winning the match long before the
+    // weapon charged, so it never fired at all. The scenario's subject is the
+    // superweapon, not the waves; the column keeps the refinery standing for
+    // the strike this scenario exists to prove.
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(70, y, true);
     world.SpawnConstructionYard(1, 86, 30);
     int enemyRefinery = world.SpawnRefinery(1, 82, 30);
     var ai = SkirmishAI.Standard(0);
     var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
-    bool launched = false, impacted = false;
-    int superBuilt = -1, radarBuilt = -1;
-    const int ticks = 4500;
+    bool launched = false, impacted = false, aimedAtRefinery = false;
+    int superBuilt = -1, radarBuilt = -1, firstLaunch = -1;
+    // P8-18 (ADR-073): the window is 3000 ticks PLUS TWICE the superweapon's
+    // own charge, read off the def. D33 holds the commander's purchase until a
+    // full charge has elapsed, so the weapon is placed at about one charge plus
+    // its build and fires about one charge after that. The window follows the
+    // def, so the purpose (decide, build, wait out the charge, fire at the
+    // refinery) survives the charge moving by construction rather than by
+    // somebody remembering to re-time it. (It was 3000 plus one charge, the old
+    // 4500 at 1500, until D33.)
+    int ticks = 3000 + 2 * world.GetStructureType(World.OrbitalCannonStructType).ChargeTicks;
     for (int t = 0; t < ticks; t++)
     {
         ai.Act(world, cmds);
@@ -1160,7 +1190,17 @@ ulong ScenarioAiSuper(ulong seed, Action<int, ulong>? cp = null, Action<string>?
                 && world.Entities[ev.A].Kind == EntityKind.Superweapon) superBuilt = world.Tick;
             if (ev.Type == GameEventType.StructurePlaced && radarBuilt < 0
                 && world.Entities[ev.A].Kind == EntityKind.RadarUplink) radarBuilt = world.Tick;
-            if (ev.Type == GameEventType.SuperweaponLaunched) launched = true;
+            if (ev.Type == GameEventType.SuperweaponLaunched && !launched)
+            {
+                // P8-18: the FIRST launch must be aimed at the refinery. The
+                // longer window gives the commander's waves time to reach the
+                // enemy base, and a refinery a wave had already battered would
+                // otherwise satisfy the damage check below with no strike at it.
+                launched = true;
+                firstLaunch = world.Tick;
+                var er = world.Entities[enemyRefinery];
+                aimedAtRefinery = er.Alive && ev.X == er.X && ev.Y == er.Y;
+            }
             if (ev.Type == GameEventType.SuperweaponImpact) impacted = true;
         }
         if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
@@ -1171,11 +1211,12 @@ ulong ScenarioAiSuper(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     if (radarBuilt < 0 || radarBuilt > superBuilt)
         throw new Exception($"aisuper: the radar must stand before the superweapon (radar {radarBuilt}, super {superBuilt})");
     if (!launched) throw new Exception("aisuper: charged and never fired");
+    if (!aimedAtRefinery) throw new Exception($"aisuper: the first launch (tick {firstLaunch}) was not aimed at the standing enemy refinery");
     if (!impacted) throw new Exception("aisuper: launch without impact");
     var target = world.Entities[enemyRefinery];
     if (target.Alive && target.Hp >= target.MaxHp)
         throw new Exception("aisuper: the enemy refinery came through unscathed");
-    report?.Invoke($"aisuper: superweapon placed at tick {superBuilt}, charged, and fired at the enemy refinery ({(target.Alive ? $"battered to {target.Hp}/{target.MaxHp}" : "destroyed")})");
+    report?.Invoke($"aisuper: superweapon placed at tick {superBuilt}, charged, and fired at the enemy refinery by tick {firstLaunch} of {ticks} ({(target.Alive ? $"battered to {target.Hp}/{target.MaxHp}" : "destroyed")})");
     return world.ComputeStateHash();
 }
 
@@ -10160,7 +10201,7 @@ int RadarJammingGate()
         }
         if (jammed >= clear)
             return Fail($"radar jamming: under continuous firing the victim was blind for {jammed} ticks and "
-                        + $"sighted for {clear}. The jam is derived as a THIRD of its own charge precisely so a "
+                        + $"sighted for {clear}. The jam is pinned at a THIRD of its own charge precisely so a "
                         + "victim spends most of the match able to see");
     }
 
@@ -10189,8 +10230,8 @@ int RadarJammingGate()
                       + "first support power whose effect is on a PLAYER rather than on the map. The Watch Post "
                       + "carries it - the Sodality's sensor building is where sensor warfare belongs, and it is "
                       + "unarmed, visible and killable by design, so s8's \"scout the structure, kill it\" needs no "
-                      + $"arranging. It blinds every hostile for {World.RadarJamTicks} ticks, DERIVED as a third of "
-                      + "its own charge (the ratio this project already uses twice), which bounds the victim to "
+                      + $"arranging. It blinds every hostile for {World.RadarJamTicks} ticks, a third of its own "
+                      + "charge (an absolute since P8-18, at the value that ratio gave), which bounds the victim to "
                       + "being blind at most a third of the time even against a commander who fires it on every "
                       + "recharge. Never its owner, it lapses, and it rides the save at v14. The client asks the "
                       + "SIM whether it is jammed, because a blackout the client decided for itself would differ "
@@ -10233,10 +10274,9 @@ int PrecisionStrikeGate()
                         + $"{w.Entities[vic].Hp}), so this gate cannot tell a strike from the weather");
     }
 
-    // --- 2. A strike HURTS what it lands on, by the derived amount.
-    //        Asserted against the DERIVATION (a third of the orbital cannon's
-    //        damage) rather than against the literal 300, so the number and the
-    //        rule that produces it cannot drift apart.
+    // --- 2. A strike HURTS what it lands on, by its own amount. P8-18 (ADR-073,
+    //        D2) cut the derivation from the orbital cannon's damage, so this
+    //        asserts the strike's own number through the live damage matrix.
     {
         var (w, bas) = Base(7301);
         int vic = w.SpawnRefinery(1, 30, 30);
@@ -10250,10 +10290,12 @@ int PrecisionStrikeGate()
         // The LIVE matrix, read from the world rather than the compiled static:
         // /data drives it since ADR-057, so this asserts what the match plays.
         int pct = w.DamageMatrixSnapshot()[(int)Warhead.Omni * DamageMatrix.ArmourClasses + (int)ArmourClass.Structure];
-        int expected = World.PrecisionStrikeDamage * pct / 100;
+        // P8-18: the Bastion's REGISTERED strike_damage, for the matrix's reason.
+        int strike = w.GetStructureType(Bastion).StrikeDamage;
+        int expected = strike * pct / 100;
         if (lost != expected)
-            return Fail($"precision strike: took {lost} off a structure where the damage matrix and a third of the "
-                        + $"orbital cannon's {World.OrbitalCannonDamage} give {expected}");
+            return Fail($"precision strike: took {lost} off a structure where the damage matrix and the strike's "
+                        + $"{strike} give {expected}");
     }
 
     // --- 3. It is SURGICAL: one band, no falloff ring. A target outside the
@@ -10336,9 +10378,9 @@ int PrecisionStrikeGate()
                         + "permission, and an unknown id must be refused rather than falling through to a default");
     }
 
-    Console.WriteLine($"precisionstrikegate: GDD s3 line 25's PRECISION STRIKE, {World.PrecisionStrikeDamage} damage "
-                      + $"- a THIRD of the orbital cannon's {World.OrbitalCannonDamage}, the same ratio ADR-062 gave "
-                      + "the charge, so a minor power does a third of the major one's damage on a third of its clock "
+    Console.WriteLine($"precisionstrikegate: GDD s3 line 25's PRECISION STRIKE, {new World(1, 8, 8, players: 2).GetStructureType(Bastion).StrikeDamage} damage "
+                      + "(the Bastion's authored strike_damage since P8-18, pinned at the third of the old 900-damage "
+                      + "cannon it was derived as, so raising the cannon left the minor power minor) "
                       + "- inside the cannon's own 1.5-cell core with NO falloff ring, which is what makes it "
                       + "surgical rather than merely small. It leaves ferrite fields alone, because GDD s8 gives "
                       + "field destruction to the Sodality's seismic charge as its identity. And the Bastion now "
@@ -10421,9 +10463,11 @@ int OrbitalScanGate()
         for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas,
                                    Map.CellCentre(FarX), Map.CellCentre(FarY), World.OrbitalScanPowerId) });
-        for (int t = 0; t < World.OrbitalScanRevealTicks + 5; t++) w.Step(default);
+        // P8-18: the Bastion's REGISTERED reveal_ticks, which is what the scan reads.
+        int reveal = w.GetStructureType(Bastion).RevealTicks;
+        for (int t = 0; t < reveal + 5; t++) w.Step(default);
         if (w.IsVisible(0, FarX, FarY))
-            return Fail($"orbital scan: the reveal was still lit {World.OrbitalScanRevealTicks + 5} ticks after "
+            return Fail($"orbital scan: the reveal was still lit {reveal + 5} ticks after "
                         + "firing - a scan that never lapses is permanent vision on a cooldown");
         // ...and the ground stays REMEMBERED after it lapses, which is stage 2's
         // claim proved over time rather than on the tick it fired.
@@ -10479,9 +10523,9 @@ int OrbitalScanGate()
     }
 
     Console.WriteLine($"orbitalscangate: GDD s3 line 25's ORBITAL SCAN, the first support power with an effect. A "
-                      + $"charged Bastion lights a circle of the map for {World.OrbitalScanRevealTicks} ticks - "
-                      + "derived from the superweapon's incoming warning, this game's own answer to \"long enough "
-                      + $"to notice and act\" - with a radius of {new World(1, 8, 8, players: 2).GetStructureType(Bastion).SightCells} "
+                      + $"charged Bastion lights a circle of the map for {new World(1, 8, 8, players: 2).GetStructureType(Bastion).RevealTicks} "
+                      + "ticks (its authored reveal_ticks since P8-18; it began as the superweapon's incoming warning, "
+                      + $"this game's own answer to \"long enough to notice and act\") - with a radius of {new World(1, 8, 8, players: 2).GetStructureType(Bastion).SightCells} "
                       + "cells, DERIVED as the building's own sight rather than given a number of its own: the scan "
                       + "shows what its sensors would see, projected anywhere on the map. It marks the ground "
                       + "EXPLORED as well as visible, because a scan is intelligence you keep; it reveals to its "
@@ -10505,9 +10549,11 @@ int SupportPowerGate()
     // adds - ADR-044 clause 4's argument applied a second time.
     //
     // Every stage asserts the SPECIFICATION rather than the implementation's
-    // constants: the charge is checked as a RATIO against the superweapon's
-    // ("shorter timers" is relative, and it is the only other timer in the
-    // sentence), and the counterplay is checked as an OUTCOME.
+    // constants: the charge is checked AGAINST the superweapon's ("shorter
+    // timers" is relative, and it is the only other timer in the sentence),
+    // and the counterplay is checked as an OUTCOME. P8-18 (ADR-073) cut the
+    // charge's derivation from the superweapon's, which is why stage 1 below
+    // measuring both timers rather than trusting the arithmetic now matters.
     // The Radar Uplink is used as the CARRIER, re-registered per world with a
     // power added and nothing else changed. That is deliberately not the same as
     // giving the shipped game a power: the override lives in this gate's world
@@ -10517,21 +10563,28 @@ int SupportPowerGate()
     const int Carrier = 12;
     const int TestPower = 1;
 
+    // P8-18 audit (ADR-073): TestPower is the orbital scan, so the carrier
+    // carries the Bastion's REGISTERED reveal as well. Without it the def
+    // registered with RevealTicks 0, and every stage below exercised a scan
+    // that lit the map for at most one tick; registration now refuses that.
+    World.StructureTypeDef Carrying(World w)
+        => w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower }, RevealTicks = w.GetStructureType(17).RevealTicks };
+
     World WithPower(ulong seed, out int bld)
     {
         var w = new World(seed, 64, 64, players: 2);
-        var stock = w.GetStructureType(Carrier);
-        w.RegisterStructureType(Carrier, stock with { SupportPowerIds = new[] { TestPower } });
+        w.RegisterStructureType(Carrier, Carrying(w));
         w.SpawnPowerPlant(0, 4, 4, supply: 5000);
         bld = w.SpawnRadarUplink(0, 20, 20);
         return w;
     }
 
-    // --- 1. SHORTER THAN THE SUPERWEAPON, asserted as the ratio rather than as
-    //        the number. GDD s8 says "shorter timers"; the superweapon is the
-    //        only other timer in that sentence, so that is the bound, and
-    //        writing it this way survives ADR-044's refused change to the
-    //        superweapon's own charge.
+    // --- 1. SHORTER THAN THE SUPERWEAPON, asserted as the relation rather than
+    //        as the number. GDD s8 says "shorter timers"; the superweapon is the
+    //        only other timer in that sentence, so that is the bound. Since
+    //        P8-18 (ADR-073) the two are separate numbers, the superweapon's in
+    //        /data and the power's a compiled absolute, so this stage is the only
+    //        thing holding "shorter" true.
     {
         // MEASURED, not compared. P7-21 wrote this stage as two `const` against
         // `const` comparisons, which the compiler FOLDED AWAY - it proved 500 <
@@ -10548,7 +10601,7 @@ int SupportPowerGate()
         {
             var w = new World(7050, 64, 64, players: 2);
             if (!superweapon)
-                w.RegisterStructureType(Carrier, w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
+                w.RegisterStructureType(Carrier, Carrying(w));
             w.SpawnPowerPlant(0, 4, 4, supply: 5000);
             _ = superweapon ? w.SpawnSuperweapon(0, 20, 20) : w.SpawnRadarUplink(0, 20, 20);
             var want = superweapon ? GameEventType.SuperweaponReady : GameEventType.SupportPowerReady;
@@ -10601,11 +10654,19 @@ int SupportPowerGate()
         // THE CONTROL FIRST, and without it this stage is satisfied by a power
         // that never works at all - which is a different bug wearing the same
         // passing test (ADR-059 stage 2's rule).
+        if (w.IsVisible(0, 30, 30))
+            return Fail("support power: the aim cell (30,30) is already lit, so stage 3 cannot tell a real reveal from sight");
         w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bld,
                                    Map.CellCentre(30), Map.CellCentre(30), TestPower) });
         if (!w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed))
             return Fail("support power: a charged power on a LIVING structure did not fire, so stage 3's kill test "
                         + "would prove nothing - a power that never works passes any counterplay assertion");
+        // P8-18 audit: and it is a REAL reveal, still lit two ticks on. With the
+        // carrier's old zero reveal this cell went dark at once.
+        w.Step(default); w.Step(default);
+        if (!w.IsVisible(0, 30, 30))
+            return Fail("support power: the control scan went dark within two ticks, so the carrier is not exercising "
+                        + "a real reveal (its RevealTicks must be the Bastion's registered value)");
 
         // Now kill the building and try again.
         var w2 = WithPower(7102, out int bld2);
@@ -10635,20 +10696,313 @@ int SupportPowerGate()
         var b = new World(7103, 32, 32, players: 2);
         if (a.CatalogueChecksum != b.CatalogueChecksum)
             return Fail("support power: two identical bare worlds disagree on the catalogue checksum");
-        b.RegisterStructureType(Carrier, b.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower } });
+        b.RegisterStructureType(Carrier, Carrying(b));
         if (a.CatalogueChecksum == b.CatalogueChecksum)
             return Fail("support power: granting a building a support power did NOT move the catalogue checksum, so "
                         + "two peers could hold different powers and the LAN hello would let them play");
     }
 
     Console.WriteLine($"supportpowergate: GDD s8's minor powers had NO machinery in the sim at all. A building now "
-                      + $"grants a power BY ITS DEF, charges in {World.SupportPowerChargeTicks} ticks - a third of "
-                      + $"the superweapon's {World.SuperweaponChargeTicks}, asserted as a RATIO so \"shorter\" "
-                      + "survives ADR-044's refused change to that number - announces itself, refuses to fire early, "
+                      + $"grants a power BY ITS DEF, charges in {World.SupportPowerChargeTicks} ticks (an absolute "
+                      + "since P8-18, MEASURED shorter than the superweapon's charge rather than derived from it), "
+                      + "announces itself, refuses to fire early, "
                       + "and rides the catalogue checksum. The counterplay clause is enforced rather than described: "
                       + "kill the building and the power dies with it, because the STRUCTURE IS THE PERMISSION and "
                       + "there is no separate unlock list to get wrong. No power has an EFFECT yet, deliberately - "
                       + "GDD s3 names five and every one needs a radius or a duration written nowhere");
+    return 0;
+}
+
+int PowerDataGate()
+{
+    // P8-18 (ADR-073). D1, D2 and D15 move the superweapon's charge, the orbital
+    // cannon's damage and the scan's reveal, and D2 pins the precision strike.
+    // All four left sim constants for three columns on the structure def
+    // (charge_ticks, strike_damage, reveal_ticks), and this gate is
+    // weapondatagate's argument applied to them. Transcription alone would pass
+    // on files the sim never read, so stage 2 REGISTERS a value no file carries
+    // and asserts the sim plays it, each beside a control. Additive: a
+    // standalone mode and a Match battery stage, never a golden.
+    const int Cannon = World.OrbitalCannonStructType;   // 6
+    const int Bastion = 17;
+    string dataDir =Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data"));
+    string buildingsDir = Path.Combine(dataDir, "buildings");
+
+    // --- 1. TRANSCRIPTION: every building file reproduces the compiled
+    //        reference for the three columns, including the 0 that most of them
+    //        carry, so a value cannot appear on the wrong building either.
+    var loaded = new World(4800);
+    try
+    {
+        CatalogueFiles.RegisterUnitsAndStructures(loaded, Path.Combine(dataDir, "units"), buildingsDir);
+        // Architect condition C3 reads the blast through the /data matrix.
+        CatalogueFiles.RegisterDamageMatrix(loaded, Path.Combine(dataDir, "combat"));
+    }
+    catch (Exception e) { return Fail($"powerdata: /data would not load: {e.Message}"); }
+    for (int t = 1; t <= World.MaxStructType; t++)
+    {
+        var got = loaded.GetStructureType(t);
+        var want = World.DefaultStructureType(t);
+        if (got.ChargeTicks != want.ChargeTicks || got.StrikeDamage != want.StrikeDamage || got.RevealTicks != want.RevealTicks)
+            return Fail($"powerdata: {StructureCatalogue.IdOf(t)} authors charge_ticks {got.ChargeTicks}, strike_damage "
+                        + $"{got.StrikeDamage}, reveal_ticks {got.RevealTicks}, and the compiled reference says "
+                        + $"{want.ChargeTicks}, {want.StrikeDamage}, {want.RevealTicks}. Fix the file, not the reference.");
+    }
+
+    // --- 2. THE SIM PLAYS THE REGISTERED NUMBER. Each value below is one no
+    //        file carries, so a pass cannot be the compiled table agreeing.
+    const int OddCharge = 321, OddBlast = 1000, OddStrike = 77, OddReveal = 20;
+
+    // 2a. The charge a superweapon is BUILT with, through the default path that
+    //     placement takes, and the charge it RESTARTS after an impact.
+    int SpawnedCharge(bool register)
+    {
+        var w = new World(4801, 64, 64, players: 2);
+        if (register) w.RegisterStructureType(Cannon, w.GetStructureType(Cannon) with { ChargeTicks = OddCharge });
+        return w.Entities[w.SpawnSuperweapon(0, 10, 10)].ChargeTicks;
+    }
+    int stockCharge = SpawnedCharge(false), oddCharge = SpawnedCharge(true);
+    if (stockCharge != World.DefaultStructureType(Cannon).ChargeTicks)
+        return Fail($"powerdata control: a stock orbital cannon was built with charge {stockCharge}, not its def's "
+                    + $"{World.DefaultStructureType(Cannon).ChargeTicks}");
+    if (oddCharge != OddCharge)
+        return Fail($"powerdata: an orbital cannon REGISTERED with charge_ticks {OddCharge} was built with {oddCharge}, "
+                    + "so the charge is still a sim constant and the file is decoration");
+
+    // Fire one cannon at a heavy, near-indestructible dummy at ground zero and
+    // report its charge on the impact tick and the damage it dealt.
+    (int Recharge, int Dealt) Fire(ulong seed, World.StructureTypeDef? def)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        if (def is { } d) w.RegisterStructureType(Cannon, d);
+        w.SpawnPowerPlant(0, 2, 2, supply: 5000);
+        int dummy = w.SpawnUnit(1, Fix64.FromInt(30), Fix64.FromInt(30), Fix64.Zero, 100000, ArmourClass.Heavy, weaponId: 0);
+        int sw = w.SpawnSuperweapon(0, 10, 2, chargeTicks: 1);
+        w.Step(default);   // the charge completes
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.LaunchSuper, sw, Fix64.FromInt(30), Fix64.FromInt(30)) });
+        for (int t = 0; t < 120; t++)
+        {
+            w.Step(default);
+            if (w.Events.Any(ev => ev.Type == GameEventType.SuperweaponImpact))
+                return (w.Entities[sw].ChargeTicks, 100000 - w.Entities[dummy].Hp);
+        }
+        return (-1, -1);
+    }
+    var stockCannon = new World(1).GetStructureType(Cannon);
+    var (stockRecharge, stockDealt) = Fire(4802, null);
+    var (oddRecharge, _) = Fire(4803, stockCannon with { ChargeTicks = OddCharge });
+    if (stockRecharge != stockCannon.ChargeTicks)
+        return Fail($"powerdata control: a stock cannon restarted its charge at {stockRecharge} after impact, not {stockCannon.ChargeTicks}");
+    if (oddRecharge != OddCharge)
+        return Fail($"powerdata: a cannon REGISTERED with charge_ticks {OddCharge} restarted at {oddRecharge} after "
+                    + "its impact, so the recharge is still reading a sim constant");
+
+    // 2b. The cannon's blast.
+    var (_, oddDealt) = Fire(4804, stockCannon with { StrikeDamage = OddBlast });
+    var probe = new World(1);
+    if (stockDealt != probe.DamageOf(stockCannon.StrikeDamage, Warhead.Omni, ArmourClass.Heavy))
+        return Fail($"powerdata control: a stock cannon dealt {stockDealt} at ground zero, not its def's "
+                    + $"{stockCannon.StrikeDamage} through the Omni row ({probe.DamageOf(stockCannon.StrikeDamage, Warhead.Omni, ArmourClass.Heavy)})");
+    if (oddDealt != probe.DamageOf(OddBlast, Warhead.Omni, ArmourClass.Heavy))
+        return Fail($"powerdata: a cannon REGISTERED with strike_damage {OddBlast} dealt {oddDealt} at ground zero, "
+                    + "so the blast is still a sim constant");
+
+    // 2c and 2d. The Bastion's two powers, the same fixture each time: a charged
+    // Bastion, a dummy at the aim point, one command.
+    (World W, int Dummy) Powered(ulong seed, World.StructureTypeDef? def, int power, int ax, int ay)
+    {
+        var w = new World(seed, 64, 64, players: 2);
+        w.SetFaction(0, World.FactionDirectorate);
+        if (def is { } d) w.RegisterStructureType(Bastion, d);
+        w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+        int bas = w.SpawnFactionDefence(0, Bastion, 8, 8);
+        int dummy = w.SpawnUnit(1, Map.CellCentre(ax), Map.CellCentre(ay), Fix64.Zero, 100000, ArmourClass.Heavy, weaponId: 0);
+        for (int t = 0; t < World.SupportPowerChargeTicks + 5; t++) w.Step(default);
+        w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, bas, Map.CellCentre(ax), Map.CellCentre(ay), power) });
+        return (w, dummy);
+    }
+    var stockBastion = new World(1).GetStructureType(Bastion);
+    {
+        var (ws, ds) = Powered(4805, null, World.PrecisionStrikePowerId, 30, 30);
+        var (wo, d2) = Powered(4806, stockBastion with { StrikeDamage = OddStrike }, World.PrecisionStrikePowerId, 30, 30);
+        int stockStrike = 100000 - ws.Entities[ds].Hp, oddStrike = 100000 - wo.Entities[d2].Hp;
+        if (stockStrike != probe.DamageOf(stockBastion.StrikeDamage, Warhead.Omni, ArmourClass.Heavy))
+            return Fail($"powerdata control: a stock precision strike dealt {stockStrike}, not its def's {stockBastion.StrikeDamage} through the Omni row");
+        if (oddStrike != probe.DamageOf(OddStrike, Warhead.Omni, ArmourClass.Heavy))
+            return Fail($"powerdata: a Bastion REGISTERED with strike_damage {OddStrike} struck for {oddStrike}, so the "
+                        + "precision strike is still a sim constant");
+    }
+    {
+        // A dark corner, lit by the scan; ask again after OddReveal + 5 ticks,
+        // which is past the registered reveal and well inside the stock one.
+        const int FarX = 54, FarY = 54;
+        var (ws, _) = Powered(4807, null, World.OrbitalScanPowerId, FarX, FarY);
+        var (wo, _) = Powered(4808, stockBastion with { RevealTicks = OddReveal }, World.OrbitalScanPowerId, FarX, FarY);
+        if (!ws.IsVisible(0, FarX, FarY) || !wo.IsVisible(0, FarX, FarY))
+            return Fail("powerdata: a charged scan did not light its corner, so the reveal stage measures nothing");
+        for (int t = 0; t < OddReveal + 5; t++) { ws.Step(default); wo.Step(default); }
+        if (stockBastion.RevealTicks <= OddReveal + 5)
+            return Fail($"powerdata: the stock reveal ({stockBastion.RevealTicks}) is too short for this stage's control");
+        if (!ws.IsVisible(0, FarX, FarY))
+            return Fail($"powerdata control: a stock scan went dark after {OddReveal + 5} ticks, inside its {stockBastion.RevealTicks}");
+        if (wo.IsVisible(0, FarX, FarY))
+            return Fail($"powerdata: a Bastion REGISTERED with reveal_ticks {OddReveal} was still lit {OddReveal + 5} "
+                        + "ticks on, so the reveal is still a sim constant");
+    }
+
+    // --- 3. Each column moves the catalogue checksum (ADR-032): two peers
+    //        holding different files would refuse each other before tick 0.
+    ulong stockSum = new World(4809).CatalogueChecksum;
+    if (loaded.CatalogueChecksum != stockSum)
+        return Fail($"powerdata: /data registers to 0x{loaded.CatalogueChecksum:X16} against the compiled 0x{stockSum:X16}");
+    foreach (var (name, type, edit) in new (string, int, Func<World.StructureTypeDef, World.StructureTypeDef>)[]
+             {
+                 ("charge_ticks", Cannon, d => d with { ChargeTicks = d.ChargeTicks + 1 }),
+                 ("strike_damage", Cannon, d => d with { StrikeDamage = d.StrikeDamage + 1 }),
+                 ("reveal_ticks", Bastion, d => d with { RevealTicks = d.RevealTicks + 1 }),
+             })
+    {
+        var w = new World(4810);
+        w.RegisterStructureType(type, edit(w.GetStructureType(type)));
+        if (w.CatalogueChecksum == stockSum)
+            return Fail($"powerdata: a one-tick or one-point change to {name} did not move the catalogue checksum, so "
+                        + "two LAN peers could play different superweapons and call it agreement");
+    }
+
+    // --- 4. THE LOADER demands each key where the sim reads it and refuses it
+    //        everywhere else. Real files, one line added or taken away.
+    string Text(string id) => File.ReadAllText(Path.Combine(buildingsDir, id + ".yaml"));
+    string Without(string text, string key)
+        => string.Join('\n', text.Replace("\r\n", "\n").Split('\n').Where(l => !l.StartsWith(key + ":", StringComparison.Ordinal)));
+    bool Refused(string text)
+    {
+        try { StructureCatalogue.ToTypeDef(DataLoader.ParseStructure(text)); return false; }
+        catch (FormatException) { return true; }
+    }
+    foreach (var (why, text) in new[]
+             {
+                 ("a superweapon with no charge_ticks", Without(Text("dir_superweapon"), "charge_ticks")),
+                 ("an orbital cannon with no strike_damage", Without(Text("dir_superweapon"), "strike_damage")),
+                 ("a Bastion with no strike_damage", Without(Text("dir_bastion"), "strike_damage")),
+                 ("a Bastion with no reveal_ticks", Without(Text("dir_bastion"), "reveal_ticks")),
+                 ("a turret with a charge_ticks", Text("dir_turret") + "\ncharge_ticks: 500\n"),
+                 ("a seismic charge with a strike_damage", Text("sod_seismic_charge") + "\nstrike_damage: 350\n"),
+                 ("a Watch Post with a reveal_ticks", Text("sod_watch_post") + "\nreveal_ticks: 75\n"),
+             })
+        if (!Refused(text))
+            return Fail($"powerdata: the loader accepted {why}. A number the sim needs must be demanded, and one it "
+                        + "never reads must be refused, or a file can promise what the game does not do");
+    if (Refused(Text("dir_superweapon")) || Refused(Text("dir_bastion")) || Refused(Text("sod_seismic_charge")))
+        return Fail("powerdata: the loader refused a shipped file, so stage 4's refusals prove nothing");
+    // The loader's ceiling (P8-18 audit): a strike above World.MaxStrikeDamage
+    // would let DamageOf's baseDamage * pct wrap.
+    if (!Refused(Text("dir_superweapon").Replace("strike_damage: 2500", $"strike_damage: {World.MaxStrikeDamage + 1}")))
+        return Fail($"powerdata: the loader accepted a strike_damage above the ceiling of {World.MaxStrikeDamage}");
+
+    // --- 5. P8-18 audit: REGISTRATION demands the same columns the loader does,
+    //        so a def built in code cannot carry the record's zero defaults
+    //        where the sim reads them. Each refusal must NAME its column.
+    {
+        string? RegRefusal(int type, Func<World.StructureTypeDef, World.StructureTypeDef> edit)
+        {
+            var w = new World(4811);
+            try { w.RegisterStructureType(type, edit(w.GetStructureType(type))); return null; }
+            catch (FormatException e) { return e.Message; }
+        }
+        const int Radar = 12;
+        foreach (var (why, type, column, edit) in new (string, int, string, Func<World.StructureTypeDef, World.StructureTypeDef>)[]
+                 {
+                     ("a superweapon with no charge", Cannon, "ChargeTicks", d => d with { ChargeTicks = 0 }),
+                     ("an orbital cannon with no strike", Cannon, "StrikeDamage", d => d with { StrikeDamage = 0 }),
+                     ("a Bastion with no precision strike damage", Bastion, "StrikeDamage", d => d with { StrikeDamage = 0 }),
+                     ("a Bastion with no scan reveal", Bastion, "RevealTicks", d => d with { RevealTicks = 0 }),
+                     ("a Radar Uplink granted the scan with no reveal (supportpowergate's old carrier)", Radar, "RevealTicks",
+                      d => d with { SupportPowerIds = new[] { World.OrbitalScanPowerId } }),
+                     ("a charge above the ceiling", Cannon, "ChargeTicks", d => d with { ChargeTicks = World.MaxChargeTicks + 1 }),
+                     ("a strike above the ceiling", Cannon, "StrikeDamage", d => d with { StrikeDamage = World.MaxStrikeDamage + 1 }),
+                     ("a reveal above the ceiling", Bastion, "RevealTicks", d => d with { RevealTicks = World.MaxRevealTicks + 1 }),
+                 })
+        {
+            string? msg = RegRefusal(type, edit);
+            if (msg == null)
+                return Fail($"powerdata: registration accepted {why}. A code-built def must meet the loader's rule, or a "
+                            + "fixture can exercise a superweapon or a power that the shipped game could never hold");
+            if (!msg.Contains(column, StringComparison.Ordinal))
+                return Fail($"powerdata: registration refused {why} without naming {column}: {msg}");
+        }
+        // The controls: the seismic charge legitimately has no strike (its
+        // damage is the compiled SeismicDamage), and the ceilings themselves are
+        // legal values.
+        foreach (var (why, type, edit) in new (string, int, Func<World.StructureTypeDef, World.StructureTypeDef>)[]
+                 {
+                     ("the stock seismic charge, which has no strike_damage", World.SeismicChargeStructType, d => d),
+                     ("a cannon at every ceiling", Cannon, d => d with { ChargeTicks = World.MaxChargeTicks, StrikeDamage = World.MaxStrikeDamage }),
+                     ("a Bastion at the reveal ceiling", Bastion, d => d with { RevealTicks = World.MaxRevealTicks }),
+                 })
+            if (RegRefusal(type, edit) is { } refused)
+                return Fail($"powerdata control: registration refused {why}: {refused}");
+    }
+
+    // --- 6. P8-18 audit: F8 HOLDS ON THE REGISTERED CHARGE, asserted here in
+    //        match because pillargate is on demand. Under D33 the commander may
+    //        not buy the weapon before one full charge, so it is placed at about
+    //        charge + build (pillargate measured 6001 = 5400 + 600 + 1) and first
+    //        fires about one charge later (11536 = 6001 + 5400 + 135, the 135
+    //        being power and beat slack). The first launch is therefore at least
+    //        2 x charge_ticks + build_ticks, and F8 needs it at or after 10800:
+    //        2 x 5400 + 600 = 11400, so the bar fails only below a charge of
+    //        5100. The bound drops the measured slack, which only helps, and it
+    //        also assumes D1's economy gate is met before the floor opens
+    //        (measured about t=3170, well before 5100). A /data edit that would
+    //        break F8 turns match, and so CI, red.
+    {
+        bool F8Holds(in World.StructureTypeDef d) => 2 * d.ChargeTicks + d.BuildTicks >= MeasurementHarness.F8FirstLaunchTicks;
+        int superweapons = 0;
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            var d = loaded.GetStructureType(t);
+            if (d.Kind != EntityKind.Superweapon) continue;
+            superweapons++;
+            if (!F8Holds(in d))
+                return Fail($"powerdata: {StructureCatalogue.IdOf(t)} charges in {d.ChargeTicks} and builds in {d.BuildTicks}, "
+                            + $"so under D33 its first launch can come as early as {2 * d.ChargeTicks + d.BuildTicks}, before "
+                            + $"F8's {MeasurementHarness.F8FirstLaunchTicks}. Raise the charge or revisit D33 (ADR-073)");
+        }
+        if (superweapons == 0) return Fail("powerdata: no superweapon def was found, so the F8 bound measured nothing");
+        // And the bound bites: a charge of 5000 (2 x 5000 + 600 = 10600) fails it.
+        if (F8Holds(stockCannon with { ChargeTicks = 5000 }))
+            return Fail("powerdata: the F8 bound passed a 5000-tick charge, so it cannot catch the edit it exists for");
+    }
+
+    // --- 7. Architect condition C3: D2's ONE-STRIKE REFINERY KILL holds on the
+    //        /data catalogue. The orbital cannon's strike, through the /data
+    //        matrix's Omni row against Structure armour, must reach a refinery's
+    //        hit points at ground zero, or D2's reason (one strike per charge
+    //        ends a refinery) is no longer true and its reversal cannot be read.
+    int refineryHp = loaded.GetStructureType(3).Hp;   // com_refinery
+    bool OneStrikeRefinery(int strike) => loaded.DamageOf(strike, Warhead.Omni, ArmourClass.Structure) >= refineryHp;
+    int cannonStrike = loaded.GetStructureType(Cannon).StrikeDamage;
+    if (!OneStrikeRefinery(cannonStrike))
+        return Fail($"powerdata: the orbital cannon's strike_damage {cannonStrike} deals "
+                    + $"{loaded.DamageOf(cannonStrike, Warhead.Omni, ArmourClass.Structure)} to a structure at ground zero, short "
+                    + $"of com_refinery's {refineryHp} hp, so D2's one-strike refinery kill no longer holds (ADR-073)");
+    // The control: one point less (2499 Omni at 80 per cent is 1999) fails it.
+    if (OneStrikeRefinery(2499))
+        return Fail($"powerdata: the one-strike check passed strike_damage 2499, so it cannot catch a cannon that no longer kills a refinery");
+
+    Console.WriteLine($"powerdatagate: the superweapon's charge ({stockCharge} ticks), the orbital cannon's blast "
+                      + $"({stockCannon.StrikeDamage}), the precision strike ({stockBastion.StrikeDamage}) and the scan's "
+                      + $"reveal ({stockBastion.RevealTicks} ticks) come from /data/buildings and reproduce the compiled "
+                      + $"reference; registered at {OddCharge}, {OddBlast}, {OddStrike} and {OddReveal} the sim built, "
+                      + $"recharged, struck and revealed by those numbers instead; each moves the catalogue checksum; "
+                      + "the loader demands each key where it is read and refuses it everywhere else; registration in code "
+                      + $"demands the same columns and refuses eight bad defs by name; every ceiling ({World.MaxChargeTicks}, "
+                      + $"{World.MaxStrikeDamage}, {World.MaxRevealTicks}) is enforced; and every registered superweapon keeps "
+                      + $"D33's first launch at or after {MeasurementHarness.F8FirstLaunchTicks} (2 x charge + build = "
+                      + $"{2 * stockCannon.ChargeTicks + stockCannon.BuildTicks} for the cannon); and the cannon's strike "
+                      + $"kills a refinery in one blow on the /data catalogue ({loaded.DamageOf(cannonStrike, Warhead.Omni, ArmourClass.Structure)} "
+                      + $"Omni against com_refinery's {refineryHp} hp, where strike_damage 2499 would deal "
+                      + $"{loaded.DamageOf(2499, Warhead.Omni, ArmourClass.Structure)} and fail)");
     return 0;
 }
 
@@ -11128,7 +11482,11 @@ int SeismicAimGate()
         var w = new World(3805, 96, 96, players: 2);
         w.SetFaction(0, World.FactionSodality);
         var real = w.GetStructureType(Seismic);
-        w.RegisterStructureType(Seismic, real with { DestroysFields = false });
+        // P8-18 audit (ADR-073): a superweapon that does not destroy fields
+        // strikes through ApplyAreaDamage and so needs a strike_damage, which
+        // registration now demands. Its own SeismicDamage is the honest value;
+        // this stage asks only where the commander AIMS.
+        w.RegisterStructureType(Seismic, real with { DestroysFields = false, StrikeDamage = World.SeismicDamage });
         w.SpawnConstructionYard(0, 6, 46);
         w.SpawnPowerPlant(0, 10, 46, supply: 5000, structType: World.SodalityGeneratorStructType);
         w.SpawnSuperweapon(0, 10, 42, chargeTicks: 0, structType: Seismic);
@@ -11191,7 +11549,14 @@ int AiFactionGate()
         w.SpawnConstructionYard(1, 86, 30);
         var ai = SkirmishAI.Standard(0);
         var cmds = new List<Command> { new(0, 0, CommandType.Harvest, harv, Fix64.Zero, Fix64.Zero, field) };
-        for (int t = 0; t < 6000; t++)
+        // P8-18 (ADR-073, D33): long enough to pass the commander's purchase
+        // floor (one full charge of its own side's superweapon) and then build
+        // the weapon twice over, and never shorter than the 6000 this ran
+        // before. MEASURED: at a flat 6000 the floor (5400) plus the 600-tick
+        // build left the Directorate commander with no superweapon at the end.
+        int sideSuper = w.BuildableStructOfKind(0, EntityKind.Superweapon);
+        int runTicks = Math.Max(6000, w.GetStructureType(sideSuper).ChargeTicks + 2 * w.GetStructureType(sideSuper).BuildTicks);
+        for (int t = 0; t < runTicks; t++)
         {
             ai.Act(w, cmds);
             w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
@@ -11344,10 +11709,13 @@ int FactionSuperweaponGate()
         // without meeting this line.
         var a = w.GetStructureType(Cannon);
         var b = w.GetStructureType(Seismic);
-        if (a.Cost != b.Cost || a.BuildTicks != b.BuildTicks || a.PowerDraw != b.PowerDraw)
+        // P8-18: the CHARGE joins the terms now that it is a column on each
+        // def rather than one shared constant, so the two files cannot drift
+        // apart on the clock GDD s8 gives them both ("~6 minute charge").
+        if (a.Cost != b.Cost || a.BuildTicks != b.BuildTicks || a.PowerDraw != b.PowerDraw || a.ChargeTicks != b.ChargeTicks)
             return Fail($"faction superweapon: GDD s8 gives BOTH sides one superweapon on the same terms, so the "
-                        + $"pair must differ in effect rather than price ({a.Cost}cr/{a.BuildTicks}t/{a.PowerDraw}d "
-                        + $"against {b.Cost}cr/{b.BuildTicks}t/{b.PowerDraw}d)");
+                        + $"pair must differ in effect rather than price ({a.Cost}cr/{a.BuildTicks}t/{a.PowerDraw}d/{a.ChargeTicks}c "
+                        + $"against {b.Cost}cr/{b.BuildTicks}t/{b.PowerDraw}d/{b.ChargeTicks}c)");
     }
 
     // --- 2. THE ECONOMIC-WARFARE HALF, with its control. The seismic charge
@@ -11401,7 +11769,9 @@ int FactionSuperweaponGate()
     //        wrong about the game rather than about the row. Measuring the pair
     //        against the same building says the true thing instead: at ground
     //        zero the cannon hits far harder, which is the whole of "huge
-    //        single-point" against "lower-damage".
+    //        single-point" against "lower-damage". (P8-18's D2 raised the cannon
+    //        to 2500, so it now DOES one-shot a factory at ground zero; the
+    //        comparison below is unchanged and still the true claim.)
     {
         int fOrb = -1, fSeis = -1;
         var orb = Fire(3606, Cannon, w => fOrb = w.SpawnFactory(1, 30, 30), 30, 30);
@@ -13132,6 +13502,10 @@ int Match(ulong seed)
     // P7-26: and the last named power, the first that CREATES entities.
     int decoy = DecoyArmyGate();
     if (decoy != 0) return decoy;
+    // P8-18: and the superweapon's charge, the cannon's blast, the precision
+    // strike and the scan's reveal are /data that the sim actually plays.
+    int powerData = PowerDataGate();
+    if (powerData != 0) return powerData;
     // P7-18: and each side defends its base with its OWN hardware rather than
     // both putting up the same common turret. FactionDefenceGate above proves
     // the hardware exists; this proves the commander uses it.
@@ -14518,6 +14892,80 @@ int SaveLoad()
     if (loaded.ComputeStateHash() != hashFull)
         return Fail($"saveload: resumed run diverged (0x{loaded.ComputeStateHash():X16} vs 0x{hashFull:X16})");
     Console.WriteLine($"saveload: {ms.Length} bytes; player 1's Sodality faction survived the round trip; loaded hash exact at the save point; resumed run reached the uninterrupted final hash 0x{hashFull:X16} bit-for-bit");
+
+    // P8-18 audit (ADR-073): A LIVE SUPERWEAPON CROSSES THE SAVE. Under D33 no
+    // commander places one before t=6001, and every save, replay and LAN gate in
+    // CI saves earlier than that, so none carried a strike in flight or a
+    // charge part-run. Two hand-placed weapons: the orbital cannon launched at
+    // a factory and saved with its strike in flight (StrikeTicks, StrikeX and
+    // StrikeY live), and the seismic charge saved mid-way through its own
+    // registered charge. Saved at tick 40, then resumed to tick 200, past the
+    // impact and into the cannon's recharge, against an uninterrupted run.
+    {
+        int cannon = -1, seismic = -1, target = -1;
+        World BuildSw()
+        {
+            var w = new World(seed, 64, 64, players: 2);
+            w.SetFaction(0, World.FactionDirectorate);
+            w.SetFaction(1, World.FactionSodality);
+            w.SpawnPowerPlant(0, 2, 2, supply: 5000);
+            w.SpawnPowerPlant(1, 58, 58, supply: 5000, structType: World.SodalityGeneratorStructType);
+            cannon = w.SpawnSuperweapon(0, 10, 2, chargeTicks: 1);
+            seismic = w.SpawnSuperweapon(1, 50, 58, structType: World.SeismicChargeStructType);
+            target = w.SpawnFactory(1, 30, 30);
+            return w;
+        }
+        void StepSw(World w, int to)
+        {
+            while (w.Tick < to)
+            {
+                // Launched on tick 1, the tick after its one-tick charge ends.
+                if (w.Tick == 1)
+                    w.Step(new[] { new Command(w.Tick, 0, CommandType.LaunchSuper, cannon, Map.CellCentre(30), Map.CellCentre(30)) });
+                else w.Step(default);
+            }
+        }
+        const int swSave = 40, swEnd = 200;
+        var swRef = BuildSw();
+        StepSw(swRef, swEnd);
+        ulong swHashEnd = swRef.ComputeStateHash();
+
+        var swLive = BuildSw();
+        StepSw(swLive, swSave);
+        var c0 = swLive.Entities[cannon];
+        var s0 = swLive.Entities[seismic];
+        if (c0.StrikeTicks <= 0)
+            return Fail($"saveload: the cannon's strike is not in flight at the save (StrikeTicks {c0.StrikeTicks}), so the stage proves nothing");
+        int seismicCharge = swLive.GetStructureType(World.SeismicChargeStructType).ChargeTicks;
+        if (s0.ChargeTicks <= 0 || s0.ChargeTicks >= seismicCharge)
+            return Fail($"saveload: the seismic charge is not mid-charge at the save ({s0.ChargeTicks} of {seismicCharge})");
+        ulong swHashMid = swLive.ComputeStateHash();
+        using var swMs = new MemoryStream();
+        swLive.Save(swMs);
+        swMs.Position = 0;
+        var swLoaded = World.Load(swMs);
+        var c1 = swLoaded.Entities[cannon];
+        var s1 = swLoaded.Entities[seismic];
+        if (c1.StrikeTicks != c0.StrikeTicks || c1.StrikeX != c0.StrikeX || c1.StrikeY != c0.StrikeY || c1.ChargeTicks != c0.ChargeTicks)
+            return Fail($"saveload: the cannon's strike did not round-trip (StrikeTicks {c0.StrikeTicks} -> {c1.StrikeTicks}, "
+                        + $"StrikeX {c0.StrikeX} -> {c1.StrikeX}, StrikeY {c0.StrikeY} -> {c1.StrikeY}, ChargeTicks {c0.ChargeTicks} -> {c1.ChargeTicks})");
+        if (s1.ChargeTicks != s0.ChargeTicks || s1.StrikeTicks != s0.StrikeTicks)
+            return Fail($"saveload: the seismic charge's charge did not round-trip ({s0.ChargeTicks} -> {s1.ChargeTicks})");
+        if (swLoaded.ComputeStateHash() != swHashMid)
+            return Fail($"saveload: superweapon world loaded to 0x{swLoaded.ComputeStateHash():X16}, saved at 0x{swHashMid:X16}");
+        StepSw(swLoaded, swEnd);
+        if (swLoaded.ComputeStateHash() != swHashEnd)
+            return Fail($"saveload: the superweapon world resumed to 0x{swLoaded.ComputeStateHash():X16} against the uninterrupted 0x{swHashEnd:X16}");
+        var hit = swLoaded.Entities[target];
+        if (hit.Alive && hit.Hp >= hit.MaxHp)
+            return Fail("saveload: the strike saved in flight never landed on its factory after the load");
+        if (swLoaded.Entities[cannon].ChargeTicks <= 0)
+            return Fail("saveload: the cannon did not begin its recharge after the strike that crossed the save");
+        Console.WriteLine($"saveload: a live superweapon crossed the save - the orbital cannon's strike in flight (StrikeTicks "
+                          + $"{c0.StrikeTicks} at ({c0.StrikeX}, {c0.StrikeY})) and the seismic charge mid-charge ({s0.ChargeTicks} "
+                          + $"of its {seismicCharge} ticks still to run) round-tripped exactly; the resumed run landed the strike, "
+                          + $"began the recharge and reached the uninterrupted hash 0x{swHashEnd:X16} at tick {swEnd}");
+    }
     return 0;
 }
 
@@ -15107,8 +15555,26 @@ MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = nu
                         r.Income[e.PlayerId] += World.OutpostIncomePerSecond;
                 }
         }
+        // P8-18 (ADR-073, D2's reversal): a strike's kills are the Died events
+        // that directly follow its SuperweaponImpact in the tick's event list
+        // (the impact functions emit nothing else), each also checked to lie
+        // within the widest blast's 6-cell reach of the impact point.
+        bool afterImpact = false;
+        Fix64 impactX = Fix64.Zero, impactY = Fix64.Zero;
         foreach (var ev in w.Events)
         {
+            if (ev.Type == GameEventType.SuperweaponImpact) { afterImpact = true; impactX = ev.X; impactY = ev.Y; }
+            else if (ev.Type != GameEventType.Died) afterImpact = false;
+            else if (ev.A >= 0 && ev.A < w.EntityCount)
+            {
+                var dead = w.Entities[ev.A];
+                if (dead.Kind == EntityKind.ConstructionYard && dead.PlayerId is 0 or 1)
+                {
+                    r.LastYardDeath[dead.PlayerId] = w.Tick;
+                    r.LastYardBySuperweapon[dead.PlayerId] = afterImpact
+                        && Fix64.DistSq(dead.X - impactX, dead.Y - impactY) <= Fix64.FromInt(36);
+                }
+            }
             switch (ev.Type)
             {
                 case GameEventType.Fired:
@@ -15767,24 +16233,135 @@ int PillarProbe()
         Console.WriteLine(built.Count == 0 ? $"  first built, {FactionName(faction)} seats: never"
             : $"  first built, {FactionName(faction)} seats: earliest {built.Min()}, median {MedianOf(built)}, latest {built.Max()} ({built.Count} seats)");
     }
+    PrintPillarF8(PillarF8(results), results.Length);
+    Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
+// P8-18 (ADR-073): F8's figures, computed ONCE for the probe that prints them
+// and the gate that binds them, so the gate's figure is the probe's figure by
+// construction. The first launch of a match is the earlier of its two seats'
+// first launches, over the matches in which anybody launched; a seat's rate is
+// its launches scaled to a 27000-tick window by the match's own length.
+PillarF8Figures PillarF8(MeasuredMatch[] results)
+{
     var firstLaunch = new List<double>();
     foreach (var r in results)
     {
         var launched = r.SwFirstLaunch.Where(t => t >= 0).ToList();
         if (launched.Count > 0) firstLaunch.Add(launched.Min());
     }
-    Console.WriteLine(firstLaunch.Count == 0 ? "  median first launch per match: no launch in any match"
-        : $"  median first launch per match: {MedianOf(firstLaunch)} (earliest {firstLaunch.Min()}, latest {firstLaunch.Max()}; "
-          + $"{firstLaunch.Count} of {results.Length} matches launched)");
     var rates = new List<double>();
+    MeasuredMatch? busiest = null;
+    double maxRate = 0;
     foreach (var r in results)
-        for (int p = 0; p < 2; p++) rates.Add(r.Launches[p] * (double)MeasurementHarness.WindowCloseTicks / Math.Max(1, r.EndTick));
+        for (int p = 0; p < 2; p++)
+        {
+            double rate = r.Launches[p] * (double)MeasurementHarness.WindowCloseTicks / Math.Max(1, r.EndTick);
+            rates.Add(rate);
+            if (busiest == null || rate > maxRate) { maxRate = rate; busiest = r; }
+        }
     var most = results.OrderByDescending(r => r.Launches[0] + r.Launches[1]).First();
-    Console.WriteLine($"  launches per seat per 30 minutes: median {MedianOf(rates):F1}, max {rates.Max():F1}; most in one match "
+    // D2's reversal figure (P8-18, ADR-073): of the matches with a winner, how
+    // many saw the loser's last Construction Yard die to a superweapon impact.
+    int decided = 0, yardBySw = 0;
+    foreach (var r in results)
+    {
+        if (r.Winner is not (0 or 1)) continue;
+        decided++;
+        if (r.LastYardBySuperweapon[1 - r.Winner]) yardBySw++;
+    }
+    return new PillarF8Figures(firstLaunch.Count, MedianOf(firstLaunch),
+        firstLaunch.Count == 0 ? double.NaN : firstLaunch.Min(), firstLaunch.Count == 0 ? double.NaN : firstLaunch.Max(),
+        MedianOf(rates), rates.Count == 0 ? 0 : rates.Max(), busiest, most, decided, yardBySw);
+}
+
+void PrintPillarF8(PillarF8Figures f, int matches)
+{
+    Console.WriteLine(f.Launched == 0 ? "  median first launch per match: no launch in any match"
+        : $"  median first launch per match: {f.MedianFirst} (earliest {f.EarliestFirst}, latest {f.LatestFirst}; "
+          + $"{f.Launched} of {matches} matches launched)");
+    var most = f.Most;
+    Console.WriteLine($"  launches per seat per 30 minutes: median {f.MedianRate:F1}, max {f.MaxRate:F1}; most in one match "
         + $"{most.Launches[0] + most.Launches[1]} ({most.Spec.Map} {FactionLetter(most.Spec.F0)}{FactionLetter(most.Spec.F1)} o{(most.Spec.Swap ? 1 : 0)}, "
         + $"{most.EndTick} ticks)");
-    Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
-    return 0;
+    // D2's reversal reads this line (the tracker names it).
+    Console.WriteLine($"  loser's last yard to a superweapon: {f.YardBySuperweapon} of {f.Decided} decided matches "
+        + $"({(f.Decided == 0 ? 0 : 100.0 * f.YardBySuperweapon / f.Decided):F0} per cent; D2 reverses above "
+        + $"{MeasurementHarness.D2YardBySuperweaponPercent} per cent)");
+}
+
+int PillarGate()
+{
+    // P8-18 (ADR-073), F8: "The superweapon is a climax, not an opening.
+    // Median first launch at or after minute 12 (10800 ticks) across
+    // pillarprobe; at most 5 launches per seat per 30 minutes." pillarprobe
+    // prints those two figures and, being a probe, asserts nothing (ADR-061);
+    // this is the gate that binds them, over the same shipped-setup sweep and
+    // through the same arithmetic (PillarF8).
+    //
+    // TWO HALVES, each with its own switch, because they landed separately.
+    // The RATE half binds from D1: at a 5400-tick charge a seat cannot launch
+    // more than five times in 27000 ticks, and the gate holds that. The
+    // FIRST-LAUNCH half binds from D33: D1's purchase gate alone was met at
+    // about t=3170 in every match and left the first launch near t=8700, and
+    // D33's floor (no purchase before one full charge) moved it past 10800.
+    // --bind makes both binding for one run whatever the switches say.
+    //
+    // NOT in match: the full sweep is 72 whole AI matches played to 27000
+    // ticks or a result, under a minute on ten threads and several on a CI
+    // runner. maps=, pairs=, orient= and jobs= run a subset.
+    string root = MeasureRoot();
+    var o = MeasureOptions("pillargate", true, "maps", "pairs", "orient", "jobs");
+    bool bindAll = o.ContainsKey("bind");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
+    Console.WriteLine($"pillargate: F8 over {specs.Count} shipped-setup matches, Normal against Normal, to "
+        + $"{MeasurementHarness.WindowCloseTicks} ticks or a result. Bars: median first launch from "
+        + $"{MeasurementHarness.F8FirstLaunchTicks} to {MeasurementHarness.F8MaxFirstLaunchTicks} with at least half the "
+        + $"matches launching; at most {MeasurementHarness.F8MaxLaunchesPerWindow} launches per seat per 30 minutes.");
+    var sw = Stopwatch.StartNew();
+    var results = RunOrdered(specs.Count, jobs, i => PlayMeasured(root, specs[i]), (_, r) => Console.WriteLine(PillarLine(r)));
+    sw.Stop();
+    var f8 = PillarF8(results);
+    PrintPillarF8(f8, results.Length);
+    Console.WriteLine($"pillargate: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    // A stage that measured nothing fails (P8-13's rule): no launch anywhere is
+    // not a climax, it is an absent weapon, which D1's reversal names. It is
+    // asserted in BOTH halves, so the binding one cannot pass on silence.
+    string? none = f8.Launched == 0 ? "no match launched a superweapon, so F8 measured nothing" : null;
+    var rateFailures = new List<string>();
+    if (none != null) rateFailures.Add(none);
+    else if (f8.MaxRate > MeasurementHarness.F8MaxLaunchesPerWindow && f8.Busiest is { } b)
+        rateFailures.Add($"a seat launched {f8.MaxRate:F1} times per 30 minutes ({b.Spec.Map} {FactionLetter(b.Spec.F0)}"
+                         + $"{FactionLetter(b.Spec.F1)} o{(b.Spec.Swap ? 1 : 0)}, launches {b.Launches[0]}/{b.Launches[1]} in "
+                         + $"{b.EndTick} ticks), over {MeasurementHarness.F8MaxLaunchesPerWindow}");
+    var firstFailures = new List<string>();
+    if (none != null) firstFailures.Add(none);
+    else
+    {
+        if (f8.MedianFirst < MeasurementHarness.F8FirstLaunchTicks)
+            firstFailures.Add($"median first launch {f8.MedianFirst} is before {MeasurementHarness.F8FirstLaunchTicks} "
+                              + $"(earliest {f8.EarliestFirst}, over {f8.Launched} of {results.Length} matches)");
+        // Architect condition C4: the other edge of D1's and D33's band, and
+        // D33's own "fewer than half launch" threshold. A climax that arrives
+        // after minute 16, or in a minority of matches, is an absent weapon.
+        if (f8.MedianFirst > MeasurementHarness.F8MaxFirstLaunchTicks)
+            firstFailures.Add($"median first launch {f8.MedianFirst} is after {MeasurementHarness.F8MaxFirstLaunchTicks} "
+                              + $"(minute 16, the top of D1's and D33's band)");
+        if (2 * f8.Launched < results.Length)
+            firstFailures.Add($"only {f8.Launched} of {results.Length} matches launched, fewer than half (D33's reversal)");
+    }
+    int rate = MeasureVerdict("pillargate (F8 rate)", "P8-18", MeasurementHarness.PillarGateRateBinding || bindAll,
+        rateFailures, $"At most {f8.MaxRate:F1} launches per seat per 30 minutes (bar {MeasurementHarness.F8MaxLaunchesPerWindow}).");
+    int first = MeasureVerdict("pillargate (F8 first launch)", "P8-18 (D33)",
+        MeasurementHarness.PillarGateFirstLaunchBinding || bindAll, firstFailures,
+        $"Median first launch {f8.MedianFirst} (band {MeasurementHarness.F8FirstLaunchTicks} to "
+        + $"{MeasurementHarness.F8MaxFirstLaunchTicks}), {f8.Launched} of {results.Length} matches launched (at least half).");
+    return rate != 0 ? rate : first;
 }
 
 int EndGate()
@@ -16009,6 +16586,7 @@ return args.Length == 0
         "radarjamminggate" => RadarJammingGate(),
         "tunneldeploymentgate" => TunnelDeploymentGate(),
         "decoyarmygate" => DecoyArmyGate(),
+        "powerdatagate" => PowerDataGate(),
         "parityprobe" => ParityProbe(),
         "aidefenceladdergate" => AiDefenceLadderGate(),
         "baseshapegate" => BaseShapeGate(),
@@ -16046,6 +16624,7 @@ return args.Length == 0
         "endgate" => Measured(EndGate),
         "cheesegate" => Measured(CheeseGate),
         "pillarprobe" => Measured(PillarProbe),
+        "pillargate" => Measured(PillarGate),
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
@@ -16088,7 +16667,31 @@ static class MeasurementHarness
     public const bool EndGateBinding = false;           // F6, the stalemate half: P8-24 sets this
     public const bool CheeseGateBinding = true;         // AI-12's cheeses: set by P8-17 (see CheeseGate)
     public const bool FieldSurvivalGateBinding = false; // F7: P8-19 sets this
+    public const bool PillarGateRateBinding = true;          // F8's rate half: set by P8-18 (ADR-073)
+    public const bool PillarGateFirstLaunchBinding = true;   // F8's first-launch half: set by P8-18 with D33 (ADR-073)
+
+    /// <summary>F8's two bars: the median first launch at or after minute 12,
+    /// and at most five launches per seat per 30 minutes.</summary>
+    public const int F8FirstLaunchTicks = 10800, F8MaxLaunchesPerWindow = 5;
+
+    /// <summary>P8-18 (ADR-073, Architect condition C4): the first-launch half
+    /// also fails above minute 16, the upper edge of D1's and D33's reversal
+    /// band, or when fewer than half the sweep's matches launch at all (D33's
+    /// reversal threshold), so a charge long enough to make the weapon absent
+    /// cannot pass as a climax.</summary>
+    public const int F8MaxFirstLaunchTicks = 14400;
+
+    /// <summary>P8-18 (ADR-073, Architect condition C2): D2 reverses when the
+    /// loser's last Construction Yard died to a superweapon impact in more than
+    /// this share of the sweep's decided matches.</summary>
+    public const int D2YardBySuperweaponPercent = 25;
 }
+
+/// <summary>P8-18: F8's figures over one sweep (pillarprobe prints them,
+/// pillargate binds them). Ticks are sim ticks; NaN means no match launched.</summary>
+record PillarF8Figures(int Launched, double MedianFirst, double EarliestFirst, double LatestFirst,
+                       double MedianRate, double MaxRate, MeasuredMatch? Busiest, MeasuredMatch Most,
+                       int Decided = 0, int YardBySuperweapon = 0);
 
 /// <summary>P8-13: one measured match's setup. Swap exchanges the map's starts
 /// 0 and 1; P0 and P1 are personalities (0 standard, 1 rusher, 2 turtle).</summary>
@@ -16107,6 +16710,10 @@ sealed class MeasuredMatch
     public long StockStart, Stock9000, Stock13500;
     public readonly long[] Income = new long[2], Credits = new long[2];
     public readonly int[] Structs = new int[2], Army = new int[2], Harvesters = new int[2];
+    /// <summary>P8-18 (ADR-073, D2's reversal): the tick each seat's most recent
+    /// Construction Yard died, and whether a superweapon impact killed it.</summary>
+    public readonly int[] LastYardDeath = { -1, -1 };
+    public readonly bool[] LastYardBySuperweapon = new bool[2];
 }
 
 /// <summary>P8-13: how one cheese raid ended (aiairgate, cheesegate).</summary>

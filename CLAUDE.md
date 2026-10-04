@@ -62,7 +62,7 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
 ## Build commands
 - Build sim + runner: `dotnet build sim/Ferrostorm.Sim.Runner -c Release` (requires .NET 8 SDK; NuGet sources disabled by design - zero package dependencies)
 - Full local gate: `dotnet run --project sim/Ferrostorm.Sim.Runner -c Release` (selftest + double-run determinism + scenario battery + lockstep soak; exit 0 required)
-- Modes: `selftest`, `determinism [seed]`, `golden [seed]`, `match [seed]`, `lan [games]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs) P8-13 added the opponent and match measurements: `ladderprobe`, `laddergate`, `aiairgate`, `seatfairgate`, `endgate`, `cheesegate`, `pillarprobe` and `fieldsurvivalgate`. Most are long sweeps run on demand, NOT part of `match`, `golden` or CI, and each gate reports PASS or WOULD-FAIL without failing until the P8 row named in its header makes it binding. A gate that is binding and runs in seconds joins `match` in the row that binds it, as `aiairgate` and `cheesegate` did in P8-17, so CI guards it from then on. `sim/Directory.Build.props` treats warnings as errors for every sim project.
+- Modes: `selftest`, `determinism [seed]`, `golden [seed]`, `match [seed]`, `lan [games]`, `bench`, and more (see the header of sim/Ferrostorm.Sim.Runner/Program.cs) P8-13 added the opponent and match measurements: `ladderprobe`, `laddergate`, `aiairgate`, `seatfairgate`, `endgate`, `cheesegate`, `pillarprobe` and `fieldsurvivalgate`. Most are long sweeps run on demand, NOT part of `match`, `golden` or CI, and each gate reports PASS or WOULD-FAIL without failing until the P8 row named in its header makes it binding. A gate that is binding and runs in seconds joins `match` in the row that binds it, as `aiairgate` and `cheesegate` did in P8-17, so CI guards it from then on. P8-18 added `pillargate` (F8 over the pillarprobe sweep, both halves binding, about 41 s, on demand) and `powerdatagate` (in `match`). `sim/Directory.Build.props` treats warnings as errors for every sim project.
 - Client harness: `tools/verify-client.sh` drives the REAL battle scene headless from the joiner's seat and asserts on what it does (game/scripts/VerifyRunner.cs). **Run it for any /game change.** It keeps catching a class the sim battery is structurally blind to, and the reason is worth knowing rather than the running total, which only rots: it drives the real scene FROM SEAT 1, so any rule that is written as "me versus the other one" and happens to be right at seat 0 fails here. That class has included an inverted victory banner, a capture alert fired for a robbery, and a Brutal handicap that granted itself to a different seat on each LAN peer. The CI seat grep cannot see them, because `seat != LocalPlayerId` is exactly the shape it wants. Needs a Godot 4.7 mono editor; set `GODOT=` if yours is not at the default path.
 - CI: .github/workflows/determinism.yml, three jobs, and ANY of them red blocks the merge:
   - `banned-tokens`: the sim purity grep, the ADR-004 portability grep, the legal check (`tools/legalgrep.sh`, D31), the hardcoded-seat guard (a literal seat in SkirmishLive.cs, which is invisible in single player and inverted for a LAN joiner) and the team-colour guard.
@@ -82,17 +82,24 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
   four powers. That one decision makes s8's counterplay rule ("scout the
   structure, kill it") fall out of the data model rather than needing arranging:
   the permission IS the building. **Powers on one building SHARE its charge**, so
-  a Bastion holds a scan or a strike ready and never both. Charges are DERIVED
-  from the superweapon's, never invented, so "shorter timers" stays true by
-  construction. Each effect gets its OWN function - never widen `ApplyAreaDamage`,
+  a Bastion holds a scan or a strike ready and never both. A power's charge is
+  an absolute 500 ticks (`World.SupportPowerChargeTicks`), pinned at the value it
+  was once derived as, because P8-18 (ADR-073) moved the superweapon's charge to
+  5400 in /data and a derived charge would have tripled with it; "shorter
+  timers" is now held by `supportpowergate` measuring both charges side by side,
+  not by construction. Each effect gets its OWN function - never widen `ApplyAreaDamage`,
   which the mine shares and `minegate` asserts the shape of.
 - **The method that let five powers ship with no balance argument between them:
   DERIVE EVERY NUMBER FROM ONE ALREADY IN THE GAME.** The scan's radius is its
-  building's own sight; the strike's damage is a third of the orbital cannon's;
-  the jam lasts a third of its own charge; the tunnel moves one transport's worth
-  onto the producers' spawn ring; the decoy army is one wave's worth at one hit
-  point. A derived number needs no defence, only a reader - and it cannot drift,
-  because there is nothing separate to keep in step.
+  building's own sight; the strike's damage was a third of the orbital cannon's
+  and the jam a third of its own charge, both pinned since P8-18 at the values
+  that gave (300 as the Bastion's `strike_damage`, 166 compiled); the tunnel
+  moves one transport's worth onto the producers' spawn ring; the decoy army is
+  one wave's worth at one hit point. A derived number needs no defence, only a
+  reader - and it cannot drift, because there is nothing separate to keep in
+  step. The exception is the day the source number moves for a reason of its
+  own: then pin the derived one at its value first, in its own goldens-neutral
+  step, as P8-18 did (ADR-073).
 - Any stat change >15% requires Balance + Game Designer co-sign (charter A11).
 
 ## Agent roster
