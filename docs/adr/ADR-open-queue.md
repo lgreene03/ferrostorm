@@ -176,3 +176,22 @@ the same commit.
   Routed by the orchestrator for Architect sign-off, and signed off with
   conditions by the Architect on 2026-10-04; its before-merge conditions C1
   to C5 are met in the pull request that lands it.
+- ADR-075: PROPOSED 2026-10-05 - ADR-075-placement-is-oriented-to-the-map-centre.md
+  (P8-21, decision D5, findings AI-04, BAL-01 map half, OJ-01 (3)). Number
+  claimed here per the numbering law, in the same commit as the draft; 074 is
+  held by P8-56, so 075 is the next free number. The commander's placement
+  scan is walked in one canonical frame, the side facing the map centre
+  first, reflected per anchor along each axis on which the anchor stands
+  short of the centre, so the bases on a rotation pair are rotations of each
+  other; mirrorprobe bisects what remains. F5 is NOT met (income within 15
+  per cent in 18 of 32, start split 21/3), so seatfairgate stays
+  non-binding, and the residue is traced to the opening hand, the free
+  harvester's fixed offset, Fix64's flooring multiplication (P8-53), the
+  production exit order and the flow field's tie-break, none of them this
+  row's to fix. Goldens MOVE (skirmish, expansion, aisuper, mission), one
+  cause, attributed in the ADR; catalogue checksum unchanged; no save or wire
+  change. NOT RATIFIED: it changes which commands a commander issues, so a
+  mixed-build LAN game with a commander seat desyncs within 30 ticks of the
+  first reflected placement rather than being refused (Q024); old replays,
+  which record the commander's commands, play back unchanged. For the
+  orchestrator to route for Architect sign-off and ratify under D5.
