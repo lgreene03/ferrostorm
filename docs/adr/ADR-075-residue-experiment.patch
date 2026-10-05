@@ -1,0 +1,101 @@
+ADR-075's residue experiment, kept so that a later row can rebuild it (Architect condition C3).
+
+NOT SHIPPED. It neutralises the first four causes ADR-075 bisects, in the sim itself:
+  1. the opening hand (MapData.PlaceSkirmishStart): the yard anchored so its footprint is the exact
+     rotation, and the opening force mirrored in y as well as x;
+  2. the free harvester (World.SpawnFreeHarvester): spawned at the cell centre beside the reflected corner;
+  3. Fix64 multiplication (P8-53): truncated towards zero, as division already is;
+  4. the production exit (World.ProductionSystem's SpawnOffsets): reflected, with the centre cell taken
+     on the reflected side.
+Each is a rule a human plays under, moves goldens and belongs to its own row (P8-62, P8-63, P8-53,
+P8-64), so none of it may be merged as it stands.
+
+Apply with: git apply docs/adr/ADR-075-residue-experiment.patch (it was cut against main after the
+P8-21 pull request). The sheltered frame is the same build with the two comparisons in
+SkirmishAI.TryFindPlacement reversed (2 * oax + anchorSize > w.Map.Width, and the same for the height).
+
+Measured with it at seed 2026 (seatfairgate, pairs within 15 per cent of 16, mean gap, decided pairs by
+start): this ADR's frame 13, 10.8 per cent, 8/5; the sheltered frame 14, 9.1 per cent, 6/5; the old
+scan (SkirmishAI.cs restored to main) 9, 14.9 per cent, 8/5. mirrorprobe with this ADR's frame finds no
+command difference before the first break on any two-seat map (first breaks t=406 to t=2493); with the
+old scan the first placement differs on every map (t=210 Directorate, t=90 Sodality).
+
+diff --git a/sim/Ferrostorm.Sim/Fix64.cs b/sim/Ferrostorm.Sim/Fix64.cs
+index 166be00..9fdd487 100644
+--- a/sim/Ferrostorm.Sim/Fix64.cs
++++ b/sim/Ferrostorm.Sim/Fix64.cs
+@@ -37,7 +37,10 @@ public readonly struct Fix64 : IEquatable<Fix64>, IComparable<Fix64>
+     public static Fix64 operator -(Fix64 a) => new(-a.Raw);
+ 
+     public static Fix64 operator *(Fix64 a, Fix64 b)
+-        => new((long)(((System.Int128)a.Raw * b.Raw) >> FracBits));
++    {
++        System.Int128 p = (System.Int128)a.Raw * b.Raw;
++        return new((long)(p >= 0 ? p >> FracBits : -((-p) >> FracBits)));
++    }
+ 
+     public static Fix64 operator /(Fix64 a, Fix64 b)
+     {
+diff --git a/sim/Ferrostorm.Sim/MapLoader.cs b/sim/Ferrostorm.Sim/MapLoader.cs
+index 7868e72..730a34d 100644
+--- a/sim/Ferrostorm.Sim/MapLoader.cs
++++ b/sim/Ferrostorm.Sim/MapLoader.cs
+@@ -346,10 +346,13 @@ public sealed class MapData
+         // same and hash differently, which is a replay-compatibility break for
+         // no gain.
+         for (int p = 0; p < seats; p++) world.GrantCredits(p, startCredits);
+-        for (int p = 0; p < seats; p++) world.SpawnConstructionYard(p, Starts[p].Cx, Starts[p].Cy);
++        for (int p = 0; p < seats; p++) world.SpawnConstructionYard(p,
++            2 * Starts[p].Cx + 1 < Width ? Starts[p].Cx : Starts[p].Cx - 1,
++            2 * Starts[p].Cy + 1 < Height ? Starts[p].Cy : Starts[p].Cy - 1);
+         for (int p = 0; p < seats; p++)
+         {
+             int sx = Starts[p].Cx, sy = Starts[p].Cy;
++            int vside = 2 * sy < Height ? 1 : -1;
+             // Which way the opening force is laid out beside its yard. This was
+             // "player 0 leans right, player 1 leans left", a binary that has no
+             // meaning once there is a seat 2. Read as a PROPERTY rather than as
+@@ -360,9 +363,9 @@ public sealed class MapData
+             // ships, while also being meaningful for a seat anywhere on a map
+             // with four or eight of them.
+             int side = 2 * sx < Width ? 1 : -1;
+-            world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2));
++            world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2 * vside));
+             for (int i = 0; i < 3; i++)
+-                world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2),
++                world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2 * vside),
+                     Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
+         }
+     }
+diff --git a/sim/Ferrostorm.Sim/World.cs b/sim/Ferrostorm.Sim/World.cs
+index 1a694fd..45b7684 100644
+--- a/sim/Ferrostorm.Sim/World.cs
++++ b/sim/Ferrostorm.Sim/World.cs
+@@ -635,8 +635,8 @@ public sealed partial class World
+         // block cells and units may overlap, so there is nothing to search for,
+         // and a search would be a scan whose answer could depend on entity order.
+         var def = GetStructureType(3);
+-        Fix64 x = Fix64.Clamp(Fix64.FromInt(ax + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
+-        Fix64 y = Fix64.Clamp(Fix64.FromInt(ay + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
++        Fix64 x = Fix64.Clamp(Map.CellCentre(2 * ax + def.Footprint > Map.Width ? ax - 1 : ax + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
++        Fix64 y = Fix64.Clamp(Map.CellCentre(2 * ay + def.Footprint > Map.Height ? ay - 1 : ay + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
+         SpawnHarvester(player, x, y);
+     }
+ 
+@@ -6248,10 +6248,15 @@ public sealed partial class World
+                 // Spawn-cell occupancy (SPAWN-04): terrain AND standing
+                 // entities, via ValidPlacement's own predicate (CellOccupied).
+                 int scx = Map.CellOf(e.X), scy = Map.CellOf(e.Y);
++                int xfx = e.X + e.X > Fix64.FromInt(Map.Width) ? -1 : 1, xfy = e.Y + e.Y > Fix64.FromInt(Map.Height) ? -1 : 1;
++                bool evenFp = FootprintOf(e.StructType) % 2 == 0;
++                if (xfx < 0 && evenFp) scx--;
++                if (xfy < 0 && evenFp) scy--;
+                 int sdx = 0, sdy = 0;
+                 bool found = false;
+-                foreach (var (dx, dy) in SpawnOffsets)
++                foreach (var (dx0, dy0) in SpawnOffsets)
+                 {
++                    int dx = dx0 * xfx, dy = dy0 * xfy;
+                     int nx = scx + dx, ny = scy + dy;
+                     if (!Map.InBounds(nx, ny) || Map.IsBlocked(nx, ny)) continue;
+                     if (CellOccupied(nx, ny)) continue;

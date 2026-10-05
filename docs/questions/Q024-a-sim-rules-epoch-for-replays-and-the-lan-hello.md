@@ -27,7 +27,7 @@ compare the same single number: the catalogue checksum (ADR-006).
 
 The catalogue checksum moves only when a value in `/data` (or a number folded
 into it) moves. **A change to what the sim's code does, with no catalogue value
-moved, is invisible to both.** Two rows have now shipped such a change:
+moved, is invisible to both.** Three rows have now shipped such a change:
 
 - **ADR-071's docking (P8-15).** A refinery docks from every face, and a walk
   onto a building routes to whichever face is open. Seven goldens moved; no
@@ -39,6 +39,26 @@ moved, is invisible to both.** Two rows have now shipped such a change:
   walks in and boards, or gives up at ADR-014's deadline, and the in-reach
   boarding clears the unit's orders. No golden moved and no catalogue value
   moved (ADR-074, "Compatibility").
+- **ADR-075's oriented placement (P8-21).** The commander's placement scan is
+  oriented to the map centre. Five commander goldens moved (four on the base
+  the Architect reviewed, and `airanswer`, appended on main meanwhile); no
+  catalogue value, save format or wire format moved (ADR-075,
+  "Compatibility"). It adds a distinction the first two do not have: it
+  changes which commands a commander CHOOSES, not a rule of the sim. A LAN
+  game with a commander seat across it desyncs, because every peer generates
+  that seat's commands locally (`LockstepClient.SetAiCommanders`); but a
+  replay recorded before it plays back exactly, because a replay records the
+  commander's commands and playback attaches no commander. So an epoch bumped
+  on every golden move, which Option 1's CI tie below would enforce, would
+  refuse replays that play back exactly: the epoch would need to tell a
+  commander-only change, which splits the LAN hello but not the replay
+  header, from a rules change, which splits both.
+
+The comment on `LockstepClient.SetAiCommanders` (sim/Ferrostorm.Net/Lockstep.cs)
+says "Two peers therefore provably run the same commander", because the
+commander's tuning rides `World.CatalogueChecksum`, which the hello compares.
+That holds only within one build: the commander's CODE is in no checksum, so
+two builds either side of ADR-075 pass the hello with different commanders.
 
 What happens today when the rules differ but the catalogues agree:
 
@@ -54,7 +74,7 @@ What happens today when the rules differ but the catalogues agree:
 
 A rules change is refused up front today only by accident, when the same row
 also happens to move a catalogue value. ADR-073 (P8-18) did, so every v3 replay
-and every LAN peer from before it is refused; ADR-071 did not, and ADR-074 does not. Whether
+and every LAN peer from before it is refused; ADR-071 did not, and neither ADR-074 nor ADR-075 does. Whether
 a build refuses an incompatible partner should not depend on whether its row
 touched `/data`.
 
@@ -141,4 +161,6 @@ published build, which is why that is the decide-by.
 An Architect decision with Netcode's agreement on the wire change, recorded as an
 ADR that fixes the field, the header line, the hello frame, the refusal text and
 the CI rule, and that names the rows which would have bumped the epoch so far
-(ADR-071 and ADR-074 among them) so its first value has a stated meaning.
+(ADR-071 and ADR-074 among them, and ADR-075 with the commander-only
+distinction above decided one way or the other) so its first value has a
+stated meaning.

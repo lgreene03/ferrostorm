@@ -1364,15 +1364,21 @@ public sealed class SkirmishAI
     }
 
     /// <summary>Deterministic outward ring scan around own structures for a
-    /// legal anchor, NEWEST structure first - so support buildings gravitate
-    /// to the frontier (a fresh expansion CY gets its refinery, not the
-    /// already-crowded home base). ADR-071 clause 3 filters the candidates
-    /// through KeepsApron; the scan's order and shape are untouched (D5, P8-21,
-    /// owns those).</summary>
+    /// legal anchor, OLDEST structure first (P7-8, below). ADR-071 clause 3
+    /// filters the candidates through KeepsApron. P8-21 (ADR-075, decision D5)
+    /// orients the scan to the MAP CENTRE: each anchor's rings are walked in one
+    /// canonical frame, the side facing the centre first, reflected along every
+    /// axis on which that anchor stands short of the centre, so a base in one
+    /// corner lays itself out as the rotation (or, on a mirrored map, the
+    /// reflection) of a base in the opposite one.</summary>
     private bool TryFindPlacement(World w, int ready, out int ax, out int ay)
     {
         bool placingRefinery = w.GetStructureType(ready).Kind == EntityKind.Refinery;
         int size = w.FootprintOf(ready);
+        // The footprint ValidPlacement's default actually tests (structure
+        // type 0's, or the 2x2 fallback), read rather than written as a
+        // literal, so the reflected box below stays the box it checks.
+        int box = w.FootprintOf(0);
         // P7-8: OLDEST FIRST, and the direction is the whole fix.
         //
         // This walked backwards, so the anchor was the most recently built
@@ -1394,13 +1400,67 @@ public sealed class SkirmishAI
             if (!s.Alive || !World.IsOwnedBy(in s, _player)) continue;
             if (s.Kind is not (EntityKind.ConstructionYard or EntityKind.PowerPlant or EntityKind.Factory or EntityKind.Refinery)) continue;
             int oax = w.AnchorOf(s.X, s.StructType), oay = w.AnchorOf(s.Y, s.StructType);
+            int anchorSize = w.FootprintOf(s.StructType);
+            // P8-21 (ADR-075, D5): THE SCAN IS ORIENTED TO THE MAP CENTRE.
+            //
+            // It walked the same compass order from every base: rows top to
+            // bottom, each left to right. A base in the top-left corner
+            // therefore filled its sheltered corner side first, and the base
+            // in the opposite corner, on a map that is the 180-degree rotation
+            // of itself, filled its side facing the enemy first. Swapping the
+            // starts relabelled the winner in 34 of 36 measured pairs (P8-13):
+            // the bias was the START, not the seat.
+            //
+            // So the offsets below are written in ONE canonical frame and
+            // reflected along each axis on which THIS anchor's centre stands
+            // short of the map's. A base and its rotated twin then try
+            // mirrored cells in the same order. The reflection is about the
+            // anchor's own centre and carries with it the box ValidPlacement
+            // checks, so the reflection itself is exact for any pair of
+            // footprint sizes. The build radius is NOT: ValidPlacement measures
+            // it as the Chebyshev distance between top-left anchors, which the
+            // half turn preserves only when the anchor's footprint and the
+            // candidate's are the same size. For a 1x1 candidate round a 2x2
+            // anchor that is not a yard, and for a 2x2 box round a 1x1
+            // generator, the reflected candidate can stand six cells from the
+            // anchor where its unreflected twin stands five, so ValidPlacement
+            // can refuse a cell whose twin it accepts (a yard's radius of 7
+            // covers both). ADR-075 lists it in the residue. A centre exactly
+            // on the map's centre line is not reflected, the one tie and a
+            // recorded asymmetry.
+            //
+            // The canonical frame is the walk a base right of and below the
+            // centre always had, which from there starts on the side FACING
+            // the centre. Measured, not assumed: on seven of the eight two-seat
+            // maps the home ferrite lies towards the centre from the yard on
+            // both axes, and on skirmish-03 it is level in x (-0.6 cells) and
+            // towards the centre in y (+12.4), so this frame builds towards the
+            // base's own economy. The other frame, the sheltered side first,
+            // was measured and refused, because it fails aiairgate: ADR-075
+            // records both.
+            bool flipX = 2 * oax + anchorSize < w.Map.Width;
+            bool flipY = 2 * oay + anchorSize < w.Map.Height;
             for (int ring = 3; ring <= World.BuildRadius; ring++)
                 for (int dy = -ring; dy <= ring; dy++)
                     for (int dx = -ring; dx <= ring; dx++)
                     {
                         if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != ring) continue; // ring shell only
-                        int cx = oax + dx, cyy = oay + dy;
-                        if (w.ValidPlacement(_player, cx, cyy) && KeepsApron(w, cx, cyy, size, placingRefinery))
+                        // The box ValidPlacement reads (it is asked with the
+                        // default footprint, as it always was) and the
+                        // building's own anchor, each reflected whole.
+                        int bx = flipX ? oax + anchorSize - box - dx : oax + dx;
+                        int by = flipY ? oay + anchorSize - box - dy : oay + dy;
+                        int cx = flipX ? oax + anchorSize - size - dx : oax + dx;
+                        int cyy = flipY ? oay + anchorSize - size - dy : oay + dy;
+                        if (!w.ValidPlacement(_player, bx, by)) continue;
+                        // Reflected, a 1x1 building no longer shares the box's
+                        // anchor, and the sim's own test on the PlaceStructure
+                        // reads the building's anchor for the build radius, so
+                        // it is asked too: a placement the sim then refuses
+                        // would be retried every beat and stall the yard. Where
+                        // the anchors coincide the box test already implies it.
+                        if ((bx != cx || by != cyy) && !w.ValidPlacement(_player, cx, cyy, ready)) continue;
+                        if (KeepsApron(w, cx, cyy, size, placingRefinery))
                         { ax = cx; ay = cyy; return true; }
                     }
         }

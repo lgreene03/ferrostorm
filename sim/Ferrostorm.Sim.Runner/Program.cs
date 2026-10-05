@@ -54,7 +54,8 @@ using Ferrostorm.Sim;
 //   ladderprobe        - P8-13: the difficulty ladder, rung against rung in both seat orders on every map and faction pairing, with the win, loss and undecided tally per pairing (not a gate; nothing asserts)
 //   laddergate         - P8-13, F4: each rung beats the rung below in at least 70 per cent of decided games from both seats (registered non-binding until P8-26)
 //   aiairgate          - P8-13, F3: three Strike Flyers raiding harvesters from t=4500 on skirmish-01 die and an AI harvester survives them, Normal and Hard, both factions, each beside a printed no-raid control (binding since P8-17)
-//   seatfairgate       - P8-13, F5: Normal mirrors on every two-seat map with starts swapped keep each seat's income within 15 per cent and the win split within 60/40 by seat and by start (non-binding until P8-21)
+//   seatfairgate       - P8-13, F5: Normal mirrors on every two-seat map with starts swapped keep each seat's income within 15 per cent and the win split within 60/40 by seat and by start (non-binding until F5 is met: P8-21 oriented the placement scan and left both clauses unmet, ADR-075)
+//   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts)
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
@@ -17080,7 +17081,13 @@ int SeatFairGate()
     //   the other way round, so both are checked.
     //
     // The two-seat maps are derived from each map's own start count. NON-BINDING
-    // until P8-21 (D5).
+    // until F5 is met. P8-21 (D5, ADR-075) oriented the commander's placement
+    // scan to the map centre and F5 stayed unmet on both clauses (start split
+    // 20/8 to 21/3, income within 15 per cent in 20 then 18 of 32). With starts
+    // this asymmetric the split is a chaotic readout: mirrorprobe and ADR-075
+    // trace the residue to the opening hand and to compass-fixed rules in the
+    // sim itself, and with those neutralised in an experiment the oriented scan
+    // brought income parity to 13 or 14 of 16 pairs against the old scan's 9.
     string root = MeasureRoot();
     var o = MeasureOptions("seatfairgate", true, "maps", "jobs");
     bool binding = MeasurementHarness.SeatFairGateBinding || o.ContainsKey("bind");
@@ -17132,8 +17139,153 @@ int SeatFairGate()
     Split("Directorate mirrors", results.Where(r => r.Spec.F0 == World.FactionDirectorate), check: false);
     Split("Sodality mirrors", results.Where(r => r.Spec.F0 == World.FactionSodality), check: false);
     Console.WriteLine($"seatfairgate: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
-    return MeasureVerdict("seatfairgate", "P8-21", binding, failures,
+    return MeasureVerdict("seatfairgate", "F5 is met (P8-21 left it unmet, ADR-075)", binding, failures,
         "Every match kept each seat's income within 15 per cent of the other's, and neither seat nor start took more than 60 per cent of decided games.");
+}
+
+int MirrorProbe()
+{
+    // P8-21 (ADR-075, D5): WHERE DOES THE MIRROR FIRST BREAK? D5 orients the
+    // commander's placement scan so a base in the far corner lays itself out as
+    // the rotation of a base in the near one, and then asks for any residue to
+    // be bisected to its cause. seatfairgate cannot bisect: a match is chaotic,
+    // so the smallest asymmetry anywhere decides it, and the win split and the
+    // income gap say THAT the halves differ, never where they first did.
+    //
+    // This plays a Normal mirror in the shipped setup (PlayMeasured's) and,
+    // after every step, compares seat 0's half of the world with the 180-degree
+    // rotation of seat 1's, which is how every two-seat map relates its starts
+    // (tools/mapgen.py proves the grid is closed under it). An entity is
+    // compared by what it is and where it stands (kind, type, position, hit
+    // points, harvest state, load, motion, cooldown, build state, target, flow
+    // walk), never by id, because the two halves' ids differ by construction;
+    // the ferrite fields must match their rotation partners and the treasuries
+    // must be equal. The commands each commander issued are compared the same
+    // way, a placement's anchor rotated as the far corner of its footprint. It
+    // prints the first tick on which the halves differ, what differs, the
+    // first command difference if one came first, and, for a walker that
+    // differs, the next cell the single-target and the 2x2 footprint flow
+    // fields give from the cell it stood in a tick earlier, both written in
+    // seat 0's frame, so a flow-field tie-break shows as two different cells.
+    //
+    // A probe by ADR-061's rule: it prints and asserts nothing. Its first break
+    // on today's sim is the opening hand (MapData.PlaceSkirmishStart), whose
+    // yard and opening force are not a rotation pair; ADR-075 records the chain
+    // of breaks found by neutralising each in turn in an uncommitted build.
+    string root = MeasureRoot();
+    var o = MeasureOptions("mirrorprobe", false, "maps", "pairs", "ticks", "show");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps")).Where(m => LoadMeasureMap(root, m, false).Starts.Count == 2).ToArray();
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,SS");
+    int ticks = OptInt(o, "ticks", MeasurementHarness.IncomeWindowTicks);
+    int show = OptInt(o, "show", 4);
+    var sw = Stopwatch.StartNew();
+    foreach (var m in maps)
+    {
+        var map = LoadMeasureMap(root, m, false);
+        var (s0, s1) = (map.Starts[0], map.Starts[1]);
+        if (s1 != (map.Width - 1 - s0.Cx, map.Height - 1 - s0.Cy))
+            throw new FormatException($"mirrorprobe: {m}'s starts {s0} and {s1} are not a 180-degree rotation pair, so its halves cannot be compared");
+        foreach (var pr in pairs)
+        {
+            var w = map.BuildWorld(2026, players: 2, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
+            w.SetFaction(0, pr.F0);
+            w.SetFaction(1, pr.F1);
+            map.PlaceSkirmishStart(w, 8000);
+            var ais = new[] { MeasureCommander(0, AiDifficulty.Normal, 0, w), MeasureCommander(1, AiDifficulty.Normal, 0, w) };
+            long W = Fix64.FromInt(map.Width).Raw, H = Fix64.FromInt(map.Height).Raw;
+            string P(long raw) => (raw / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+            string Sig(in Entity e, bool rot)
+            {
+                long x = rot ? W - e.X.Raw : e.X.Raw, y = rot ? H - e.Y.Raw : e.Y.Raw;
+                long tx = rot ? W - e.TargetX.Raw : e.TargetX.Raw, ty = rot ? H - e.TargetY.Raw : e.TargetY.Raw;
+                return $"{e.Kind}/{e.StructType}/{e.UnitType} ({P(x)},{P(y)}) hp {e.Hp} {e.HState} carry {e.Carry} "
+                     + $"moving {(e.Moving ? 1 : 0)} cooldown {e.Cooldown} state {e.StateTicks} build {e.BuildProgress} "
+                     + $"ready {e.ReadyStructure} target ({P(tx)},{P(ty)}) flow {(e.UseFlow ? 1 : 0)}";
+            }
+            var cmds = new List<Command>();
+            var prev = new List<(Fix64 X, Fix64 Y)>();
+            string firstCmdDiff = "";
+            bool broke = false;
+            while (w.Tick < ticks && !MatchOver(w))
+            {
+                cmds.Clear();
+                ais[0].Act(w, cmds);
+                ais[1].Act(w, cmds);
+                var ca = new List<string>();
+                var cb = new List<string>();
+                foreach (var c in cmds)
+                {
+                    bool rot = c.PlayerId == 1;
+                    // A zero position is "no position" on every command that
+                    // takes none, so it is not rotated.
+                    bool posRot = rot && (c.X.Raw != 0 || c.Y.Raw != 0);
+                    long fp = c.Type == CommandType.PlaceStructure ? Fix64.FromInt(w.FootprintOf(c.AuxId)).Raw : 0;
+                    long x = posRot ? W - fp - c.X.Raw : c.X.Raw, y = posRot ? H - fp - c.Y.Raw : c.Y.Raw;
+                    string ent = c.EntityId >= 0 && c.EntityId < w.EntityCount ? Sig(w.Entities[c.EntityId], rot) : "-";
+                    string aux = c.Type is CommandType.Attack or CommandType.Harvest && c.AuxId >= 0 && c.AuxId < w.EntityCount
+                        ? Sig(w.Entities[c.AuxId], rot) : c.AuxId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    (c.PlayerId == 0 ? ca : cb).Add($"{c.Type} on [{ent}] at ({P(x)},{P(y)}) aux [{aux}]");
+                }
+                if (firstCmdDiff == "" && !ca.SequenceEqual(cb))
+                    firstCmdDiff = $"  first command difference at t={w.Tick}:\n      seat 0: " + string.Join("\n              ", ca)
+                        + "\n      seat 1: " + string.Join("\n              ", cb);
+                prev.Clear();
+                for (int i = 0; i < w.EntityCount; i++) prev.Add((w.Entities[i].X, w.Entities[i].Y));
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                var a = new List<string>();
+                var b = new List<string>();
+                var fields = new Dictionary<(long, long), int>();
+                for (int i = 0; i < w.EntityCount; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive) continue;
+                    if (e.PlayerId == 0) a.Add(Sig(e, false));
+                    else if (e.PlayerId == 1) b.Add(Sig(e, true));
+                    else if (e.Kind == EntityKind.FerriteField) fields[(e.X.Raw, e.Y.Raw)] = e.FerriteAmount;
+                }
+                // Walked in entity order, never in the dictionary's own order.
+                var fieldDiff = new List<string>();
+                for (int i = 0; i < w.EntityCount; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive || e.Kind != EntityKind.FerriteField || e.PlayerId >= 0) continue;
+                    int partner = fields.TryGetValue((W - e.X.Raw, H - e.Y.Raw), out int v) ? v : -1;
+                    if (partner != e.FerriteAmount)
+                        fieldDiff.Add($"field ({P(e.X.Raw)},{P(e.Y.Raw)}) holds {e.FerriteAmount}, its rotation partner {partner}");
+                }
+                a.Sort(StringComparer.Ordinal);
+                b.Sort(StringComparer.Ordinal);
+                if (a.SequenceEqual(b) && fieldDiff.Count == 0 && w.Credits(0) == w.Credits(1)) continue;
+                broke = true;
+                var onlyA = a.Except(b).ToList();
+                var onlyB = b.Except(a).ToList();
+                Console.WriteLine($"{m} {pr.Name}: the mirror breaks at t={w.Tick} (treasuries {w.Credits(0)} and {w.Credits(1)})");
+                if (firstCmdDiff != "") Console.WriteLine(firstCmdDiff);
+                foreach (var s in onlyA.Take(show)) Console.WriteLine($"    seat 0 only: {s}");
+                foreach (var s in onlyB.Take(show)) Console.WriteLine($"    seat 1 only: {s}");
+                foreach (var s in fieldDiff.Take(show)) Console.WriteLine($"    {s}");
+                for (int i = 0; i < w.EntityCount && i < prev.Count; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive || e.PlayerId is not (0 or 1) || !e.UseFlow) continue;
+                    bool r = e.PlayerId == 1;
+                    if (!(r ? onlyB : onlyA).Contains(Sig(e, r))) continue;
+                    int pcx = Map.CellOf(prev[i].X), pcy = Map.CellOf(prev[i].Y);
+                    int tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
+                    int single = FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, pcx, pcy);
+                    int foot = FlowField.BuildToFootprint(w.Map, tcx - 1, tcy - 1, 2).NextCell(w.Map, pcx, pcy);
+                    string Cell(int x, int y) => r ? $"({map.Width - 1 - x},{map.Height - 1 - y})" : $"({x},{y})";
+                    string Next(int c) => c < 0 ? "none" : Cell(c % map.Width, c / map.Width);
+                    Console.WriteLine($"    seat {e.PlayerId}'s walker stood in {Cell(pcx, pcy)} a tick earlier: single-target flow next {Next(single)}, "
+                        + $"2x2 footprint flow next {Next(foot)} (seat 0's frame)");
+                }
+                break;
+            }
+            if (!broke) Console.WriteLine($"{m} {pr.Name}: the mirror held to t={w.Tick}");
+        }
+    }
+    Console.WriteLine($"mirrorprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s");
+    return 0;
 }
 
 int FieldSurvivalGate()
@@ -17483,6 +17635,7 @@ return args.Length == 0
         "laddergate" => Measured(LadderGate),
         "aiairgate" => Measured(AiAirGate),
         "seatfairgate" => Measured(SeatFairGate),
+        "mirrorprobe" => Measured(MirrorProbe),
         "endgate" => Measured(EndGate),
         "cheesegate" => Measured(CheeseGate),
         "pillarprobe" => Measured(PillarProbe),
@@ -17527,7 +17680,7 @@ static class MeasurementHarness
 
     public const bool LadderGateBinding = false;        // F4: P8-26 sets this
     public const bool AiAirGateBinding = true;          // F3: set by P8-17 (ADR-072)
-    public const bool SeatFairGateBinding = false;      // F5: P8-21 sets this
+    public const bool SeatFairGateBinding = false;      // F5: unmet at P8-21 (ADR-075); set by the row that meets it
     public const bool EndGateBinding = false;           // F6, the stalemate half: P8-24 sets this
     public const bool CheeseGateBinding = true;         // AI-12's cheeses: set by P8-17 (see CheeseGate)
     public const bool FieldSurvivalGateBinding = false; // F7: P8-19 sets this
@@ -17558,9 +17711,12 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED at 9dd23cd (main
-    /// after P8-18, whose AI purchase floor moved every commander match; the
-    /// first baseline, at 3633913, read 313104, 66271 and 155801), which
+    /// F12's wall bar uses. Each figure is the one MEASURED on main after the
+    /// P8-21 pull request (ADR-075: the commander's placement scan oriented
+    /// to the map centre, which moves every commander match; at 9dd23cd, main
+    /// after P8-18, they
+    /// read 313713, 77278 and 120756, and the first baseline, at 3633913, read
+    /// 313104, 66271 and 155801), which
     /// is the value P8-31 must meet or beat: a parity-proven replacement pops
     /// in the same order, relaxes the same cells and so meets it exactly,
     /// which makes an unchanged proxy part of the parity evidence, and the
@@ -17582,9 +17738,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 313713),
-        ("skirmish-08", 77278),
-        ("skirmish-09", 120756),
+        ("skirmish-07", 269005),
+        ("skirmish-08", 44857),
+        ("skirmish-09", 155592),
     };
 }
 
