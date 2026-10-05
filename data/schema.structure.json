@@ -67,7 +67,7 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 4,
-      "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal."
+      "description": "Cells per side of the square footprint (ADR-005). Barriers are 1; everything else is 2. A mismatch against the placement code is silent and fatal. Registration refuses a footprint above 2 on a refinery or on any structure a contact unit can act on (ADR-071, Architect condition C4), because a walk onto a building is guaranteed to end within reach only up to 2x2; the maximum of 4 here applies to barriers and bridges, which nothing walks onto."
     },
     "weapon_ids": {
       "type": "array",

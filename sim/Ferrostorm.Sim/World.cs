@@ -1857,7 +1857,40 @@ public sealed partial class World
     {
         if (Tick != 0) throw new InvalidOperationException("catalogue is fixed once the match starts");
         ValidatePacing(typeId, in def);
+        ValidateReach(typeId, in def);
         _structTypes[typeId] = def;
+    }
+
+    /// <summary>
+    /// ADR-071 (Architect condition C4): the largest footprint a walk onto a
+    /// building is guaranteed to end within reach of. Every edge point of a
+    /// footprint this size or smaller lies within 1.42 cells of its centre, and
+    /// both the 1.75-cell contact reach (CaptureSystem) and the 2.83-cell dock
+    /// (Docked) are measured from that centre. A 3x3 edge point can lie 2.12
+    /// cells out, beyond the contact reach.
+    /// </summary>
+    public const int MaxReachableFootprint = 2;
+
+    /// <summary>
+    /// ADR-071 (Architect condition C4): the reach guarantee, enforced where a
+    /// def enters the catalogue rather than trusted. A refinery (a harvester
+    /// docks at it) and any structure a contact unit can act on
+    /// (<see cref="IsActedOnKind"/>) may not be registered with a footprint
+    /// above <see cref="MaxReachableFootprint"/>. Barriers and bridges are
+    /// never walked onto, so they keep the schema's wider range. Registration
+    /// is the single funnel: the /data loader reaches the catalogue only
+    /// through <see cref="RegisterStructureType"/>, so a file and a code-built
+    /// def are refused alike. Every shipped footprint is 1 or 2, so this
+    /// refuses nothing today and moves no hash.
+    /// </summary>
+    internal static void ValidateReach(int typeId, in StructureTypeDef d)
+    {
+        if (d.Footprint <= MaxReachableFootprint) return;
+        if (d.Kind == EntityKind.Refinery || IsActedOnKind(d.Kind))
+            throw new FormatException($"structure type {typeId} was registered with footprint {d.Footprint}, and a {d.Kind} is walked onto "
+                                      + "(a harvester docks at a refinery; a contact unit acts on any structure but a barrier or a bridge). "
+                                      + $"ADR-071 guarantees that walk ends inside the contact reach and the dock only for a footprint of "
+                                      + $"{MaxReachableFootprint} or less, because both are measured from the footprint centre");
     }
 
     /// <summary>
@@ -4548,13 +4581,22 @@ public sealed partial class World
                 if (dock.IsGoal(Map, cx, cy))
                 {
                     // On a face or a corner: close on the nearest point of the
-                    // footprint. That point lies on this cell's own boundary, so
-                    // the step never leaves the cell and can never clip a blocked
-                    // neighbour. Every point on the edge of a 2x2 or smaller
-                    // footprint is within 1.42 cells of its centre, inside both
-                    // the 1.75-cell contact reach and the 2.83-cell dock, so the
-                    // walk always ends in reach (and a harvester docks the moment
-                    // it enters any ring cell of a 2x2).
+                    // footprint. That point lies on the boundary this cell shares
+                    // with the footprint, so the step cannot clip a blocked
+                    // diagonal neighbour. It is not strictly inside this cell:
+                    // for a west or north face the boundary is the integer line
+                    // CellOf assigns to the footprint cell. That is safe because
+                    // a contact unit moves 0.20 cells a tick and CaptureSystem's
+                    // reach fires at least a third of a cell short of it, and a
+                    // harvester docks the moment it enters a ring cell; a faster
+                    // contact unit that survived its act could be left standing
+                    // in a blocked cell (ADR-071, Architect review). Every point
+                    // on the edge of a 2x2 or smaller footprint is within 1.42
+                    // cells of its centre, inside both the 1.75-cell contact
+                    // reach and the 2.83-cell dock, so the walk always ends in
+                    // reach (and a harvester docks the moment it enters any ring
+                    // cell of a 2x2). ValidateReach refuses a larger footprint on
+                    // anything walked onto, so the guarantee is enforced.
                     aimX = Fix64.Clamp(e.X, Fix64.FromInt(ax), Fix64.FromInt(ax + size));
                     aimY = Fix64.Clamp(e.Y, Fix64.FromInt(ay), Fix64.FromInt(ay + size));
                 }
@@ -4963,8 +5005,16 @@ public sealed partial class World
     /// because a rock is allied to nobody. Note this is deliberately NOT
     /// IsEnemyOf: hostility would exclude the neutral and delete ADR-021.</remarks>
     private bool CanBeActedOn(in Entity actor, in Entity t)
-        => t.Alive && IsStructure(t.Kind) && !IsBarrier(t.Kind)
-           && t.Kind != EntityKind.Bridge && !IsAlliedTo(in t, actor.PlayerId);
+        => t.Alive && IsActedOnKind(t.Kind) && !IsAlliedTo(in t, actor.PlayerId);
+
+    /// <summary>
+    /// The KIND half of <see cref="CanBeActedOn"/>: a structure that is neither
+    /// a barrier nor a bridge. Named so that structure registration asks the
+    /// same rule CaptureSystem applies rather than a copy of it (ADR-071,
+    /// Architect condition C4; see <see cref="ValidateReach"/>).
+    /// </summary>
+    internal static bool IsActedOnKind(EntityKind k)
+        => IsStructure(k) && !IsBarrier(k) && k != EntityKind.Bridge;
 
     private void CaptureSystem()
     {

@@ -1,7 +1,7 @@
 # ADR-072: the commander answers air
-- Status: Ratified under decision D10 of docs/tickets/P8-formidable-tracker.md ("the AI answers air (flak, earlier radar, escorts) but does not fly in P8"), taken under the owner's standing authority of 2026-10-02 for the orchestrator to integrate
-- Date: 2026-10-02
-- Deciders: orchestrator (owner's standing authority, D10) + implementer agent
+- Status: Ratified under decision D10 of docs/tickets/P8-formidable-tracker.md ("the AI answers air (flak, earlier radar, escorts) but does not fly in P8"), taken under the owner's standing authority of 2026-10-02 for the orchestrator to integrate. Signed off with conditions by the Architect, retrospectively, on 2026-10-03; the conditions are met in the pull request that lands the amendment below (see Architect sign-off)
+- Date: 2026-10-02 (amended 2026-10-04)
+- Deciders: orchestrator (owner's standing authority, D10) + implementer agent; Architect sign-off retrospective (see Architect sign-off)
 - GDD/TDD feature served: GDD s9 line 76 (Normal "competent build orders", Hard "strong macro, honest information"); GDD line 55 (air is a scalpel, not an army); ADR-028 clause 4 and its closing note that "the AI does not build or answer them"; P8-17; findings AI-01 and PV-06; criterion F3
 
 ## Context
@@ -100,6 +100,15 @@ pay-as-you-build, so the cost is build progress only), the anti-air unit is
 queued, and the harvester purchase, the MCV purchase and the army block all
 yield that producer for the beat.
 
+(Narrowed 2026-10-04 to match the code, from the Architect's review. The army
+block yields the producer whenever the answer is short. The harvester and MCV
+purchases yield only on a beat where the anti-air order is actually placed,
+which needs the answer short AND affordable. So on a short beat without the
+credits a harvester can still be queued, drain the treasury pay-as-you-build
+and delay the flak order, and is then cancelled on the next affordable beat,
+refund exact and build progress lost. This has not been shown to move any gate
+figure.)
+
 ### 4. The garrison and the escort
 
 The first `anti_air_garrison` anti-air units, lowest id first, are the
@@ -188,6 +197,31 @@ cannon's pacing (P8-18, P8-21) instead of to air.
 garrison still walks after flyers it cannot shoot. Not in the row, and it
 changes no figure here; recorded below.
 
+**Keeping `anti_air_cap` and `anti_air_garrison` compiled.** The only option
+that would have left the catalogue checksum, and with it every save and replay,
+untouched. Refused on CLAUDE.md's data rule, that every gameplay number lives
+in /data, and on ADR-032, whose clause 2 puts every number that decides which
+orders a commander issues into the checksum because every LAN peer runs the
+commander itself (ADR-033). The numbers that stay compiled are not new tuning.
+The guard radii (`EconomyGuardSq`, `BaseGuardSq`, `HomeLeashSq`) and the
+60-tick cadence (`DefendCadenceTicks`) are the ground garrison's own, from the
+intruder census, and the escort leash (`EscortLeashSq`) is the Directorate
+sentinel escort's (TICKET-P3-FAC-07). All five were literals before this row
+and are only named here, so authoring them would give numbers the ground
+garrison and the sentinels already use a second home; and the plus-one margin
+is the rule itself ("one more than the most flyers seen at once"), not a
+quantity to tune. The cap and the garrison are the two numbers this row
+introduces that a designer would tune.
+
+**Saving the commander's air memory** (`_airSeen`, `_antiAirStood`) in the
+save format. It would let a commander resume its answer across a load instead
+of relearning it from the next sighting. Refused on the precedent `saveload`
+and `savescalegate` hold: commander state is not serialised, `_produced` and
+the wave timers included, because the save carries the world and a commander
+is rebuilt beside it. Serialising two fields of one subsystem would start a
+commander save format without the rest of the commander, and the loss shows
+only across a single-player load (Hash and format says exactly what it costs).
+
 ## The measurement, before and after
 
 **`aiairgate`** (F3, binding), per cell. Harvesters lost to the raid are read
@@ -247,8 +281,19 @@ and a 130-tick build, and F3 does not ask for it.
 ## Hash and format
 
 **All 24 goldens byte-identical, measured**: `golden 2026` diffs empty
-against `sim/golden-hashes.txt`, in order. No golden holds an aircraft, so
-the census never counts one, and every air branch is gated on that count.
+against `sim/golden-hashes.txt`, in order. None of the 24 holds an aircraft,
+so the census never counts one. (Corrected 2026-10-04, Architect condition C3:
+this sentence said every air branch is gated on that count, which is false.)
+The census gates the anti-air ordering and the anti-air tier rung. The army,
+ground-garrison and wave exclusions and the `AnswerAir` call are gated instead
+on OWNING an anti-air unit (`else if (IsAntiAir(w, in e)) antiAir++` and
+`if (antiAir > 0) AnswerAir(...)` in SkirmishAI.cs). So neutrality holds
+because no shipped doctrine, map or mission gives a commander a Flak Track
+before it has seen air: the army doctrine buys unit types 1, 2, 3, 6, 8, 9 and
+10 only, and no map or mission seats or spawns type 16. `ladderprobe`'s 371
+lines (360 per match plus every summary line), byte-identical before and after,
+confirm it. The 25th golden, `airanswer`, added by the amendment below, is the
+first to hold an aircraft.
 
 **The catalogue checksum moves**, from `0xB4E6F043C4A872CC` to
 `0xF384205E0D0BF2D2` (the same from /data and from the compiled table), by
@@ -262,6 +307,24 @@ the flyer), and proves a one-unit change to either moves the checksum.
 
 No new Entity field, no save change and no wire change. The commander's new
 state is AI-internal and never hashed.
+
+**What old artefacts do** (Architect condition C4). A replay recorded before
+387dc39 would re-simulate identically, because playback applies the recorded
+commander orders and runs no commander, and no golden moved; it is refused
+anyway, by the catalogue checksum alone, so the refusal is the price of
+ADR-032's fold rather than a divergence. The refusal's advice, to restore the
+/data files the recording or save was made with, cannot be followed on this
+build: `DataLoader.ParseAiTuning` now requires both new keys in a personality
+file, so the old data/ai no longer parses, and a pre-change replay or save
+works only on a pre-change build. Campaign saves refuse in the same way.
+Builds on either side of 387dc39 refuse each other at the LAN hello, which
+compares the catalogue checksum, and that is the protection the move buys.
+Finally, the census reads the visible bitset, which the save does not carry
+(`World.Serialization.cs` writes `_explored` and never `_visible`), so a
+commander acting on the first tick after a load sees no aircraft, on top of
+having forgotten its high-water mark. That is a behavioural break across a
+single-player load, not a desync: LAN peers share one history, and the
+client's only load site resumes single player and records no replay.
 
 ## Consequences
 
@@ -290,9 +353,119 @@ Found and left to their owners:
 - **The Sodality loses the ground war to the Directorate** on skirmish-01
   with or without air, which is P8-21's and P8-53's residue.
 
-**What would reverse it.** D10's condition: a playtest that finds the air
-layer one-sided, whether the commander's answer makes air useless or air is
-still the exploit. And the gate's reading: once P8-22 and P8-21 land, if the
-no-raid control keeps a harvester at the window's end in all four cells, the
-gate should go back to counting at the window's end, because it would then
-measure the raid rather than the ground war.
+**What would reverse it.** Two conditions, each a measurement. (Restated
+2026-10-04 under Architect conditions C1 and C2. The first read "a playtest
+that finds the air layer one-sided" and stated no measure; the second named
+P8-22 and P8-21 and said the gate would go back to the end-of-window count
+instead, which contradicted D32.)
+
+- **D10's playtest half, as a number.** A three-flyer raid on a Normal
+  commander whose Radar Uplink stands, played three times as the playtest
+  brief's air check asks (docs/tickets/P7-playtest-brief-2026-08-03.md).
+  Reverse towards a LIGHTER answer if the raids kill **no harvester in any
+  attempt**: the answer has then made air useless, against GDD line 55's
+  scalpel. Reverse towards a HEAVIER answer if **any raid kills two or more
+  harvesters before the last flyer falls**: air is then still the exploit.
+  Between those bounds the answer stands; `aiairgate` measures at most one
+  harvester lost by t=5500, after every flyer has fallen, in each of its four
+  cells.
+- **The gate's reading (D32).** If P8-18 and P8-22 land and the no-raid control
+  keeps a harvester to the end of the window in every cell, the gate asserts
+  the end-of-window count as well as the count at the answer tick, so a
+  commander that wins the raid and then loses its economy to the flyers'
+  aftermath cannot pass. The end of the window would then measure the raid
+  rather than the ground war.
+
+## Amendment, 2026-10-04: the Architect's conditions
+
+The Architect signed this ADR off with six conditions (below). Conditions 1 to
+5 are met in the sections above: the reversal paragraph (1 and 2), "Hash and
+format" (3 and 4) and "Alternatives rejected" (5). For condition 1, decision D32
+of the tracker now uses the same words as the reversal paragraph; for condition
+2, decision D10 states the same measurement and the playtest brief
+(docs/tickets/P7-playtest-brief-2026-08-03.md) carries it as a measurable check
+citing this ADR, so `tools/playtest-index.sh` no longer lists ADR-072 as
+uncited. Condition 6 needed code, and is recorded here.
+
+**Condition 6: the first golden to hold an aircraft.** `sim/golden-hashes.txt`
+gains a 25th line, appended after the existing 24, which stay byte-identical:
+
+```
+airanswer 2026 0x0FC6285A838F451D
+```
+
+The scenario is `ScenarioAirAnswer` in sim/Ferrostorm.Sim.Runner/Program.cs,
+appended last to the runner's golden list, so `golden`, `determinism` and
+`match` all run it. A Normal Standard commander on a bare 64x64 World, playing
+the compiled catalogue and AI tuning as every golden does, holds a
+Construction Yard, three power plants, a refinery, a barracks, a factory, a
+harvester and 6000 credits, with no radar and no turret. Seat 1 is sealed
+behind a blocked column, as `aisuper`'s is, so only the flyers cross it. At
+t=150 three Strike Flyers appear and hunt the commander's harvesters by
+`aiairgate`'s prey rule. Measured at seed 2026 over its 1500 ticks:
+
+```
+airanswer: the commander first saw the 3 Strike Flyers at t=194, placed its Radar Uplink at t=466 (no turret placed in the window), ordered flak at t=480, fielded its first Flak Track at t=611 (4 by t=1500) and shot the first flyer down at t=682; 3 of 3 down, every one fired on by a commander's Flak Track (ADR-072 C6, the first golden to hold an aircraft)
+```
+
+It asserts that the raid spawned and entered the commander's own fog; that no
+anti-air order came before the first sighting (clause 1); that the Radar Uplink
+was placed and no turret before it, which is clause 5's pull-forward, because
+the ordinary ladder builds the turret first; that a Flak Track was built; and
+that at least one flyer fell and every one that fell was fired on by a
+commander's Flak Track. The hash now covers the air layer's movement and
+anti-air targeting (ADR-028 clauses 2 and 3) and this ADR's census, tier rung,
+queue clearing, garrison and escort, none of which any golden saw before.
+
+Proved to bite: with the census disabled (`airSeenNow++` removed), `golden 2026`
+throws `airanswer: the commander saw the flyers at t=194 and never ordered a
+Flak Track`, while lines 1 to 24 still match, which measures this ADR's
+neutrality claim once more. The scenario needed no sim change. The
+cross-platform check, the ordered golden diff on Windows and Linux, is CI's on
+the pull request.
+
+**Recorded from the review, not conditions.** `SeesAircraft` restates the
+cloak half of `World.CanTarget`, which is private; the two copies are identical
+today, and one public World predicate both call would remove the second copy
+hash-neutrally. No runner stage calls `DataLoader.ParseAiTuning`, so the claim
+that it requires both keys in a personality file and refuses them in a rung
+file is true by reading rather than proved by a gate (a rung yaml carrying
+`anti_air_cap` and a personality yaml missing `anti_air_garrison` should each
+throw). The LAN hello compares only the catalogue checksum, so a code-only
+change to commander doctrine would pass it and desync mid-match; Q024 (a
+sim-rules epoch for replays and the LAN hello) is filed for that class.
+
+## Architect sign-off
+
+- Date: 2026-10-03
+- Reviewer: Systems Architect (A3), retrospective review of PR 154 (commit 387dc39)
+- Verdict: **signed off with conditions**
+- Conditions met: all six, in the pull request that lands the amendment above (2026-10-04). Conditions 1 and 2 in "What would reverse it" (with D32 and D10 of the tracker matching it, and the playtest brief citing this ADR with the measurement), 3 and 4 in "Hash and format", 5 in "Alternatives rejected", and 6 by the `airanswer` golden recorded in the Amendment.
+
+**Reproduced.** From clean builds of 387dc39 and its parent: `golden 2026` matches the parent's `sim/golden-hashes.txt` line for line, 24 of 24. `aituninggate` reports the catalogue checksum as `0xB4E6F043C4A872CC` before and `0xF384205E0D0BF2D2` after, the same from /data and from the compiled table. `aiairgate` reproduces this ADR's before and after table figure for figure, controls included. `cheesegate` passes 10 of 10 at the ticks given. `ladderprobe` is identical across all 371 lines apart from elapsed time. PR 154 was green on Windows and Linux.
+
+**The break is justified.** The checksum moves because the cap and garrison are authored in data/ai, as CLAUDE.md's data rule requires. ADR-032 clause 2 makes anything authored there ride the checksum, since every LAN peer runs the commander itself (ADR-033). The change serves F3, GDD s9 line 76 and AI-01. No golden moved. The checksum's single cause, two integers appended to each row of the fold's last section, is stated and measured.
+
+**The code matches the decision.** The census, the catalogue-derived unit and tier, the target and its timing, the cancel loop, the garrison and escort, and the gate's new reading all do what the clauses say. The cancel loop is sound: each cancel addresses a queue index and commands apply in list order, so back to front is safe. The new state is per instance. Loops walk entity index order or a sorted id list. Arithmetic is Fix64 and integer. Every catalogue fact the code reads is already folded. There is no Entity, save or wire change.
+
+**Conditions.**
+
+1. The reversal paragraph and D32 agree: both name P8-18 and P8-22, and both say the gate then asserts the end-of-window count as well, not instead.
+2. The playtest half of the reversal states a number. For example: a three-flyer raid on a Normal commander with its radar standing kills no harvester in any attempt, or kills two or more before the last flyer falls. `tools/playtest-index.sh` stops listing ADR-072 as uncited by the brief.
+3. Hash and format stops claiming every air branch is gated on the census. The army, garrison and wave exclusions and `AnswerAir` are gated on owning anti-air. Neutrality rests on no shipped doctrine, map or mission giving a commander a Flak Track before it sees air.
+4. Hash and format says plainly that:
+   - a pre-change replay would have re-simulated identically and is refused only by the checksum;
+   - its advice to restore the old /data cannot work on this build, which requires both keys;
+   - campaign saves refuse in the same way;
+   - builds on either side of this commit now refuse each other at the LAN hello;
+   - the census reads a visible bitset the save does not carry, so a commander acting on the first tick after a load sees no aircraft.
+5. Alternatives rejected gains a paragraph for keeping the two numbers compiled and one for saving the commander's air memory.
+6. Before F3 is signed at the P8 gate, `sim/golden-hashes.txt` gains one scenario in which a commander shoots down a Strike Flyer with a Flak Track it built. The existing 24 lines stay unchanged and the cross-platform check is green on both platforms. No golden has ever held an aircraft, which is why this decision was neutral and also why nothing yet hashes it.
+
+**Follow-ups I own.**
+
+- A TDD section on what the commander may read: public World queries, its own seat's visibility, and state that is never hashed or saved.
+- Open-queue entries for:
+  - separating AI tuning from the checksum that replays verify, before the first public build;
+  - a build version in the LAN hello;
+  - recomputing visibility at the end of `World.Load`, which also stops a tunnel ordered on the first tick after a load from being refused (ADR-066).
