@@ -75,6 +75,14 @@ public partial class SkirmishLive : Node3D
     /// counts one batch per player per tick and a second submission for the
     /// same tick corrupts the merge, so this guard is not an optimisation.</summary>
     private int _lastSubmittedTick = -1;
+    /// <summary>P8-58: this peer left a LAN match still being played and
+    /// closed its connection (CloseNetSession), so no tick submits or polls
+    /// again.</summary>
+    private bool _netClosed;
+    /// <summary>P8-58 verification reads: every batch this peer has sent the
+    /// relay and every command those batches carried, counted at the one place
+    /// a batch is sent.</summary>
+    private int _netBatchesSubmitted, _netCommandsSubmitted;
     public bool IsNetworked => _net != null;
     /// <summary>The other seat in a two-player match, for the handful of reads
     /// that are genuinely about the opponent rather than about me. Public so a
@@ -151,6 +159,12 @@ public partial class SkirmishLive : Node3D
     /// finished while the match carries on without them, so their client is over
     /// at a moment when there is still no winner to name.</summary>
     private bool _matchOver;
+    /// <summary>P8-58: the local seat was eliminated from a LAN match that goes
+    /// on without it. Unlike _matchOver this does NOT stop the sim: the peer
+    /// must keep advancing and submitting (empty batches), because the relay
+    /// broadcasts a tick only once it holds every peer's batch. Never set
+    /// offline, where my own elimination is the verdict.</summary>
+    private bool _spectating;
 
     // TICKET-P5-SAVE-01: persistence and replays. Exactly one of these three
     // states holds for a scene: recording a fresh live match (_rec set), playing
@@ -204,6 +218,8 @@ public partial class SkirmishLive : Node3D
     // TICKET-P5-SET-01: the LAN desync notice (doc 18 Phase D: "desync notice
     // surfaced in the HUD"). Driven by NetSession, latched, never fades.
     private Label _desyncNotice = null!;
+    // P8-58: an eliminated LAN commander's notice that the battle goes on.
+    private Label _spectateNotice = null!;
 
     // Structure placement mode
     private int _placingType;
@@ -1153,8 +1169,31 @@ public partial class SkirmishLive : Node3D
     public void QuitToMenu()
     {
         FinishRecording();
+        CloseNetSession();
         if (LeaveForMenuForTest is { } leave) { leave(); return; }
         GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
+    }
+
+    /// <summary>
+    /// P8-58: leaving a LAN match that is still being played closes this peer's
+    /// connection, which is how the relay learns that a peer has gone: its pump
+    /// reads the closed socket and sends every other peer Left, whose notice
+    /// then says the other commander has left. Nothing closed it before. The
+    /// scene changed and the client's socket stayed open behind it, so the
+    /// relay went on waiting for a batch that would never come and the other
+    /// peer's match froze with nothing on screen, which is exactly what an
+    /// eliminated spectator leaving would have done. After a verdict nothing
+    /// waits on this socket, because the verdict lands on the same tick of both
+    /// worlds and both peers have stopped, so it is left as it always was
+    /// rather than raising a departure notice over the other commander's
+    /// banner. Latched, and AdvanceOneTickUncontained answers a closed session
+    /// with no tick, so nothing is ever submitted on a closed stream.
+    /// </summary>
+    private void CloseNetSession()
+    {
+        if (_net == null || _netClosed || _matchOver) return;
+        _netClosed = true;
+        _net.Dispose();
     }
 
     /// <summary>P8-11 verification seam: when set, leaving for the menu calls
@@ -1588,6 +1627,24 @@ public partial class SkirmishLive : Node3D
         _desyncNotice.AddThemeColorOverride("font_color", new Color(0.92f, 0.28f, 0.22f));
         hud.AddChild(_desyncNotice);
 
+        // P8-58: an eliminated LAN commander's notice, below the desync notice.
+        // A label of its own: the desync notice keeps the first text it shows,
+        // so sharing it would hide a later desync or departure, and the verdict
+        // banner sits over the middle of the battlefield this peer is now there
+        // to watch. Worn in the defeat banner's red.
+        _spectateNotice = new Label
+        {
+            Name = "SpectateNotice",
+            Visible = false,
+            AnchorLeft = 0.5f, AnchorRight = 0.5f, AnchorTop = 0, AnchorBottom = 0,
+            OffsetLeft = -300, OffsetRight = 300, OffsetTop = 172,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _spectateNotice.AddThemeFontSizeOverride("font_size", 16);
+        _spectateNotice.AddThemeColorOverride("font_color", new Color(0.8f, 0.25f, 0.2f));
+        hud.AddChild(_spectateNotice);
+
         _banner = new Label
         {
             Visible = false,
@@ -1770,7 +1827,8 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>Is the sim allowed to advance? A finished match, a pause, a
     /// replay that has reached the end of its stream and (P8-11) a fault all
-    /// stop it.</summary>
+    /// stop it. A LAN spectator (P8-58) deliberately does not: the other peer's
+    /// match advances only while this one submits.</summary>
     private bool Running => !_matchOver && !_paused && !_replayDone && !_faulted;
 
     /// <summary>
@@ -3628,11 +3686,46 @@ public partial class SkirmishLive : Node3D
     /// above is what closes the match. The exception is MY OWN elimination -
     /// there is nothing left to watch and nothing left to command, so defeat is
     /// shown at once rather than whenever the remaining commanders settle
-    /// it.</summary>
+    /// it. Offline, that is; in a LAN match the peer stays in lockstep as a
+    /// spectator instead (P8-58, BeginSpectating).</summary>
     private void OnEliminated(int player)
     {
         if (_matchOver || player != LocalPlayerId) return;
+        if (_net != null) { BeginSpectating(); return; }
         ShowVerdict(false);
+    }
+
+    /// <summary>
+    /// P8-58: MY elimination from a LAN match that goes on without me. Offline
+    /// that is the verdict, and the verdict stops the sim, which is harmless
+    /// when this scene is the only thing stepping its world. In lockstep it is
+    /// not: the relay broadcasts a tick only once it holds every peer's batch,
+    /// so the peer that stopped advancing also stopped submitting, and the other
+    /// peer's match froze for good with nothing on its screen (reachable on
+    /// skirmish-09, whose LAN match seats two commanders beside the two peers:
+    /// a free-for-all where a person falls first, or even sides where one falls
+    /// while their commander teammate fights on). So the eliminated peer stays
+    /// in lockstep as a SPECTATOR. It keeps advancing and submits empty batches
+    /// (it owns nothing, and AdvanceOneTickUncontained drops whatever it
+    /// queues), and its defeat is a notice that stops nothing. Its match ends
+    /// only when the match itself ends, through EndMatch, which the sweep runs
+    /// before the events, so a tick that both eliminates me and names the
+    /// winner closes the match rather than starting a spectator; or when the
+    /// player leaves for the menu by the key the notice names, which closes the
+    /// connection (CloseNetSession) so the relay tells the other peer the usual
+    /// way.
+    /// </summary>
+    private void BeginSpectating()
+    {
+        if (_spectating) return;
+        _spectating = true;
+        // No order can be given now, so no targeting cursor stays armed.
+        DisarmAllArmedOrders();
+        _spectateNotice.Text = "ELIMINATED: SPECTATING\nyour forces are gone and the battle goes on; "
+                             + $"press {Settings.KeyName(Settings.BindOf("cancel"))} for uplink";
+        _spectateNotice.Visible = true;
+        // The line the offline verdict plays for the same moment.
+        PlayVo("vo_mission_failed");
     }
 
     /// <summary>Raise the closing banner and stand the match down. Split out of
@@ -3641,6 +3734,9 @@ public partial class SkirmishLive : Node3D
     private void ShowVerdict(bool iWon)
     {
         _matchOver = true;
+        // P8-58: a spectator's match ends here too, and the banner replaces its
+        // notice.
+        _spectateNotice.Visible = false;
         // TICKET-P5-SAVE-01: the match is over, so the recording is complete.
         // Closing it here rather than at scene exit means the file is on disk
         // and in the browser before the player has finished reading the banner.
@@ -4679,7 +4775,8 @@ public partial class SkirmishLive : Node3D
                 : null;
             if (cancelled != null) { DisarmAllArmedOrders(); ShowToast(cancelled); return true; }
             if (_placingType > 0) { ExitPlacement(); return true; }
-            if (_matchOver || _replayDone) { QuitToMenu(); return true; }
+            // P8-58: and a spectator's notice names this key as its way out.
+            if (_matchOver || _replayDone || _spectating) { QuitToMenu(); return true; }
             return false;
         }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
@@ -6491,6 +6588,12 @@ public partial class SkirmishLive : Node3D
     /// signal it emits.</summary>
     public void PressFaultMenuButtonForTest() => _faultMenuButton?.EmitSignal(BaseButton.SignalName.Pressed);
     public bool MatchOverForTest => _matchOver;
+    // ---- P8-58 verification surface: a LAN spectator, read where it lives.
+    public bool SpectatingForTest => _spectating;
+    public bool SpectateNoticeVisibleForTest => _spectateNotice.Visible;
+    public string SpectateNoticeTextForTest => _spectateNotice.Text;
+    public int NetBatchesSubmittedForTest => _netBatchesSubmitted;
+    public int NetCommandsSubmittedForTest => _netCommandsSubmitted;
 
     /// <summary>P8-11 verification hook: hand the LOCAL seat to a commander as
     /// well, so a long match plays AI against AI through this scene's own tick
@@ -6505,17 +6608,6 @@ public partial class SkirmishLive : Node3D
         _commanders.Insert(at, SkirmishAI.Standard(LocalPlayerId, rung, _world));
     }
 
-    /// <summary>
-    /// C7b: advance exactly one tick, offline or networked, returning false when
-    /// the sim could NOT advance (a lockstep tick whose merged batch has not
-    /// arrived). Offline it always succeeds.
-    ///
-    /// The networked path submits this tick's batch EXACTLY ONCE - the relay
-    /// counts one batch per player per tick and a second submission for the
-    /// same tick corrupts the merge - then polls. TryAdvanceTick never blocks,
-    /// which is the property C7a shipped and the whole reason the frame loop
-    /// can be lockstep-driven without freezing on a socket.
-    /// </summary>
     /// <summary>
     /// P8-11: THE CONTAINMENT. Every tick the frame drain or StepTicks runs
     /// comes through here, so this is the one place a fault in the sim step or
@@ -6642,14 +6734,33 @@ public partial class SkirmishLive : Node3D
         v.AddChild(UplinkUi.Note($"or press {Settings.KeyName(Settings.BindOf("cancel"))}", 11));
     }
 
+    /// <summary>
+    /// C7b: advance exactly one tick, offline or networked, returning false when
+    /// the sim could NOT advance (a lockstep tick whose merged batch has not
+    /// arrived). Offline it always succeeds.
+    ///
+    /// The networked path submits this tick's batch EXACTLY ONCE - the relay
+    /// counts one batch per player per tick and a second submission for the
+    /// same tick corrupts the merge - then polls. TryAdvanceTick never blocks,
+    /// which is the property C7a shipped and the whole reason the frame loop
+    /// can be lockstep-driven without freezing on a socket.
+    /// </summary>
     private bool AdvanceOneTickUncontained()
     {
         if (_net == null) { RunOneTick(); return true; }
+        // P8-58: a session closed by leaving has no stream to submit on.
+        if (_netClosed) return false;
 
         int tick = _world.Tick;
         if (tick != _lastSubmittedTick)
         {
-            _net.SubmitCommands(_pending);
+            // P8-58: a spectator's batch is EMPTY. It owns nothing, so its
+            // orders could only be refused, and what the relay needs from it is
+            // the batch itself, without which no tick is broadcast to anyone.
+            IReadOnlyList<Command> batch = _spectating ? System.Array.Empty<Command>() : _pending;
+            _net.SubmitCommands(batch);
+            _netBatchesSubmitted++;
+            _netCommandsSubmitted += batch.Count;
             _pending.Clear();
             _lastSubmittedTick = tick;
         }

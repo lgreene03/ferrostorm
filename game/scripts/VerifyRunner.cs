@@ -4892,6 +4892,101 @@ public partial class VerifyRunner : Node
     }
 
     /// <summary>
+    /// C7b-iii's pair, shared since P8-58 with the LAN event stage and the
+    /// spectator stage: a relay and two real battle scenes, each a lockstep
+    /// client of it, on skirmish-02 unless a map and its seat count are given
+    /// (skirmish-09 at four seats is the real lobby's four-seat match: two
+    /// peers, and each scene hands the seats above them to commanders). The
+    /// host's setup blob carries the seed, so the client handed a DELIBERATELY
+    /// WRONG seed must build the host's world from the Hello instead (ADR-022).
+    /// Each scene is handed its own client's PlayerId as its seat, the rule
+    /// MainMenu's join path ships, so a peer's orders are stamped with the seat
+    /// its scene believes it holds whichever thread the relay accepted first;
+    /// the pair is returned with relay seat 0 as the host and seat 1 as the
+    /// joiner. Throws if the clients do not connect, for the caller's catch,
+    /// having first stopped the relay and closed any client that did connect,
+    /// because a caller that catches the throw holds nothing to clean up.
+    /// </summary>
+    private (Ferrostorm.Net.Relay Relay, Ferrostorm.Net.LockstepClient HostClient, Ferrostorm.Net.LockstepClient JoinClient,
+        SkirmishLive Host, SkirmishLive Join) ConnectLanPair(ulong seed, string mapPath = "data/maps/skirmish-02.fmap",
+        int seats = 2)
+    {
+        var setup = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, seed);
+        var relay = new Ferrostorm.Net.Relay(playerCount: 2, setup: setup);
+        relay.Start();
+        Ferrostorm.Net.LockstepClient? bySeed = null, byBlob = null;
+        try
+        {
+            var relayThread = new System.Threading.Thread(relay.Run) { IsBackground = true };
+            relayThread.Start();
+
+            Ferrostorm.Sim.World BuildFrom(ulong s)
+            {
+                var map = Ferrostorm.Sim.MapData.Load(GameFiles.Abs(mapPath));
+                var w = map.BuildWorld(s, players: seats, out _, SkirmishLive.RegisterCatalogue);
+                map.PlaceSkirmishStart(w, 8000);
+                return w;
+            }
+
+            SkirmishLive Seat(Ferrostorm.Net.LockstepClient client)
+            {
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.LocalSeat = client.PlayerId;
+                SkirmishLive.PendingNet = client;
+                MatchConfig.MapPath = GameFiles.Abs(mapPath);
+                var sc = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(sc);
+                return sc;
+            }
+
+            // Both clients are constructed CONCURRENTLY, on their own threads.
+            // The relay accepts every player before it sends a single Hello, and
+            // a LockstepClient's constructor blocks reading that Hello, so
+            // building them one after another on this thread deadlocks: the
+            // first waits for a Hello that cannot come until the second
+            // connects. Worth knowing for the real Host and Join flow too - a
+            // host cannot construct its own client inline and then wait for a
+            // joiner on the same thread.
+            System.Exception? connectError = null;
+            var seedThread = new System.Threading.Thread(() =>
+            {
+                try { bySeed = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, seed); }
+                catch (System.Exception e) { connectError = e; }
+            });
+            var blobThread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    // Handed a DELIBERATELY WRONG seed: it must build from the
+                    // Hello's setup blob instead (ADR-022).
+                    byBlob = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, 999999UL, null,
+                        blob => BuildFrom(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob)));
+                }
+                catch (System.Exception e) { connectError = e; }
+            });
+            seedThread.Start(); blobThread.Start();
+            seedThread.Join(15000); blobThread.Join(15000);
+            if (connectError != null) throw connectError;
+            if (bySeed == null || byBlob == null) throw new System.Exception("clients did not connect in time");
+            var (hostClient, joinClient) = bySeed.PlayerId == 0 ? (bySeed, byBlob) : (byBlob, bySeed);
+            var host = Seat(hostClient);
+            var join = Seat(joinClient);
+            return (relay, hostClient, joinClient, host, join);
+        }
+        catch
+        {
+            // Started here, so stopped here: the relay's listener, and the
+            // socket of any client that connected, which is what ends the
+            // relay's pump threads once a match has begun.
+            relay.Stop();
+            bySeed?.Dispose();
+            byBlob?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// C7b-iii acceptance: TWO REAL BATTLE SCENES playing each other over an
     /// in-process relay. Not the net layer in isolation, which the sim runner
     /// already soaks - the actual SkirmishLive frame path, both seats, through
@@ -4900,82 +4995,6 @@ public partial class VerifyRunner : Node
     /// This is the check the whole LAN wave exists to satisfy, and until the
     /// harness landed there was no way to write it at all.
     /// </summary>
-    /// <summary>
-    /// C7b-iii's pair, shared since P8-58 with the LAN event stage: a relay and
-    /// two real battle scenes on skirmish-02, each a lockstep client of it. The
-    /// host's setup blob carries the seed, so the client handed a DELIBERATELY
-    /// WRONG seed must build the host's world from the Hello instead (ADR-022).
-    /// Each scene is handed its own client's PlayerId as its seat, the rule
-    /// MainMenu's join path ships, so a peer's orders are stamped with the seat
-    /// its scene believes it holds whichever thread the relay accepted first;
-    /// the pair is returned with relay seat 0 as the host and seat 1 as the
-    /// joiner. Throws if the clients do not connect, for the caller's catch.
-    /// </summary>
-    private (Ferrostorm.Net.Relay Relay, Ferrostorm.Net.LockstepClient HostClient, Ferrostorm.Net.LockstepClient JoinClient,
-        SkirmishLive Host, SkirmishLive Join) ConnectLanPair(ulong seed)
-    {
-        var setup = new byte[8];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, seed);
-        var relay = new Ferrostorm.Net.Relay(playerCount: 2, setup: setup);
-        relay.Start();
-        var relayThread = new System.Threading.Thread(relay.Run) { IsBackground = true };
-        relayThread.Start();
-
-        static Ferrostorm.Sim.World BuildFrom(ulong s)
-        {
-            var map = Ferrostorm.Sim.MapData.Load(GameFiles.Abs("data/maps/skirmish-02.fmap"));
-            var w = map.BuildWorld(s, players: 2, out _, SkirmishLive.RegisterCatalogue);
-            map.PlaceSkirmishStart(w, 8000);
-            return w;
-        }
-
-        SkirmishLive Seat(Ferrostorm.Net.LockstepClient client)
-        {
-            SkirmishLive.AutoStep = false;
-            SkirmishLive.LocalSeat = client.PlayerId;
-            SkirmishLive.PendingNet = client;
-            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-02.fmap");
-            var sc = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
-            AddChild(sc);
-            return sc;
-        }
-
-        // Both clients are constructed CONCURRENTLY, on their own threads.
-        // The relay accepts every player before it sends a single Hello, and
-        // a LockstepClient's constructor blocks reading that Hello, so
-        // building them one after another on this thread deadlocks: the
-        // first waits for a Hello that cannot come until the second
-        // connects. Worth knowing for the real Host and Join flow too - a
-        // host cannot construct its own client inline and then wait for a
-        // joiner on the same thread.
-        Ferrostorm.Net.LockstepClient? bySeed = null, byBlob = null;
-        System.Exception? connectError = null;
-        var seedThread = new System.Threading.Thread(() =>
-        {
-            try { bySeed = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, seed); }
-            catch (System.Exception e) { connectError = e; }
-        });
-        var blobThread = new System.Threading.Thread(() =>
-        {
-            try
-            {
-                // Handed a DELIBERATELY WRONG seed: it must build from the
-                // Hello's setup blob instead (ADR-022).
-                byBlob = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, 999999UL, null,
-                    blob => BuildFrom(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob)));
-            }
-            catch (System.Exception e) { connectError = e; }
-        });
-        seedThread.Start(); blobThread.Start();
-        seedThread.Join(15000); blobThread.Join(15000);
-        if (connectError != null) throw connectError;
-        if (bySeed == null || byBlob == null) throw new System.Exception("clients did not connect in time");
-        var (hostClient, joinClient) = bySeed.PlayerId == 0 ? (bySeed, byBlob) : (byBlob, bySeed);
-        var host = Seat(hostClient);
-        var join = Seat(joinClient);
-        return (relay, hostClient, joinClient, host, join);
-    }
-
     private void RunLanChecks()
     {
         GD.Print("  --    LAN: two battle scenes over an in-process relay");
@@ -5080,9 +5099,159 @@ public partial class VerifyRunner : Node
             Check(false, $"the LAN match threw: {ex.Message}");
         }
 
+        RunLanSpectatorStage();
         RunLobbyChecks();
         RunDifficultyChecks();
         RunTeamChecks();
+    }
+
+    /// <summary>
+    /// P8-58: A PEER ELIMINATED FROM A LAN MATCH THAT GOES ON STAYS IN LOCKSTEP
+    /// AS A SPECTATOR. Once the networked tick ran the full post-step sweep, its
+    /// PlayerEliminated arm showed the eliminated peer its verdict, and the
+    /// verdict stops the sim: that peer stopped advancing, so it stopped
+    /// submitting, and the relay, which broadcasts a tick only once it holds
+    /// every peer's batch, starved the other peer's match for good with nothing
+    /// on its screen. A two-seat pair cannot see it, because there an
+    /// elimination always names the winner and both peers halt together; it
+    /// needs the real lobby's four-seat match, two peers on skirmish-09 with a
+    /// commander in each seat above them, as a free-for-all, so the joiner can
+    /// fall while three commanders fight on. The joiner loses everything on
+    /// both worlds at one tick (Alive false on all of its entities), then both
+    /// frame loops are driven on: the survivor must play on, the spectator must
+    /// keep advancing and submitting empty batches (an order queued on it
+    /// included), its notice must name the way out, and the two worlds must
+    /// still hash alike across the relay's hash exchange. Leaving by that way
+    /// out must close its connection so the survivor is told rather than
+    /// frozen. Proved to bite with the offline verdict restored on the net path.
+    /// </summary>
+    private void RunLanSpectatorStage()
+    {
+        GD.Print("  --    LAN (P8-58): a peer eliminated from a match that goes on stays in lockstep as a spectator");
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            MatchConfig.TeamMode = MatchSetup.TeamsFreeForAll;
+            MatchConfig.Seats = 0;                 // fill the map: four seats
+            // The smoke test's departure is still latched in the session, and
+            // this stage asserts a departure of its own.
+            Ferrostorm.Client.NetSession.Reset();
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(6565UL, "data/maps/skirmish-09.fmap", seats: 4);
+            RunLanSpectatorChecks(relay, hostClient, joinClient, host, join);
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"lanspectate: the LAN match threw: {ex.Message}");
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.Seats = wasSeats;
+            host?.QueueFree();
+            join?.QueueFree();
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    private void RunLanSpectatorChecks(Ferrostorm.Net.Relay relay, Ferrostorm.Net.LockstepClient hostClient,
+        Ferrostorm.Net.LockstepClient joinClient, SkirmishLive host, SkirmishLive join)
+    {
+        var hw = host.LiveWorld;
+        var jw = join.LiveWorld;
+        int hs = host.LocalPlayerId, js = join.LocalPlayerId;
+        bool four = host.IsNetworked && join.IsNetworked && hs == 0 && js == 1
+                    && hw.PlayerCount == 4 && jw.PlayerCount == 4
+                    && hostClient.AiCommanders.Count == 2 && joinClient.AiCommanders.Count == 2
+                    && host.IsHostileSeat(js) && join.IsHostileSeat(hs);
+        Check(four, $"lanspectate: precondition: two peers on skirmish-09, in seats {hs} and {js} of {hw.PlayerCount} and hostile, "
+                    + $"with a commander in each of the {hostClient.AiCommanders.Count} seats above them on both peers");
+        if (!four) return;
+        hostClient.Prime();
+        joinClient.Prime();
+        bool warm = true;
+        for (int t = 0; t < 5 && warm; t++) warm = LanStepBoth(host, join);
+        Check(warm && host.StateHash == join.StateHash,
+              $"lanspectate: precondition: both peers advance together and hold one world (tick {host.CurrentTick} and {join.CurrentTick})");
+        if (!warm) return;
+
+        // The joiner loses everything it holds, on both worlds at the same tick.
+        int removed = 0;
+        for (int i = 0; i < hw.EntityCount; i++)
+            if (hw.Entities[i].Alive && hw.Entities[i].PlayerId == js)
+            {
+                RemoveFixture(hw, i);
+                RemoveFixture(jw, i);
+                removed++;
+            }
+        int news0 = host.EliminationNotices;
+        bool eliminated = LanStepBoth(host, join)
+                          && TickHad(hw, ev => ev.Type == GameEventType.PlayerEliminated && ev.B == js)
+                          && TickHad(jw, ev => ev.Type == GameEventType.PlayerEliminated && ev.B == js);
+        Check(eliminated && hw.Winner < 0 && jw.Winner < 0,
+              $"lanspectate: precondition: the joiner, stripped of all {removed} of its entities, is eliminated on both worlds "
+              + $"on one tick and the match goes on (winner {hw.Winner} and {jw.Winner})");
+        if (!eliminated) return;
+
+        string cancelKey = Settings.KeyName(Settings.BindOf("cancel"));
+        string notice = join.SpectateNoticeTextForTest;
+        Check(join.SpectatingForTest && !join.MatchOverForTest && join.SpectateNoticeVisibleForTest
+              && notice.StartsWith("ELIMINATED: SPECTATING") && notice.Contains($"press {cancelKey}") && !join.BannerVisibleForTest,
+              $"lanspectate: the eliminated joiner is told it is out and spectating, by a notice that names the way out and stops "
+              + $"nothing (\"{notice.Replace("\n", " / ")}\", match over {join.MatchOverForTest}, banner {join.BannerVisibleForTest})");
+        Check(!host.SpectatingForTest && !host.MatchOverForTest && host.EliminationNotices == news0 + 1,
+              $"lanspectate: ...while the host, still in the war, is told an enemy commander is out and plays on "
+              + $"(\"{host.ToastText}\", spectating {host.SpectatingForTest}, match over {host.MatchOverForTest})");
+
+        // Both frame loops driven on, with an order queued on the spectator
+        // that must never reach the relay.
+        int b0 = join.NetBatchesSubmittedForTest, c0 = join.NetCommandsSubmittedForTest;
+        int h0 = host.CurrentTick, j0 = join.CurrentTick;
+        join.QueueCommandForTest(CommandType.Stop, 0, 0);
+        const int onward = 40;
+        for (int t = 0; t < onward; t++)
+            if (!LanStepBoth(host, join)) break;
+        int hAdv = host.CurrentTick - h0, jAdv = join.CurrentTick - j0;
+        int batches = join.NetBatchesSubmittedForTest - b0, commands = join.NetCommandsSubmittedForTest - c0;
+        Check(hAdv >= 30 && !relay.DesyncDetected,
+              $"lanspectate: the surviving host plays on after the joiner is eliminated: {hAdv} of {onward} ticks "
+              + $"(at least 30 wanted), with no desync at the relay");
+        Check(jAdv == hAdv && batches >= jAdv && batches > 0,
+              $"lanspectate: ...because the spectating joiner keeps advancing ({jAdv} ticks) and submitting ({batches} batches)");
+        Check(batches > 0 && commands == 0,
+              $"lanspectate: ...and issues no command: every batch it sent was empty, the order queued on it included "
+              + $"({commands} commands in {batches} batches)");
+        Check(jAdv > 0 && host.CurrentTick == join.CurrentTick && host.StateHash == join.StateHash && !relay.DesyncDetected,
+              $"lanspectate: ...and its world still hashes as the survivor's: identical at tick {host.CurrentTick} "
+              + $"(0x{host.StateHash:X16} and 0x{join.StateHash:X16}), the relay comparing the peers' hashes every "
+              + $"{Ferrostorm.Net.LockstepClient.HashInterval} ticks and seeing no desync");
+        Check(join.SpectatingForTest && !join.MatchOverForTest && join.SpectateNoticeVisibleForTest,
+              "lanspectate: ...and it is still spectating, its notice still up");
+
+        // The way out the notice names: the cancel key leaves for the menu,
+        // and leaving closes the spectator's connection, so the relay tells
+        // the survivor the usual way.
+        int left = 0;
+        join.LeaveForMenuForTest = () => left++;
+        join.PressKey(Settings.BindOf("cancel"));
+        join.LeaveForMenuForTest = null;
+        int waited = 0;
+        while (!host.MatchNoticeVisible && waited++ < 5000)
+        {
+            host.StepTicks(1);            // the drain keeps polling; it just stops advancing
+            host.PumpFrameForTest();      // the notice is raised from the frame, not the tick
+            System.Threading.Thread.Sleep(1);
+        }
+        Check(left == 1, $"lanspectate: the key the notice names ({cancelKey}) leaves for the menu ({left} departure)");
+        Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
+              $"lanspectate: ...and leaving closes the spectator's connection, so the survivor is told the other commander "
+              + $"left rather than left frozen (\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
     }
 
     /// <summary>
