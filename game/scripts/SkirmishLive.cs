@@ -1868,12 +1868,42 @@ public partial class SkirmishLive : Node3D
         // every tick while it is set, as a recurring defect would. Null in
         // every played game.
         if (TickFaultForTest is { } injected) throw new System.InvalidOperationException(injected);
-        // P8-10 review: the owner cache as it stands BEFORE this step, so the
-        // sweep reads every event against the owner at that moment even on the
-        // first tick of a resumed match or after a building appeared between
-        // ticks (DR-20 refreshes it after the sweep as well).
-        RememberStructureOwners();
+        PreStepCapture();
         _world.Step(span);
+        PostStepSweep();
+    }
+
+    /// <summary>
+    /// P8-58: what the post-step sweep needs to know about the world as it
+    /// stood BEFORE the step, taken immediately before it on BOTH tick paths:
+    /// here offline, and before the lockstep client steps the world on the net
+    /// path (AdvanceOneTickUncontained). Today that is the owner cache (P8-10
+    /// review), so the sweep reads every event against the owner at that
+    /// moment even on the first tick of a resumed match or after a building
+    /// appeared between ticks (DR-20 refreshes it after the sweep as well).
+    /// Read only: it touches no sim state, so calling it on a lockstep poll
+    /// whose merged batch has not arrived yet costs a walk and changes nothing.
+    /// </summary>
+    private void PreStepCapture()
+    {
+        RememberStructureOwners();
+    }
+
+    /// <summary>
+    /// P8-58: THE POST-STEP SWEEP, the one method both tick paths call once the
+    /// world has stepped: RunOneTick after its own Step, and the networked path
+    /// after the lockstep client's. It used to be the tail of RunOneTick, and a
+    /// LAN tick ran a three-line subset of it (the snapshot, the fog and the
+    /// victory latch), so a networked match drew no shot, death or effect and
+    /// raised no toast, alert, chime or voice line on either peer. Everything a
+    /// player sees or hears of the tick's events is in here, in the order the
+    /// offline tick always ran it. The mission and playback arms are no-ops on
+    /// the net path rather than branches around it: a LAN scene builds no
+    /// MissionRunner and plays back no replay, so _mission and _replay are null
+    /// there, and its deploy watcher holds nothing because nothing arms it.
+    /// </summary>
+    private void PostStepSweep()
+    {
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
         _fog.UpdateFrom(_world, LocalPlayerId);
@@ -6486,19 +6516,6 @@ public partial class SkirmishLive : Node3D
     /// which is the property C7a shipped and the whole reason the frame loop
     /// can be lockstep-driven without freezing on a socket.
     /// </summary>
-    /// <summary>C7b: the post-step work a networked tick still owes, since the
-    /// lockstep client performed the Step itself. Deliberately the SUBSET of
-    /// RunOneTick's tail that a LAN match needs: the snapshot the renderer
-    /// samples, the local player's fog, and the victory latch. Missions and
-    /// replay recording do not run in LAN, so their tails are absent by
-    /// design rather than forgotten.</summary>
-    private void AfterNetTick()
-    {
-        SnapshotNow();
-        _fog.UpdateFrom(_world, LocalPlayerId);
-        if (_winner < 0 && _world.Winner >= 0) EndMatch(_world.Winner);
-    }
-
     /// <summary>
     /// P8-11: THE CONTAINMENT. Every tick the frame drain or StepTicks runs
     /// comes through here, so this is the one place a fault in the sim step or
@@ -6636,14 +6653,19 @@ public partial class SkirmishLive : Node3D
             _pending.Clear();
             _lastSubmittedTick = tick;
         }
+        // P8-58: taken before the poll, because the poll is where the lockstep
+        // client steps the world when this tick's merged batch has arrived.
+        PreStepCapture();
         if (!_net.TryAdvanceTick(out bool desynced))
         {
             if (desynced) NetSession.NoteDesync(_world.Tick);
             return false;
         }
         // The lockstep client Stepped the world itself, so everything the
-        // offline tick does AFTER the step still has to happen here.
-        AfterNetTick();
+        // offline tick does AFTER the step happens here, through the same
+        // method (P8-58: this ran only the snapshot, the fog and the victory
+        // latch, so a LAN match surfaced no events at all).
+        PostStepSweep();
         return true;
     }
     public int DebugTick => _world.Tick;
