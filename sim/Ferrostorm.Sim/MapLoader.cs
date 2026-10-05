@@ -372,7 +372,12 @@ public sealed class MapData
         // rotation (say, at the middles of a square map's four edges) would get
         // hands that are reflections rather than rotations. No map ships one.
         // The tie: a start cell standing on a centre line (an odd dimension)
-        // keeps the authored layout on that axis, its own partner there.
+        // keeps the authored layout on that axis. That is NOT a half turn for
+        // a pair: two starts that are each other's half turn on that line
+        // both keep it, so their hands are translations of each other on that
+        // axis rather than rotations. mapgate refuses such a two-seat map, no
+        // shipped map has one, and ADR-076 lists it under what remains
+        // asymmetric (ADR-075's tie clause decides when it needs a rule).
         int yardFootprint = world.FootprintOf(4);   // the yard's type, as SpawnConstructionYard reads it
         for (int p = 0; p < seats; p++)
         {
@@ -403,6 +408,7 @@ public sealed class MapData
     /// the centre of an axis <paramref name="size"/> cells long, so a start there
     /// keeps the authored layout on that axis; -1 when it stands past the centre,
     /// so the layout is reflected about the start cell. A cell on the centre line
-    /// of an odd axis takes +1, the one tie.</summary>
+    /// of an odd axis takes +1, the one tie, which is not exact for a pair of
+    /// starts on that line (see the tie above).</summary>
     private static int TowardsCentre(int c, int size) => 2 * c < size ? 1 : -1;
 }

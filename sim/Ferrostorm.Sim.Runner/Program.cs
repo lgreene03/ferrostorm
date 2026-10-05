@@ -4282,6 +4282,68 @@ int MapGate()
     Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
     if (maps.Length == 0) return Fail("mapgate: no maps found");
 
+    // P8-62 (ADR-076): THE OPENING HAND IS A TRUE HALF TURN. Every seat the
+    // map declares gets its hand, and every other start must be the image of
+    // start 0 under the map's centre-line reflections (the half turn is both),
+    // with every entity its hand spawned having a twin of the same kind at
+    // exactly the reflected position, compared as raw fixed-point values. The
+    // reflection is read off the two start CELLS and the map's size, never off
+    // the rule that laid the hand out, so a hand that is a cell off its
+    // partner's (the yard anchored at the start cell on every start, as it
+    // was) or mirrored on one axis only (the opening force, as it was) fails
+    // here by name.
+    //
+    // ADR-076's Architect condition C5: clause 1's reversal TRIGGERS ITSELF. A
+    // start that is not such an image used to be skipped, and only a two-seat
+    // map counted its comparisons, so a four-seat map with its starts at the
+    // middles of its edges (related only by a quarter turn, which the rule
+    // cannot express) would have printed PASS with fewer hands compared; and
+    // two empty hands compare equal. Now either one fails the map by name,
+    // citing the reversal. Returns null when the map passes.
+    string? HalfTurnFailure(string name, MapData map, bool placeHand, out int compared)
+    {
+        compared = 0;
+        var hw = map.BuildWorld(4242, players: map.Starts.Count, out _, w =>
+        {
+            CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+        });
+        int firstOfHand = hw.EntityCount;
+        if (placeHand) map.PlaceSkirmishStart(hw, 8000);
+        long mw = Fix64.FromInt(map.Width).Raw, mh = Fix64.FromInt(map.Height).Raw;
+        // Compared on the RAW values; the message renders the same values in
+        // cells, at four decimals, for a reader.
+        string Hand(int seat, bool rx, bool ry, bool readable) => string.Join("; ", Enumerable.Range(firstOfHand, hw.EntityCount - firstOfHand)
+            .Select(i => hw.Entities[i]).Where(e => e.PlayerId == seat)
+            .Select(e => (e.Kind, e.StructType, e.UnitType, X: rx ? mw - e.X.Raw : e.X.Raw, Y: ry ? mh - e.Y.Raw : e.Y.Raw))
+            .OrderBy(h => h.Kind).ThenBy(h => h.StructType).ThenBy(h => h.UnitType).ThenBy(h => h.X).ThenBy(h => h.Y)
+            .Select(h => readable
+                ? $"{h.Kind} at ({(h.X / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},"
+                  + $"{(h.Y / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)})"
+                : $"{h.Kind}/{h.StructType}/{h.UnitType} at ({h.X},{h.Y})"));
+        var (s0x, s0y) = map.Starts[0];
+        for (int p = 1; p < map.Starts.Count; p++)
+        {
+            var (px, py) = map.Starts[p];
+            bool rx = px == map.Width - 1 - s0x, ry = py == map.Height - 1 - s0y;
+            if (!(rx || px == s0x) || !(ry || py == s0y))
+                return $"mapgate: {name}'s start {p} at ({px},{py}) is not an image of start 0 at ({s0x},{s0y}) under the map's "
+                       + "centre-line reflections, so its opening hand cannot be laid out as start 0's rotation or reflection. "
+                       + "That is ADR-076's clause 1 reversal: a map whose starts are related only by a quarter turn, or by no "
+                       + "centre-line reflection, needs a rule of its own for the opening hand";
+            string mine = Hand(0, false, false, false), theirs = Hand(p, rx, ry, false);
+            if (mine.Length == 0 || theirs.Length == 0)
+                return $"mapgate: {name}'s start {(mine.Length == 0 ? 0 : p)} has an empty opening hand, and two empty hands "
+                       + "compare equal, so the half-turn stage that ADR-076's clause 1 reversal reads would pass while proving "
+                       + "nothing on this map";
+            compared++;
+            if (mine != theirs)
+                return $"mapgate: {name}'s start {p} at ({px},{py}) is the {(rx && ry ? "half turn" : "reflection")} of start 0 "
+                       + $"at ({s0x},{s0y}), but its opening hand is not: start 0's hand is [{Hand(0, false, false, true)}] "
+                       + $"and start {p}'s, taken back into start 0's frame, is [{Hand(p, rx, ry, true)}]";
+        }
+        return null;
+    }
+
     int totalOutposts = 0, totalCaptured = 0, handsCompared = 0;
     const int ticks = 1500;
     foreach (var mapPath in maps)
@@ -4308,50 +4370,11 @@ int MapGate()
             return Fail($"mapgate: {name} failed to load: {ex.Message}");
         }
 
-        // P8-62 (ADR-076): THE OPENING HAND IS A TRUE HALF TURN. Every seat the
-        // map declares gets its hand, and for each start that is the image of
-        // start 0 under the map's centre-line reflections (the half turn is
-        // both), every entity the hand spawned must have a twin of the same
-        // kind at exactly the reflected position, compared as raw fixed-point
-        // values. The reflection is read off the two start CELLS and the map's
-        // size, never off the rule that laid the hand out, so a hand that is a
-        // cell off its partner's (the yard anchored at the start cell on every
-        // start, as it was) or mirrored on one axis only (the opening force, as
-        // it was) fails here by name.
+        // P8-62 (ADR-076): THE OPENING HAND IS A TRUE HALF TURN, asserted on
+        // every committed map with every seat it declares (HalfTurnFailure).
         {
-            var hw = map.BuildWorld(4242, players: map.Starts.Count, out _, w =>
-            {
-                CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
-            });
-            int firstOfHand = hw.EntityCount;
-            map.PlaceSkirmishStart(hw, 8000);
-            long mw = Fix64.FromInt(map.Width).Raw, mh = Fix64.FromInt(map.Height).Raw;
-            // Compared on the RAW values; the message renders the same values in
-            // cells, at four decimals, for a reader.
-            string Hand(int seat, bool rx, bool ry, bool readable) => string.Join("; ", Enumerable.Range(firstOfHand, hw.EntityCount - firstOfHand)
-                .Select(i => hw.Entities[i]).Where(e => e.PlayerId == seat)
-                .Select(e => (e.Kind, e.StructType, e.UnitType, X: rx ? mw - e.X.Raw : e.X.Raw, Y: ry ? mh - e.Y.Raw : e.Y.Raw))
-                .OrderBy(h => h.Kind).ThenBy(h => h.StructType).ThenBy(h => h.UnitType).ThenBy(h => h.X).ThenBy(h => h.Y)
-                .Select(h => readable
-                    ? $"{h.Kind} at ({(h.X / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},"
-                      + $"{(h.Y / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)})"
-                    : $"{h.Kind}/{h.StructType}/{h.UnitType} at ({h.X},{h.Y})"));
-            var (s0x, s0y) = map.Starts[0];
-            int compared = 0;
-            for (int p = 1; p < map.Starts.Count; p++)
-            {
-                var (px, py) = map.Starts[p];
-                bool rx = px == map.Width - 1 - s0x, ry = py == map.Height - 1 - s0y;
-                if (!(rx || px == s0x) || !(ry || py == s0y)) continue;   // not an image of start 0 under those reflections
-                compared++;
-                if (Hand(0, false, false, false) != Hand(p, rx, ry, false))
-                    return Fail($"mapgate: {name}'s start {p} at ({px},{py}) is the {(rx && ry ? "half turn" : "reflection")} of start 0 "
-                                + $"at ({s0x},{s0y}), but its opening hand is not: start 0's hand is [{Hand(0, false, false, true)}] "
-                                + $"and start {p}'s, taken back into start 0's frame, is [{Hand(p, rx, ry, true)}]");
-            }
-            if (map.Starts.Count == 2 && compared != 1)
-                return Fail($"mapgate: {name} is a two-seat map whose starts are neither a half turn nor a reflection of each other, "
-                            + "so its opening hands cannot be compared");
+            string? why = HalfTurnFailure(name, map, true, out int compared);
+            if (why != null) return Fail(why);
             handsCompared += compared;
         }
 
@@ -4402,9 +4425,34 @@ int MapGate()
                           $"{outposts} outposts ({captured} AI-captured)");
     }
 
+    // C5's bite, kept in the gate so that it cannot rot: the same check must
+    // refuse a synthetic four-seat map with its starts at the middles of its
+    // edges (one quarter-turn orbit: start 2 is start 0's half turn, starts 1
+    // and 3 its quarter turns, images under no centre-line reflection), and a
+    // committed map whose hands were never laid out (every hand empty).
+    {
+        var quarterTurn = new MapData
+        {
+            Width = 64, Height = 64,
+            Starts = new Dictionary<int, (int, int)> { [0] = (31, 4), [1] = (59, 31), [2] = (32, 59), [3] = (4, 32) },
+        };
+        string? why = HalfTurnFailure("synthetic-edge-midpoints", quarterTurn, true, out _);
+        if (why == null || !why.Contains("start 1 ", StringComparison.Ordinal) || !why.Contains("clause 1 reversal", StringComparison.Ordinal))
+            return Fail("mapgate: a synthetic four-seat map with its starts at the middles of its edges, related only by a quarter "
+                        + "turn, was not refused by the half-turn stage naming ADR-076's clause 1 reversal (Architect condition C5)"
+                        + (why == null ? "; it passed" : $"; it said: {why}"));
+        string first = Path.GetFileNameWithoutExtension(maps[0]);
+        string? bare = HalfTurnFailure($"{first} with no hand laid out", MapData.Load(maps[0]), false, out _);
+        if (bare == null || !bare.Contains("empty opening hand", StringComparison.Ordinal))
+            return Fail($"mapgate: {first} with no opening hand laid out was not refused as an empty hand (Architect condition C5 "
+                        + "on ADR-076)" + (bare == null ? "; it passed" : $"; it said: {bare}"));
+    }
+
     Console.WriteLine($"mapgate: all {maps.Length} committed maps load, spawn the opening hand and play {ticks} ticks " +
                       $"of AI-vs-AI without throwing; {totalOutposts} outposts stood across them, {totalCaptured} taken by an AI; " +
-                      $"{handsCompared} opening hands are the exact half turn or reflection of start 0's (P8-62)");
+                      $"{handsCompared} opening hands are the exact half turn or reflection of start 0's, every start of every map " +
+                      "an image of start 0 (P8-62); a synthetic edge-midpoint four-seat map and a map with no hand laid out are " +
+                      "refused by name (ADR-076 C5)");
     return 0;
 }
 
@@ -9875,6 +9923,72 @@ int FreeHarvesterGate()
                 return Fail($"free harvester: a harvester was delivered at ({h.X},{h.Y}), inside a blocked cell, where it cannot route");
     }
 
+    //        And on ONE axis at a time (ADR-076's Architect condition C6). The
+    //        half-turned pair above reflects both axes at once, so a rule that
+    //        swapped them (the y frame read off Map.Width, or the x and y
+    //        frames exchanged) would pass it, and so would every two-seat map,
+    //        all of which are half turns. Four-seat maps rely on single-axis
+    //        reflection between neighbouring corners (skirmish-09, test-4seat).
+    //        So three bases on a 64 by 48 map, NOT square, each buy a refinery
+    //        on one tick: seat 1's base is seat 0's reflection in x only and
+    //        seat 2's in y only, and the harvesters must be the same
+    //        reflections, raw. The anchors are chosen so that reading either
+    //        frame off the other axis's length, or exchanging the frames,
+    //        moves a harvester: seat 0's refinery at x 25 stands short of 32
+    //        but past 24, and seat 2's at y 30 past 24 but short of 32.
+    {
+        const int W = 64, H = 48;
+        var w = new World(4004, W, H, players: 3);
+        int fy = w.FootprintOf(4), fp = w.FootprintOf(World.DirectoratePlantStructType), fr = w.GetStructureType(Refinery).Footprint;
+        int InX(int anchor, int footprint) => W - footprint - anchor;
+        int InY(int anchor, int footprint) => H - footprint - anchor;
+        var cys = new[]
+        {
+            w.SpawnConstructionYard(0, 20, 16),
+            w.SpawnConstructionYard(1, InX(20, fy), 16),
+            w.SpawnConstructionYard(2, 20, InY(16, fy)),
+        };
+        w.SpawnPowerPlant(0, 16, 16, supply: 5000);
+        w.SpawnPowerPlant(1, InX(16, fp), 16, supply: 5000);
+        w.SpawnPowerPlant(2, 16, InY(16, fp), supply: 5000);
+        for (int p = 0; p < 3; p++) w.GrantCredits(p, 100000);
+        var rd = w.GetStructureType(Refinery);
+        w.Step(Enumerable.Range(0, 3)
+            .Select(p => new Command(w.Tick, p, CommandType.BuildStructure, cys[p], Fix64.Zero, Fix64.Zero, Refinery)).ToArray());
+        for (int t = 0; t < rd.BuildTicks * 4 + 400 && cys.Any(cy => w.Entities[cy].ReadyStructure != Refinery); t++)
+            w.Step(default);
+        if (cys.Any(cy => w.Entities[cy].ReadyStructure != Refinery))
+            return Fail("free harvester: the three yards never all finished a refinery, so stage 4's single-axis pairs cannot ask their question");
+        var anchors = new[] { (X: 25, Y: 16), (X: InX(25, fr), Y: 16), (X: 25, Y: InY(16, fr)) };
+        int first = w.EntityCount;
+        w.Step(Enumerable.Range(0, 3)
+            .Select(p => new Command(w.Tick, p, CommandType.PlaceStructure, cys[p],
+                                     Map.CellCentre(anchors[p].X), Map.CellCentre(anchors[p].Y), Refinery)).ToArray());
+        var hv = new[] { -1, -1, -1 };
+        for (int i = first; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && e.Kind == EntityKind.Harvester && e.PlayerId is >= 0 and < 3) hv[e.PlayerId] = i;
+        }
+        if (hv.Any(h => h < 0))
+            return Fail($"free harvester: the three single-axis purchases delivered harvesters {string.Join(", ", hv)}, not one each");
+        var a = w.Entities[hv[0]];
+        var bx = w.Entities[hv[1]];
+        var by = w.Entities[hv[2]];
+        Fix64 fullW = Fix64.FromInt(W), fullH = Fix64.FromInt(H);
+        if (bx.X != fullW - a.X || bx.Y != a.Y)
+            return Fail($"free harvester: seat 0's refinery at (25,16) delivered at ({a.X},{a.Y}) and its reflection in x at "
+                        + $"({anchors[1].X},16) delivered at ({bx.X},{bx.Y}), which is not the reflection ({fullW - a.X},{a.Y}) "
+                        + $"on a {W} by {H} map - the delivery corner does not reflect with the base on one axis (P8-63, C6)");
+        if (by.X != a.X || by.Y != fullH - a.Y)
+            return Fail($"free harvester: seat 0's refinery at (25,16) delivered at ({a.X},{a.Y}) and its reflection in y at "
+                        + $"(25,{anchors[2].Y}) delivered at ({by.X},{by.Y}), which is not the reflection ({a.X},{fullH - a.Y}) "
+                        + $"on a {W} by {H} map - the delivery corner does not reflect with the base on one axis (P8-63, C6)");
+        foreach (var h in new[] { a, bx, by })
+            if (w.Map.IsBlocked(Map.CellOf(h.X), Map.CellOf(h.Y)))
+                return Fail($"free harvester: a harvester was delivered at ({h.X},{h.Y}), inside a blocked cell, where it cannot route");
+    }
+
     Console.WriteLine("freeharvestergate: GDD s4 prices a refinery and a harvester together - \"2,000 credits, "
                       + "includes one free harvester\" - and the sim had never honoured it, which is why the "
                       + "commander reached two harvesters where s4 writes three. Buying one now delivers exactly "
@@ -9883,7 +9997,8 @@ int FreeHarvesterGate()
                       + "refinery and to 29 fixtures that spawn one only as a prerequisite; and CAPTURING one "
                       + "delivers nothing either, which reads correctly - an engineer takes a building, not a "
                       + "delivery. Two refineries bought as each other's half turn deliver their harvesters at "
-                      + "exactly each other's half turn, at the cell beside the corner facing the map centre (P8-63)");
+                      + "exactly each other's half turn, at the cell beside the corner facing the map centre (P8-63), "
+                      + "and two reflected in one axis only, on a map that is not square, at exactly that reflection (C6)");
     return 0;
 }
 
@@ -16996,7 +17111,68 @@ int PillarProbe()
         + $"orientation(s)), Normal against Normal, personalities {o.GetValueOrDefault("p0") ?? "standard"}/{o.GetValueOrDefault("p1") ?? "standard"}, "
         + $"cap {ticks} ticks, seed {seed}. A probe: nothing asserts.");
     var sw = Stopwatch.StartNew();
-    var results = RunOrdered(specs.Count, jobs, i => PlayMeasured(root, specs[i]), (_, r) => Console.WriteLine(PillarLine(r)));
+    // ADR-076 clause 2's reversal, made measurable (Architect condition C7 on
+    // ADR-076): every free harvester a purchase delivers (the harvester the
+    // sim spawns straight after a bought refinery, one entity id later) is
+    // read again at ADR-014's no-progress deadline after the purchase. Two
+    // readings are counted. STILL IDLE is the reading C7 names. STRANDED is
+    // the one that catches what clause 2 is about, because a harvester that
+    // cannot route is not left Idle: its commander orders it to a field on the
+    // next beat, so it sits in ToField, motionless and empty, in the very cell
+    // it was delivered to (measured with the harvester delivered inside its
+    // refinery's footprint: every one ToField, not moving, carry 0, at its
+    // delivery point, and none Idle). Each instance is listed, and clause 2
+    // reverses if one on a shipped map is found unable to reach its refinery
+    // or a field from the corner it was delivered at. A delivery within the
+    // deadline of its match's end is not checked, and the observer only reads
+    // the world, so the sweep plays exactly as before.
+    var freeFlagged = new List<string>[specs.Count];
+    var freeIdle = new int[specs.Count];
+    var freeStranded = new int[specs.Count];
+    var freeChecked = new int[specs.Count];
+    var freeBought = new int[specs.Count];
+    var results = RunOrdered(specs.Count, jobs, i =>
+    {
+        var s = specs[i];
+        var watch = new List<(int Id, int Seat, int Bought, int Cx, int Cy)>();
+        var flagged = new List<string>();
+        int bought = 0, checkedN = 0, idleN = 0, strandedN = 0;
+        var r = PlayMeasured(root, s, w =>
+        {
+            foreach (var ev in w.Events)
+            {
+                if (ev.Type != GameEventType.StructurePlaced || ev.A < 0 || ev.A + 1 >= w.EntityCount) continue;
+                var refinery = w.Entities[ev.A];
+                var delivered = w.Entities[ev.A + 1];
+                if (refinery.Kind != EntityKind.Refinery || delivered.Kind != EntityKind.Harvester
+                    || delivered.PlayerId != refinery.PlayerId) continue;
+                watch.Add((ev.A + 1, refinery.PlayerId, w.Tick, Map.CellOf(delivered.X), Map.CellOf(delivered.Y)));
+                bought++;
+            }
+            for (int k = 0; k < watch.Count; k++)
+            {
+                var (id, seat, at, cx, cy) = watch[k];
+                if (w.Tick < at + World.NoProgressDeadline) continue;
+                checkedN++;
+                var h = w.Entities[id];
+                bool idle = h.Alive && h.HState == HarvestState.Idle;
+                bool stranded = h.Alive && !h.Moving && h.Carry == 0 && h.HState is HarvestState.Idle or HarvestState.ToField
+                                && Map.CellOf(h.X) == cx && Map.CellOf(h.Y) == cy;
+                if (idle) idleN++;
+                if (stranded) strandedN++;
+                if (idle || stranded)
+                    flagged.Add($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} o{(s.Swap ? 1 : 0)} seat {seat} (start {StartOf(s, seat)}): "
+                                + $"bought at t={at}, at t={w.Tick} {h.HState}{(stranded ? ", stranded in its delivery cell" : "")} at ({h.X},{h.Y})");
+                watch.RemoveAt(k--);
+            }
+        });
+        freeFlagged[i] = flagged;
+        freeIdle[i] = idleN;
+        freeStranded[i] = strandedN;
+        freeChecked[i] = checkedN;
+        freeBought[i] = bought;
+        return r;
+    }, (_, r) => Console.WriteLine(PillarLine(r)));
     sw.Stop();
 
     void Classes(string label, IEnumerable<MeasuredMatch> rs)
@@ -17024,6 +17200,12 @@ int PillarProbe()
             : $"  first built, {FactionName(faction)} seats: earliest {built.Min()}, median {MedianOf(built)}, latest {built.Max()} ({built.Count} seats)");
     }
     PrintPillarF8(PillarF8(results), results.Length);
+    // ADR-076 clause 2's reversal reads this line (its "What reverses it" names it).
+    Console.WriteLine($"pillarprobe: ADR-076 clause 2, free harvesters at ADR-014's deadline ({World.NoProgressDeadline} ticks) "
+        + $"after their purchase: {freeIdle.Sum()} still Idle and {freeStranded.Sum()} stranded (motionless and empty in the cell "
+        + $"they were delivered to), of {freeChecked.Sum()} checked, of {freeBought.Sum()} delivered (one delivered within that "
+        + "deadline of its match's end is not checked)");
+    foreach (var line in freeFlagged.SelectMany(x => x)) Console.WriteLine(line);
     Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
     return 0;
 }
@@ -17289,9 +17471,11 @@ int MirrorProbe()
     // seat 0's frame, so a flow-field tie-break shows as two different cells.
     //
     // A probe by ADR-061's rule: it prints and asserts nothing. Its first break
-    // on today's sim is the opening hand (MapData.PlaceSkirmishStart), whose
-    // yard and opening force are not a rotation pair; ADR-075 records the chain
-    // of breaks found by neutralising each in turn in an uncommitted build.
+    // was the opening hand until P8-62 and the free harvester until P8-63
+    // (ADR-076); run it for today's, because a first break written down here
+    // goes stale with the next row that removes one. ADR-075 records the chain
+    // of breaks found by neutralising each in turn in an uncommitted build, and
+    // ADR-076 the breaks measured after each of its stages.
     string root = MeasureRoot();
     var o = MeasureOptions("mirrorprobe", false, "maps", "pairs", "ticks", "show");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps")).Where(m => LoadMeasureMap(root, m, false).Starts.Count == 2).ToArray();

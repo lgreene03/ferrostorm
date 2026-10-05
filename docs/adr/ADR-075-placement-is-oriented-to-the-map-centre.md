@@ -281,3 +281,25 @@ This is a commander-only change, in the same class as the four approved above. N
 - in `airanswer`, the factory at (8,34) is past the centre in y.
 
 An exact wording: in each scenario, a commander's yard stands short of the centre on both axes, so the rings round it are now reflected.
+
+## Amendment, 2026-10-06: the frame under C7 as ADR-076 lands (P8-62 and P8-63; P8-64 held under D37)
+
+Recorded with ADR-076, whose rows P8-62, P8-63 and P8-64 each carried both of this ADR's re-tests. Nothing in this ADR is changed or reverted. ADR-076 merges P8-62 and P8-63 only; P8-64 was built and measured as a third stage and is held back (tracker decision D37). P8-53 (cause 3) is still open, so the frame clause's own trigger ("once P8-62, P8-63, P8-53 and P8-64 have landed") is not met, and the frame is judged after P8-53 lands. Every figure is from `seatfairgate`, `aiairgate`, `cheesegate` and `pillargate --bind` at seed 2026. For a frame that is not swap-symmetric (the sheltered frame), the mean income gap is taken over all 32 matches (ADR-076's Architect condition C3).
+
+By C7's measure (matches of 32 with each seat's income within 15 per cent of the other's, then the mean income gap; the start split not used):
+
+| Stage of ADR-076 | Centre-facing (shipped) | Old scan (hunk reverted) | Sheltered frame |
+|------------------|-------------------------|--------------------------|-----------------|
+| 1, the opening hand | 16 of 32, 17.3 per cent | 19, 12.9 | 21, 14.0; `cheesegate` FAIL |
+| 2, the free harvester (what merges) | 22, 14.8 | 22, 13.3 | 20, 16.1 |
+| 3, the production exit (held) | 26, 8.04 | 22, 11.0 | 26, 8.03 (o0 alone 7.84, o1 alone 8.22); start split 6/15, so `seatfairgate` WOULD-FAIL on two clauses |
+
+**D5's and D36's condition (the old scan restored scores better): not met.** At stage 3 the oriented scan scores 26 of 32 against the old scan's 22. (At stage 2 alone the old scan ties on 22 with the lower mean gap, which is why the clause is judged after the rows land rather than row by row.) The scan stays.
+
+**The frame clause: level at stage 3, and not yet triggered.** The shipped and sheltered frames read 26 and 26 of 32, and 8.04 against 8.03 per cent over all 32 matches. The 7.84 per cent first quoted for the sheltered frame is orientation o0 alone; over o1 alone it reads 8.22, where the shipped frame wins. The sheltered frame passes `aiairgate` and `cheesegate` at stage 3, but it fails F5's win split by start (6/15 of 21 decided matches), which the shipped frame passes (16/12). On this evidence the frame choice is level, so nothing is flipped.
+
+**`pillargate --bind` bears on the same choice.** Matches launching of 72, against a bar of 36: main 44 (66 with the old scan, this ADR's figure before P8-21); stage 1 38 (old scan 52, sheltered 58); stage 2 42 (56, 66); stage 3 32, a FAIL of F8's first-launch half (old scan 54, sheltered 58). The stage 3 pair was first recorded transposed (58 and 54); the figures here were measured separately by ADR-076's Architect and its verifier. Stage 3 lowers launches in every frame (42 to 32, 56 to 54, 66 to 58), and this frame, which launches 14 to 26 fewer matches than either other frame at every stage, is the one it takes under the bar: every match that did not launch was over before t=11536, the earliest launch D33 allows. That is why P8-64 is held (D37) rather than merged with F8 red or merged beside a frame flip that its own measure does not support.
+
+**The tie, qualified.** The Decision section's sentence on a structure centred exactly on the map's centre line holds for one structure, which the reflection leaves where it is. It does not hold for a pair: two anchors that are each other's half turn while both centred on that line are both left unreflected, so their rings are translations of each other on that axis, not rotations. ADR-076 lists this, with the opening hand's and the free harvester's versions of the same tie, under "What remains asymmetric"; the tie clause under "What reverses it" is unchanged.
+
+**When the frame is judged.** P8-53's landing triggers the frame clause. That judgement is then taken by this ADR's measure with the pair mean as defined above, with F5's start split stated beside it and `pillargate --bind` measured for each frame, and P8-64 re-lands only with `pillargate --bind` green on the merged head (D37's reversal).

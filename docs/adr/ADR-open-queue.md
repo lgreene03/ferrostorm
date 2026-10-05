@@ -198,17 +198,25 @@ the same commit.
   2026-10-05; its before-merge conditions C1 to C11 are met in the pull
   request that lands it, and it is ratified under D5 and D36 (D36: it lands
   before F5 is met).
-- ADR-076: PROPOSED 2026-10-05 - ADR-076-the-start-is-a-true-half-turn.md
-  (rows P8-62, P8-63 and P8-64, ADR-075's causes 1, 2 and 4). Number claimed
-  here per the numbering law, in the same commit as the draft; 075 is held by
-  P8-21, so 076 is the next free number. Each rule is laid out in the
-  structure's own frame, an axis short of the map centre keeping the authored
-  layout and an axis past it reflected: the opening hand (the yard covers its
-  start cell and grows towards the centre, the force mirrored on both axes),
-  the free harvester (the cell beside the refinery's centre-facing corner)
-  and the production exit (the spawn ring reflected with the producer).
-  Landed as three staged commits, one cause each, with every golden move
-  attributed per stage in the ADR; catalogue checksum unchanged; no save or
-  wire change. NOT RATIFIED: these are sim rules a human plays under, so old
-  replays diverge and a mixed-build LAN game desyncs rather than being
-  refused (Q024); it needs the Architect's sign-off for its golden moves.
+- ADR-076: RATIFIED 2026-10-06 - ADR-076-the-start-is-a-true-half-turn.md
+  (rows P8-62 and P8-63, ADR-075's causes 1 and 2; row P8-64, cause 4, held
+  back under D37). Number claimed here per the numbering law, in the same
+  commit as the draft; 075 is held by P8-21, so 076 is the next free number.
+  Each rule is laid out in the structure's own frame, an axis short of the
+  map centre keeping the authored layout and an axis past it reflected: the
+  opening hand (the yard covers its start cell and grows towards the centre,
+  the force mirrored on both axes) and the free harvester (the cell beside
+  the refinery's centre-facing corner). Lands as two staged rule changes, one
+  cause each, with every golden move attributed per stage in the ADR (skirmish
+  in stage 1; skirmish, expansion, aisuper, mission and airanswer in stage 2);
+  catalogue checksum unchanged; no save or wire change. These are sim rules a
+  human plays under, so old replays diverge and a mixed-build LAN game
+  desyncs rather than being refused (Q024). The production exit (clause 3)
+  was built and measured as a third stage and is HELD: with ADR-075's shipped
+  frame it takes F8's first-launch half under its bar (32 of 72 matches
+  launching against 36), and the frames are level on ADR-075's C7 measure at
+  that stage, so it waits for the frame judgement P8-53's landing triggers.
+  Signed off with conditions by the Architect on 2026-10-06 (the ADR's
+  "Architect sign-off" section); C1 to C7 are met by route A in the ADR-076
+  pull request from branch claude/p8-62-63-half-turn, whose number is
+  recorded here when it is opened, and it is ratified under D5, D36 and D37.

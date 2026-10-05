@@ -643,6 +643,10 @@ public sealed partial class World
         // refinery's own frame: where its centre stands short of the map's
         // centre (or on it, the one tie) the harvester comes out past its far
         // edge, as before; where it stands past the centre, past its near edge.
+        // The tie is not exact for a PAIR: two refineries centred on the same
+        // centre line as each other's half turn both take the far edge on that
+        // axis, so their harvesters are translations there, not rotations
+        // (ADR-076, what remains asymmetric).
         // And it is set down at the CENTRE of the cell diagonally beside that
         // corner, the convention of every other spawn path, rather than on the
         // corner point: the corner point's exact reflection is the refinery's
