@@ -176,7 +176,7 @@ the same commit.
   Routed by the orchestrator for Architect sign-off, and signed off with
   conditions by the Architect on 2026-10-04; its before-merge conditions C1
   to C5 are met in the pull request that lands it.
-- ADR-075: PROPOSED 2026-10-05 - ADR-075-placement-is-oriented-to-the-map-centre.md
+- ADR-075: RATIFIED 2026-10-05 - ADR-075-placement-is-oriented-to-the-map-centre.md
   (P8-21, decision D5, findings AI-04, BAL-01 map half, OJ-01 (3)). Number
   claimed here per the numbering law, in the same commit as the draft; 074 is
   held by P8-56, so 075 is the next free number. The commander's placement
@@ -188,10 +188,13 @@ the same commit.
   non-binding, and the residue is traced to the opening hand, the free
   harvester's fixed offset, Fix64's flooring multiplication (P8-53), the
   production exit order and the flow field's tie-break, none of them this
-  row's to fix. Goldens MOVE (skirmish, expansion, aisuper, mission), one
-  cause, attributed in the ADR; catalogue checksum unchanged; no save or wire
-  change. NOT RATIFIED: it changes which commands a commander issues, so a
-  mixed-build LAN game with a commander seat desyncs within 30 ticks of the
-  first reflected placement rather than being refused (Q024); old replays,
-  which record the commander's commands, play back unchanged. For the
-  orchestrator to route for Architect sign-off and ratify under D5.
+  row's to fix. Goldens MOVE (skirmish, expansion, aisuper, mission, and
+  airanswer, appended on main meanwhile), one cause, attributed in the ADR;
+  catalogue checksum unchanged; no save or wire change. It changes which
+  commands a commander issues, so a mixed-build LAN game with a commander
+  seat desyncs within 30 ticks of the first reflected placement rather than
+  being refused (Q024); old replays, which record the commander's commands,
+  play back unchanged. Signed off with conditions by the Architect on
+  2026-10-05; its before-merge conditions C1 to C11 are met in the pull
+  request that lands it, and it is ratified under D5 and D36 (D36: it lands
+  before F5 is met).

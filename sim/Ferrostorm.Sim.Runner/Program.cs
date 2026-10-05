@@ -17711,9 +17711,10 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED on P8-21's branch
-    /// (ADR-075: the commander's placement scan oriented to the map centre,
-    /// which moves every commander match; at 9dd23cd, main after P8-18, they
+    /// F12's wall bar uses. Each figure is the one MEASURED on main after the
+    /// P8-21 pull request (ADR-075: the commander's placement scan oriented
+    /// to the map centre, which moves every commander match; at 9dd23cd, main
+    /// after P8-18, they
     /// read 313713, 77278 and 120756, and the first baseline, at 3633913, read
     /// 313104, 66271 and 155801), which
     /// is the value P8-31 must meet or beat: a parity-proven replacement pops
