@@ -5,9 +5,10 @@ Raised by: the Architect's sign-off reviews of ADR-071 (P8-15, 2026-10-03) and
 ADR-074 (P8-56, 2026-10-04), filed with ADR-074's before-merge condition C5
 Decide by: before the first published build
 
-Numbering: Q023 is cited by tracker decision D30 (a per-faction anti-air defence
-structure) and owed by row P8-12, but it has never been filed. It stays reserved
-for that subject, which is why this question is Q024.
+Numbering: Q023 is the per-faction anti-air defence structure that tracker
+decision D30 cites. It was reserved for that subject when this question was
+filed, which is why this one is Q024, and it has since been filed with the
+ADR-072 conditions (docs/questions/Q023-a-per-faction-anti-air-defence-structure.md).
 
 ## The problem
 
