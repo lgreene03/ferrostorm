@@ -5100,6 +5100,7 @@ public partial class VerifyRunner : Node
         }
 
         RunLanSpectatorStage();
+        RunLanPreStepStage();
         RunLobbyChecks();
         RunDifficultyChecks();
         RunTeamChecks();
@@ -5252,6 +5253,219 @@ public partial class VerifyRunner : Node
         Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
               $"lanspectate: ...and leaving closes the spectator's connection, so the survivor is told the other commander "
               + $"left rather than left frozen (\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
+    }
+
+    /// <summary>
+    /// P8-65: A LAN TICK RUNS THE OFFLINE TICK'S PRE-STEP CLIENT WORK. Only
+    /// RunOneTick ran it, and a networked tick never calls RunOneTick, so in a
+    /// LAN match an idle harvester was never auto-resumed and a refused Deploy
+    /// was never told (the SPAWN-02 watcher armed only from the offline stream).
+    /// Two real battle scenes over the in-process relay (ConnectLanPair, on
+    /// skirmish-02, host at seat 0 and joiner at seat 1), every fixture placed
+    /// on both worlds at the same tick. Each peer's idle harvester goes back to
+    /// work by THAT peer's order, carried in its own batch and never in the
+    /// other's; the joiner's Deploy onto a blocked foundation is told on the
+    /// joiner, on the step that applied it (CommandDelay ticks after the order,
+    /// not the step after it, which a control deploy onto clear ground beside
+    /// it would otherwise be refused on), and on neither for the host. Then the
+    /// joiner leaves by LOAD GAME, whose scene change takes the scene out of the
+    /// tree; that must close its connection, so the relay tells the host the
+    /// other commander has left rather than leaving it frozen, and a second
+    /// close (QuitToMenu's) must do nothing.
+    /// </summary>
+    private void RunLanPreStepStage()
+    {
+        GD.Print("  --    LAN (P8-65): a LAN tick runs the pre-step client work, and leaving by LOAD GAME closes the session");
+        // LoadFromSlot points MatchConfig at the slot's match, which the scene
+        // change it no longer makes would have consumed; every field it writes
+        // is put back, so no later stage boots a battle from this one's load.
+        string? wasMap = MatchConfig.MapPath, wasMission = MatchConfig.MissionPath, wasLoad = MatchConfig.LoadPath;
+        int wasPreset = MatchConfig.AiPreset, wasDiff = MatchConfig.AiDifficulty, wasSeats = MatchConfig.Seats;
+        int wasTeamMode = MatchConfig.TeamMode, wasIndex = MatchConfig.MissionIndex;
+        int wasFaction = MatchConfig.Faction, wasOpp = MatchConfig.OppositionFaction;
+        long wasCredits = MatchConfig.StartCredits;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            // The spectator stage's departure is still latched in the session,
+            // and this stage asserts a departure of its own.
+            Ferrostorm.Client.NetSession.Reset();
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(7373UL);
+            RunLanPreStepChecks(relay, hostClient, joinClient, host, join);
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"lanprestep: the LAN match threw: {ex.Message}");
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.LoadPath = wasLoad;
+            MatchConfig.AiPreset = wasPreset;
+            MatchConfig.AiDifficulty = wasDiff;
+            MatchConfig.Seats = wasSeats;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.MissionIndex = wasIndex;
+            MatchConfig.Faction = wasFaction;
+            MatchConfig.OppositionFaction = wasOpp;
+            MatchConfig.StartCredits = wasCredits;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+            host?.QueueFree();
+            join?.QueueFree();
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    private void RunLanPreStepChecks(Ferrostorm.Net.Relay relay, Ferrostorm.Net.LockstepClient hostClient,
+        Ferrostorm.Net.LockstepClient joinClient, SkirmishLive host, SkirmishLive join)
+    {
+        var hw = host.LiveWorld;
+        var jw = join.LiveWorld;
+        int hs = host.LocalPlayerId, js = join.LocalPlayerId;
+        bool pair = host.IsNetworked && join.IsNetworked && hs == 0 && js == 1;
+        Check(pair, $"lanprestep: precondition: two lockstep peers over the relay, in seats {hs} and {js}");
+        if (!pair) return;
+        hostClient.Prime();
+        joinClient.Prime();
+        bool warm = LanStepBoth(host, join) && LanStepBoth(host, join);
+        Check(warm && host.StateHash == join.StateHash,
+              $"lanprestep: precondition: both peers advance together and hold one world (tick {host.CurrentTick} and {join.CurrentTick})");
+        if (!warm) return;
+        int Both(System.Func<World, int> place)
+        {
+            int a = place(hw), b = place(jw);
+            return a == b ? a : -1;
+        }
+        int delay = Ferrostorm.Net.LockstepClient.CommandDelay;
+
+        // --- The deploy watcher: a refused Deploy is told on its own peer ----
+        // Two joiner MCVs: one with a squad standing in its foundation, which
+        // the sim refuses by doing nothing, and a control on clear ground,
+        // which it unpacks. Both ordered on one tick through the joiner's own
+        // client, both executed CommandDelay ticks later.
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        int blocked = -1, blocker = -1, clear = -1;
+        if (GroundNear(join, js) is { } bq)
+        {
+            blocked = Both(w => SpawnOfType(w, js, World.McvUnitType, bq.X, bq.Y));
+            blocker = blocked >= 0 ? Both(w => SpawnOfType(w, js, rifle, bq.X + 1, bq.Y + 1)) : -1;
+        }
+        if (GroundNear(join, js) is { } cq) clear = Both(w => SpawnOfType(w, js, World.McvUnitType, cq.X, cq.Y));
+        bool fixture = blocked >= 0 && blocker >= 0 && clear >= 0
+                       && !hw.ValidFoundation(Map.CellOf(hw.Entities[blocked].X), Map.CellOf(hw.Entities[blocked].Y), blocked)
+                       && hw.ValidFoundation(Map.CellOf(hw.Entities[clear].X), Map.CellOf(hw.Entities[clear].Y), clear);
+        Check(fixture, $"lanprestep: precondition: two joiner MCVs on both worlds, one with a squad in its foundation and one "
+                       + $"on clear ground (MCVs {blocked} and {clear}, squad {blocker})");
+        if (fixture)
+        {
+            LanStepBoth(host, join);
+            host.AlertsView.ResetForTest();
+            join.AlertsView.ResetForTest();
+            const string refused = "DEPLOY BLOCKED - CLEAR THE AREA";
+            int ordered = join.CurrentTick;
+            join.IssueDeploy(blocked);
+            join.IssueDeploy(clear);
+            int toldAt = -1, unpackedAt = -1;
+            bool hostTold = false;
+            for (int t = 0; t < delay + 3; t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                if (toldAt < 0 && join.AlertsView.StackTexts().Contains(refused)) toldAt = join.CurrentTick;
+                if (unpackedAt < 0 && TickHad(jw, ev => ev.Type == GameEventType.Deployed && ev.A == clear)) unpackedAt = join.CurrentTick;
+                hostTold |= host.AlertsView.StackTexts().Contains(refused);
+            }
+            bool stillMcv = hw.Entities[blocked].Alive && jw.Entities[blocked].Alive;
+            int verdict = ordered + delay + 1;
+            Check(stillMcv && unpackedAt == verdict && !hw.Entities[clear].Alive && !jw.Entities[clear].Alive,
+                  $"lanprestep/deploy: precondition: the sim refused the blocked MCV (still standing on both worlds: {stillMcv}) and "
+                  + $"unpacked the control at tick {unpackedAt}, CommandDelay ticks after the order at {ordered}");
+            Check(toldAt == verdict,
+                  $"lanprestep/deploy: the joiner is told its Deploy was refused (\"{refused}\"), on the step that applied it: tick "
+                  + $"{toldAt}, where {verdict} is wanted (the order went out at tick {ordered}, CommandDelay {delay}), so the "
+                  + "control's own deploy was never called refused while it waited for its batch");
+            Check(stillMcv && !hostTold,
+                  $"lanprestep/deploy: ...and the host, whose Deploy it was not, is told nothing ({(hostTold ? "it was" : "no line")})");
+        }
+
+        // --- The auto-resume: each peer's idle harvester, by its own order ---
+        // Neither seat holds a refinery yet, so neither harvester has been sent
+        // anywhere. A refinery for each, placed between ticks, and the next
+        // tick's pre-step work on each peer finds its own harvester idle.
+        int hh = host.FindEntity(EntityKind.Harvester, hs), jh = join.FindEntity(EntityKind.Harvester, js);
+        bool idle = hh >= 0 && jh >= 0
+                    && hw.Entities[hh].HState == HarvestState.Idle && jw.Entities[hh].HState == HarvestState.Idle
+                    && hw.Entities[jh].HState == HarvestState.Idle && jw.Entities[jh].HState == HarvestState.Idle;
+        // Quiet ground by each yard rather than FindPlacementCell, which reads
+        // the yard the frame's HUD pass caches, and no frame runs between
+        // these lockstep steps.
+        int hRef = GroundNear(host, hs) is { } hc ? Both(w => w.SpawnRefinery(hs, hc.X, hc.Y)) : -1;
+        int jRef = GroundNear(join, js) is { } jc ? Both(w => w.SpawnRefinery(js, jc.X, jc.Y)) : -1;
+        int hIss0 = host.AutoHarvestIssues, jIss0 = join.AutoHarvestIssues;
+        int hCmd0 = host.NetCommandsSubmittedForTest, jCmd0 = join.NetCommandsSubmittedForTest;
+        Check(idle && hRef >= 0 && jRef >= 0 && !host.AutoHarvestedForTest(hh) && !join.AutoHarvestedForTest(jh),
+              $"lanprestep: precondition: both seats' opening harvesters stand idle on both worlds, and a refinery is placed "
+              + $"for each seat on both (harvesters {hh} and {jh}, refineries {hRef} and {jRef})");
+        for (int t = 0; t < delay + 2; t++)
+            if (!LanStepBoth(host, join)) break;
+        bool Working(World w, int id) => w.Entities[id].HState != HarvestState.Idle && w.Entities[id].FieldId >= 0;
+        bool hostBack = Working(hw, hh) && Working(jw, hh) && hw.Entities[hh].FieldId == jw.Entities[hh].FieldId;
+        bool joinBack = Working(hw, jh) && Working(jw, jh) && hw.Entities[jh].FieldId == jw.Entities[jh].FieldId;
+        int hIss = host.AutoHarvestIssues - hIss0, jIss = join.AutoHarvestIssues - jIss0;
+        int hCmd = host.NetCommandsSubmittedForTest - hCmd0, jCmd = join.NetCommandsSubmittedForTest - jCmd0;
+        Check(joinBack && hostBack,
+              $"lanprestep/harvest: an idle LAN harvester goes back to work: the joiner's and the host's both left Idle for a "
+              + $"field on both worlds (joiner's {hw.Entities[jh].HState} at field {hw.Entities[jh].FieldId}, host's "
+              + $"{hw.Entities[hh].HState} at field {hw.Entities[hh].FieldId})");
+        Check(join.AutoHarvestedForTest(jh) && !join.AutoHarvestedForTest(hh) && host.AutoHarvestedForTest(hh) && !host.AutoHarvestedForTest(jh)
+              && jIss == 1 && hIss == 1,
+              $"lanprestep/harvest: ...each by its OWN peer's order and never the other's (the joiner ordered {jIss}, the host "
+              + $"{hIss}; joiner ordered its own {join.AutoHarvestedForTest(jh)} and the host's {join.AutoHarvestedForTest(hh)})");
+        Check(jCmd == 1 && hCmd == 1,
+              $"lanprestep/harvest: ...carried in that peer's own batch over the relay ({jCmd} command from the joiner, {hCmd} "
+              + "from the host)");
+
+        Check(host.CurrentTick == join.CurrentTick && host.StateHash == join.StateHash && !relay.DesyncDetected,
+              $"lanprestep: ...and the orders and fixtures left the peers ONE world: identical hashes at tick {host.CurrentTick} "
+              + $"(0x{host.StateHash:X16} and 0x{join.StateHash:X16}) and no desync at the relay");
+
+        // --- Leaving by LOAD GAME closes the session ------------------------
+        // The load path changes scene without QuitToMenu. The seam hands it what
+        // a scene change does to this scene, taking it out of the tree, so it is
+        // _ExitTree that has to close the connection.
+        int closes0 = join.NetSessionClosesForTest;
+        bool noticeBefore = host.MatchNoticeVisible;
+        join.LoadSceneForTest = () => RemoveChild(join);
+        join.LoadFromSlot(92, MatchMeta.For(join.Setup, join.CurrentTick, 0));
+        join.LoadSceneForTest = null;
+        bool gone = !join.IsInsideTree();
+        int waited = 0;
+        while (!host.MatchNoticeVisible && waited++ < 5000)
+        {
+            host.StepTicks(1);            // the drain keeps polling; it just stops advancing
+            host.PumpFrameForTest();      // the notice is raised from the frame, not the tick
+            System.Threading.Thread.Sleep(1);
+        }
+        Check(gone && !noticeBefore && join.NetSessionClosesForTest == closes0 + 1,
+              $"lanprestep/leave: leaving by LOAD GAME takes the joiner's scene out of the tree and that closes its connection "
+              + $"({join.NetSessionClosesForTest - closes0} close; out of the tree {gone})");
+        Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
+              $"lanprestep/leave: ...so the host is told the other commander has left rather than left frozen "
+              + $"(\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
+        int left = 0;
+        join.LeaveForMenuForTest = () => left++;
+        join.QuitToMenuForTest();
+        join.LeaveForMenuForTest = null;
+        Check(left == 1 && join.NetSessionClosesForTest == closes0 + 1,
+              $"lanprestep/leave: ...and closing it a second time, by the menu path, is safe and does nothing "
+              + $"({join.NetSessionClosesForTest - closes0} close in all)");
     }
 
     /// <summary>
