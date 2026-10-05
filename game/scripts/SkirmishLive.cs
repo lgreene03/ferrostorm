@@ -462,14 +462,6 @@ public partial class SkirmishLive : Node3D
     // boarding pick, the unload key, the readout and the army filter all test
     // it, and a bare 14 in each is how one of them drifts.
     private const int CarrierUnitType = World.CarrierUnitType;
-    // P8-7: boardings this client ordered and the sim has not yet completed,
-    // keyed by the boarding unit: which Carrier, and where that Carrier stood
-    // when the order was last sent. LoadTransport walks a unit that is out of
-    // reach and boards only one that is within it, and the sim leaves the
-    // re-issue to whoever gave the order (World.ApplyCommand, LoadTransport),
-    // so this is that giver's memory. See ReissueBoardings.
-    private readonly Dictionary<int, (int Carrier, Fix64 X, Fix64 Y)> _boarding = new();
-    private readonly List<int> _boardingKeys = new();
     // TICKET-P5-REP-02: rolling bay counter, so no two depot-send orders ever
     // carry the identical destination (see SendMobilesToDepot for why exact
     // equality matters: the sim's arrival contagion keys on it).
@@ -1338,60 +1330,6 @@ public partial class SkirmishLive : Node3D
     }
 
     /// <summary>
-    /// P8-7: the giver's half of LoadTransport. The sim boards a unit only on
-    /// the tick a LoadTransport lands with the unit within two cells of its
-    /// Carrier; from farther it walks the unit towards where the Carrier stood
-    /// and leaves the re-issue to whoever gave the order. So a boarding the
-    /// player ordered is remembered here and sent again on two occasions only:
-    /// the tick the unit is within the sim's own reach (the same Fix64 test the
-    /// sim applies, so it boards on that tick), and whenever the Carrier has
-    /// moved more than a cell since the last send (so the walk follows it). A
-    /// waiting unit beside a parked Carrier sends nothing, so the lockstep
-    /// stream carries no per-tick flood (P5-ECON-15's lesson).
-    ///
-    /// It ends when the unit is aboard or dead, when the Carrier is dead or
-    /// full, or the moment the player gives that unit any other order than a
-    /// stance, read off the commands queued since the last tick, so a squad
-    /// sent elsewhere is never dragged back to a transport it was ordered away
-    /// from.
-    /// </summary>
-    private void ReissueBoardings()
-    {
-        if (_boarding.Count == 0) return;
-        if (_replay != null) { _boarding.Clear(); return; }   // a spectator issues no orders
-        // A stance is not a destination: hold-fire on a squad walking to its
-        // Carrier changes how it fights, not where it is going.
-        foreach (var c in _pending)
-            if (c.Type != CommandType.LoadTransport && c.Type != CommandType.SetStance) _boarding.Remove(c.EntityId);
-        var ents = _world.Entities;
-        _boardingKeys.Clear();
-        _boardingKeys.AddRange(_boarding.Keys);
-        _boardingKeys.Sort();                   // one order on every machine
-        foreach (int u in _boardingKeys)
-        {
-            var (carrier, lastX, lastY) = _boarding[u];
-            if (u < 0 || u >= ents.Count || carrier < 0 || carrier >= ents.Count) { _boarding.Remove(u); continue; }
-            var e = ents[u];
-            var t = ents[carrier];
-            if (!e.Alive || e.PlayerId != LocalPlayerId || !t.Alive || t.PlayerId != LocalPlayerId
-                || _world.CargoOf(carrier).Count >= World.CarrierCapacity)
-            {
-                _boarding.Remove(u);
-                continue;
-            }
-            bool inReach = Fix64.DistSq(e.X - t.X, e.Y - t.Y) <= Fix64.FromInt(4);
-            bool carrierMoved = Fix64.DistSq(t.X - lastX, t.Y - lastY) > Fix64.One;
-            if (!inReach && !carrierMoved) continue;
-            bool alreadySent = false;
-            foreach (var c in _pending)
-                if (c.Type == CommandType.LoadTransport && c.EntityId == u) { alreadySent = true; break; }
-            if (!alreadySent)
-                _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, u, Fix64.Zero, Fix64.Zero, carrier));
-            _boarding[u] = (carrier, t.X, t.Y);
-        }
-    }
-
-    /// <summary>
     /// A mission's tech gate, asked in ONE place rather than at each of the six
     /// sites that used to open-code it. Null means the full catalogue (every
     /// skirmish), an empty set means nothing.
@@ -1886,7 +1824,6 @@ public partial class SkirmishLive : Node3D
         // convention the runner's replay gate records and replays under.
         int recTick = _world.Tick;
         AutoResumeHarvesters();
-        ReissueBoardings();
         _tickCmds.Clear();
         if (_replay != null)
         {
@@ -5578,9 +5515,12 @@ public partial class SkirmishLive : Node3D
         return true;
     }
 
-    /// <summary>P8-7 verification read: the boardings this client is still
-    /// re-issuing, so a check can see one start and end.</summary>
-    public int PendingBoardingsForTest => _boarding.Count;
+    /// <summary>P8-56 verification read: every order the last offline tick
+    /// handed the sim (every seat's, the player's, any mission's), as stepped.
+    /// Read after each tick, it lets a check COUNT the LoadTransport orders a
+    /// boarding took from any source, rather than trusting that one particular
+    /// path sent none.</summary>
+    public IReadOnlyList<Command> TickCommandsForTest => _tickCmds;
 
     private void FinishSelect(Vector2 at, bool add)
     {
@@ -6692,7 +6632,6 @@ public partial class SkirmishLive : Node3D
         int tick = _world.Tick;
         if (tick != _lastSubmittedTick)
         {
-            ReissueBoardings();   // P8-7: the boarding re-issue rides in this tick's batch, as offline
             _net.SubmitCommands(_pending);
             _pending.Clear();
             _lastSubmittedTick = tick;
@@ -6887,13 +6826,18 @@ public partial class SkirmishLive : Node3D
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.Attack, id, cx, cy, enemy, queued));
             else if (carrier >= 0 && id != carrier && CanBoard(in me))
             {
-                // P8-7: board. The sim walks a unit that is out of reach and
-                // boards one that is within it; ReissueBoardings sends the order
-                // again on the tick it can land. A full Carrier is refused here,
-                // said by toast, rather than sent orders the sim would drop.
+                // P8-7: board. Since P8-56 this one order is the whole boarding,
+                // sent once and never again: the sim boards a unit within reach
+                // at once, and walks one from farther in to the Carrier,
+                // following it, and boards it on arrival (World.BoardingSystem),
+                // or gives the order up by ADR-074's deadline. P8-7's client
+                // re-send (ReissueBoardings) is gone: each re-send landed as a
+                // fresh LoadTransport, which re-arms that deadline, so it kept a
+                // chase alive the sim had given up and revived a lapsed walk the
+                // moment its Carrier moved. A full Carrier is refused here, said
+                // by toast, rather than sent orders the sim would drop.
                 if (carrierFull) { deniedBoard = true; continue; }
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.LoadTransport, id, Fix64.Zero, Fix64.Zero, carrier, queued));
-                if (!queued) _boarding[id] = (carrier, _world.Entities[carrier].X, _world.Entities[carrier].Y);
                 boarded++;
             }
             // The Carrier being boarded is the destination, not a mover: one

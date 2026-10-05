@@ -159,3 +159,20 @@ the same commit.
   10800; D33 (the commander does not buy the weapon before one full charge
   has elapsed), taken on the ADR's measured recommendation, brings it to
   11536, and pillargate binds both F8 halves.
+- ADR-074: PROPOSED 2026-10-04 - ADR-074-a-boarding-walk-closes-to-reach.md
+  (P8-56, found by P8-7). Number claimed here per the numbering law, in the
+  same commit as the draft; ADR-073 is held by P8-18 (the superweapon), so
+  074 is the next free number. A walk to board a Carrier is marked in
+  ExplicitTarget's negative range (no new hashed or saved state), closes to
+  the two-cell reach and boards on arrival through one Board() that ends
+  every order the unit held, and gives up by ADR-014's no-progress deadline
+  when the squad cannot gain on its Carrier. Goldens NEUTRAL, measured (24 of
+  24 byte-identical); catalogue checksum unchanged; no save or wire change.
+  NOT RATIFIED: it changes what a recorded LoadTransport does, so a replay
+  from a build carrying ADR-073 but not this ADR ends DIVERGED and such a
+  mixed-build LAN game desyncs within 30 ticks of the command (neither is
+  refused up front, as the ADR's compatibility section records, and Q024 asks
+  whether to; builds from before ADR-073 are refused by its catalogue move).
+  Routed by the orchestrator for Architect sign-off, and signed off with
+  conditions by the Architect on 2026-10-04; its before-merge conditions C1
+  to C5 are met in the pull request that lands it.
