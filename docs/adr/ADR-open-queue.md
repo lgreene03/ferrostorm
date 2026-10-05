@@ -198,3 +198,17 @@ the same commit.
   2026-10-05; its before-merge conditions C1 to C11 are met in the pull
   request that lands it, and it is ratified under D5 and D36 (D36: it lands
   before F5 is met).
+- ADR-076: PROPOSED 2026-10-05 - ADR-076-the-start-is-a-true-half-turn.md
+  (rows P8-62, P8-63 and P8-64, ADR-075's causes 1, 2 and 4). Number claimed
+  here per the numbering law, in the same commit as the draft; 075 is held by
+  P8-21, so 076 is the next free number. Each rule is laid out in the
+  structure's own frame, an axis short of the map centre keeping the authored
+  layout and an axis past it reflected: the opening hand (the yard covers its
+  start cell and grows towards the centre, the force mirrored on both axes),
+  the free harvester (the cell beside the refinery's centre-facing corner)
+  and the production exit (the spawn ring reflected with the producer).
+  Landed as three staged commits, one cause each, with every golden move
+  attributed per stage in the ADR; catalogue checksum unchanged; no save or
+  wire change. NOT RATIFIED: these are sim rules a human plays under, so old
+  replays diverge and a mixed-build LAN game desyncs rather than being
+  refused (Q024); it needs the Architect's sign-off for its golden moves.

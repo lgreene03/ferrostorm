@@ -4282,7 +4282,7 @@ int MapGate()
     Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
     if (maps.Length == 0) return Fail("mapgate: no maps found");
 
-    int totalOutposts = 0, totalCaptured = 0;
+    int totalOutposts = 0, totalCaptured = 0, handsCompared = 0;
     const int ticks = 1500;
     foreach (var mapPath in maps)
     {
@@ -4306,6 +4306,53 @@ int MapGate()
             // The exact failure an unguarded map produces: a struct type with
             // no MapLoader arm, a malformed line, an off-map start.
             return Fail($"mapgate: {name} failed to load: {ex.Message}");
+        }
+
+        // P8-62 (ADR-076): THE OPENING HAND IS A TRUE HALF TURN. Every seat the
+        // map declares gets its hand, and for each start that is the image of
+        // start 0 under the map's centre-line reflections (the half turn is
+        // both), every entity the hand spawned must have a twin of the same
+        // kind at exactly the reflected position, compared as raw fixed-point
+        // values. The reflection is read off the two start CELLS and the map's
+        // size, never off the rule that laid the hand out, so a hand that is a
+        // cell off its partner's (the yard anchored at the start cell on every
+        // start, as it was) or mirrored on one axis only (the opening force, as
+        // it was) fails here by name.
+        {
+            var hw = map.BuildWorld(4242, players: map.Starts.Count, out _, w =>
+            {
+                CatalogueFiles.RegisterAll(w, Path.Combine(root, "data"));
+            });
+            int firstOfHand = hw.EntityCount;
+            map.PlaceSkirmishStart(hw, 8000);
+            long mw = Fix64.FromInt(map.Width).Raw, mh = Fix64.FromInt(map.Height).Raw;
+            // Compared on the RAW values; the message renders the same values in
+            // cells, at four decimals, for a reader.
+            string Hand(int seat, bool rx, bool ry, bool readable) => string.Join("; ", Enumerable.Range(firstOfHand, hw.EntityCount - firstOfHand)
+                .Select(i => hw.Entities[i]).Where(e => e.PlayerId == seat)
+                .Select(e => (e.Kind, e.StructType, e.UnitType, X: rx ? mw - e.X.Raw : e.X.Raw, Y: ry ? mh - e.Y.Raw : e.Y.Raw))
+                .OrderBy(h => h.Kind).ThenBy(h => h.StructType).ThenBy(h => h.UnitType).ThenBy(h => h.X).ThenBy(h => h.Y)
+                .Select(h => readable
+                    ? $"{h.Kind} at ({(h.X / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)},"
+                      + $"{(h.Y / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture)})"
+                    : $"{h.Kind}/{h.StructType}/{h.UnitType} at ({h.X},{h.Y})"));
+            var (s0x, s0y) = map.Starts[0];
+            int compared = 0;
+            for (int p = 1; p < map.Starts.Count; p++)
+            {
+                var (px, py) = map.Starts[p];
+                bool rx = px == map.Width - 1 - s0x, ry = py == map.Height - 1 - s0y;
+                if (!(rx || px == s0x) || !(ry || py == s0y)) continue;   // not an image of start 0 under those reflections
+                compared++;
+                if (Hand(0, false, false, false) != Hand(p, rx, ry, false))
+                    return Fail($"mapgate: {name}'s start {p} at ({px},{py}) is the {(rx && ry ? "half turn" : "reflection")} of start 0 "
+                                + $"at ({s0x},{s0y}), but its opening hand is not: start 0's hand is [{Hand(0, false, false, true)}] "
+                                + $"and start {p}'s, taken back into start 0's frame, is [{Hand(p, rx, ry, true)}]");
+            }
+            if (map.Starts.Count == 2 && compared != 1)
+                return Fail($"mapgate: {name} is a two-seat map whose starts are neither a half turn nor a reflection of each other, "
+                            + "so its opening hands cannot be compared");
+            handsCompared += compared;
         }
 
         int before = world.EntityCount;
@@ -4356,7 +4403,8 @@ int MapGate()
     }
 
     Console.WriteLine($"mapgate: all {maps.Length} committed maps load, spawn the opening hand and play {ticks} ticks " +
-                      $"of AI-vs-AI without throwing; {totalOutposts} outposts stood across them, {totalCaptured} taken by an AI");
+                      $"of AI-vs-AI without throwing; {totalOutposts} outposts stood across them, {totalCaptured} taken by an AI; " +
+                      $"{handsCompared} opening hands are the exact half turn or reflection of start 0's (P8-62)");
     return 0;
 }
 
@@ -5221,8 +5269,14 @@ int MultiSeatGate()
     // What this pair still catches, and why it is kept: an ACCIDENTAL change to
     // two-player placement, which is the thing P7-8a risked and which no golden
     // covers, because skirmish-01 placement is not itself a golden scenario.
-    const ulong PlacedPinned = 0x9D3E3D666AE5E693UL;
-    const ulong Tick600Pinned = 0xAF41FAAB56DE8325UL;
+    //
+    // RE-PINNED by P8-62 (ADR-076), deliberately: start 1's yard now stands a
+    // cell up and left of where it did, so that it is the exact half turn of
+    // start 0's, and its opening force is mirrored top to bottom as well, so
+    // both hashes moved (from 0x9D3E3D666AE5E693 and 0xAF41FAAB56DE8325).
+    // mapgate now asserts the half turn itself on every committed map.
+    const ulong PlacedPinned = 0x5D8A10A22C7FA993UL;
+    const ulong Tick600Pinned = 0x28B6EF3DF9B49E9EUL;
     {
         var w = BuildSkirmishWorld(4105);
         ulong placed = w.ComputeStateHash();
@@ -15085,7 +15139,11 @@ int LanAiSeatsGate()
     // own /data speed moved it, because test-4seat's opening hand carries one.
     // What it still catches is the thing worth catching: the no-commanders path
     // silently ceasing to be a pass-through.
-    const ulong NoAiPinned = 0x468099A1430B53FDUL;
+    // RE-PINNED by P8-62 (ADR-076), from 0x468099A1430B53FD: test-4seat's
+    // opening hands are now laid out in each start's own frame, so the yards
+    // of the three starts right of or below the centre moved a cell towards it
+    // and their forces were mirrored on the second axis.
+    const ulong NoAiPinned = 0x1377C844B399DD6DUL;
     ulong controlHash;
     {
         var run = PlayLan(8101, ControlTicks, None);
@@ -17711,10 +17769,10 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED on main after the
-    /// P8-21 pull request (ADR-075: the commander's placement scan oriented
-    /// to the map centre, which moves every commander match; at 9dd23cd, main
-    /// after P8-18, they
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-62 landed
+    /// (ADR-076: the opening hand a true half turn, which moves every skirmish
+    /// match; on main after the P8-21 pull request, ADR-075, they read 269005,
+    /// 44857 and 155592; at 9dd23cd, main after P8-18, they
     /// read 313713, 77278 and 120756, and the first baseline, at 3633913, read
     /// 313104, 66271 and 155801), which
     /// is the value P8-31 must meet or beat: a parity-proven replacement pops
@@ -17738,9 +17796,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 269005),
-        ("skirmish-08", 44857),
-        ("skirmish-09", 155592),
+        ("skirmish-07", 268451),
+        ("skirmish-08", 44232),
+        ("skirmish-09", 120654),
     };
 }
 
