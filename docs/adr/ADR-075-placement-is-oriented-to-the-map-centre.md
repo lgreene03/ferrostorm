@@ -177,7 +177,7 @@ Every scenario's own assertions still pass (`match` green), and the catalogue ch
 ## Architect sign-off
 
 - Date: 2026-10-05
-- Reviewer: Systems Architect (A3). I reviewed the P8-21 pull request from branch `claude/p8-21-seat-fairness` against main. The integrator records the pull request's number here when it is opened.
+- Reviewer: Systems Architect (A3). I reviewed the P8-21 pull request from branch `claude/p8-21-seat-fairness` against main. It lands as pull request 164 (branch `claude/p8-21-placement`, rebased onto main after PRs 162 and 163).
 - Verdict: **signed off with conditions**. The four golden moves are approved once conditions 1 to 12 are met in that pull request.
 
 **Reproduced.** A determinism audit and an adversarial verifier each rebuilt the branch and main in Release, with zero warnings.
