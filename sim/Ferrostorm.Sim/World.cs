@@ -634,9 +634,28 @@ public sealed partial class World
         // FIXED offset rather than a search for open ground: harvesters do not
         // block cells and units may overlap, so there is nothing to search for,
         // and a search would be a scan whose answer could depend on entity order.
+        //
+        // P8-63 (ADR-076): AT THE CORNER FACING THE MAP CENTRE, IN A CELL'S
+        // CENTRE. It was the fixed point (anchor + footprint) on both axes, the
+        // refinery's bottom-right corner whichever way the base faced, so two
+        // refineries that were each other's half turn delivered their
+        // harvesters at corners that were not. Now each axis is read in the
+        // refinery's own frame: where its centre stands short of the map's
+        // centre (or on it, the one tie) the harvester comes out past its far
+        // edge, as before; where it stands past the centre, past its near edge.
+        // And it is set down at the CENTRE of the cell diagonally beside that
+        // corner, the convention of every other spawn path, rather than on the
+        // corner point: the corner point's exact reflection is the refinery's
+        // own top-left corner, which Map.CellOf (a floor) puts inside the
+        // blocked footprint, so a reflected corner point could not route. The
+        // clamp cannot bind on any map more than four cells wide (the cell
+        // beside a centre-facing corner is always in bounds) and is kept as a
+        // guard.
         var def = GetStructureType(3);
-        Fix64 x = Fix64.Clamp(Fix64.FromInt(ax + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
-        Fix64 y = Fix64.Clamp(Fix64.FromInt(ay + def.Footprint), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
+        int hx = 2 * ax + def.Footprint > Map.Width ? ax - 1 : ax + def.Footprint;
+        int hy = 2 * ay + def.Footprint > Map.Height ? ay - 1 : ay + def.Footprint;
+        Fix64 x = Fix64.Clamp(Map.CellCentre(hx), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
+        Fix64 y = Fix64.Clamp(Map.CellCentre(hy), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
         SpawnHarvester(player, x, y);
     }
 

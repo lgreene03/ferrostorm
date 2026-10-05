@@ -9814,6 +9814,67 @@ int FreeHarvesterGate()
             return Fail("free harvester: a CAPTURED refinery must deliver nothing - a capture is not a purchase");
     }
 
+    // --- 4. P8-63 (ADR-076): WHERE IT COMES OUT IS A HALF TURN TOO. Two bases
+    //        that are each other's half turn about the centre of a 64x64 map
+    //        each buy a refinery on the same tick, at anchors that are each
+    //        other's half turn. The two free harvesters must stand at exactly
+    //        each other's half turn, compared as raw fixed-point values, and
+    //        neither may stand in a blocked cell. The geometry comes from the
+    //        map and the footprints, never from the rule under test: an anchor
+    //        a of footprint f turns to 64 - f - a, and a point p to 64 - p.
+    //        It used to come out at the refinery's bottom-right corner
+    //        whichever way the base faced, which fails this by a cell on each
+    //        axis; the exact reflection of that corner point is inside the
+    //        refinery, which is why the rule sets it down at a cell's centre.
+    {
+        const int Size = 64;
+        var w = new World(4003, Size, Size, players: 2);
+        int fy = w.FootprintOf(4), fp = w.FootprintOf(World.DirectoratePlantStructType), fr = w.GetStructureType(Refinery).Footprint;
+        int Turn(int anchor, int footprint) => Size - footprint - anchor;
+        int cy0 = w.SpawnConstructionYard(0, 20, 20);
+        int cy1 = w.SpawnConstructionYard(1, Turn(20, fy), Turn(20, fy));
+        w.SpawnPowerPlant(0, 16, 20, supply: 5000);
+        w.SpawnPowerPlant(1, Turn(16, fp), Turn(20, fp), supply: 5000);
+        w.GrantCredits(0, 100000);
+        w.GrantCredits(1, 100000);
+        var rd = w.GetStructureType(Refinery);
+        w.Step(new[]
+        {
+            new Command(w.Tick, 0, CommandType.BuildStructure, cy0, Fix64.Zero, Fix64.Zero, Refinery),
+            new Command(w.Tick, 1, CommandType.BuildStructure, cy1, Fix64.Zero, Fix64.Zero, Refinery),
+        });
+        for (int t = 0; t < rd.BuildTicks * 4 + 400
+             && (w.Entities[cy0].ReadyStructure != Refinery || w.Entities[cy1].ReadyStructure != Refinery); t++)
+            w.Step(default);
+        if (w.Entities[cy0].ReadyStructure != Refinery || w.Entities[cy1].ReadyStructure != Refinery)
+            return Fail("free harvester: the two yards never both finished a refinery, so stage 4 cannot ask its question");
+        int first = w.EntityCount;
+        w.Step(new[]
+        {
+            new Command(w.Tick, 0, CommandType.PlaceStructure, cy0, Map.CellCentre(25), Map.CellCentre(20), Refinery),
+            new Command(w.Tick, 1, CommandType.PlaceStructure, cy1, Map.CellCentre(Turn(25, fr)), Map.CellCentre(Turn(20, fr)), Refinery),
+        });
+        int h0 = -1, h1 = -1;
+        for (int i = first; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || e.Kind != EntityKind.Harvester) continue;
+            if (e.PlayerId == 0) h0 = i; else if (e.PlayerId == 1) h1 = i;
+        }
+        if (h0 < 0 || h1 < 0)
+            return Fail($"free harvester: the two half-turned purchases delivered harvesters {h0} and {h1}, not one each");
+        var a = w.Entities[h0];
+        var b = w.Entities[h1];
+        Fix64 full = Fix64.FromInt(Size);
+        if (b.X != full - a.X || b.Y != full - a.Y)
+            return Fail($"free harvester: seat 0's refinery at (25,20) delivered at ({a.X},{a.Y}) and its half turn at "
+                        + $"({Turn(25, fr)},{Turn(20, fr)}) delivered at ({b.X},{b.Y}), which is not the half turn "
+                        + $"({full - a.X},{full - a.Y}) - the delivery corner does not turn with the base (P8-63)");
+        foreach (var h in new[] { a, b })
+            if (w.Map.IsBlocked(Map.CellOf(h.X), Map.CellOf(h.Y)))
+                return Fail($"free harvester: a harvester was delivered at ({h.X},{h.Y}), inside a blocked cell, where it cannot route");
+    }
+
     Console.WriteLine("freeharvestergate: GDD s4 prices a refinery and a harvester together - \"2,000 credits, "
                       + "includes one free harvester\" - and the sim had never honoured it, which is why the "
                       + "commander reached two harvesters where s4 writes three. Buying one now delivers exactly "
@@ -9821,7 +9882,8 @@ int FreeHarvesterGate()
                       + "and putting the delivery in SpawnRefinery would hand a free unit to every map-placed "
                       + "refinery and to 29 fixtures that spawn one only as a prerequisite; and CAPTURING one "
                       + "delivers nothing either, which reads correctly - an engineer takes a building, not a "
-                      + "delivery");
+                      + "delivery. Two refineries bought as each other's half turn deliver their harvesters at "
+                      + "exactly each other's half turn, at the cell beside the corner facing the map centre (P8-63)");
     return 0;
 }
 
@@ -17769,9 +17831,11 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-62 landed
-    /// (ADR-076: the opening hand a true half turn, which moves every skirmish
-    /// match; on main after the P8-21 pull request, ADR-075, they read 269005,
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-63 landed
+    /// (ADR-076: the free harvester at the corner facing the map centre, which
+    /// moves every match that buys a refinery; with P8-62 alone, the opening
+    /// hand a true half turn, they read 268451, 44232 and 120654; on main
+    /// after the P8-21 pull request, ADR-075, they read 269005,
     /// 44857 and 155592; at 9dd23cd, main after P8-18, they
     /// read 313713, 77278 and 120756, and the first baseline, at 3633913, read
     /// 313104, 66271 and 155801), which
@@ -17796,9 +17860,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 268451),
-        ("skirmish-08", 44232),
-        ("skirmish-09", 120654),
+        ("skirmish-07", 313482),
+        ("skirmish-08", 65877),
+        ("skirmish-09", 155083),
     };
 }
 
