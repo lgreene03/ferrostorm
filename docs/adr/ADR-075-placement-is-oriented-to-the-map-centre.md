@@ -117,7 +117,7 @@ On the five maps whose start 0 is top left (01, 03, 04, 05, 06) the offset puts 
 
 ## Golden hashes
 
-Measured at seed 2026 at this pull request's head (main at 817f117, which carries 25 goldens, plus this row); the ordered diff against main's sim/golden-hashes.txt names exactly these five, and the other 20 are byte-identical. One cause moves all five: each commander's anchors stand short of the centre on both axes, so its scan is now reflected where it was not.
+Measured at seed 2026 at this pull request's head (main at 817f117, which carries 25 goldens, plus this row); the ordered diff against main's sim/golden-hashes.txt names exactly these five, and the other 20 are byte-identical. One cause moves all five: in each scenario some anchor the commander's scan tries stands short of the centre on an axis (always its yard, on both axes), so its rings are now reflected there where they were not; anchors past the centre, such as seat 1's yard in skirmish and airanswer's factory in y, walk as before.
 
 **The measurement that isolates the cause.** Restoring `sim/Ferrostorm.Sim/SkirmishAI.cs` to main, and nothing else, restores all 25 of main's committed hashes at seed 2026 (an empty ordered diff, measured at this pull request's head; the Architect's verifier made the same measurement on the 24-golden base, where it restored all 24).
 
@@ -231,3 +231,53 @@ The change does not move F5 towards passing on today's starts. Both clauses read
 - C11: `TryFindPlacement` reflects the box by `w.FootprintOf(0)`, and `golden 2026` is byte-identical to the new hashes.
 
 **Integrator's note, not the Architect's words.** The review above was of a base with 24 goldens. Main has since gained a 25th, `airanswer` (ADR-072's condition C6), and this row moves it too, by the same single cause; restoring `SkirmishAI.cs` alone restores all 25 of main's hashes ("Golden hashes"). The approval above names four moves, so this fifth one is recorded here for the Architect to confirm, and C12's determinism job must reproduce five new hashes on Windows and Linux, not four.
+
+### Addendum, 2026-10-05: the fifth golden move
+
+- Reviewer: Systems Architect (A3). The P8-21 pull request was rebased onto main after PR 162, ADR-072's amendment, which added a 25th golden, `airanswer`. I re-reviewed the rebased row. It now lives on branch `claude/p8-21-oriented-placement`. The sign-off above was written against the 24-golden base.
+- Verdict: **the fifth move is confirmed.** It is approved once conditions 1 to 13 are met, with condition 12 widened to five hashes as set out below.
+
+**Reproduced.** I built the rebased pull request clean in Release, with zero warnings.
+
+- `golden 2026` matches the pull request's `sim/golden-hashes.txt` line for line, 25 of 25.
+- The four moves approved above give exactly the hashes I approved on the 24-golden base. The fifth is `airanswer`, from 0x0FC6285A838F451D to 0x6DDA336EE7D85F04.
+- With `sim/Ferrostorm.Sim/SkirmishAI.cs` restored to main and nothing else changed, `golden 2026` gives all 25 of main's hashes. One cause moves all five.
+- `match 2026` exits 0. The `airanswer` line reads: first sighting t=194; Radar Uplink t=466, no turret in the window; flak ordered t=480; first Flak Track t=610, four by t=1500; first flyer down t=690; 3 of 3 down, each fired on by a commander's Flak Track.
+- `aiairgate` and `cheesegate` pass.
+- `docs/adr/ADR-075-residue-experiment.patch` applies cleanly over the pull request. With it applied, `mirrorprobe` prints no command difference before the first break on any of the sixteen map and faction pairs. The first breaks fall between t=406 and t=2493, as section 1 says.
+
+All of this evidence is from macOS. Windows and Linux are left to CI.
+
+**Why the fifth move is justified.** The pull request does not change `ScenarioAirAnswer` or its assertions, so the scenario still tests what ADR-072's condition 6 asked for. The commander must:
+
+- see the Strike Flyers in its own fog, and order no anti-air before it does;
+- place the Radar Uplink with no turret before it;
+- build a Flak Track;
+- shoot at least one flyer down, with every flyer that falls fired on by a commander's Flak Track.
+
+Every one of these still passes. The hash moves for the reason the ADR gives. The yard at (8,30) on the 64x64 World stands short of the centre on both axes (2 x 8 + 2 = 18 and 2 x 30 + 2 = 62, both under 64). Its rings are therefore now reflected, which changes where the commander builds. The first Flak Track now comes one tick sooner and the first kill eight ticks later.
+
+This is a commander-only change, in the same class as the four approved above. No sim rule, catalogue value, save format or wire format moves, and a replay plays back exactly. One note for later: the yard's reflection in y depends on a single cell. A fixture that moved the yard to y=31 would put it on the centre line, the recorded tie, and the hash would move again.
+
+**Conditions 1 to 11.** Each is met as I worded it.
+
+- For condition 1 I ran the grep it names. None of the withdrawn phrases remain except in this section's own quotations, and the shipped frame's figures appear. The table gives 25.1 per cent as the mean gap and explains that the 25.0 I quoted is the mean of the rounded per-pair gaps. I accept this as meeting condition 1.
+- For condition 11, `w.FootprintOf(0)` is in place, and `golden 2026` keeps the four approved hashes.
+
+**Further condition before merge.**
+
+13. **ADR-072 points forward.** ADR-072's dated Amendment still records `airanswer 2026 0x0FC6285A838F451D`, with the t=611 and t=682 report line, as current, and this pull request does not touch that file. Under "Condition 6", add a line dated 2026-10-05 that:
+    - names ADR-075 (P8-21) as moving this golden to 0x6DDA336EE7D85F04 through the oriented placement scan;
+    - gives the new first Flak Track, t=610, and first kill, t=690;
+    - says every assertion is unchanged.
+
+    The hash and line recorded on 2026-10-04 stay as history. Check: `git grep 0x6DDA336EE7D85F04 docs/adr/ADR-072-the-commander-answers-air.md` finds that line, and the line names ADR-075.
+
+**Condition 12, widened.** All three CI jobs must be green on the pull request, and the determinism job must reproduce all 25 goldens on Windows and Linux, the five new hashes included. When I reviewed it, the branch was not pushed and no pull request existed, so condition 12 is open. The pull request's number is recorded in this section's header when it is opened. The integrator's note above may stand as the record of how the fifth move arrived.
+
+**Recommended, not a condition.** "Golden hashes" and the tracker cell attribute all five moves to "each commander's anchors" standing short of the centre. That is loose in two places:
+
+- in `skirmish`, seat 1's yard is past the centre and walks exactly as before;
+- in `airanswer`, the factory at (8,34) is past the centre in y.
+
+An exact wording: in each scenario, a commander's yard stands short of the centre on both axes, so the rings round it are now reflected.

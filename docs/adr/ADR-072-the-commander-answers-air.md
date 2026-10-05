@@ -408,6 +408,13 @@ t=150 three Strike Flyers appear and hunt the commander's harvesters by
 airanswer: the commander first saw the 3 Strike Flyers at t=194, placed its Radar Uplink at t=466 (no turret placed in the window), ordered flak at t=480, fielded its first Flak Track at t=611 (4 by t=1500) and shot the first flyer down at t=682; 3 of 3 down, every one fired on by a commander's Flak Track (ADR-072 C6, the first golden to hold an aircraft)
 ```
 
+**2026-10-05, forward pointer.** ADR-075 (P8-21, the commander's placement
+scan oriented to the map centre) moves this golden to `airanswer 2026
+0x6DDA336EE7D85F04`, because the scenario's yard stands short of the centre on
+both axes and its rings are now reflected. The first Flak Track now comes at
+t=610 and the first kill at t=690; every assertion above is unchanged and still
+passes. The hash and report line recorded on 2026-10-04 stay above as history.
+
 It asserts that the raid spawned and entered the commander's own fog; that no
 anti-air order came before the first sighting (clause 1); that the Radar Uplink
 was placed and no turret before it, which is clause 5's pull-forward, because
