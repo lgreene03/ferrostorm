@@ -32,6 +32,10 @@ public partial class VerifyRunner : Node
     private readonly List<string> _failures = new();
     private SkirmishLive _game = null!;
     private int _frame;
+    /// <summary>P8-57: the engine's own error stream, counted for the stages
+    /// that assert on it (the long match). Registered first thing in _Ready and
+    /// removed before quitting, so nothing logged at shutdown calls into it.</summary>
+    private readonly EngineLogTally _engineLog = new();
 
     private void Check(bool ok, string what)
     {
@@ -42,6 +46,7 @@ public partial class VerifyRunner : Node
     public override void _Ready()
     {
         GD.Print("verify: headless client harness");
+        OS.AddLogger(_engineLog);
         // The seat and the step mode must both be set before the scene loads.
         // AutoStep off means the sim only advances when StepTicks says so, which
         // is what lets a check measure state at an exact tick instead of racing
@@ -97,6 +102,7 @@ public partial class VerifyRunner : Node
         {
             GD.Print("verify: FAIL - the battle scene never became drivable. "
                      + $"Refusal notice: '{MainMenu.BattleRefusedNotice}'");
+            OS.RemoveLogger(_engineLog);
             GetTree().Quit(1);
             return;
         }
@@ -108,6 +114,7 @@ public partial class VerifyRunner : Node
         GD.Print(_failures.Count == 0
             ? "verify: PASS - the client was driven from the player-1 seat and read player 1 throughout"
             : $"verify: FAIL - {_failures.Count} check(s) failed");
+        OS.RemoveLogger(_engineLog);
         GetTree().Quit(_failures.Count == 0 ? 0 : 1);
     }
 
@@ -6724,7 +6731,11 @@ public partial class VerifyRunner : Node
     /// largest theatre, with BOTH seats commanded, run frame by frame through
     /// _Process (the drain, the recording, the client's per-tick work and the
     /// frame's own work) until a side wins or the cap. It asserts nothing
-    /// escaped a frame, nothing faulted, and the match got there.
+    /// escaped a frame, nothing faulted, and the match got there; and (P8-57)
+    /// that the engine logged no error or warning meanwhile, counted from its
+    /// own error stream through EngineLogTally once a pushed error and warning
+    /// have proved the tally hears it, and that no actor's transform went
+    /// non-finite on any frame.
     /// </summary>
     private void RunLongMatchStage()
     {
@@ -6748,6 +6759,26 @@ public partial class VerifyRunner : Node
             int t0 = g.CurrentTick, frames = 0, nodes0 = GetTree().GetNodeCount();
             string escaped = "";
             bool stalled = false;
+            // P8-57: the tally must be hearing the engine before its silence
+            // can mean anything, so one error and one warning are pushed
+            // through the engine's own stream and must arrive, one each.
+            int calErr = _engineLog.Errors, calWarn = _engineLog.Warnings;
+            GD.PushError("P8-57 calibration: the harness pushed this error to prove the engine-log tally hears it");
+            GD.PushWarning("P8-57 calibration: the harness pushed this warning to prove the engine-log tally hears it");
+            calErr = _engineLog.Errors - calErr;
+            calWarn = _engineLog.Warnings - calWarn;
+            Check(calErr == 1 && calWarn == 1,
+                  $"longmatch: precondition: the engine-log tally hears the engine's error stream (a pushed error counted "
+                  + $"{calErr} times, a pushed warning {calWarn})");
+            // P8-57: and what the engine said meanwhile, counted from its own
+            // error stream (EngineLogTally, registered through OS.AddLogger),
+            // beside the actors' transforms read off the nodes every frame:
+            // the engine reports a poisoned node's transform at once only when
+            // something like a visibility change pushes it, and otherwise at the
+            // frame's end, after this single-frame harness has finished.
+            _engineLog.Mark();
+            int err0 = _engineLog.Errors, warn0 = _engineLog.Warnings;
+            int worstNonFinite = 0, firstNonFiniteTick = -1;
             ulong started = Time.GetTicksMsec();
             try
             {
@@ -6758,6 +6789,9 @@ public partial class VerifyRunner : Node
                     // the frame draws them.
                     DriveFrame(g, 1.0);
                     frames++;
+                    int bad = g.NonFiniteActorsForTest();
+                    if (bad > 0 && firstNonFiniteTick < 0) firstNonFiniteTick = g.CurrentTick;
+                    worstNonFinite = System.Math.Max(worstNonFinite, bad);
                     if (g.CurrentTick == before && !g.MatchOverForTest && !g.FaultedForTest) { stalled = true; break; }
                 }
             }
@@ -6766,6 +6800,8 @@ public partial class VerifyRunner : Node
                 escaped = $"{e.GetType().Name} at tick {g.CurrentTick}: {e.Message}";
             }
             ulong ms = Time.GetTicksMsec() - started;
+            int engineErrors = _engineLog.Errors - err0, engineWarnings = _engineLog.Warnings - warn0;
+            string firstLogged = _engineLog.FirstSinceMark;
             int ticks = g.CurrentTick - t0;
             string end = g.MatchOverForTest ? $"a result at tick {g.CurrentTick} (\"{g.BannerTextForTest.Split('\n')[0]}\")"
                 : g.CurrentTick >= cap ? $"the {cap} tick cap" : $"neither, stopped at tick {g.CurrentTick}";
@@ -6777,11 +6813,53 @@ public partial class VerifyRunner : Node
                   $"longmatch: no fault halted the drain{(g.FaultedForTest ? $" (it halted at tick {g.FaultTickForTest}; report {g.FaultReportPathForTest})" : "")}");
             Check(!stalled && ticks > 0 && (g.CurrentTick >= cap || (g.MatchOverForTest && g.BannerVisibleForTest)),
                   $"longmatch: the tick advanced from {t0} to {g.CurrentTick} and the match reached {end}");
+            // P8-57: an engine error is not an exception, so the checks above
+            // passed a match whose actors went non-finite from the first
+            // harvester's first move. Any error or warning on the engine's
+            // stream fails here, and so does any actor whose transform is not
+            // finite on any frame.
+            Check(ticks > 0 && engineErrors == 0 && engineWarnings == 0,
+                  $"longmatch: the engine reported no error and no warning across the match ({engineErrors} errors, "
+                  + $"{engineWarnings} warnings{(firstLogged.Length > 0 ? $"; the first: {firstLogged}" : "")})");
+            Check(ticks > 0 && worstNonFinite == 0,
+                  $"longmatch: every actor's transform stayed finite on every frame (at worst {worstNonFinite} not, "
+                  + $"{(firstNonFiniteTick >= 0 ? $"first at tick {firstNonFiniteTick}" : "never")})");
+            RunTracerBasisChecks(g);
         }
         finally
         {
             g.QueueFree();
         }
+    }
+
+    /// <summary>
+    /// P8-57: the tracer's basis, guarded where it is built, on the inputs that
+    /// broke it in the long match and on the one the old guard already knew. A
+    /// NaN end and a zero-length shot draw nothing; a shot straight down draws a
+    /// tracer whose basis is finite; and none of the three puts a line on the
+    /// engine's error stream (LookAt normalising NaN raised "cannot be
+    /// normalized", then "colinear", on every such shot).
+    /// </summary>
+    private void RunTracerBasisChecks(SkirmishLive g)
+    {
+        var a = new Vector3(10f, 0.4f, 10f);
+        var nan = new Vector3(float.NaN, 0.4f, 10f);
+        _engineLog.Mark();
+        int err0 = _engineLog.Errors, warn0 = _engineLog.Warnings;
+        var fromNaN = g.TracerForTest(nan, a);
+        var toNaN = g.TracerForTest(a, nan);
+        var zero = g.TracerForTest(a, a);
+        var down = g.TracerForTest(a + new Vector3(0, 6f, 0), a);
+        int errs = _engineLog.Errors - err0, warns = _engineLog.Warnings - warn0;
+        string first = _engineLog.FirstSinceMark;
+        Check(fromNaN == null && toNaN == null && zero == null,
+              $"longmatch/tracer: a shot with a NaN end or no length draws no tracer (from NaN {fromNaN != null}, to NaN "
+              + $"{toNaN != null}, zero length {zero != null})");
+        Check(down is { } d && d.IsFinite() && d.Origin.DistanceTo(a + new Vector3(0, 3f, 0)) < 0.01f,
+              $"longmatch/tracer: a shot straight down draws one, midway and with a finite basis ({down})");
+        Check(errs == 0 && warns == 0,
+              $"longmatch/tracer: ...and none of them puts a line on the engine's error stream ({errs} errors, {warns} "
+              + $"warnings{(first.Length > 0 ? $"; the first: {first}" : "")})");
     }
 
     /// <summary>

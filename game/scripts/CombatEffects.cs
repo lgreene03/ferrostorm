@@ -557,15 +557,42 @@ public partial class CombatEffects : Node3D
 
     private void SpawnTracer(Vector3 from, Vector3 to, Material mat, float thickness, float fade)
     {
-        Vector3 dir = to - from;
-        float len = dir.Length();
-        if (len <= 0.05f) return;
+        if (!Aimable(from, to)) return;
+        float len = (to - from).Length();
         var tracer = SpawnMesh(TracerMesh, mat, (from + to) * 0.5f);
-        // Guard the degenerate LookAt case where the shot is near vertical.
-        Vector3 up = Mathf.Abs(dir.Normalized().Dot(Vector3.Up)) > 0.99f ? Vector3.Right : Vector3.Up;
-        tracer.LookAt(to, up);
+        tracer.LookAt(to, UpFor(to - from));
         tracer.Scale = new Vector3(thickness, thickness, len);
         FadeAndFree(tracer, fade);
+    }
+
+    /// <summary>
+    /// P8-57: can a projectile's basis be aimed from one point at the other?
+    /// Both ends finite and more than 0.05 apart. A non-finite end made
+    /// LookAt normalise NaN (the engine's "cannot be normalized" warning) and
+    /// then build its basis from a zero vector (its "colinear" warning), and a
+    /// zero-length shot has no direction to aim along. Asked before anything is
+    /// spawned, so a shot that cannot be drawn draws nothing rather than a
+    /// mesh at a NaN position.
+    /// </summary>
+    private static bool Aimable(Vector3 from, Vector3 to) =>
+        from.IsFinite() && to.IsFinite() && (to - from).LengthSquared() > 0.05f * 0.05f;
+
+    /// <summary>The up axis for aiming along dir: world up, unless dir is
+    /// within about eight degrees of vertical, where up and the shot would be
+    /// colinear and LookAt has no basis, so world right instead.</summary>
+    private static Vector3 UpFor(Vector3 dir) =>
+        Mathf.Abs(dir.Normalized().Dot(Vector3.Up)) > 0.99f ? Vector3.Right : Vector3.Up;
+
+    /// <summary>P8-57 verification seam: fire one tracer between two points
+    /// through the real SpawnTracer and say whether it drew one, and with what
+    /// transform, so a check can prove the basis guard on the inputs that broke
+    /// it (a NaN end, a vertical shot, a zero-length shot). Nothing in a played
+    /// game calls it.</summary>
+    public Transform3D? TracerForTest(Vector3 from, Vector3 to)
+    {
+        int before = GetChildCount();
+        SpawnTracer(from, to, TracerMat, 0.04f, 0.10f);
+        return GetChildCount() > before && GetChild(GetChildCount() - 1) is Node3D drawn ? drawn.Transform : null;
     }
 
     private void SpawnAutocannonBurst(IReadOnlyDictionary<int, Node3D> actors, int attackerId, int targetId)
@@ -595,12 +622,11 @@ public partial class CombatEffects : Node3D
     // W3-02: travelling cannon shell for weapons 1/4/6.
     private void SpawnShell(IReadOnlyDictionary<int, Node3D> actors, int targetId, Vector3 from, Vector3 to)
     {
+        if (!from.IsFinite() || !to.IsFinite()) return;   // P8-57: nothing to draw a flight between
         var shell = SpawnMesh(ShellMesh, ShellMat, from);
-        Vector3 dir = to - from;
-        if (dir.Length() > 0.05f)
+        if (Aimable(from, to))
         {
-            Vector3 up = Mathf.Abs(dir.Normalized().Dot(Vector3.Up)) > 0.99f ? Vector3.Right : Vector3.Up;
-            shell.LookAt(to, up);
+            shell.LookAt(to, UpFor(to - from));
             // CapsuleMesh's long axis is Y; rotating 90 degrees about local X
             // points it down -Z, the LookAt forward.
             shell.RotateObjectLocal(Vector3.Right, Mathf.Pi / 2);

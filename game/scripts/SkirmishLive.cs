@@ -4525,7 +4525,17 @@ public partial class SkirmishLive : Node3D
         {
             if (!_targets.TryGetValue(id, out var t)) continue;
             var to = t - node.Position;
-            node.Position = node.Position.Lerp(t, dt * 10f);
+            // P8-57: the weight is capped at 1, so a long frame lands on the
+            // target instead of past it. Uncapped, dt * 10 above 1 overshot and
+            // above 2 multiplied the distance still to go by (dt * 10 - 1) every
+            // frame, so a frame rate under five a second diverged: in the long
+            // match (one-second frames, a weight of 10) harvester 136 set off
+            // at tick 420 and its distance from its target grew ninefold a
+            // frame until the length overflowed, the hull pitch below read
+            // infinity minus infinity and its rotation went NaN at tick 750,
+            // and every tracer fired from or at a poisoned actor inherited it.
+            // Every frame shorter than 100 ms moves exactly as before.
+            node.Position = node.Position.Lerp(t, Mathf.Min(dt * 10f, 1f));
             // W4-16: tyre-track decals behind vehicles. Infantry (2/3/11,
             // plus the untyped starting squads at 0) leave none. Hidden
             // enemy movement prints nothing (node.Visible carries the
@@ -5924,6 +5934,21 @@ public partial class SkirmishLive : Node3D
     public AlertService AlertsView => _alerts;
     public SuperweaponGauge SuperweaponGaugeView => _swGauge;
     public int DeathBursts => _effects.DeathBursts;
+    /// <summary>P8-57 verification seam: one tracer through the live effects
+    /// layer's real SpawnTracer (CombatEffects.TracerForTest).</summary>
+    public Transform3D? TracerForTest(Vector3 from, Vector3 to) => _effects.TracerForTest(from, to);
+    /// <summary>P8-57 verification read: how many actors' transforms are not
+    /// finite right now, read off the nodes themselves, so a stage catches a
+    /// poisoned actor whether or not the engine happens to report it while
+    /// the stage is still watching (its transform notifications are flushed
+    /// at the end of the frame, after a single-frame harness has moved on).</summary>
+    public int NonFiniteActorsForTest()
+    {
+        int n = 0;
+        foreach (var node in _actors.Values)
+            if (!node.Transform.IsFinite()) n++;
+        return n;
+    }
     public Vector3? StrikeReticleAt(int launcherId) => _effects.StrikeReticleAt(launcherId);
     /// <summary>SFX requests by name (AudioDirector.PlayRequests).</summary>
     public int AudioRequests(string name) => _audio.PlayRequests(name);
