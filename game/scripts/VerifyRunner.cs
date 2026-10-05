@@ -1632,6 +1632,7 @@ public partial class VerifyRunner : Node
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
         int bursts0 = g.DeathBursts, lost0 = g.VoRequests("vo_unit_lost"), boarded0 = g.Boardings;
+        int tumbles0 = g.CorpseTumbles, sinks0 = g.Sinkings;
         g.QueueCommandForTest(CommandType.LoadTransport, r1, carrier);
         g.QueueCommandForTest(CommandType.LoadTransport, r2, carrier);
         g.StepOneTick();
@@ -1643,9 +1644,11 @@ public partial class VerifyRunner : Node
         EventGate(aboard, "Boarded",
                   $"precondition: both squads boarded, which the sim now reports as Boarded and never as Died (D34; hold "
                   + $"{lw.CargoOf(carrier).Count})");
-        EventGate(aboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 2, "Boarded",
+        EventGate(aboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 2
+                  && g.CorpseTumbles == tumbles0 && g.Sinkings == sinks0, "Boarded",
                   $"boarding a Carrier draws NO death: no flash, smoke or scorch ({g.DeathBursts - bursts0} bursts); both "
-                  + $"squads shrink into the hold rather than sinking as the dead do ({g.Boardings - boarded0})");
+                  + $"squads shrink into the hold ({g.Boardings - boarded0}) rather than tumbling as the dead do or sinking "
+                  + $"({g.CorpseTumbles - tumbles0} tumbles, {g.Sinkings - sinks0} sinkings)");
         EventGate(aboard && g.VoRequests("vo_unit_lost") == lost0 && g.ToastText == $"BOARDED: CARGO 2/{World.CarrierCapacity}",
                   "Boarded", $"...asks for no casualty line (vo_unit_lost asked {g.VoRequests("vo_unit_lost") - lost0} "
                   + $"times) and says what did happen (\"{g.ToastText}\")");
@@ -1663,6 +1666,7 @@ public partial class VerifyRunner : Node
         int gunner = SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), d.X + 2, d.Y);
         g.PumpActorsForTest();
         bursts0 = g.DeathBursts; lost0 = g.VoRequests("vo_unit_lost"); boarded0 = g.Boardings;
+        tumbles0 = g.CorpseTumbles; sinks0 = g.Sinkings;
         bool fired = false;
         float intensityAtShot = -1f;
         for (int t = 0; t < 150 && lw.Entities[victim].Alive; t++)
@@ -1681,6 +1685,33 @@ public partial class VerifyRunner : Node
                   + $"boarder ({g.Boardings - boarded0}) and asks for the casualty line ({g.VoRequests("vo_unit_lost") - lost0})");
         EventGate(fired && intensityAtShot >= 0.999f, "Fired",
                   $"a shot at my squad snaps the combat score's intensity signal to full ({intensityAtShot:0.00})");
+        // P8-59: and its actor is retired as W2-06's tumbling corpse. Every
+        // death took the structure's sink, because the retirement read the
+        // dead unit's kind from a view rebuilt from the living; P8-10 dropped
+        // the check it wanted here because, with the tumble unreachable, no
+        // corpse assertion could pass.
+        EventGate(dead && g.CorpseTumbles == tumbles0 + 1 && g.Sinkings == sinks0, "Died/corpse",
+                  $"the squad shot dead falls as a tumbling corpse rather than sinking like a building "
+                  + $"({g.CorpseTumbles - tumbles0} tumble, {g.Sinkings - sinks0} sinkings)");
+        // The structure's half: a plant of mine, left one hit from death in
+        // the gunner's reach, sinks when it is shot down and does not tumble.
+        int plant = lw.SpawnPowerPlant(me, d.X, d.Y + 1);
+        var pe = lw.Entities[plant];
+        pe.Hp = 1;
+        lw.SetEntityForTest(plant, pe);
+        g.PumpActorsForTest();
+        tumbles0 = g.CorpseTumbles; sinks0 = g.Sinkings;
+        bool razed = false;
+        for (int t = 0; t < 150 && lw.Entities[plant].Alive; t++)
+        {
+            g.StepTicks(1);
+            razed |= TickHad(lw, ev => ev.Type == GameEventType.Died && ev.A == plant);
+        }
+        g.PumpActorsForTest();
+        razed &= !lw.Entities[plant].Alive;
+        EventGate(razed && g.Sinkings == sinks0 + 1 && g.CorpseTumbles == tumbles0, "Died/corpse",
+                  $"...while a structure shot down sinks and does not tumble (razed {razed}; {g.Sinkings - sinks0} sinking, "
+                  + $"{g.CorpseTumbles - tumbles0} tumbles)");
         _eventsCovered.Add(GameEventType.Fired);
         _eventsCovered.Add(GameEventType.Died);
         RemoveFixture(lw, gunner);
@@ -1976,12 +2007,19 @@ public partial class VerifyRunner : Node
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
         int dep0 = g.DeployCues;
+        int tumbles0 = g.CorpseTumbles, sinks0 = g.Sinkings;
         g.IssueDeploy(mcv);
         g.StepOneTick();
         bool deployed = TickHad(lw, ev => ev.Type == GameEventType.Deployed && ev.A == mcv);
         EventGate(deployed, "Deployed", "precondition: the MCV unpacked");
         EventGate(deployed && g.DeployCues == dep0 + 1 && g.ToastText == "CONSTRUCTION YARD ESTABLISHED", "Deployed",
                   $"an MCV unpacking is said and heard, not only refused when it fails (\"{g.ToastText}\")");
+        // P8-59: the vehicle IS the building, so its actor sinks as the yard
+        // rises; it did not die and is not a tumbling corpse.
+        g.PumpActorsForTest();
+        EventGate(deployed && g.CorpseTumbles == tumbles0 && g.Sinkings == sinks0 + 1, "Died/corpse",
+                  $"...and an MCV that unpacks is no corpse: its actor sinks as the yard rises ({g.Sinkings - sinks0} sinking, "
+                  + $"{g.CorpseTumbles - tumbles0} tumbles)");
         _eventsCovered.Add(GameEventType.Deployed);
     }
 

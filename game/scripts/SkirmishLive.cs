@@ -448,6 +448,16 @@ public partial class SkirmishLive : Node3D
     /// so the actor shrinks into its Carrier rather than sinking like the dead.
     /// Pruned as the actor goes.</summary>
     private readonly HashSet<int> _boardedIds = new();
+    /// <summary>P8-59: every entity that DIED (a Died event) while its actor
+    /// stands, so a dead unit's actor is retired as W2-06's tumbling corpse.
+    /// Kept from the event, like _boardedIds, because SyncActors retires an
+    /// actor only once its entity has left the living view, where neither
+    /// "dead" nor "mobile" can be read any more: `_latest` is rebuilt from
+    /// LIVING entities, which is how every death came to take the structure's
+    /// sink. A mobile that leaves without dying (an MCV unpacking, which the
+    /// sim reports as Deployed) is not a corpse and keeps the sink it had.
+    /// Pruned as the actor goes.</summary>
+    private readonly HashSet<int> _diedIds = new();
     /// <summary>The radar's three faces. Offline wins over Jammed: with no
     /// uplink, or no power for it, the map is dark for a reason in your own
     /// base, and a jam on top changes nothing you can act on.</summary>
@@ -466,6 +476,12 @@ public partial class SkirmishLive : Node3D
     /// <summary>Actors retired as boarders (shrunk into their Carrier), counted
     /// in SyncActors.</summary>
     public int Boardings { get; private set; }
+    /// <summary>P8-59: actors retired as tumbling corpses (dead units and
+    /// harvesters, W2-06), and actors retired by sinking (structures, and
+    /// anything else that leaves the view without dying or boarding), counted
+    /// in SyncActors where each retirement path starts.</summary>
+    public int CorpseTumbles { get; private set; }
+    public int Sinkings { get; private set; }
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
     private double _repairConfirmUntil = -1;
@@ -2136,6 +2152,8 @@ public partial class SkirmishLive : Node3D
             // harvesters are the "unit lost" of the classic genre.
             if (ev.Type == GameEventType.Died && ev.A >= 0 && ev.A < _world.EntityCount)
             {
+                // P8-59: its actor is retired as a death (SyncActors).
+                if (_actors.ContainsKey(ev.A)) _diedIds.Add(ev.A);
                 var fallen = _world.Entities[ev.A];
                 if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
                     PlayVo("vo_unit_lost");
@@ -4462,14 +4480,18 @@ public partial class SkirmishLive : Node3D
                 // structures sink. Both free themselves via the tween.
                 // P8-10: a squad that BOARDED is not dead, so it neither tumbles
                 // nor sinks: it shrinks away into its Carrier in a quarter second.
-                // (Found, not fixed here, P8-59: `_latest` is rebuilt above from
-                // LIVING entities only, so `wasMobile` is never true for a dead
-                // unit and every death takes the sink branch; the W2-06 tumble
-                // below is unreachable. The boarder's path keys off _boardedIds,
-                // filled from the Boarded event, instead.)
+                // P8-59: a dead unit tumbles, which is decided from the Died
+                // event (_diedIds) and the entity's own kind in the world,
+                // never from `_latest`, which the loop above rebuilt from
+                // LIVING entities only: read there, no dead unit was ever
+                // mobile, every death took the sink branch and the tumble was
+                // unreachable. The boarder's path keys off _boardedIds, filled
+                // from the Boarded event, and comes first; anything else that
+                // leaves the view (a structure, or an MCV that unpacked) sinks.
                 var corpse = _actors[id];
-                bool wasMobile = _latest.TryGetValue(id, out var lastV) && Mobile(lastV.Kind);
                 bool boarded = _boardedIds.Remove(id);
+                bool died = _diedIds.Remove(id);
+                bool deadUnit = died && id < _world.EntityCount && Mobile(_world.Entities[id].Kind);
                 var tw = corpse.CreateTween();
                 if (boarded)
                 {
@@ -4477,8 +4499,9 @@ public partial class SkirmishLive : Node3D
                     tw.TweenProperty(corpse, "scale", Vector3.One * 0.1f, 0.25f)
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
                 }
-                else if (wasMobile)
+                else if (deadUnit)
                 {
+                    CorpseTumbles++;
                     var rng = new System.Random(id);
                     var tumble = corpse.Rotation + new Vector3(
                         ((float)rng.NextDouble() - 0.5f) * 1.6f,
@@ -4494,6 +4517,7 @@ public partial class SkirmishLive : Node3D
                 }
                 else
                 {
+                    Sinkings++;
                     tw.TweenProperty(corpse, "position",
                         corpse.Position + new Vector3(0, -0.9f, 0), 1.1f)
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
