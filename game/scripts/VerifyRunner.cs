@@ -1328,11 +1328,6 @@ public partial class VerifyRunner : Node
             "by design (P8-10)"),
         ("Promoted/not-own", GameEventType.Promoted, false, true,
             "another seat's promotion shows only on its rank pips", "by design (P8-10)"),
-        ("every type/LAN", null, false, false,
-            "in a LAN match no event reaches the client's sweep at all: AfterNetTick snapshots, updates the fog and checks "
-            + "the winner, but never runs RunOneTick's post-step event handling, so a networked match draws no shot, "
-            + "death or alert and raises no toast",
-            "P8-58 (found by P8-10; the fix is the post-step sweep as one method both tick paths call)"),
     };
 
     /// <summary>Quiet ground for a fixture near a seat's own yard (QuietGround's
@@ -1478,6 +1473,8 @@ public partial class VerifyRunner : Node
         RunCaptureAttributionStage(g, me, foe);
         RunSuperweaponResumeStage(g, me, foe);
         RunEliminationStage(g, foe2);
+        // P8-58: the same reactions over the wire, in a LAN pair of its own.
+        RunLanEventStage();
         RunEventGateCoverage();
         g.QueueFree();
     }
@@ -2606,6 +2603,286 @@ public partial class VerifyRunner : Node
         EventGate(gone != null && !g.MatchOverForTest && g.EliminationNotices == n0 + 1 && g.ToastText == news, "PlayerEliminated",
                   $"an enemy seat eliminated while the war goes on is said (\"{g.ToastText}\"), where it used to pass in silence");
         _eventsCovered.Add(GameEventType.PlayerEliminated);
+    }
+
+    /// <summary>
+    /// P8-58: advance two lockstep peers by exactly one tick each and stop
+    /// them there, so the two worlds stand at the same tick whenever a fixture
+    /// is placed on both or a reaction is read. The frame loop's own shape
+    /// (RunLanChecks says why it is interleaved and yields): each scene polls
+    /// through StepTicks, the one door every tick comes through, and a tick
+    /// lands only once both peers have submitted for it. Both scenes' actors
+    /// are then synced, as a rendered frame would, so what the next tick's
+    /// effects read as visible is what each player would have seen.
+    /// </summary>
+    private static bool LanStepBoth(SkirmishLive a, SkirmishLive b)
+    {
+        int target = a.CurrentTick + 1;
+        int spins = 0;
+        while ((a.CurrentTick < target || b.CurrentTick < target) && spins++ < 4000)
+        {
+            int before = a.CurrentTick + b.CurrentTick;
+            if (a.CurrentTick < target) a.StepTicks(1);
+            if (b.CurrentTick < target) b.StepTicks(1);
+            if (a.CurrentTick + b.CurrentTick == before) System.Threading.Thread.Sleep(1);
+        }
+        a.PumpActorsForTest();
+        b.PumpActorsForTest();
+        return a.CurrentTick == target && b.CurrentTick == target;
+    }
+
+    /// <summary>
+    /// P8-58: THE LAN STAGE, in place of the silent table's `every type/LAN`
+    /// line. A networked tick ran three lines of the offline tick's tail (the
+    /// snapshot, the fog and the victory latch), so a LAN match surfaced no
+    /// event at all, on either peer. Two real battle scenes over the
+    /// in-process relay (C7b-iii's pair), the host at seat 0 and the joiner at
+    /// seat 1, and every order is a peer's own, through its own LocalPlayerId
+    /// and the relay: the sidebar's QueueUnit, an attack order, and the
+    /// superweapon's key and left click. A fixture is placed on BOTH worlds at
+    /// the same tick, so the two stay one world, which the closing hash check
+    /// proves. Each reaction is read on both screens and must be the right one
+    /// for that seat: the joiner's own completion toasts and chimes on the
+    /// joiner and not the host; a host squad's death bursts on both screens
+    /// and is mourned by the host alone; a host plant taken by the joiner's
+    /// engineer is a loss to one and a gain to the other, read against the
+    /// owner BEFORE the lockstep step (the plant is placed between ticks, just
+    /// before the step that takes it, so only a capture taken before the
+    /// lockstep client steps knows it was the host's); and the joiner's launch
+    /// is the host's klaxon, with its reticle on both screens until impact.
+    /// </summary>
+    private void RunLanEventStage()
+    {
+        GD.Print("  --    eventgate (P8-58): a LAN match surfaces its events on both peers, each for its own seat");
+        string? wasMap = MatchConfig.MapPath;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(5858UL);
+            RunLanEventChecks(relay, hostClient, joinClient, host, join);
+        }
+        catch (System.Exception ex)
+        {
+            EventGate(false, "LAN", $"the LAN match threw: {ex.Message}");
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            host?.QueueFree();
+            join?.QueueFree();
+            // Nothing steps either scene again, so neither the departure the
+            // relay now reports nor its stand-down reaches NetSession.
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    private void RunLanEventChecks(Ferrostorm.Net.Relay relay, Ferrostorm.Net.LockstepClient hostClient,
+        Ferrostorm.Net.LockstepClient joinClient, SkirmishLive host, SkirmishLive join)
+    {
+        var hw = host.LiveWorld;
+        var jw = join.LiveWorld;
+        int hs = host.LocalPlayerId, js = join.LocalPlayerId;
+        bool pair = host.IsNetworked && join.IsNetworked && hs == 0 && js == 1
+                    && host.IsHostileSeat(js) && join.IsHostileSeat(hs);
+        EventGate(pair, "LAN", $"two lockstep peers over the relay, each in its own seat and hostile to the other "
+                               + $"(host {hs}, joiner {js})");
+        if (!pair) return;
+        hostClient.Prime();
+        joinClient.Prime();
+        bool started = LanStepBoth(host, join) && LanStepBoth(host, join);
+        EventGate(started && hw.ComputeStateHash() == jw.ComputeStateHash(), "LAN",
+                  $"precondition: both peers advance together and hold one world (tick {host.CurrentTick} and {join.CurrentTick})");
+        if (!started) return;
+
+        // The same placement on each world at the same tick is the same id on
+        // each, and anything else is a fixture failure (-1).
+        int Both(System.Func<World, int> place)
+        {
+            int a = place(hw), b = place(jw);
+            return a == b ? a : -1;
+        }
+        void BothEdit(int id, System.Func<Entity, Entity> edit)
+        {
+            hw.SetEntityForTest(id, edit(hw.Entities[id]));
+            jw.SetEntityForTest(id, edit(jw.Entities[id]));
+        }
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+
+        // --- ProductionComplete: the joiner's completion is the joiner's news
+        if (GroundNear(join, js) is { } pp && Both(w => w.SpawnPowerPlant(js, pp.X, pp.Y, supply: 3000)) >= 0
+            && GroundNear(join, js) is { } bp && Both(w => w.SpawnBarracks(js, bp.X, bp.Y)) is var barracks && barracks >= 0)
+        {
+            LanStepBoth(host, join);
+            host.AlertsView.ResetForTest();
+            join.AlertsView.ResetForTest();
+            int hChime0 = host.AudioRequests("production_done"), jChime0 = join.AudioRequests("production_done");
+            int hReady0 = host.VoRequests("vo_unit_ready"), jReady0 = join.VoRequests("vo_unit_ready");
+            join.QueueUnit(rifle);
+            bool hostSaw = false, joinSaw = false;
+            string jToast = "";
+            for (int t = 0; t < 400 && !(hostSaw && joinSaw); t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                hostSaw |= TickHad(hw, ev => ev.Type == GameEventType.ProductionComplete && ev.C == barracks);
+                if (!joinSaw && TickHad(jw, ev => ev.Type == GameEventType.ProductionComplete && ev.C == barracks))
+                {
+                    joinSaw = true;
+                    jToast = join.ToastText;
+                }
+            }
+            string want = $"{join.UnitNameForTest(rifle)} DEPLOYED";
+            int hChimes = host.AudioRequests("production_done") - hChime0, jChimes = join.AudioRequests("production_done") - jChime0;
+            int hReady = host.VoRequests("vo_unit_ready") - hReady0, jReady = join.VoRequests("vo_unit_ready") - jReady0;
+            EventGate(hostSaw && joinSaw, "LAN/ProductionComplete",
+                      $"precondition: the joiner's barracks, ordered through its own sidebar, finished a rifle squad on both worlds "
+                      + $"(host {hostSaw}, joiner {joinSaw})");
+            EventGate(joinSaw && jToast == want && jChimes == 1 && jReady == 1, "LAN/ProductionComplete",
+                      $"the joiner's own completion toasts, chimes and speaks on the joiner's screen (\"{jToast}\", {jChimes} chime, "
+                      + $"vo_unit_ready asked {jReady} times)");
+            EventGate(hostSaw && hChimes == 0 && hReady == 0 && !host.AlertsView.StackTexts().Contains(want), "LAN/ProductionComplete",
+                      $"...and NOT on the host's, for whom another seat's completion is not news ({hChimes} chimes, "
+                      + $"{hReady} voice requests, stack: {JoinLines(host.AlertsView.StackTexts())})");
+        }
+        else EventGate(false, "LAN/ProductionComplete", "quiet ground by the joiner's yard for a plant and a barracks (none: a fixture failure)");
+
+        // --- Died: drawn on both screens, mourned by its owner alone ---------
+        if (GroundNear(join, js) is { } dp
+            && Both(w => SpawnOfType(w, js, rifle, dp.X, dp.Y)) is var guard && guard >= 0
+            && Both(w => SpawnOfType(w, hs, rifle, dp.X + 2, dp.Y)) is var victim && victim >= 0)
+        {
+            // A tick for both squads' sight to reach the worlds and their actors
+            // to be drawn, then the host's squad is left one hit from death.
+            LanStepBoth(host, join);
+            BothEdit(victim, e => { e.Hp = 1; return e; });
+            bool seen = join.ActorShownForTest(victim) && host.ActorShownForTest(victim);
+            int hBurst0 = host.DeathBursts, jBurst0 = join.DeathBursts;
+            int hLost0 = host.VoRequests("vo_unit_lost"), jLost0 = join.VoRequests("vo_unit_lost");
+            join.QueueCommandForTest(CommandType.Attack, guard, victim);
+            bool died = false;
+            for (int t = 0; t < 60 && !died; t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                died = TickHad(hw, ev => ev.Type == GameEventType.Died && ev.A == victim)
+                       && TickHad(jw, ev => ev.Type == GameEventType.Died && ev.A == victim);
+            }
+            int hBursts = host.DeathBursts - hBurst0, jBursts = join.DeathBursts - jBurst0;
+            int hLost = host.VoRequests("vo_unit_lost") - hLost0, jLost = join.VoRequests("vo_unit_lost") - jLost0;
+            EventGate(seen && died, "LAN/Died",
+                      $"precondition: the host's squad, in sight of both seats, was shot dead by the joiner's on the same tick of "
+                      + $"both worlds (in sight {seen}, died {died})");
+            EventGate(died && hBursts >= 1 && jBursts >= 1, "LAN/Died",
+                      $"the death bursts on BOTH screens ({hBursts} on the host's, {jBursts} on the joiner's)");
+            EventGate(died && hLost == 1 && jLost == 0, "LAN/Died",
+                      $"...and its owner alone mourns it: vo_unit_lost asked {hLost} time on the host's seat and {jLost} on the joiner's");
+        }
+        else EventGate(false, "LAN/Died", "quiet ground by the joiner's yard for two squads (none: a fixture failure)");
+
+        // --- Captured: against the owner as it stood before the lockstep step
+        // The joiner orders its engineer onto the host's plant now, and both
+        // are placed only on the tick the order lands, CommandDelay ticks
+        // later, so the plant exists for no sweep before the step that takes it.
+        if (GroundNear(host, hs) is { } cp)
+        {
+            int n = hw.EntityCount;
+            bool sameCount = jw.EntityCount == n;
+            join.QueueCommandForTest(CommandType.Attack, n + 1, n);
+            for (int t = 0; t < Ferrostorm.Net.LockstepClient.CommandDelay; t++) LanStepBoth(host, join);
+            bool unchanged = hw.EntityCount == n && jw.EntityCount == n;
+            int prize = Both(w => w.SpawnPowerPlant(hs, cp.X, cp.Y));
+            int engineer = prize >= 0 && ContactCell(hw, prize) is { } kc
+                ? Both(w => SpawnOfType(w, js, World.EngineerUnitType, kc.X, kc.Y)) : -1;
+            bool fixture = sameCount && unchanged && prize == n && engineer == n + 1;
+            EventGate(fixture, "LAN/Captured",
+                      $"precondition: the plant and the engineer the order names stand on both worlds, placed on the tick it lands "
+                      + $"(plant {prize}, engineer {engineer}, ordered as {n} and {n + 1})");
+            if (fixture)
+            {
+                host.AlertsView.ResetForTest();
+                join.AlertsView.ResetForTest();
+                int hCap0 = host.CaptureAlerts, jCap0 = join.CaptureAlerts;
+                LanStepBoth(host, join);
+                bool taken = hw.Entities[prize].PlayerId == js && jw.Entities[prize].PlayerId == js
+                             && TickHad(hw, ev => ev.Type == GameEventType.Captured && ev.A == prize)
+                             && TickHad(jw, ev => ev.Type == GameEventType.Captured && ev.A == prize);
+                const string lost = "STRUCTURE LOST TO CAPTURE", gained = "STRUCTURE CAPTURED";
+                var hStack = host.AlertsView.StackTexts();
+                var jStack = join.AlertsView.StackTexts();
+                EventGate(taken, "LAN/Captured", $"precondition: the joiner's engineer took the host's plant on both worlds ({taken})");
+                EventGate(taken && host.CaptureAlerts == hCap0 + 1 && hStack.Contains(lost)
+                          && host.AlertsView.PriorityShown(lost) == AlertPriority.Critical, "LAN/Captured",
+                          $"the host is told it LOST the plant, critically, which needs the plant's owner from before the lockstep "
+                          + $"step ({host.CaptureAlerts - hCap0} alert, stack: {JoinLines(hStack)})");
+                EventGate(taken && join.CaptureAlerts == jCap0 + 1 && jStack.Contains(gained) && !jStack.Contains(lost)
+                          && join.AlertsView.PriorityShown(gained) == AlertPriority.Notice, "LAN/Captured",
+                          $"...and the joiner that it TOOK it ({join.CaptureAlerts - jCap0} alert, stack: {JoinLines(jStack)})");
+            }
+        }
+        else EventGate(false, "LAN/Captured", "quiet ground by the host's yard for the plant (none: a fixture failure)");
+
+        // --- SuperweaponLaunched: the joiner's strike is the host's klaxon ---
+        if (GroundNear(join, js) is { } sp && GroundNear(host, hs) is { } aim
+            && Both(w => w.SpawnSuperweapon(js, sp.X, sp.Y, chargeTicks: 0)) is var sw && sw >= 0)
+        {
+            BothEdit(sw, e => { e.PowerDraw = 0; return e; });   // charged whatever the grid; a fixture
+            LanStepBoth(host, join);
+            float ax = aim.X + 0.5f, az = aim.Y + 0.5f;
+            join.FocusCameraOn(ax, az, 22f);
+            join.PumpActorsForTest();
+            host.AlertsView.ResetForTest();
+            join.AlertsView.ResetForTest();
+            int hLa0 = host.LaunchAlerts, jLa0 = join.LaunchAlerts;
+            int hVo0 = host.VoRequests("vo_superweapon_launch"), jVo0 = join.VoRequests("vo_superweapon_launch");
+            join.PressKey(Settings.BindOf("launch_super"));
+            bool armed = join.SuperArmed;
+            join.PressLeftClick(join.ScreenOf(ax, az));
+            GameEvent? launch = null;
+            Vector3? hRet = null, jRet = null;
+            string hToast = "";
+            List<string> jStack = new();
+            for (int t = 0; t < Ferrostorm.Net.LockstepClient.CommandDelay + 4 && launch == null; t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                foreach (var ev in hw.Events) if (ev.Type == GameEventType.SuperweaponLaunched && ev.A == sw) launch = ev;
+                if (launch == null || !TickHad(jw, ev => ev.Type == GameEventType.SuperweaponLaunched && ev.A == sw)) continue;
+                hRet = host.StrikeReticleAt(sw);
+                jRet = join.StrikeReticleAt(sw);
+                hToast = host.ToastText;
+                jStack = join.AlertsView.StackTexts();
+            }
+            bool OnAim(Vector3? r) => launch is { } l && r is { } p && Mathf.Abs(p.X - Fx(l.X)) < 0.02f && Mathf.Abs(p.Z - Fx(l.Y)) < 0.02f
+                                      && Mathf.Abs(p.X - ax) < 1f && Mathf.Abs(p.Z - az) < 1f;
+            const string klaxon = "ENEMY STRIKE INBOUND: BRACE";
+            int hLa = host.LaunchAlerts - hLa0, jLa = join.LaunchAlerts - jLa0;
+            int hVo = host.VoRequests("vo_superweapon_launch") - hVo0, jVo = join.VoRequests("vo_superweapon_launch") - jVo0;
+            EventGate(armed && launch != null, "LAN/SuperweaponLaunched",
+                      $"precondition: the joiner launched by its key and a left click, and the launch reached both worlds (armed {armed})");
+            EventGate(launch != null && hLa == 1 && hToast == klaxon && host.AlertsView.PriorityShown(klaxon) == AlertPriority.Critical
+                      && hVo == 1, "LAN/SuperweaponLaunched",
+                      $"the host, the seat it is aimed at, hears the klaxon with its voice line (\"{hToast}\", {hLa} launch alert, "
+                      + $"{hVo} voice request)");
+            EventGate(launch != null && jLa == 0 && jVo == 0 && !jStack.Contains(klaxon), "LAN/SuperweaponLaunched",
+                      $"...and the joiner, who fired it, is not told an enemy strike is inbound ({jLa} launch alerts, stack: {JoinLines(jStack)})");
+            EventGate(OnAim(hRet) && OnAim(jRet), "LAN/SuperweaponLaunched",
+                      $"a reticle stands on the aim point on BOTH screens (host {hRet}, joiner {jRet}, clicked {ax:0.0},{az:0.0})");
+            bool impact = false;
+            for (int t = 0; t < 150 && launch != null && !impact; t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                impact = TickHad(hw, ev => ev.Type == GameEventType.SuperweaponImpact && ev.A == sw);
+            }
+            // Only once it has stood: a reticle never laid is also absent.
+            EventGate(hRet != null && jRet != null && impact && host.StrikeReticleAt(sw) == null && join.StrikeReticleAt(sw) == null,
+                      "LAN/SuperweaponImpact", $"...and comes down with the impact on both (impact {impact})");
+        }
+        else EventGate(false, "LAN/SuperweaponLaunched", "quiet ground for the joiner's weapon and the aim point (none: a fixture failure)");
+
+        EventGate(host.CurrentTick == join.CurrentTick && host.StateHash == join.StateHash && !relay.DesyncDetected, "LAN",
+                  $"...and the fixtures placed on both worlds left them ONE world: identical hashes at tick {host.CurrentTick} "
+                  + $"(0x{host.StateHash:X16} and 0x{join.StateHash:X16}) and no desync at the relay");
     }
 
     /// <summary>The closing check: every GameEventType has a stage or a whole
@@ -4615,6 +4892,101 @@ public partial class VerifyRunner : Node
     }
 
     /// <summary>
+    /// C7b-iii's pair, shared since P8-58 with the LAN event stage and the
+    /// spectator stage: a relay and two real battle scenes, each a lockstep
+    /// client of it, on skirmish-02 unless a map and its seat count are given
+    /// (skirmish-09 at four seats is the real lobby's four-seat match: two
+    /// peers, and each scene hands the seats above them to commanders). The
+    /// host's setup blob carries the seed, so the client handed a DELIBERATELY
+    /// WRONG seed must build the host's world from the Hello instead (ADR-022).
+    /// Each scene is handed its own client's PlayerId as its seat, the rule
+    /// MainMenu's join path ships, so a peer's orders are stamped with the seat
+    /// its scene believes it holds whichever thread the relay accepted first;
+    /// the pair is returned with relay seat 0 as the host and seat 1 as the
+    /// joiner. Throws if the clients do not connect, for the caller's catch,
+    /// having first stopped the relay and closed any client that did connect,
+    /// because a caller that catches the throw holds nothing to clean up.
+    /// </summary>
+    private (Ferrostorm.Net.Relay Relay, Ferrostorm.Net.LockstepClient HostClient, Ferrostorm.Net.LockstepClient JoinClient,
+        SkirmishLive Host, SkirmishLive Join) ConnectLanPair(ulong seed, string mapPath = "data/maps/skirmish-02.fmap",
+        int seats = 2)
+    {
+        var setup = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, seed);
+        var relay = new Ferrostorm.Net.Relay(playerCount: 2, setup: setup);
+        relay.Start();
+        Ferrostorm.Net.LockstepClient? bySeed = null, byBlob = null;
+        try
+        {
+            var relayThread = new System.Threading.Thread(relay.Run) { IsBackground = true };
+            relayThread.Start();
+
+            Ferrostorm.Sim.World BuildFrom(ulong s)
+            {
+                var map = Ferrostorm.Sim.MapData.Load(GameFiles.Abs(mapPath));
+                var w = map.BuildWorld(s, players: seats, out _, SkirmishLive.RegisterCatalogue);
+                map.PlaceSkirmishStart(w, 8000);
+                return w;
+            }
+
+            SkirmishLive Seat(Ferrostorm.Net.LockstepClient client)
+            {
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.LocalSeat = client.PlayerId;
+                SkirmishLive.PendingNet = client;
+                MatchConfig.MapPath = GameFiles.Abs(mapPath);
+                var sc = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(sc);
+                return sc;
+            }
+
+            // Both clients are constructed CONCURRENTLY, on their own threads.
+            // The relay accepts every player before it sends a single Hello, and
+            // a LockstepClient's constructor blocks reading that Hello, so
+            // building them one after another on this thread deadlocks: the
+            // first waits for a Hello that cannot come until the second
+            // connects. Worth knowing for the real Host and Join flow too - a
+            // host cannot construct its own client inline and then wait for a
+            // joiner on the same thread.
+            System.Exception? connectError = null;
+            var seedThread = new System.Threading.Thread(() =>
+            {
+                try { bySeed = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, seed); }
+                catch (System.Exception e) { connectError = e; }
+            });
+            var blobThread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    // Handed a DELIBERATELY WRONG seed: it must build from the
+                    // Hello's setup blob instead (ADR-022).
+                    byBlob = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, 999999UL, null,
+                        blob => BuildFrom(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob)));
+                }
+                catch (System.Exception e) { connectError = e; }
+            });
+            seedThread.Start(); blobThread.Start();
+            seedThread.Join(15000); blobThread.Join(15000);
+            if (connectError != null) throw connectError;
+            if (bySeed == null || byBlob == null) throw new System.Exception("clients did not connect in time");
+            var (hostClient, joinClient) = bySeed.PlayerId == 0 ? (bySeed, byBlob) : (byBlob, bySeed);
+            var host = Seat(hostClient);
+            var join = Seat(joinClient);
+            return (relay, hostClient, joinClient, host, join);
+        }
+        catch
+        {
+            // Started here, so stopped here: the relay's listener, and the
+            // socket of any client that connected, which is what ends the
+            // relay's pump threads once a match has begun.
+            relay.Stop();
+            bySeed?.Dispose();
+            byBlob?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// C7b-iii acceptance: TWO REAL BATTLE SCENES playing each other over an
     /// in-process relay. Not the net layer in isolation, which the sim runner
     /// already soaks - the actual SkirmishLive frame path, both seats, through
@@ -4626,69 +4998,9 @@ public partial class VerifyRunner : Node
     private void RunLanChecks()
     {
         GD.Print("  --    LAN: two battle scenes over an in-process relay");
-        // The host's setup blob carries the seed, so the joiner builds the
-        // host's world rather than one it was told about out of band (ADR-022).
-        const ulong seed = 4242UL;
-        var setup = new byte[8];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(setup, seed);
-        var relay = new Ferrostorm.Net.Relay(playerCount: 2, setup: setup);
-        relay.Start();
-        var relayThread = new System.Threading.Thread(relay.Run) { IsBackground = true };
-        relayThread.Start();
-
-        Ferrostorm.Sim.World BuildFrom(ulong s)
-        {
-            var map = Ferrostorm.Sim.MapData.Load(GameFiles.Abs("data/maps/skirmish-02.fmap"));
-            var w = map.BuildWorld(s, players: 2, out _, SkirmishLive.RegisterCatalogue);
-            map.PlaceSkirmishStart(w, 8000);
-            return w;
-        }
-
-        SkirmishLive Seat(int seat, Ferrostorm.Net.LockstepClient client)
-        {
-            SkirmishLive.AutoStep = false;
-            SkirmishLive.LocalSeat = seat;
-            SkirmishLive.PendingNet = client;
-            MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-02.fmap");
-            var sc = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
-            AddChild(sc);
-            return sc;
-        }
-
         try
         {
-            // Both clients are constructed CONCURRENTLY, on their own threads.
-            // The relay accepts every player before it sends a single Hello, and
-            // a LockstepClient's constructor blocks reading that Hello, so
-            // building them one after another on this thread deadlocks: the
-            // first waits for a Hello that cannot come until the second
-            // connects. Worth knowing for the real Host and Join flow too - a
-            // host cannot construct its own client inline and then wait for a
-            // joiner on the same thread.
-            Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
-            System.Exception? connectError = null;
-            var hostThread = new System.Threading.Thread(() =>
-            {
-                try { hostClient = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, seed); }
-                catch (System.Exception e) { connectError = e; }
-            });
-            var joinThread = new System.Threading.Thread(() =>
-            {
-                try
-                {
-                    // Handed a DELIBERATELY WRONG seed: it must build from the
-                    // Hello's setup blob instead (ADR-022).
-                    joinClient = new Ferrostorm.Net.LockstepClient(relay.Port, BuildFrom, 999999UL, null,
-                        blob => BuildFrom(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(blob)));
-                }
-                catch (System.Exception e) { connectError = e; }
-            });
-            hostThread.Start(); joinThread.Start();
-            hostThread.Join(15000); joinThread.Join(15000);
-            if (connectError != null) throw connectError;
-            if (hostClient == null || joinClient == null) throw new System.Exception("clients did not connect in time");
-            var host = Seat(0, hostClient);
-            var join = Seat(1, joinClient);
+            var (relay, hostClient, joinClient, host, join) = ConnectLanPair(4242UL);
 
             Check(host.IsNetworked && join.IsNetworked, "both scenes are running as lockstep clients");
             Check(host.LocalPlayerId == 0 && join.LocalPlayerId == 1, "the two scenes took OPPOSITE seats");
@@ -4787,9 +5099,159 @@ public partial class VerifyRunner : Node
             Check(false, $"the LAN match threw: {ex.Message}");
         }
 
+        RunLanSpectatorStage();
         RunLobbyChecks();
         RunDifficultyChecks();
         RunTeamChecks();
+    }
+
+    /// <summary>
+    /// P8-58: A PEER ELIMINATED FROM A LAN MATCH THAT GOES ON STAYS IN LOCKSTEP
+    /// AS A SPECTATOR. Once the networked tick ran the full post-step sweep, its
+    /// PlayerEliminated arm showed the eliminated peer its verdict, and the
+    /// verdict stops the sim: that peer stopped advancing, so it stopped
+    /// submitting, and the relay, which broadcasts a tick only once it holds
+    /// every peer's batch, starved the other peer's match for good with nothing
+    /// on its screen. A two-seat pair cannot see it, because there an
+    /// elimination always names the winner and both peers halt together; it
+    /// needs the real lobby's four-seat match, two peers on skirmish-09 with a
+    /// commander in each seat above them, as a free-for-all, so the joiner can
+    /// fall while three commanders fight on. The joiner loses everything on
+    /// both worlds at one tick (Alive false on all of its entities), then both
+    /// frame loops are driven on: the survivor must play on, the spectator must
+    /// keep advancing and submitting empty batches (an order queued on it
+    /// included), its notice must name the way out, and the two worlds must
+    /// still hash alike across the relay's hash exchange. Leaving by that way
+    /// out must close its connection so the survivor is told rather than
+    /// frozen. Proved to bite with the offline verdict restored on the net path.
+    /// </summary>
+    private void RunLanSpectatorStage()
+    {
+        GD.Print("  --    LAN (P8-58): a peer eliminated from a match that goes on stays in lockstep as a spectator");
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            MatchConfig.TeamMode = MatchSetup.TeamsFreeForAll;
+            MatchConfig.Seats = 0;                 // fill the map: four seats
+            // The smoke test's departure is still latched in the session, and
+            // this stage asserts a departure of its own.
+            Ferrostorm.Client.NetSession.Reset();
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(6565UL, "data/maps/skirmish-09.fmap", seats: 4);
+            RunLanSpectatorChecks(relay, hostClient, joinClient, host, join);
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"lanspectate: the LAN match threw: {ex.Message}");
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.Seats = wasSeats;
+            host?.QueueFree();
+            join?.QueueFree();
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    private void RunLanSpectatorChecks(Ferrostorm.Net.Relay relay, Ferrostorm.Net.LockstepClient hostClient,
+        Ferrostorm.Net.LockstepClient joinClient, SkirmishLive host, SkirmishLive join)
+    {
+        var hw = host.LiveWorld;
+        var jw = join.LiveWorld;
+        int hs = host.LocalPlayerId, js = join.LocalPlayerId;
+        bool four = host.IsNetworked && join.IsNetworked && hs == 0 && js == 1
+                    && hw.PlayerCount == 4 && jw.PlayerCount == 4
+                    && hostClient.AiCommanders.Count == 2 && joinClient.AiCommanders.Count == 2
+                    && host.IsHostileSeat(js) && join.IsHostileSeat(hs);
+        Check(four, $"lanspectate: precondition: two peers on skirmish-09, in seats {hs} and {js} of {hw.PlayerCount} and hostile, "
+                    + $"with a commander in each of the {hostClient.AiCommanders.Count} seats above them on both peers");
+        if (!four) return;
+        hostClient.Prime();
+        joinClient.Prime();
+        bool warm = true;
+        for (int t = 0; t < 5 && warm; t++) warm = LanStepBoth(host, join);
+        Check(warm && host.StateHash == join.StateHash,
+              $"lanspectate: precondition: both peers advance together and hold one world (tick {host.CurrentTick} and {join.CurrentTick})");
+        if (!warm) return;
+
+        // The joiner loses everything it holds, on both worlds at the same tick.
+        int removed = 0;
+        for (int i = 0; i < hw.EntityCount; i++)
+            if (hw.Entities[i].Alive && hw.Entities[i].PlayerId == js)
+            {
+                RemoveFixture(hw, i);
+                RemoveFixture(jw, i);
+                removed++;
+            }
+        int news0 = host.EliminationNotices;
+        bool eliminated = LanStepBoth(host, join)
+                          && TickHad(hw, ev => ev.Type == GameEventType.PlayerEliminated && ev.B == js)
+                          && TickHad(jw, ev => ev.Type == GameEventType.PlayerEliminated && ev.B == js);
+        Check(eliminated && hw.Winner < 0 && jw.Winner < 0,
+              $"lanspectate: precondition: the joiner, stripped of all {removed} of its entities, is eliminated on both worlds "
+              + $"on one tick and the match goes on (winner {hw.Winner} and {jw.Winner})");
+        if (!eliminated) return;
+
+        string cancelKey = Settings.KeyName(Settings.BindOf("cancel"));
+        string notice = join.SpectateNoticeTextForTest;
+        Check(join.SpectatingForTest && !join.MatchOverForTest && join.SpectateNoticeVisibleForTest
+              && notice.StartsWith("ELIMINATED: SPECTATING") && notice.Contains($"press {cancelKey}") && !join.BannerVisibleForTest,
+              $"lanspectate: the eliminated joiner is told it is out and spectating, by a notice that names the way out and stops "
+              + $"nothing (\"{notice.Replace("\n", " / ")}\", match over {join.MatchOverForTest}, banner {join.BannerVisibleForTest})");
+        Check(!host.SpectatingForTest && !host.MatchOverForTest && host.EliminationNotices == news0 + 1,
+              $"lanspectate: ...while the host, still in the war, is told an enemy commander is out and plays on "
+              + $"(\"{host.ToastText}\", spectating {host.SpectatingForTest}, match over {host.MatchOverForTest})");
+
+        // Both frame loops driven on, with an order queued on the spectator
+        // that must never reach the relay.
+        int b0 = join.NetBatchesSubmittedForTest, c0 = join.NetCommandsSubmittedForTest;
+        int h0 = host.CurrentTick, j0 = join.CurrentTick;
+        join.QueueCommandForTest(CommandType.Stop, 0, 0);
+        const int onward = 40;
+        for (int t = 0; t < onward; t++)
+            if (!LanStepBoth(host, join)) break;
+        int hAdv = host.CurrentTick - h0, jAdv = join.CurrentTick - j0;
+        int batches = join.NetBatchesSubmittedForTest - b0, commands = join.NetCommandsSubmittedForTest - c0;
+        Check(hAdv >= 30 && !relay.DesyncDetected,
+              $"lanspectate: the surviving host plays on after the joiner is eliminated: {hAdv} of {onward} ticks "
+              + $"(at least 30 wanted), with no desync at the relay");
+        Check(jAdv == hAdv && batches >= jAdv && batches > 0,
+              $"lanspectate: ...because the spectating joiner keeps advancing ({jAdv} ticks) and submitting ({batches} batches)");
+        Check(batches > 0 && commands == 0,
+              $"lanspectate: ...and issues no command: every batch it sent was empty, the order queued on it included "
+              + $"({commands} commands in {batches} batches)");
+        Check(jAdv > 0 && host.CurrentTick == join.CurrentTick && host.StateHash == join.StateHash && !relay.DesyncDetected,
+              $"lanspectate: ...and its world still hashes as the survivor's: identical at tick {host.CurrentTick} "
+              + $"(0x{host.StateHash:X16} and 0x{join.StateHash:X16}), the relay comparing the peers' hashes every "
+              + $"{Ferrostorm.Net.LockstepClient.HashInterval} ticks and seeing no desync");
+        Check(join.SpectatingForTest && !join.MatchOverForTest && join.SpectateNoticeVisibleForTest,
+              "lanspectate: ...and it is still spectating, its notice still up");
+
+        // The way out the notice names: the cancel key leaves for the menu,
+        // and leaving closes the spectator's connection, so the relay tells
+        // the survivor the usual way.
+        int left = 0;
+        join.LeaveForMenuForTest = () => left++;
+        join.PressKey(Settings.BindOf("cancel"));
+        join.LeaveForMenuForTest = null;
+        int waited = 0;
+        while (!host.MatchNoticeVisible && waited++ < 5000)
+        {
+            host.StepTicks(1);            // the drain keeps polling; it just stops advancing
+            host.PumpFrameForTest();      // the notice is raised from the frame, not the tick
+            System.Threading.Thread.Sleep(1);
+        }
+        Check(left == 1, $"lanspectate: the key the notice names ({cancelKey}) leaves for the menu ({left} departure)");
+        Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
+              $"lanspectate: ...and leaving closes the spectator's connection, so the survivor is told the other commander "
+              + $"left rather than left frozen (\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
     }
 
     /// <summary>
