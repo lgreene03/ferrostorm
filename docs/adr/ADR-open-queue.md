@@ -217,6 +217,6 @@ the same commit.
   launching against 36), and the frames are level on ADR-075's C7 measure at
   that stage, so it waits for the frame judgement P8-53's landing triggers.
   Signed off with conditions by the Architect on 2026-10-06 (the ADR's
-  "Architect sign-off" section); C1 to C7 are met by route A in the ADR-076
-  pull request from branch claude/p8-62-63-half-turn, whose number is
-  recorded here when it is opened, and it is ratified under D5, D36 and D37.
+  "Architect sign-off" section); C1 to C7 are met by route A in pull request 166
+  (branch claude/p8-62-63-start, rebased from claude/p8-62-63-half-turn),
+  and it is ratified under D5, D36 and D37.
