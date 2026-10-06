@@ -79,6 +79,9 @@ public partial class SkirmishLive : Node3D
     /// closed its connection (CloseNetSession), so no tick submits or polls
     /// again.</summary>
     private bool _netClosed;
+    /// <summary>P8-65 verification read: how many times CloseNetSession got
+    /// past its latch and disposed the connection (never more than once).</summary>
+    private int _netCloses;
     /// <summary>P8-58 verification reads: every batch this peer has sent the
     /// relay and every command those batches carried, counted at the one place
     /// a batch is sent.</summary>
@@ -445,6 +448,16 @@ public partial class SkirmishLive : Node3D
     /// so the actor shrinks into its Carrier rather than sinking like the dead.
     /// Pruned as the actor goes.</summary>
     private readonly HashSet<int> _boardedIds = new();
+    /// <summary>P8-59: every entity that DIED (a Died event) while its actor
+    /// stands, so a dead unit's actor is retired as W2-06's tumbling corpse.
+    /// Kept from the event, like _boardedIds, because SyncActors retires an
+    /// actor only once its entity has left the living view, where neither
+    /// "dead" nor "mobile" can be read any more: `_latest` is rebuilt from
+    /// LIVING entities, which is how every death came to take the structure's
+    /// sink. A mobile that leaves without dying (an MCV unpacking, which the
+    /// sim reports as Deployed) is not a corpse and keeps the sink it had.
+    /// Pruned as the actor goes.</summary>
+    private readonly HashSet<int> _diedIds = new();
     /// <summary>The radar's three faces. Offline wins over Jammed: with no
     /// uplink, or no power for it, the map is dark for a reason in your own
     /// base, and a jam on top changes nothing you can act on.</summary>
@@ -463,6 +476,12 @@ public partial class SkirmishLive : Node3D
     /// <summary>Actors retired as boarders (shrunk into their Carrier), counted
     /// in SyncActors.</summary>
     public int Boardings { get; private set; }
+    /// <summary>P8-59: actors retired as tumbling corpses (dead units and
+    /// harvesters, W2-06), and actors retired by sinking (structures, and
+    /// anything else that leaves the view without dying or boarding), counted
+    /// in SyncActors where each retirement path starts.</summary>
+    public int CorpseTumbles { get; private set; }
+    public int Sinkings { get; private set; }
     // TICKET-P5-REP-06: mass-repair confirmation, the sell-guard shape.
     // -1 means no confirmation is pending.
     private double _repairConfirmUntil = -1;
@@ -743,10 +762,11 @@ public partial class SkirmishLive : Node3D
                         2 => SkirmishAI.Turtle(seat, rung, _world),
                         _ => SkirmishAI.Standard(seat, rung, _world),
                     });
-                // Deliberately NOT added to _commanders, which RunOneTick walks:
-                // a networked tick never calls RunOneTick, and a commander sitting
-                // in both places is one Act away from issuing every order twice
-                // the day the two paths meet.
+                // Deliberately NOT added to _commanders, which the pre-step
+                // client work walks on BOTH tick paths since P8-65 met them
+                // (PreStepClientWork): the lockstep client already Acts for
+                // these seats, so a commander sitting in both places would issue
+                // every order twice. _commanders stays empty in a LAN scene.
                 if (netCommanders.Count > 0) _net.SetAiCommanders(netCommanders);
                 // Brutal's handicap, and WHICH SEATS GET IT is the whole care
                 // here. The offline arm above grants it to every seat that is not
@@ -1163,8 +1183,17 @@ public partial class SkirmishLive : Node3D
         FinishRecording();
         MatchConfig.ApplyFrom(meta);
         MatchConfig.LoadPath = GameFiles.SlotSave(slot);
+        if (LoadSceneForTest is { } load) { load(); return; }
         GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
     }
+
+    /// <summary>P8-65 verification seam, the LeaveForMenuForTest idiom for the
+    /// load path: when set, loading calls this instead of changing scene,
+    /// because the harness IS the running scene. The harness hands it what a
+    /// scene change does to this scene, taking it out of the tree, so a check
+    /// proves that _ExitTree closes a LAN session left by LOAD GAME. Null in
+    /// every played game; nothing in the client ever sets it.</summary>
+    public System.Action? LoadSceneForTest;
 
     public void QuitToMenu()
     {
@@ -1193,6 +1222,7 @@ public partial class SkirmishLive : Node3D
     {
         if (_net == null || _netClosed || _matchOver) return;
         _netClosed = true;
+        _netCloses++;
         _net.Dispose();
     }
 
@@ -1210,6 +1240,16 @@ public partial class SkirmishLive : Node3D
     public override void _ExitTree()
     {
         FinishRecording();
+        // P8-65: and a LAN match left by ANY path closes this peer's
+        // connection, not only the one QuitToMenu takes. LOAD GAME (the pause
+        // menu stays open over a LAN battle, and its load page is reachable
+        // there) changed scene with the lockstep client still open, so the
+        // relay went on waiting for a batch that would never come and the
+        // other peer froze with nothing on screen, which is what P8-58 fixed
+        // for the menu path alone. A scene change takes this scene out of the
+        // tree whichever way it was asked for, so the backstop is here. Safe
+        // after QuitToMenu has already closed it: CloseNetSession latches.
+        CloseNetSession();
         Input.SetCustomMouseCursor(null);
     }
 
@@ -1881,45 +1921,7 @@ public partial class SkirmishLive : Node3D
         // applied on, which is the world's tick BEFORE the step - the same
         // convention the runner's replay gate records and replays under.
         int recTick = _world.Tick;
-        AutoResumeHarvesters();
-        _tickCmds.Clear();
-        if (_replay != null)
-        {
-            // Playback: the stream is the only source of orders. Clicks still
-            // select and the camera still flies, so a replay can be watched, but
-            // nothing a spectator does reaches the sim.
-            _tickCmds.AddRange(_replay.CommandsFor(recTick));
-            _pending.Clear();
-        }
-        else
-        {
-            // Ascending seat order, which is the order they were built in.
-            // Their orders share one command stream and a replay re-runs
-            // that stream, so the order is part of the recording.
-            foreach (var commander in _commanders) commander.Act(_world, _tickCmds);
-            _tickCmds.AddRange(_pending);
-            _pending.Clear();
-            // Record what the AI and the player decided, restamped with the tick
-            // they are about to be applied on: the player's commands are all
-            // built with tick 0 (nothing in the sim reads Command.Tick, and
-            // ComputeStateHash does not hash it), so the field is free for the
-            // replay to bucket on and useless for anything else.
-            if (_rec != null)
-                foreach (var c in _tickCmds)
-                    _rec.Record(new Command(recTick, c.PlayerId, c.Type, c.EntityId, c.X, c.Y, c.AuxId, c.Queued));
-        }
-        // Mission commands are NEVER recorded: the same MissionRunner re-derives
-        // them from the same world during playback, and recording them as well
-        // would issue every scripted assault twice. They are appended last, so
-        // live order and playback order are the same order.
-        _tickCmds.AddRange(_missionCmds);
-        _missionCmds.Clear();
-        // TICKET-P5-SPAWN-02: remember own Deploys so their outcome can be
-        // reported after the step. The sim decides a Deploy inside this very
-        // Step, so the verdict below is never more than one tick stale.
-        foreach (var c in _tickCmds)
-            if (c.Type == CommandType.Deploy && c.PlayerId == LocalPlayerId)
-                _pendingDeploys[c.EntityId] = recTick;
+        PreStepClientWork(recTick);
         var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_tickCmds);
         // P8-11 verification hook: a fault thrown where the sim's own would be,
         // after this tick's orders are recorded and before the world steps, on
@@ -1929,6 +1931,81 @@ public partial class SkirmishLive : Node3D
         PreStepCapture();
         _world.Step(span);
         PostStepSweep();
+    }
+
+    /// <summary>
+    /// P8-65: THE PRE-STEP CLIENT WORK, the one method both tick paths call to
+    /// gather the orders a tick carries: RunOneTick before its own Step, and the
+    /// networked path once per tick, immediately before it submits this peer's
+    /// batch (AdvanceOneTickUncontained). It used to be the head of RunOneTick,
+    /// which a LAN tick never calls, so a LAN player's idle harvesters were
+    /// never auto-resumed and a refused Deploy was never told: the SPAWN-02
+    /// watcher armed only from the offline stream, so the deploy verdicts in
+    /// the shared post-step sweep never had anything to decide. Everything here
+    /// runs in the order the offline tick always ran it: the auto-resume (whose
+    /// Harvest orders join _pending, so on the net path they ride THIS tick's
+    /// batch as the peer's own, stamped with LocalPlayerId and sent before the
+    /// poll), then the orders themselves (the recorded stream in playback,
+    /// otherwise the commanders and then the player's queue, recorded), then
+    /// the mission's, then the deploy watcher. On the net path the playback,
+    /// commander, recording and mission arms are no-ops rather than branches
+    /// around them, as in P8-58's post-step sweep: a LAN scene plays no replay,
+    /// records nothing, builds no MissionRunner and keeps its commanders inside
+    /// the lockstep client, so what is left is the player's queue, which is
+    /// exactly the batch the net path always submitted. A LAN spectator's queue
+    /// is dropped (P8-58): it owns nothing, so its orders could only be
+    /// refused, and what the relay needs from it is the empty batch itself.
+    ///
+    /// <paramref name="appliesOn"/> is the tick the gathered orders execute on:
+    /// the world's tick offline, where the Step that follows applies them, and
+    /// that tick plus LockstepClient.CommandDelay on the net path, where the
+    /// lockstep client schedules a submitted batch. The recording buckets on it
+    /// and the deploy watcher waits for it, so a LAN Deploy is judged after the
+    /// step that applied it and never the CommandDelay steps before. The orders
+    /// are left in _tickCmds.
+    /// </summary>
+    private void PreStepClientWork(int appliesOn)
+    {
+        AutoResumeHarvesters();
+        _tickCmds.Clear();
+        if (_replay != null)
+        {
+            // Playback: the stream is the only source of orders. Clicks still
+            // select and the camera still flies, so a replay can be watched, but
+            // nothing a spectator does reaches the sim.
+            _tickCmds.AddRange(_replay.CommandsFor(appliesOn));
+            _pending.Clear();
+        }
+        else
+        {
+            // Ascending seat order, which is the order they were built in.
+            // Their orders share one command stream and a replay re-runs
+            // that stream, so the order is part of the recording.
+            foreach (var commander in _commanders) commander.Act(_world, _tickCmds);
+            if (!_spectating) _tickCmds.AddRange(_pending);
+            _pending.Clear();
+            // Record what the AI and the player decided, restamped with the tick
+            // they are about to be applied on: the player's commands are all
+            // built with tick 0 (nothing in the sim reads Command.Tick, and
+            // ComputeStateHash does not hash it), so the field is free for the
+            // replay to bucket on and useless for anything else.
+            if (_rec != null)
+                foreach (var c in _tickCmds)
+                    _rec.Record(new Command(appliesOn, c.PlayerId, c.Type, c.EntityId, c.X, c.Y, c.AuxId, c.Queued));
+        }
+        // Mission commands are NEVER recorded: the same MissionRunner re-derives
+        // them from the same world during playback, and recording them as well
+        // would issue every scripted assault twice. They are appended last, so
+        // live order and playback order are the same order.
+        _tickCmds.AddRange(_missionCmds);
+        _missionCmds.Clear();
+        // TICKET-P5-SPAWN-02: remember own Deploys so their outcome can be
+        // reported after the step that applies them: offline the very next
+        // Step, in LAN the step for appliesOn. Either way the verdict in the
+        // post-step sweep is never more than one tick stale.
+        foreach (var c in _tickCmds)
+            if (c.Type == CommandType.Deploy && c.PlayerId == LocalPlayerId)
+                _pendingDeploys[c.EntityId] = appliesOn;
     }
 
     /// <summary>
@@ -1958,7 +2035,8 @@ public partial class SkirmishLive : Node3D
     /// offline tick always ran it. The mission and playback arms are no-ops on
     /// the net path rather than branches around it: a LAN scene builds no
     /// MissionRunner and plays back no replay, so _mission and _replay are null
-    /// there, and its deploy watcher holds nothing because nothing arms it.
+    /// there. Its deploy watcher is armed by the shared pre-step work
+    /// (PreStepClientWork, P8-65) for the tick a submitted Deploy executes on.
     /// </summary>
     private void PostStepSweep()
     {
@@ -2074,6 +2152,8 @@ public partial class SkirmishLive : Node3D
             // harvesters are the "unit lost" of the classic genre.
             if (ev.Type == GameEventType.Died && ev.A >= 0 && ev.A < _world.EntityCount)
             {
+                // P8-59: its actor is retired as a death (SyncActors).
+                if (_actors.ContainsKey(ev.A)) _diedIds.Add(ev.A);
                 var fallen = _world.Entities[ev.A];
                 if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
                     PlayVo("vo_unit_lost");
@@ -2539,15 +2619,19 @@ public partial class SkirmishLive : Node3D
         // after the step that applied the order, the deploy was refused and
         // the player is told why. An MCV that is no longer a live MCV either
         // deployed (Deployed consumed it) or died, and neither needs this
-        // toast. The watcher arms above on any player-0 Deploy in the applied
-        // stream rather than on an issue path, which is why the deploy key and
-        // the double-click (TICKET-P5-SPAWN-03) inherited it without wiring.
+        // toast. The watcher arms in PreStepClientWork on any own Deploy in the
+        // gathered stream rather than on an issue path, which is why the deploy
+        // key and the double-click (TICKET-P5-SPAWN-03) inherited it without
+        // wiring, and why a LAN Deploy (P8-65) is watched exactly as an
+        // offline one is.
         if (_pendingDeploys.Count > 0)
         {
             List<int>? decided = null;
             foreach (var (mcv, at) in _pendingDeploys)
             {
-                if (_world.Tick <= at) continue;   // verdict tick not reached (never in practice)
+                // Verdict tick not reached: never offline, and in LAN for the
+                // CommandDelay steps before the batch carrying it executes.
+                if (_world.Tick <= at) continue;
                 bool stillMcv = mcv >= 0 && mcv < _world.EntityCount
                     && _world.Entities[mcv].Alive
                     && _world.Entities[mcv].Kind == EntityKind.Unit
@@ -3706,8 +3790,8 @@ public partial class SkirmishLive : Node3D
     /// a free-for-all where a person falls first, or even sides where one falls
     /// while their commander teammate fights on). So the eliminated peer stays
     /// in lockstep as a SPECTATOR. It keeps advancing and submits empty batches
-    /// (it owns nothing, and AdvanceOneTickUncontained drops whatever it
-    /// queues), and its defeat is a notice that stops nothing. Its match ends
+    /// (it owns nothing, and PreStepClientWork drops whatever it queues), and
+    /// its defeat is a notice that stops nothing. Its match ends
     /// only when the match itself ends, through EndMatch, which the sweep runs
     /// before the events, so a tick that both eliminates me and names the
     /// winner closes the match rather than starting a spectator; or when the
@@ -4396,14 +4480,18 @@ public partial class SkirmishLive : Node3D
                 // structures sink. Both free themselves via the tween.
                 // P8-10: a squad that BOARDED is not dead, so it neither tumbles
                 // nor sinks: it shrinks away into its Carrier in a quarter second.
-                // (Found, not fixed here, P8-59: `_latest` is rebuilt above from
-                // LIVING entities only, so `wasMobile` is never true for a dead
-                // unit and every death takes the sink branch; the W2-06 tumble
-                // below is unreachable. The boarder's path keys off _boardedIds,
-                // filled from the Boarded event, instead.)
+                // P8-59: a dead unit tumbles, which is decided from the Died
+                // event (_diedIds) and the entity's own kind in the world,
+                // never from `_latest`, which the loop above rebuilt from
+                // LIVING entities only: read there, no dead unit was ever
+                // mobile, every death took the sink branch and the tumble was
+                // unreachable. The boarder's path keys off _boardedIds, filled
+                // from the Boarded event, and comes first; anything else that
+                // leaves the view (a structure, or an MCV that unpacked) sinks.
                 var corpse = _actors[id];
-                bool wasMobile = _latest.TryGetValue(id, out var lastV) && Mobile(lastV.Kind);
                 bool boarded = _boardedIds.Remove(id);
+                bool died = _diedIds.Remove(id);
+                bool deadUnit = died && id < _world.EntityCount && Mobile(_world.Entities[id].Kind);
                 var tw = corpse.CreateTween();
                 if (boarded)
                 {
@@ -4411,8 +4499,9 @@ public partial class SkirmishLive : Node3D
                     tw.TweenProperty(corpse, "scale", Vector3.One * 0.1f, 0.25f)
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
                 }
-                else if (wasMobile)
+                else if (deadUnit)
                 {
+                    CorpseTumbles++;
                     var rng = new System.Random(id);
                     var tumble = corpse.Rotation + new Vector3(
                         ((float)rng.NextDouble() - 0.5f) * 1.6f,
@@ -4428,6 +4517,7 @@ public partial class SkirmishLive : Node3D
                 }
                 else
                 {
+                    Sinkings++;
                     tw.TweenProperty(corpse, "position",
                         corpse.Position + new Vector3(0, -0.9f, 0), 1.1f)
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
@@ -4459,7 +4549,17 @@ public partial class SkirmishLive : Node3D
         {
             if (!_targets.TryGetValue(id, out var t)) continue;
             var to = t - node.Position;
-            node.Position = node.Position.Lerp(t, dt * 10f);
+            // P8-57: the weight is capped at 1, so a long frame lands on the
+            // target instead of past it. Uncapped, dt * 10 above 1 overshot and
+            // above 2 multiplied the distance still to go by (dt * 10 - 1) every
+            // frame, so a frame rate under five a second diverged: in the long
+            // match (one-second frames, a weight of 10) harvester 136 set off
+            // at tick 420 and its distance from its target grew ninefold a
+            // frame until the length overflowed, the hull pitch below read
+            // infinity minus infinity and its rotation went NaN at tick 750,
+            // and every tracer fired from or at a poisoned actor inherited it.
+            // Every frame shorter than 100 ms moves exactly as before.
+            node.Position = node.Position.Lerp(t, Mathf.Min(dt * 10f, 1f));
             // W4-16: tyre-track decals behind vehicles. Infantry (2/3/11,
             // plus the untyped starting squads at 0) leave none. Hidden
             // enemy movement prints nothing (node.Visible carries the
@@ -5858,6 +5958,21 @@ public partial class SkirmishLive : Node3D
     public AlertService AlertsView => _alerts;
     public SuperweaponGauge SuperweaponGaugeView => _swGauge;
     public int DeathBursts => _effects.DeathBursts;
+    /// <summary>P8-57 verification seam: one tracer through the live effects
+    /// layer's real SpawnTracer (CombatEffects.TracerForTest).</summary>
+    public Transform3D? TracerForTest(Vector3 from, Vector3 to) => _effects.TracerForTest(from, to);
+    /// <summary>P8-57 verification read: how many actors' transforms are not
+    /// finite right now, read off the nodes themselves, so a stage catches a
+    /// poisoned actor whether or not the engine happens to report it while
+    /// the stage is still watching (its transform notifications are flushed
+    /// at the end of the frame, after a single-frame harness has moved on).</summary>
+    public int NonFiniteActorsForTest()
+    {
+        int n = 0;
+        foreach (var node in _actors.Values)
+            if (!node.Transform.IsFinite()) n++;
+        return n;
+    }
     public Vector3? StrikeReticleAt(int launcherId) => _effects.StrikeReticleAt(launcherId);
     /// <summary>SFX requests by name (AudioDirector.PlayRequests).</summary>
     public int AudioRequests(string name) => _audio.PlayRequests(name);
@@ -6594,6 +6709,14 @@ public partial class SkirmishLive : Node3D
     public string SpectateNoticeTextForTest => _spectateNotice.Text;
     public int NetBatchesSubmittedForTest => _netBatchesSubmitted;
     public int NetCommandsSubmittedForTest => _netCommandsSubmitted;
+    // ---- P8-65 verification surface.
+    /// <summary>How many times this scene actually closed its LAN connection,
+    /// so a check can prove a second close is a no-op rather than infer it.</summary>
+    public int NetSessionClosesForTest => _netCloses;
+    /// <summary>Has this scene's auto-resume ever ordered this harvester back
+    /// to work? The rate-limit record itself, so a check reads which peer
+    /// issued the order rather than inferring it from the shared world.</summary>
+    public bool AutoHarvestedForTest(int harvesterId) => _lastAutoHarvest.ContainsKey(harvesterId);
 
     /// <summary>P8-11 verification hook: hand the LOCAL seat to a commander as
     /// well, so a long match plays AI against AI through this scene's own tick
@@ -6754,14 +6877,17 @@ public partial class SkirmishLive : Node3D
         int tick = _world.Tick;
         if (tick != _lastSubmittedTick)
         {
-            // P8-58: a spectator's batch is EMPTY. It owns nothing, so its
-            // orders could only be refused, and what the relay needs from it is
-            // the batch itself, without which no tick is broadcast to anyone.
-            IReadOnlyList<Command> batch = _spectating ? System.Array.Empty<Command>() : _pending;
-            _net.SubmitCommands(batch);
+            // P8-65: the pre-step client work, the same method the offline tick
+            // runs, once per tick and BEFORE the submit, so an idle harvester's
+            // auto-resume rides this tick's batch as this peer's own and a
+            // Deploy in it arms the watcher for the tick it executes on. P8-58:
+            // a spectator's batch is EMPTY (the method drops its queue), and the
+            // relay still needs the batch itself, without which no tick is
+            // broadcast to anyone.
+            PreStepClientWork(tick + Ferrostorm.Net.LockstepClient.CommandDelay);
+            _net.SubmitCommands(_tickCmds);
             _netBatchesSubmitted++;
-            _netCommandsSubmitted += batch.Count;
-            _pending.Clear();
+            _netCommandsSubmitted += _tickCmds.Count;
             _lastSubmittedTick = tick;
         }
         // P8-58: taken before the poll, because the poll is where the lockstep

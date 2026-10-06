@@ -32,6 +32,10 @@ public partial class VerifyRunner : Node
     private readonly List<string> _failures = new();
     private SkirmishLive _game = null!;
     private int _frame;
+    /// <summary>P8-57: the engine's own error stream, counted for the stages
+    /// that assert on it (the long match). Registered first thing in _Ready and
+    /// removed before quitting, so nothing logged at shutdown calls into it.</summary>
+    private readonly EngineLogTally _engineLog = new();
 
     private void Check(bool ok, string what)
     {
@@ -42,6 +46,7 @@ public partial class VerifyRunner : Node
     public override void _Ready()
     {
         GD.Print("verify: headless client harness");
+        OS.AddLogger(_engineLog);
         // The seat and the step mode must both be set before the scene loads.
         // AutoStep off means the sim only advances when StepTicks says so, which
         // is what lets a check measure state at an exact tick instead of racing
@@ -97,6 +102,7 @@ public partial class VerifyRunner : Node
         {
             GD.Print("verify: FAIL - the battle scene never became drivable. "
                      + $"Refusal notice: '{MainMenu.BattleRefusedNotice}'");
+            OS.RemoveLogger(_engineLog);
             GetTree().Quit(1);
             return;
         }
@@ -108,6 +114,7 @@ public partial class VerifyRunner : Node
         GD.Print(_failures.Count == 0
             ? "verify: PASS - the client was driven from the player-1 seat and read player 1 throughout"
             : $"verify: FAIL - {_failures.Count} check(s) failed");
+        OS.RemoveLogger(_engineLog);
         GetTree().Quit(_failures.Count == 0 ? 0 : 1);
     }
 
@@ -1625,6 +1632,7 @@ public partial class VerifyRunner : Node
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
         int bursts0 = g.DeathBursts, lost0 = g.VoRequests("vo_unit_lost"), boarded0 = g.Boardings;
+        int tumbles0 = g.CorpseTumbles, sinks0 = g.Sinkings;
         g.QueueCommandForTest(CommandType.LoadTransport, r1, carrier);
         g.QueueCommandForTest(CommandType.LoadTransport, r2, carrier);
         g.StepOneTick();
@@ -1636,9 +1644,11 @@ public partial class VerifyRunner : Node
         EventGate(aboard, "Boarded",
                   $"precondition: both squads boarded, which the sim now reports as Boarded and never as Died (D34; hold "
                   + $"{lw.CargoOf(carrier).Count})");
-        EventGate(aboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 2, "Boarded",
+        EventGate(aboard && g.DeathBursts == bursts0 && g.Boardings == boarded0 + 2
+                  && g.CorpseTumbles == tumbles0 && g.Sinkings == sinks0, "Boarded",
                   $"boarding a Carrier draws NO death: no flash, smoke or scorch ({g.DeathBursts - bursts0} bursts); both "
-                  + $"squads shrink into the hold rather than sinking as the dead do ({g.Boardings - boarded0})");
+                  + $"squads shrink into the hold ({g.Boardings - boarded0}) rather than tumbling as the dead do or sinking "
+                  + $"({g.CorpseTumbles - tumbles0} tumbles, {g.Sinkings - sinks0} sinkings)");
         EventGate(aboard && g.VoRequests("vo_unit_lost") == lost0 && g.ToastText == $"BOARDED: CARGO 2/{World.CarrierCapacity}",
                   "Boarded", $"...asks for no casualty line (vo_unit_lost asked {g.VoRequests("vo_unit_lost") - lost0} "
                   + $"times) and says what did happen (\"{g.ToastText}\")");
@@ -1656,6 +1666,7 @@ public partial class VerifyRunner : Node
         int gunner = SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), d.X + 2, d.Y);
         g.PumpActorsForTest();
         bursts0 = g.DeathBursts; lost0 = g.VoRequests("vo_unit_lost"); boarded0 = g.Boardings;
+        tumbles0 = g.CorpseTumbles; sinks0 = g.Sinkings;
         bool fired = false;
         float intensityAtShot = -1f;
         for (int t = 0; t < 150 && lw.Entities[victim].Alive; t++)
@@ -1674,6 +1685,33 @@ public partial class VerifyRunner : Node
                   + $"boarder ({g.Boardings - boarded0}) and asks for the casualty line ({g.VoRequests("vo_unit_lost") - lost0})");
         EventGate(fired && intensityAtShot >= 0.999f, "Fired",
                   $"a shot at my squad snaps the combat score's intensity signal to full ({intensityAtShot:0.00})");
+        // P8-59: and its actor is retired as W2-06's tumbling corpse. Every
+        // death took the structure's sink, because the retirement read the
+        // dead unit's kind from a view rebuilt from the living; P8-10 dropped
+        // the check it wanted here because, with the tumble unreachable, no
+        // corpse assertion could pass.
+        EventGate(dead && g.CorpseTumbles == tumbles0 + 1 && g.Sinkings == sinks0, "Died/corpse",
+                  $"the squad shot dead falls as a tumbling corpse rather than sinking like a building "
+                  + $"({g.CorpseTumbles - tumbles0} tumble, {g.Sinkings - sinks0} sinkings)");
+        // The structure's half: a plant of mine, left one hit from death in
+        // the gunner's reach, sinks when it is shot down and does not tumble.
+        int plant = lw.SpawnPowerPlant(me, d.X, d.Y + 1);
+        var pe = lw.Entities[plant];
+        pe.Hp = 1;
+        lw.SetEntityForTest(plant, pe);
+        g.PumpActorsForTest();
+        tumbles0 = g.CorpseTumbles; sinks0 = g.Sinkings;
+        bool razed = false;
+        for (int t = 0; t < 150 && lw.Entities[plant].Alive; t++)
+        {
+            g.StepTicks(1);
+            razed |= TickHad(lw, ev => ev.Type == GameEventType.Died && ev.A == plant);
+        }
+        g.PumpActorsForTest();
+        razed &= !lw.Entities[plant].Alive;
+        EventGate(razed && g.Sinkings == sinks0 + 1 && g.CorpseTumbles == tumbles0, "Died/corpse",
+                  $"...while a structure shot down sinks and does not tumble (razed {razed}; {g.Sinkings - sinks0} sinking, "
+                  + $"{g.CorpseTumbles - tumbles0} tumbles)");
         _eventsCovered.Add(GameEventType.Fired);
         _eventsCovered.Add(GameEventType.Died);
         RemoveFixture(lw, gunner);
@@ -1969,12 +2007,19 @@ public partial class VerifyRunner : Node
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
         int dep0 = g.DeployCues;
+        int tumbles0 = g.CorpseTumbles, sinks0 = g.Sinkings;
         g.IssueDeploy(mcv);
         g.StepOneTick();
         bool deployed = TickHad(lw, ev => ev.Type == GameEventType.Deployed && ev.A == mcv);
         EventGate(deployed, "Deployed", "precondition: the MCV unpacked");
         EventGate(deployed && g.DeployCues == dep0 + 1 && g.ToastText == "CONSTRUCTION YARD ESTABLISHED", "Deployed",
                   $"an MCV unpacking is said and heard, not only refused when it fails (\"{g.ToastText}\")");
+        // P8-59: the vehicle IS the building, so its actor sinks as the yard
+        // rises; it did not die and is not a tumbling corpse.
+        g.PumpActorsForTest();
+        EventGate(deployed && g.CorpseTumbles == tumbles0 && g.Sinkings == sinks0 + 1, "Died/corpse",
+                  $"...and an MCV that unpacks is no corpse: its actor sinks as the yard rises ({g.Sinkings - sinks0} sinking, "
+                  + $"{g.CorpseTumbles - tumbles0} tumbles)");
         _eventsCovered.Add(GameEventType.Deployed);
     }
 
@@ -5100,6 +5145,7 @@ public partial class VerifyRunner : Node
         }
 
         RunLanSpectatorStage();
+        RunLanPreStepStage();
         RunLobbyChecks();
         RunDifficultyChecks();
         RunTeamChecks();
@@ -5252,6 +5298,219 @@ public partial class VerifyRunner : Node
         Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
               $"lanspectate: ...and leaving closes the spectator's connection, so the survivor is told the other commander "
               + $"left rather than left frozen (\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
+    }
+
+    /// <summary>
+    /// P8-65: A LAN TICK RUNS THE OFFLINE TICK'S PRE-STEP CLIENT WORK. Only
+    /// RunOneTick ran it, and a networked tick never calls RunOneTick, so in a
+    /// LAN match an idle harvester was never auto-resumed and a refused Deploy
+    /// was never told (the SPAWN-02 watcher armed only from the offline stream).
+    /// Two real battle scenes over the in-process relay (ConnectLanPair, on
+    /// skirmish-02, host at seat 0 and joiner at seat 1), every fixture placed
+    /// on both worlds at the same tick. Each peer's idle harvester goes back to
+    /// work by THAT peer's order, carried in its own batch and never in the
+    /// other's; the joiner's Deploy onto a blocked foundation is told on the
+    /// joiner, on the step that applied it (CommandDelay ticks after the order,
+    /// not the step after it, which a control deploy onto clear ground beside
+    /// it would otherwise be refused on), and on neither for the host. Then the
+    /// joiner leaves by LOAD GAME, whose scene change takes the scene out of the
+    /// tree; that must close its connection, so the relay tells the host the
+    /// other commander has left rather than leaving it frozen, and a second
+    /// close (QuitToMenu's) must do nothing.
+    /// </summary>
+    private void RunLanPreStepStage()
+    {
+        GD.Print("  --    LAN (P8-65): a LAN tick runs the pre-step client work, and leaving by LOAD GAME closes the session");
+        // LoadFromSlot points MatchConfig at the slot's match, which the scene
+        // change it no longer makes would have consumed; every field it writes
+        // is put back, so no later stage boots a battle from this one's load.
+        string? wasMap = MatchConfig.MapPath, wasMission = MatchConfig.MissionPath, wasLoad = MatchConfig.LoadPath;
+        int wasPreset = MatchConfig.AiPreset, wasDiff = MatchConfig.AiDifficulty, wasSeats = MatchConfig.Seats;
+        int wasTeamMode = MatchConfig.TeamMode, wasIndex = MatchConfig.MissionIndex;
+        int wasFaction = MatchConfig.Faction, wasOpp = MatchConfig.OppositionFaction;
+        long wasCredits = MatchConfig.StartCredits;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            // The spectator stage's departure is still latched in the session,
+            // and this stage asserts a departure of its own.
+            Ferrostorm.Client.NetSession.Reset();
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(7373UL);
+            RunLanPreStepChecks(relay, hostClient, joinClient, host, join);
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"lanprestep: the LAN match threw: {ex.Message}");
+        }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.LoadPath = wasLoad;
+            MatchConfig.AiPreset = wasPreset;
+            MatchConfig.AiDifficulty = wasDiff;
+            MatchConfig.Seats = wasSeats;
+            MatchConfig.TeamMode = wasTeamMode;
+            MatchConfig.MissionIndex = wasIndex;
+            MatchConfig.Faction = wasFaction;
+            MatchConfig.OppositionFaction = wasOpp;
+            MatchConfig.StartCredits = wasCredits;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+            host?.QueueFree();
+            join?.QueueFree();
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    private void RunLanPreStepChecks(Ferrostorm.Net.Relay relay, Ferrostorm.Net.LockstepClient hostClient,
+        Ferrostorm.Net.LockstepClient joinClient, SkirmishLive host, SkirmishLive join)
+    {
+        var hw = host.LiveWorld;
+        var jw = join.LiveWorld;
+        int hs = host.LocalPlayerId, js = join.LocalPlayerId;
+        bool pair = host.IsNetworked && join.IsNetworked && hs == 0 && js == 1;
+        Check(pair, $"lanprestep: precondition: two lockstep peers over the relay, in seats {hs} and {js}");
+        if (!pair) return;
+        hostClient.Prime();
+        joinClient.Prime();
+        bool warm = LanStepBoth(host, join) && LanStepBoth(host, join);
+        Check(warm && host.StateHash == join.StateHash,
+              $"lanprestep: precondition: both peers advance together and hold one world (tick {host.CurrentTick} and {join.CurrentTick})");
+        if (!warm) return;
+        int Both(System.Func<World, int> place)
+        {
+            int a = place(hw), b = place(jw);
+            return a == b ? a : -1;
+        }
+        int delay = Ferrostorm.Net.LockstepClient.CommandDelay;
+
+        // --- The deploy watcher: a refused Deploy is told on its own peer ----
+        // Two joiner MCVs: one with a squad standing in its foundation, which
+        // the sim refuses by doing nothing, and a control on clear ground,
+        // which it unpacks. Both ordered on one tick through the joiner's own
+        // client, both executed CommandDelay ticks later.
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        int blocked = -1, blocker = -1, clear = -1;
+        if (GroundNear(join, js) is { } bq)
+        {
+            blocked = Both(w => SpawnOfType(w, js, World.McvUnitType, bq.X, bq.Y));
+            blocker = blocked >= 0 ? Both(w => SpawnOfType(w, js, rifle, bq.X + 1, bq.Y + 1)) : -1;
+        }
+        if (GroundNear(join, js) is { } cq) clear = Both(w => SpawnOfType(w, js, World.McvUnitType, cq.X, cq.Y));
+        bool fixture = blocked >= 0 && blocker >= 0 && clear >= 0
+                       && !hw.ValidFoundation(Map.CellOf(hw.Entities[blocked].X), Map.CellOf(hw.Entities[blocked].Y), blocked)
+                       && hw.ValidFoundation(Map.CellOf(hw.Entities[clear].X), Map.CellOf(hw.Entities[clear].Y), clear);
+        Check(fixture, $"lanprestep: precondition: two joiner MCVs on both worlds, one with a squad in its foundation and one "
+                       + $"on clear ground (MCVs {blocked} and {clear}, squad {blocker})");
+        if (fixture)
+        {
+            LanStepBoth(host, join);
+            host.AlertsView.ResetForTest();
+            join.AlertsView.ResetForTest();
+            const string refused = "DEPLOY BLOCKED - CLEAR THE AREA";
+            int ordered = join.CurrentTick;
+            join.IssueDeploy(blocked);
+            join.IssueDeploy(clear);
+            int toldAt = -1, unpackedAt = -1;
+            bool hostTold = false;
+            for (int t = 0; t < delay + 3; t++)
+            {
+                if (!LanStepBoth(host, join)) break;
+                if (toldAt < 0 && join.AlertsView.StackTexts().Contains(refused)) toldAt = join.CurrentTick;
+                if (unpackedAt < 0 && TickHad(jw, ev => ev.Type == GameEventType.Deployed && ev.A == clear)) unpackedAt = join.CurrentTick;
+                hostTold |= host.AlertsView.StackTexts().Contains(refused);
+            }
+            bool stillMcv = hw.Entities[blocked].Alive && jw.Entities[blocked].Alive;
+            int verdict = ordered + delay + 1;
+            Check(stillMcv && unpackedAt == verdict && !hw.Entities[clear].Alive && !jw.Entities[clear].Alive,
+                  $"lanprestep/deploy: precondition: the sim refused the blocked MCV (still standing on both worlds: {stillMcv}) and "
+                  + $"unpacked the control at tick {unpackedAt}, CommandDelay ticks after the order at {ordered}");
+            Check(toldAt == verdict,
+                  $"lanprestep/deploy: the joiner is told its Deploy was refused (\"{refused}\"), on the step that applied it: tick "
+                  + $"{toldAt}, where {verdict} is wanted (the order went out at tick {ordered}, CommandDelay {delay}), so the "
+                  + "control's own deploy was never called refused while it waited for its batch");
+            Check(stillMcv && !hostTold,
+                  $"lanprestep/deploy: ...and the host, whose Deploy it was not, is told nothing ({(hostTold ? "it was" : "no line")})");
+        }
+
+        // --- The auto-resume: each peer's idle harvester, by its own order ---
+        // Neither seat holds a refinery yet, so neither harvester has been sent
+        // anywhere. A refinery for each, placed between ticks, and the next
+        // tick's pre-step work on each peer finds its own harvester idle.
+        int hh = host.FindEntity(EntityKind.Harvester, hs), jh = join.FindEntity(EntityKind.Harvester, js);
+        bool idle = hh >= 0 && jh >= 0
+                    && hw.Entities[hh].HState == HarvestState.Idle && jw.Entities[hh].HState == HarvestState.Idle
+                    && hw.Entities[jh].HState == HarvestState.Idle && jw.Entities[jh].HState == HarvestState.Idle;
+        // Quiet ground by each yard rather than FindPlacementCell, which reads
+        // the yard the frame's HUD pass caches, and no frame runs between
+        // these lockstep steps.
+        int hRef = GroundNear(host, hs) is { } hc ? Both(w => w.SpawnRefinery(hs, hc.X, hc.Y)) : -1;
+        int jRef = GroundNear(join, js) is { } jc ? Both(w => w.SpawnRefinery(js, jc.X, jc.Y)) : -1;
+        int hIss0 = host.AutoHarvestIssues, jIss0 = join.AutoHarvestIssues;
+        int hCmd0 = host.NetCommandsSubmittedForTest, jCmd0 = join.NetCommandsSubmittedForTest;
+        Check(idle && hRef >= 0 && jRef >= 0 && !host.AutoHarvestedForTest(hh) && !join.AutoHarvestedForTest(jh),
+              $"lanprestep: precondition: both seats' opening harvesters stand idle on both worlds, and a refinery is placed "
+              + $"for each seat on both (harvesters {hh} and {jh}, refineries {hRef} and {jRef})");
+        for (int t = 0; t < delay + 2; t++)
+            if (!LanStepBoth(host, join)) break;
+        bool Working(World w, int id) => w.Entities[id].HState != HarvestState.Idle && w.Entities[id].FieldId >= 0;
+        bool hostBack = Working(hw, hh) && Working(jw, hh) && hw.Entities[hh].FieldId == jw.Entities[hh].FieldId;
+        bool joinBack = Working(hw, jh) && Working(jw, jh) && hw.Entities[jh].FieldId == jw.Entities[jh].FieldId;
+        int hIss = host.AutoHarvestIssues - hIss0, jIss = join.AutoHarvestIssues - jIss0;
+        int hCmd = host.NetCommandsSubmittedForTest - hCmd0, jCmd = join.NetCommandsSubmittedForTest - jCmd0;
+        Check(joinBack && hostBack,
+              $"lanprestep/harvest: an idle LAN harvester goes back to work: the joiner's and the host's both left Idle for a "
+              + $"field on both worlds (joiner's {hw.Entities[jh].HState} at field {hw.Entities[jh].FieldId}, host's "
+              + $"{hw.Entities[hh].HState} at field {hw.Entities[hh].FieldId})");
+        Check(join.AutoHarvestedForTest(jh) && !join.AutoHarvestedForTest(hh) && host.AutoHarvestedForTest(hh) && !host.AutoHarvestedForTest(jh)
+              && jIss == 1 && hIss == 1,
+              $"lanprestep/harvest: ...each by its OWN peer's order and never the other's (the joiner ordered {jIss}, the host "
+              + $"{hIss}; joiner ordered its own {join.AutoHarvestedForTest(jh)} and the host's {join.AutoHarvestedForTest(hh)})");
+        Check(jCmd == 1 && hCmd == 1,
+              $"lanprestep/harvest: ...carried in that peer's own batch over the relay ({jCmd} command from the joiner, {hCmd} "
+              + "from the host)");
+
+        Check(host.CurrentTick == join.CurrentTick && host.StateHash == join.StateHash && !relay.DesyncDetected,
+              $"lanprestep: ...and the orders and fixtures left the peers ONE world: identical hashes at tick {host.CurrentTick} "
+              + $"(0x{host.StateHash:X16} and 0x{join.StateHash:X16}) and no desync at the relay");
+
+        // --- Leaving by LOAD GAME closes the session ------------------------
+        // The load path changes scene without QuitToMenu. The seam hands it what
+        // a scene change does to this scene, taking it out of the tree, so it is
+        // _ExitTree that has to close the connection.
+        int closes0 = join.NetSessionClosesForTest;
+        bool noticeBefore = host.MatchNoticeVisible;
+        join.LoadSceneForTest = () => RemoveChild(join);
+        join.LoadFromSlot(92, MatchMeta.For(join.Setup, join.CurrentTick, 0));
+        join.LoadSceneForTest = null;
+        bool gone = !join.IsInsideTree();
+        int waited = 0;
+        while (!host.MatchNoticeVisible && waited++ < 5000)
+        {
+            host.StepTicks(1);            // the drain keeps polling; it just stops advancing
+            host.PumpFrameForTest();      // the notice is raised from the frame, not the tick
+            System.Threading.Thread.Sleep(1);
+        }
+        Check(gone && !noticeBefore && join.NetSessionClosesForTest == closes0 + 1,
+              $"lanprestep/leave: leaving by LOAD GAME takes the joiner's scene out of the tree and that closes its connection "
+              + $"({join.NetSessionClosesForTest - closes0} close; out of the tree {gone})");
+        Check(host.MatchNoticeVisible && host.MatchNoticeText.Contains("LEFT") && !host.MatchNoticeText.Contains("DESYNC"),
+              $"lanprestep/leave: ...so the host is told the other commander has left rather than left frozen "
+              + $"(\"{host.MatchNoticeText.Replace("\n", " / ")}\")");
+        int left = 0;
+        join.LeaveForMenuForTest = () => left++;
+        join.QuitToMenuForTest();
+        join.LeaveForMenuForTest = null;
+        Check(left == 1 && join.NetSessionClosesForTest == closes0 + 1,
+              $"lanprestep/leave: ...and closing it a second time, by the menu path, is safe and does nothing "
+              + $"({join.NetSessionClosesForTest - closes0} close in all)");
     }
 
     /// <summary>
@@ -6510,7 +6769,11 @@ public partial class VerifyRunner : Node
     /// largest theatre, with BOTH seats commanded, run frame by frame through
     /// _Process (the drain, the recording, the client's per-tick work and the
     /// frame's own work) until a side wins or the cap. It asserts nothing
-    /// escaped a frame, nothing faulted, and the match got there.
+    /// escaped a frame, nothing faulted, and the match got there; and (P8-57)
+    /// that the engine logged no error or warning meanwhile, counted from its
+    /// own error stream through EngineLogTally once a pushed error and warning
+    /// have proved the tally hears it, and that no actor's transform went
+    /// non-finite on any frame.
     /// </summary>
     private void RunLongMatchStage()
     {
@@ -6534,6 +6797,26 @@ public partial class VerifyRunner : Node
             int t0 = g.CurrentTick, frames = 0, nodes0 = GetTree().GetNodeCount();
             string escaped = "";
             bool stalled = false;
+            // P8-57: the tally must be hearing the engine before its silence
+            // can mean anything, so one error and one warning are pushed
+            // through the engine's own stream and must arrive, one each.
+            int calErr = _engineLog.Errors, calWarn = _engineLog.Warnings;
+            GD.PushError("P8-57 calibration: the harness pushed this error to prove the engine-log tally hears it");
+            GD.PushWarning("P8-57 calibration: the harness pushed this warning to prove the engine-log tally hears it");
+            calErr = _engineLog.Errors - calErr;
+            calWarn = _engineLog.Warnings - calWarn;
+            Check(calErr == 1 && calWarn == 1,
+                  $"longmatch: precondition: the engine-log tally hears the engine's error stream (a pushed error counted "
+                  + $"{calErr} times, a pushed warning {calWarn})");
+            // P8-57: and what the engine said meanwhile, counted from its own
+            // error stream (EngineLogTally, registered through OS.AddLogger),
+            // beside the actors' transforms read off the nodes every frame:
+            // the engine reports a poisoned node's transform at once only when
+            // something like a visibility change pushes it, and otherwise at the
+            // frame's end, after this single-frame harness has finished.
+            _engineLog.Mark();
+            int err0 = _engineLog.Errors, warn0 = _engineLog.Warnings;
+            int worstNonFinite = 0, firstNonFiniteTick = -1;
             ulong started = Time.GetTicksMsec();
             try
             {
@@ -6544,6 +6827,9 @@ public partial class VerifyRunner : Node
                     // the frame draws them.
                     DriveFrame(g, 1.0);
                     frames++;
+                    int bad = g.NonFiniteActorsForTest();
+                    if (bad > 0 && firstNonFiniteTick < 0) firstNonFiniteTick = g.CurrentTick;
+                    worstNonFinite = System.Math.Max(worstNonFinite, bad);
                     if (g.CurrentTick == before && !g.MatchOverForTest && !g.FaultedForTest) { stalled = true; break; }
                 }
             }
@@ -6552,6 +6838,8 @@ public partial class VerifyRunner : Node
                 escaped = $"{e.GetType().Name} at tick {g.CurrentTick}: {e.Message}";
             }
             ulong ms = Time.GetTicksMsec() - started;
+            int engineErrors = _engineLog.Errors - err0, engineWarnings = _engineLog.Warnings - warn0;
+            string firstLogged = _engineLog.FirstSinceMark;
             int ticks = g.CurrentTick - t0;
             string end = g.MatchOverForTest ? $"a result at tick {g.CurrentTick} (\"{g.BannerTextForTest.Split('\n')[0]}\")"
                 : g.CurrentTick >= cap ? $"the {cap} tick cap" : $"neither, stopped at tick {g.CurrentTick}";
@@ -6563,11 +6851,53 @@ public partial class VerifyRunner : Node
                   $"longmatch: no fault halted the drain{(g.FaultedForTest ? $" (it halted at tick {g.FaultTickForTest}; report {g.FaultReportPathForTest})" : "")}");
             Check(!stalled && ticks > 0 && (g.CurrentTick >= cap || (g.MatchOverForTest && g.BannerVisibleForTest)),
                   $"longmatch: the tick advanced from {t0} to {g.CurrentTick} and the match reached {end}");
+            // P8-57: an engine error is not an exception, so the checks above
+            // passed a match whose actors went non-finite from the first
+            // harvester's first move. Any error or warning on the engine's
+            // stream fails here, and so does any actor whose transform is not
+            // finite on any frame.
+            Check(ticks > 0 && engineErrors == 0 && engineWarnings == 0,
+                  $"longmatch: the engine reported no error and no warning across the match ({engineErrors} errors, "
+                  + $"{engineWarnings} warnings{(firstLogged.Length > 0 ? $"; the first: {firstLogged}" : "")})");
+            Check(ticks > 0 && worstNonFinite == 0,
+                  $"longmatch: every actor's transform stayed finite on every frame (at worst {worstNonFinite} not, "
+                  + $"{(firstNonFiniteTick >= 0 ? $"first at tick {firstNonFiniteTick}" : "never")})");
+            RunTracerBasisChecks(g);
         }
         finally
         {
             g.QueueFree();
         }
+    }
+
+    /// <summary>
+    /// P8-57: the tracer's basis, guarded where it is built, on the inputs that
+    /// broke it in the long match and on the one the old guard already knew. A
+    /// NaN end and a zero-length shot draw nothing; a shot straight down draws a
+    /// tracer whose basis is finite; and none of the three puts a line on the
+    /// engine's error stream (LookAt normalising NaN raised "cannot be
+    /// normalized", then "colinear", on every such shot).
+    /// </summary>
+    private void RunTracerBasisChecks(SkirmishLive g)
+    {
+        var a = new Vector3(10f, 0.4f, 10f);
+        var nan = new Vector3(float.NaN, 0.4f, 10f);
+        _engineLog.Mark();
+        int err0 = _engineLog.Errors, warn0 = _engineLog.Warnings;
+        var fromNaN = g.TracerForTest(nan, a);
+        var toNaN = g.TracerForTest(a, nan);
+        var zero = g.TracerForTest(a, a);
+        var down = g.TracerForTest(a + new Vector3(0, 6f, 0), a);
+        int errs = _engineLog.Errors - err0, warns = _engineLog.Warnings - warn0;
+        string first = _engineLog.FirstSinceMark;
+        Check(fromNaN == null && toNaN == null && zero == null,
+              $"longmatch/tracer: a shot with a NaN end or no length draws no tracer (from NaN {fromNaN != null}, to NaN "
+              + $"{toNaN != null}, zero length {zero != null})");
+        Check(down is { } d && d.IsFinite() && d.Origin.DistanceTo(a + new Vector3(0, 3f, 0)) < 0.01f,
+              $"longmatch/tracer: a shot straight down draws one, midway and with a finite basis ({down})");
+        Check(errs == 0 && warns == 0,
+              $"longmatch/tracer: ...and none of them puts a line on the engine's error stream ({errs} errors, {warns} "
+              + $"warnings{(first.Length > 0 ? $"; the first: {first}" : "")})");
     }
 
     /// <summary>
