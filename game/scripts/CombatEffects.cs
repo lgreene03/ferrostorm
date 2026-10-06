@@ -229,6 +229,11 @@ public partial class CombatEffects : Node3D
     /// feed the trauma pool. Null means no shake.</summary>
     public RtsCamera? Camera;
 
+    /// <summary>P8-44: the live weapon table, for the report of a weapon the
+    /// sound table does not name (WeaponSounds.FireSoundOf). Null means the
+    /// table's own fallback.</summary>
+    public System.Func<int, WeaponDef>? WeaponDefOf;
+
     // W3-01: at most 8 muzzle omni lights alive at once; the billboard quad
     // always spawns so dense fights stay readable without a light storm.
     private int _liveMuzzleLights;
@@ -535,9 +540,13 @@ public partial class CombatEffects : Node3D
 
         // The report is POSITIONAL, so it is placed only when the shooter is on
         // screen: a 3D sound at an unseen position is a quieter version of the
-        // same giveaway.
+        // same giveaway. P8-44: each weapon class its own report, from the
+        // weapon's id (WeaponSounds), where two sounds served all ten.
         if (seeShooter)
-            audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from, AudioDirector.Jitter(0.06f));   // W3-21
+        {
+            var (report, pitch) = WeaponSounds.FireSoundOf(w, WeaponDefOf?.Invoke(w));
+            audio?.PlayAt(report, from, pitch * AudioDirector.Jitter(0.06f));   // W3-21
+        }
     }
 
     private void SpawnMuzzle(Vector3 from, float quadSize, float lightEnergy)

@@ -297,6 +297,60 @@ def shot_rocket():
     return edge_fade(woosh, fade_out=0.02)
 
 
+def shot_heavy_mg():
+    """Heavy machine-gun burst (~300 ms), P8-44: four rounds at about 14 a
+    second, each a mid band-passed crack over a short low body thump, the
+    rounds jittered in time and level by the seed so the burst does not
+    read as a loop. Lower, heavier and longer than the rifle's single
+    crack: the autocannon and the emplacement gun, which shared the rifle's
+    report until now."""
+    rng = random.Random(116)
+    out = silence(0.30)
+    for k in range(4):
+        at = int(SR * (k * 0.070 + rng.uniform(-0.004, 0.004)))
+        crack = band_pass(white_noise(0.07, rng), 1700.0, q=1.1)
+        crack = exp_decay(crack, tau=0.016, attack=0.0005)
+        body = exp_decay(sine_sweep(0.07, 170.0, 85.0, curve=0.6), tau=0.020, attack=0.001)
+        level = (1.0 - 0.12 * k) * rng.uniform(0.85, 1.0)
+        for i, s in enumerate(mix(crack, gain(body, 0.7))):
+            if at + i < len(out):
+                out[at + i] += s * level
+    return edge_fade(out, fade_out=0.03)
+
+
+def shot_flak():
+    """Flak airburst (~600 ms), P8-44: TWO events, the launch and the burst
+    in the air a beat later, which is what tells it from every gun on the
+    ground. A dull low pop leaves the barrel; 0.17 s on, a bright sharp
+    crack with a hollow overpressure boom under it, and a short ringing
+    tail of high band-passed noise as the shell's fragments spread. The
+    flak track's gun, the game's only anti-air weapon."""
+    rng = random.Random(117)
+    pop = exp_decay(sine_sweep(0.12, 95.0, 60.0, curve=0.6), tau=0.030, attack=0.001)
+    pop = mix(pop, gain(exp_decay(band_pass(white_noise(0.08, rng), 700.0, q=1.0), tau=0.015), 0.5))
+    crack = exp_decay(band_pass(white_noise(0.10, rng), 2800.0, q=0.7), tau=0.012, attack=0.0005)
+    boom = exp_decay(low_pass(brown_noise(0.40, rng), 900.0), tau=0.110, attack=0.002)
+    ring = exp_decay(band_pass(white_noise(0.35, rng), 4200.0, q=2.5), tau=0.090, attack=0.004)
+    burst = mix(crack, gain(boom, 0.8), gain(ring, 0.18))
+    out = mix(gain(pop, 0.55), silence(0.17) + burst)
+    return edge_fade(out, fade_out=0.04)
+
+
+def shot_howitzer():
+    """Artillery report (~1.2 s), P8-44: a deep long-throated boom, lower
+    and longer than the cannon. A sub sine sagging 70 to 30 Hz, a dark
+    brown-noise body with a slow decay, a short blast transient, and the
+    body's rumble returning 0.22 s later at a quarter level, the roll of a
+    big gun across open ground."""
+    rng = random.Random(118)
+    sub = exp_decay(sine_sweep(0.9, 70.0, 30.0, curve=0.7), tau=0.260, attack=0.002)
+    body = exp_decay(low_pass(brown_noise(1.0, rng), 420.0), tau=0.300, attack=0.002)
+    blast = exp_decay(band_pass(white_noise(0.25, rng), 650.0, q=0.8), tau=0.045, attack=0.0005)
+    first = mix(sub, gain(body, 0.8), gain(blast, 0.6))
+    echo = silence(0.22) + gain(low_pass(first, 300.0), 0.25)
+    return edge_fade(mix(first, echo), fade_out=0.10)
+
+
 def explosion_small():
     """Brown-noise burst (~600 ms): exponential decay with a 65 Hz sub thump
     underneath. Aiming for a compact infantry-scale detonation that sits
@@ -467,6 +521,61 @@ def production_done():
     tap = exp_decay(sine_sweep(0.08, f / 2.0, f / 2.0), tau=0.030, attack=0.002)
     out = mix(fundamental, gain(h2, 0.35), gain(h3, 0.18), gain(tap, 0.3))
     return edge_fade(out, fade_out=0.05)
+
+
+def _metal(freq, dur, tau):
+    """A small struck-metal tone: the first three modes of a free bar
+    (1, 2.76, 5.40 times the fundamental), the higher ones dying faster."""
+    return mix(exp_decay(sine(dur, freq), tau=tau, attack=0.002),
+               gain(exp_decay(sine(dur, freq * 2.76), tau=tau * 0.5, attack=0.001), 0.35),
+               gain(exp_decay(sine(dur, freq * 5.40), tau=tau * 0.25, attack=0.001), 0.15))
+
+
+def cue_promoted():
+    """Rank earned (~520 ms), P8-44: two bright struck-metal tones stepping
+    up a major sixth, the second ringing on over a soft shimmer of high
+    band-passed noise, a pin set on a collar rather than a fanfare. Its own
+    cue where P8-10 lent the promotion ui_confirm; deliberately no brass
+    and no melody, so it can never be mistaken for a musical sting."""
+    rng = random.Random(119)
+    first = _metal(698.0, 0.16, 0.050)
+    second = _metal(1174.0, 0.40, 0.120)
+    shimmer = band_pass(white_noise(0.40, rng), 6000.0, q=3.0)
+    shimmer = envelope(shimmer, [(0.0, 0.0), (0.15, 0.6), (1.0, 0.0)])
+    out = mix(first, silence(0.11) + mix(second, gain(shimmer, 0.10)))
+    return edge_fade(out, fade_out=0.05)
+
+
+def cue_deployed():
+    """Unfold and lock (~760 ms), P8-44: the MCV becoming a yard. A servo
+    whirr, a sine with two harmonics climbing 160 to 380 Hz under a band of
+    mechanical hiss and swelling as it goes, cut off by a heavy clunk (a
+    low thump dropping 120 to 55 Hz, a burst of 900 Hz noise and a short
+    metal tick) as the frame locks. Its own cue where P8-10 lent ui_confirm."""
+    rng = random.Random(120)
+    dur = 0.48
+    whirr = mix(sine_sweep(dur, 160.0, 380.0, curve=0.8),
+                gain(sine_sweep(dur, 320.0, 760.0, curve=0.8), 0.30),
+                gain(sine_sweep(dur, 480.0, 1140.0, curve=0.8), 0.12))
+    hiss = band_pass(white_noise(dur, rng), lambda i: 1500.0 + 1500.0 * (i / (SR * dur)), q=1.8)
+    whirr = envelope(mix(gain(whirr, 0.5), gain(hiss, 0.25)), [(0.0, 0.0), (0.2, 0.5), (0.95, 1.0), (1.0, 0.2)])
+    thump = exp_decay(sine_sweep(0.22, 120.0, 55.0, curve=0.6), tau=0.060, attack=0.001)
+    knock = exp_decay(band_pass(white_noise(0.10, rng), 900.0, q=1.2), tau=0.020, attack=0.0005)
+    clunk = mix(thump, gain(knock, 0.7), gain(_metal(1350.0, 0.12, 0.030), 0.25))
+    return edge_fade(whirr + clunk + silence(0.06), fade_out=0.04)
+
+
+def cue_placed():
+    """Foundation set down (~420 ms), P8-44: the sim accepting a placement.
+    A deep soft thud (a sine sagging 85 to 40 Hz), a crunch of band-passed
+    brown noise as gravel takes the weight, and a faint metal tick on top,
+    heavy and short so a wall run's one cue per tick never drones."""
+    rng = random.Random(121)
+    thud = exp_decay(sine_sweep(0.32, 85.0, 40.0, curve=0.6), tau=0.085, attack=0.002)
+    crunch = exp_decay(band_pass(brown_noise(0.30, rng), 1200.0, q=0.9), tau=0.060, attack=0.003)
+    tick = _metal(1500.0, 0.10, 0.020)
+    out = mix(thud, gain(crunch, 0.6), silence(0.015) + gain(tick, 0.18))
+    return edge_fade(out + silence(0.08), fade_out=0.05)
 
 
 def superweapon_charge():
@@ -1542,6 +1651,9 @@ SOUNDS = [
     ("shot_rifle.wav", shot_rifle),
     ("shot_cannon.wav", shot_cannon),
     ("shot_rocket.wav", shot_rocket),
+    ("shot_heavy_mg.wav", shot_heavy_mg),          # P8-44
+    ("shot_flak.wav", shot_flak),                  # P8-44
+    ("shot_howitzer.wav", shot_howitzer),          # P8-44
     ("explosion_small.wav", explosion_small),
     ("explosion_large.wav", explosion_large),
     ("death_infantry.wav", death_infantry),        # P8-43
@@ -1552,6 +1664,9 @@ SOUNDS = [
     ("alert_radar.wav", alert_radar),
     ("alert_jammed.wav", alert_jammed),
     ("production_done.wav", production_done),
+    ("cue_promoted.wav", cue_promoted),            # P8-44
+    ("cue_deployed.wav", cue_deployed),            # P8-44
+    ("cue_placed.wav", cue_placed),                # P8-44
     ("superweapon_charge.wav", superweapon_charge),
     ("superweapon_impact.wav", superweapon_impact),
     ("ambient_wind.wav", ambient_wind),

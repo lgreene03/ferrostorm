@@ -1278,6 +1278,9 @@ public partial class VerifyRunner : Node
         RunSupportPowerChecks();
         RunArmedOrderMatrixChecks();
         RunScoreGate();   // P8-46: the score playlist, on the battle scene's own AudioDirector
+        RunAnnouncerGate();       // P8-44: voice lines one at a time, on the alert ladder, duplicates collapsed
+        RunPositionalPoolGate();  // P8-44: the positional pool and its per-family caps under a volley
+        RunWeaponSoundGate();     // P8-44: each weapon class its own report
         // P8-1: in a scene of its own, so the spawns above cannot reach it and
         // its own cannot reach anything after it.
         RunInputGate();
@@ -1317,10 +1320,13 @@ public partial class VerifyRunner : Node
     /// </summary>
     private static readonly (string Stage, GameEventType? Type, bool WholeType, bool ByDesign, string Why, string Owner)[] EventGateSilent =
     {
-        ("StructurePlaced", GameEventType.StructurePlaced, true, false,
-            "a placement has no cue of its own: the PLACE click and the building rising out of the ground (W2-05) are "
-            + "its whole reaction",
-            "P8-44 (the placement cue, with bespoke promotion and deploy sounds in place of P8-10's interim ones)"),
+        // P8-44 closed the StructurePlaced KNOWN-MISSING line: an own placement
+        // has its own cue now (eventgate/StructurePlaced), and the case below
+        // is what stays silent on purpose.
+        ("StructurePlaced/not-own", GameEventType.StructurePlaced, false, true,
+            "another seat's placement makes no sound: its building rising in sight (W2-05) is the news, and a cue for one "
+            + "raised in the fog would be a maphack",
+            "by design (P8-44)"),
         ("SuperweaponReady/unseen-enemy", GameEventType.SuperweaponReady, false, true,
             "an enemy superweapon this seat has never SEEN comes ready in silence and stays off the gauge: GDD s8 makes "
             + "only the launch global, so announcing an unseen weapon's charge would be a maphack",
@@ -1471,6 +1477,7 @@ public partial class VerifyRunner : Node
         RunDeathEffectStages(g, me, foe);         // P8-43: a death's effect from what the sim says it was
         RunBoardingPairStage(g, me, foe);
         RunPromotionAndDeployStages(g, me, foe);
+        RunPlacementCueStage(g, me, foe);         // P8-44: a placement's own cue, mine only
         RunContactEventStages(g, me, foe);
         RunCloakDimStage(g, me, foe);
         RunJamStages(g, me, foe);
@@ -2117,15 +2124,17 @@ public partial class VerifyRunner : Node
         lw.SetEntityForTest(prey, pr);
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
-        int cues0 = g.PromotionCues, confirm0 = g.AudioRequests("ui_confirm");
+        int cues0 = g.PromotionCues, rankCue0 = g.AudioRequests("cue_promoted");
         var promoted = StepUntilEvent(g, ev => ev.Type == GameEventType.Promoted && ev.A == vet, 150);
         string want = $"{g.UnitNameForTest(rifle)} PROMOTED: VETERAN";
         var stack = g.AlertsView.StackTexts();
         EventGate(promoted != null, "Promoted", "precondition: my squad's third kill promoted it");
+        // P8-44: heard as its OWN cue, where P8-10 lent it ui_confirm.
         EventGate(promoted != null && g.PromotionCues == cues0 + 1 && stack.Contains(want)
-                  && g.AlertsView.PriorityShown(want) == AlertPriority.Notice && g.AudioRequests("ui_confirm") > confirm0,
-                  "Promoted", $"a promotion is said (\"{want}\" on screen: {stack.Contains(want)}) and heard (its cue), and a "
-                  + "gold ring marks the unit");
+                  && g.AlertsView.PriorityShown(want) == AlertPriority.Notice
+                  && g.AudioRequests("cue_promoted") == rankCue0 + 1 && g.AudioView.Has("cue_promoted"),
+                  "Promoted", $"a promotion is said (\"{want}\" on screen: {stack.Contains(want)}) and heard as its own cue "
+                  + $"(cue_promoted asked {g.AudioRequests("cue_promoted") - rankCue0}), and a gold ring marks the unit");
         _eventsCovered.Add(GameEventType.Promoted);
         if (lw.Entities[prey].Alive) RemoveFixture(lw, prey);
 
@@ -2138,14 +2147,16 @@ public partial class VerifyRunner : Node
         g.StepTicks(1);
         g.PumpActorsForTest();
         g.AlertsView.ResetForTest();
-        int dep0 = g.DeployCues;
+        int dep0 = g.DeployCues, depCue0 = g.AudioRequests("cue_deployed");
         int tumbles0 = g.CorpseTumbles, sinks0 = g.Sinkings;
         g.IssueDeploy(mcv);
         g.StepOneTick();
         bool deployed = TickHad(lw, ev => ev.Type == GameEventType.Deployed && ev.A == mcv);
         EventGate(deployed, "Deployed", "precondition: the MCV unpacked");
-        EventGate(deployed && g.DeployCues == dep0 + 1 && g.ToastText == "CONSTRUCTION YARD ESTABLISHED", "Deployed",
-                  $"an MCV unpacking is said and heard, not only refused when it fails (\"{g.ToastText}\")");
+        EventGate(deployed && g.DeployCues == dep0 + 1 && g.ToastText == "CONSTRUCTION YARD ESTABLISHED"
+                  && g.AudioRequests("cue_deployed") == depCue0 + 1 && g.AudioView.Has("cue_deployed"), "Deployed",
+                  $"an MCV unpacking is said and heard as its own cue (P8-44: cue_deployed asked "
+                  + $"{g.AudioRequests("cue_deployed") - depCue0}), not only refused when it fails (\"{g.ToastText}\")");
         // P8-59: the vehicle IS the building, so its actor sinks as the yard
         // rises; it did not die and is not a tumbling corpse.
         g.PumpActorsForTest();
@@ -2153,6 +2164,60 @@ public partial class VerifyRunner : Node
                   $"...and an MCV that unpacks is no corpse: its actor sinks as the yard rises ({g.Sinkings - sinks0} sinking, "
                   + $"{g.CorpseTumbles - tumbles0} tumbles)");
         _eventsCovered.Add(GameEventType.Deployed);
+    }
+
+    /// <summary>
+    /// P8-44: a placement has its OWN cue, where P8-10 listed StructurePlaced
+    /// as KNOWN-MISSING. I draw a three-segment wall run through the real drag
+    /// gesture, which lands as three StructurePlaced events in one tick and
+    /// must be ONE cue; then an enemy places a wall of its own, which must be
+    /// none (the silent table's StructurePlaced/not-own).
+    /// </summary>
+    private void RunPlacementCueStage(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        const int wallType = 9;
+        if (GroundNear(g, me) is not { } s || GroundNear(g, foe) is not { } f)
+        {
+            EventGate(false, "StructurePlaced", "quiet ground by my yard and the enemy's (none: a fixture failure)");
+            return;
+        }
+        g.GrantCreditsForTest(1000);
+        lw.GrantCredits(foe, 1000);
+        // A wall must stand within a building's radius (World.BuildRadius),
+        // and quiet ground is quiet because nothing stands near it: so each
+        // side gets a plant to build the wall beside.
+        lw.SpawnPowerPlant(me, s.X + 2, s.Y);
+        lw.SpawnPowerPlant(foe, f.X + 2, f.Y);
+        g.StepOneTick();
+        int cues0 = g.PlacementCues, asked0 = g.AudioRequests("cue_placed");
+        g.EnterPlacement(wallType);
+        g.BeginWallDragAtCell(s.X, s.Y);
+        g.DragToCellForTest(s.X, s.Y + 2);
+        int segments = g.CommitWallDragAtCell(s.X, s.Y + 2);
+        g.CancelPlacementForTest();
+        g.StepOneTick();
+        int mine = 0;
+        foreach (var ev in lw.Events)
+            if (ev.Type == GameEventType.StructurePlaced && ev.A >= 0 && ev.A < lw.EntityCount && lw.Entities[ev.A].PlayerId == me)
+                mine++;
+        EventGate(segments == 3 && mine == 3, "StructurePlaced",
+                  $"precondition: my three-segment wall run landed as three placements in one tick ({segments} sent, {mine} placed)");
+        EventGate(mine == 3 && g.PlacementCues == cues0 + 1 && g.AudioRequests("cue_placed") == asked0 + 1
+                  && g.AudioView.Has("cue_placed"), "StructurePlaced",
+                  $"my placement is HEARD as its own cue, once for the whole run rather than once a segment "
+                  + $"({g.PlacementCues - cues0} cue, cue_placed asked {g.AudioRequests("cue_placed") - asked0})");
+        int cues1 = g.PlacementCues, asked1 = g.AudioRequests("cue_placed");
+        int foeYard = g.FindEntity(EntityKind.ConstructionYard, foe);
+        g.ScriptCommandForTest(new Command(0, foe, CommandType.PlaceStructure, foeYard,
+            Fix64.FromInt(f.X), Fix64.FromInt(f.Y), wallType));
+        g.StepOneTick();
+        bool theirs = TickHad(lw, ev => ev.Type == GameEventType.StructurePlaced && ev.A >= 0 && ev.A < lw.EntityCount
+                                        && lw.Entities[ev.A].PlayerId == foe);
+        EventGate(theirs && g.PlacementCues == cues1 && g.AudioRequests("cue_placed") == asked1, "StructurePlaced",
+                  $"...while an ENEMY placement makes no sound, by decision (placed {theirs}, "
+                  + $"{g.AudioRequests("cue_placed") - asked1} cues)");
+        _eventsCovered.Add(GameEventType.StructurePlaced);
     }
 
     /// <summary>FEEL-03 and the contact effects: an enemy saboteur, infiltrator
@@ -3090,6 +3155,288 @@ public partial class VerifyRunner : Node
               $"eventgate/coverage: no type with a stage is still listed as wholly silent{(stale.Length > 0 ? $" (delete the line for:{stale})" : "")}");
         foreach (var k in EventGateSilent)
             GD.Print($"  {(k.ByDesign ? "EXCEPTION" : "KNOWN-MISSING")}  eventgate/{k.Stage}: {k.Why} [{k.Owner}]");
+    }
+
+    // ---------------- P8-44: audiogate ----------------
+
+    private void AudioGate(bool ok, string what) => Check(ok, $"audiogate/{what}");
+
+    /// <summary>
+    /// P8-44 (FEEL-08): the announcer's channel, on the battle scene's own
+    /// AudioDirector with its clock frozen and stepped by hand, so a line's
+    /// length is its stream's own and nothing races the wall clock. Lines are
+    /// asked for through Announce, the call PlayVo makes, and once through the
+    /// alert service itself; the channel moves on through StepAnnouncer, the
+    /// call its frame makes. "Overlap" is read off the real players: how many
+    /// of them carry a voice line and are playing.
+    /// </summary>
+    private void RunAnnouncerGate()
+    {
+        GD.Print("  --    audiogate/announcer (P8-44): one voice line at a time, the more important first, duplicates collapsed");
+        var dir = _game.AudioView;
+        var q = dir.AnnouncerView;
+        double t = 5000.0;
+        dir.SetClockForTest(() => t);
+        try
+        {
+            const string routine = "vo_unit_ready", critical = "vo_base_under_attack";
+            double critLen = dir.SoundSeconds(critical), routineLen = dir.SoundSeconds(routine);
+            AudioGate(critLen > 0 && routineLen > 0 && critLen < Announcer.MaxWaitSeconds(AlertPriority.Routine),
+                      $"announcer: precondition: both lines are loaded and the critical one ends before the routine one would go "
+                      + $"stale ({critical} {critLen:0.00} s, {routine} {routineLen:0.00} s)");
+
+            // Two lines asked for together, the routine one FIRST, plus a
+            // duplicate of it in the same frame.
+            dir.ResetAnnouncerForTest();
+            int peak = 0;
+            dir.Announce(routine, AlertPriority.Routine);
+            dir.Announce(critical, AlertPriority.Critical);
+            dir.Announce(routine, AlertPriority.Routine);
+            dir.StepAnnouncer();
+            string? first = q.Playing(t);
+            peak = System.Math.Max(peak, dir.VoiceLinesSounding);
+            int waitingBehind = q.WaitingCount;
+            t += critLen + 0.01;
+            dir.StepAnnouncer();
+            string? second = q.Playing(t);
+            peak = System.Math.Max(peak, dir.VoiceLinesSounding);
+            AudioGate(first == critical && second == routine && waitingBehind == 1 && peak == 1,
+                      $"announcer: two lines asked for together play in PRIORITY order without overlap: the critical base alert "
+                      + $"first though asked second, the routine line once it ends, and never two voices at once (first {first}, "
+                      + $"then {second}; {waitingBehind} waiting behind it; at most {peak} voice line sounding)");
+            AudioGate(q.Collapsed == 1 && q.Queued == 2,
+                      $"announcer: the same line asked for twice in one frame is said ONCE ({q.Collapsed} collapsed, {q.Queued} queued)");
+
+            // A duplicate inside the window collapses, while playing and just
+            // after; past the window it is said again.
+            int c0 = q.Collapsed, q0 = q.Queued;
+            dir.Announce(routine, AlertPriority.Routine);               // while it plays
+            t += routineLen + 0.05;
+            dir.StepAnnouncer();
+            dir.Announce(routine, AlertPriority.Routine);               // ended, but inside the window
+            bool quietInside = q.Playing(t) == null && q.WaitingCount == 0;
+            t += Announcer.DuplicateWindowSeconds;
+            dir.Announce(routine, AlertPriority.Routine);               // past the window
+            dir.StepAnnouncer();
+            AudioGate(q.Collapsed == c0 + 2 && quietInside && q.Queued == q0 + 1 && q.Playing(t) == routine,
+                      $"announcer: a duplicate COLLAPSES: asked again while it plays and again just after, inside "
+                      + $"{Announcer.DuplicateWindowSeconds:0} s of starting, it is not repeated; past that it is said again "
+                      + $"({q.Collapsed - c0} collapsed, {q.Queued - q0} queued, now {q.Playing(t)})");
+
+            // A critical line cuts in over a routine one; an urgent one waits.
+            dir.ResetAnnouncerForTest();
+            dir.Announce(routine, AlertPriority.Routine);
+            dir.StepAnnouncer();
+            t += 0.2;
+            dir.Announce("vo_harvester_under_attack", AlertPriority.Urgent);
+            dir.StepAnnouncer();
+            string? afterUrgent = q.Playing(t);
+            dir.Announce("vo_superweapon_launch", AlertPriority.Critical);
+            dir.StepAnnouncer();
+            string? afterCritical = q.Playing(t);
+            int voices = dir.VoiceLinesSounding;
+            AudioGate(afterUrgent == routine && afterCritical == "vo_superweapon_launch" && q.Preempted == 1 && voices == 1
+                      && dir.IsVoicePlaying("vo_superweapon_launch"),
+                      $"announcer: a CRITICAL line pre-empts a routine one mid-line, on the channel's one player, while an urgent "
+                      + $"one waits its turn (after the urgent ask {afterUrgent}; after the critical {afterCritical}; "
+                      + $"{q.Preempted} pre-empted; {voices} voice sounding)");
+
+            // A routine line that cannot start before its caption would have
+            // left the screen is dropped, not said late.
+            dir.ResetAnnouncerForTest();
+            dir.Announce("vo_enemy_superweapon_ready", AlertPriority.Critical);
+            dir.StepAnnouncer();
+            dir.Announce("vo_construction_complete", AlertPriority.Routine);
+            t += System.Math.Max(dir.SoundSeconds("vo_enemy_superweapon_ready"), AlertService.LifeOf(AlertPriority.Routine)) + 0.05;
+            dir.StepAnnouncer();
+            AudioGate(q.Dropped == 1 && q.Playing(t) == null && q.Started == 1,
+                      $"announcer: a routine line still waiting when its caption would have left the screen "
+                      + $"({AlertService.LifeOf(AlertPriority.Routine)} s) is dropped, not said late ({q.Dropped} dropped, "
+                      + $"{q.Started} started)");
+
+            // Through the alert service: the line takes the ALERT's priority,
+            // so there is no second ranking.
+            dir.ResetAnnouncerForTest();
+            _game.AlertsView.ResetForTest();
+            _game.AlertsView.Raise(new Alert("AUDIOGATE NOTICE", AlertPriority.Notice) { Vo = "vo_superweapon_ready" });
+            _game.AlertsView.Raise(new Alert("AUDIOGATE CRITICAL", AlertPriority.Critical) { Vo = "vo_enemy_superweapon_ready" });
+            var notice = q.WaitingPriority("vo_superweapon_ready");
+            var crit = q.WaitingPriority("vo_enemy_superweapon_ready");
+            dir.StepAnnouncer();
+            AudioGate(notice == AlertPriority.Notice && crit == AlertPriority.Critical
+                      && q.Playing(t) == "vo_enemy_superweapon_ready",
+                      $"announcer: a line raised with an alert is queued at THAT alert's priority and played by it (notice line at "
+                      + $"{notice}, critical line at {crit}; playing {q.Playing(t)})");
+            _game.AlertsView.ResetForTest();
+        }
+        finally
+        {
+            dir.ResetAnnouncerForTest();
+            dir.SetClockForTest(null);
+        }
+    }
+
+    /// <summary>
+    /// P8-44 (FEEL-08): the positional pool under a scripted volley, its clock
+    /// frozen so every voice started is still sounding: 60 cannon shots with an
+    /// explosion after every second one, then the superweapon's impact. The
+    /// pool must stay inside its size, each family inside its cap, the oldest
+    /// shots must be the ones stolen, and the impact must find a voice without
+    /// stealing one. Then a far shot among near ones is stolen first.
+    /// </summary>
+    private void RunPositionalPoolGate()
+    {
+        GD.Print("  --    audiogate/pool (P8-44): a 24 to 32 voice pool with per-family caps");
+        var dir = _game.AudioView;
+        double t = 9000.0;
+        var ear = new Vector3(40f, 0f, 40f);
+        dir.SetClockForTest(() => t);
+        dir.SetListenerForTest(ear);
+        dir.ResetPoolForTest();
+        try
+        {
+            var fams = System.Enum.GetValues<AudioDirector.SfxFamily>();
+            int capSum = 0;
+            foreach (var f in fams) capSum += AudioDirector.FamilyCap(f);
+            int voices = dir.PositionalVoices;
+            AudioGate(voices >= 24 && voices <= 32 && capSum == voices,
+                      $"pool: {voices} positional voices, inside 24 to 32, and the family caps sum to exactly the pool ({capSum}), "
+                      + "so no family can starve another");
+
+            var shots = new List<long>();
+            int overPool = 0, overFamily = 0;
+            for (int i = 0; i < 60; i++)
+            {
+                dir.PlayAt("shot_cannon", ear + new Vector3(1f, 0f, 0f));
+                shots.Add(dir.LastVoiceSeq);
+                if (i % 2 == 1) dir.PlayAt("explosion_small", ear + new Vector3(2f, 0f, 0f));
+                if (dir.PositionalSounding > voices) overPool++;
+                foreach (var f in fams) if (dir.FamilySounding(f) > AudioDirector.FamilyCap(f)) overFamily++;
+            }
+            int gunCap = AudioDirector.FamilyCap(AudioDirector.SfxFamily.Gunfire);
+            int boomCap = AudioDirector.FamilyCap(AudioDirector.SfxFamily.Explosion);
+            AudioGate(overPool == 0 && dir.PeakPositionalSounding <= voices && overFamily == 0
+                      && dir.PeakFamilySounding(AudioDirector.SfxFamily.Gunfire) == gunCap
+                      && dir.PeakFamilySounding(AudioDirector.SfxFamily.Explosion) == boomCap,
+                      $"pool: under a 60-shot volley with 30 explosions the pool never exceeds its {voices} voices (peak "
+                      + $"{dir.PeakPositionalSounding}) and gunfire and explosions each fill their own cap and no more (peaks "
+                      + $"{dir.PeakFamilySounding(AudioDirector.SfxFamily.Gunfire)} of {gunCap}, "
+                      + $"{dir.PeakFamilySounding(AudioDirector.SfxFamily.Explosion)} of {boomCap}; {overFamily} over-cap moments)");
+            var sounding = dir.SoundingSeqs(AudioDirector.SfxFamily.Gunfire);
+            var newest = shots.GetRange(shots.Count - gunCap, gunCap);
+            AudioGate(sounding.Count == gunCap && string.Join(",", sounding) == string.Join(",", newest),
+                      $"pool: a family at its cap steals its OWN oldest voice: the {gunCap} shots still sounding are the newest "
+                      + $"{gunCap} of 60 ({(sounding.Count > 0 ? sounding[0] : 0)} to {(sounding.Count > 0 ? sounding[^1] : 0)}, "
+                      + $"newest {shots[^1]})");
+            int stolen0 = dir.StolenVoices;
+            dir.PlayAt("superweapon_impact", ear);
+            AudioGate(dir.FamilySounding(AudioDirector.SfxFamily.Impact) == 1 && dir.StolenVoices == stolen0
+                      && dir.FamilySounding(AudioDirector.SfxFamily.Gunfire) == gunCap
+                      && dir.FamilySounding(AudioDirector.SfxFamily.Explosion) == boomCap,
+                      $"pool: in the thick of it the superweapon's impact still finds a free voice of its own family, stealing "
+                      + $"nothing ({dir.StolenVoices - stolen0} stolen)");
+
+            // Quietest first: one far shot among near ones goes before older near ones.
+            dir.ResetPoolForTest();
+            var near = ear + new Vector3(1f, 0f, 0f);
+            long oldestNear = 0, far = 0;
+            for (int i = 0; i < gunCap; i++)
+            {
+                dir.PlayAt("shot_rifle", i == gunCap / 2 ? ear + new Vector3(400f, 0f, 0f) : near);
+                if (i == 0) oldestNear = dir.LastVoiceSeq;
+                if (i == gunCap / 2) far = dir.LastVoiceSeq;
+            }
+            dir.PlayAt("shot_rifle", near);
+            var after = dir.SoundingSeqs(AudioDirector.SfxFamily.Gunfire);
+            AudioGate(!after.Contains(far) && after.Contains(oldestNear) && after.Count == gunCap,
+                      $"pool: the QUIETEST voice at the listener is stolen before an older loud one: a shot 400 units away goes "
+                      + $"while the oldest shot beside the listener plays on (far one kept {after.Contains(far)}, oldest near one "
+                      + $"kept {after.Contains(oldestNear)})");
+        }
+        finally
+        {
+            dir.ResetPoolForTest();
+            dir.SetListenerForTest(null);
+            dir.SetClockForTest(null);
+        }
+    }
+
+    /// <summary>
+    /// P8-44 (FEEL-14): each weapon class makes its own report. One shooter of
+    /// each class of mine fires one synthetic Fired event through the REAL
+    /// effects layer with the scene's own weapon resolver, as a tick would,
+    /// and the report it asks the AudioDirector for is read off the request
+    /// counts: its own, and none of the others'. A shooter whose weapon id is
+    /// unknown takes the fallback.
+    /// </summary>
+    private void RunWeaponSoundGate()
+    {
+        GD.Print("  --    audiogate/weapons (P8-44): each weapon class its own report");
+        var lw = _game.LiveWorld;
+        var dir = _game.AudioView;
+        int me = _game.LocalPlayerId;
+        int yard = _game.FindEntity(EntityKind.ConstructionYard, me);
+        if (yard < 0 || QuietGround(lw, _game.CellOfForTest(yard).X, _game.CellOfForTest(yard).Y) is not { } s)
+        {
+            AudioGate(false, "weapons: quiet ground by my yard for the shooters (none: a fixture failure)");
+            return;
+        }
+        var classes = new (string Class, string Unit, string Report)[]
+        {
+            ("rifle", "com_rifle_squad", "shot_rifle"),
+            ("heavy machine gun", "dir_vanguard_car", "shot_heavy_mg"),
+            ("cannon", "dir_cannon_tank", "shot_cannon"),
+            ("rocket", "com_rocket_squad", "shot_rocket"),
+            ("flak airburst", "com_flak_track", "shot_flak"),
+            ("artillery", "dir_howitzer", "shot_howitzer"),
+        };
+        var reports = WeaponSounds.Sounds();
+        var spawned = new List<int>();
+        int target = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), s.X + 3, s.Y + 3);
+        spawned.Add(target);
+        var shooters = new int[classes.Length];
+        for (int i = 0; i < classes.Length; i++)
+        {
+            shooters[i] = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf(classes[i].Unit), s.X + i % 3, s.Y + i / 3);
+            HoldFire(lw, shooters[i]);
+            spawned.Add(shooters[i]);
+        }
+        int unknown = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("dir_cannon_tank"), s.X + 4, s.Y);
+        var ue = lw.Entities[unknown];
+        ue.WeaponId = 99;
+        lw.SetEntityForTest(unknown, ue);
+        HoldFire(lw, unknown);
+        spawned.Add(unknown);
+        _game.PumpActorsForTest();
+
+        string Heard(int shooter)
+        {
+            var before = new Dictionary<string, int>();
+            foreach (var r in reports) before[r] = dir.PlayRequests(r);
+            _game.FireEventForTest(shooter, target);
+            var heard = new List<string>();
+            foreach (var r in reports)
+                for (int k = before[r]; k < dir.PlayRequests(r); k++) heard.Add(r);
+            return string.Join("+", heard);
+        }
+        var distinct = new HashSet<string>();
+        for (int i = 0; i < classes.Length; i++)
+        {
+            string got = Heard(shooters[i]);
+            distinct.Add(got);
+            AudioGate(got == classes[i].Report && dir.Has(classes[i].Report),
+                      $"weapons: the {classes[i].Class} ({classes[i].Unit}, weapon {lw.Entities[shooters[i]].WeaponId}) fires with "
+                      + $"its OWN report, {classes[i].Report}, and nothing else (heard: {(got.Length > 0 ? got : "nothing")}; "
+                      + $"asset loaded {dir.Has(classes[i].Report)})");
+        }
+        AudioGate(distinct.Count == classes.Length,
+                  $"weapons: the {classes.Length} classes make {distinct.Count} different reports, where two sounds served all ten "
+                  + "weapons");
+        string fallback = Heard(unknown);
+        AudioGate(fallback == "shot_cannon",
+                  $"weapons: a weapon no table names and no def describes falls back to the cannon's report (heard: {fallback})");
+        foreach (var id in spawned) RemoveFixture(lw, id);
+        _game.PumpActorsForTest();
     }
 
     // ---------------- P8-46: scoregate ----------------

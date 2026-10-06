@@ -22,7 +22,9 @@ public sealed record Alert(string Text, AlertPriority Priority = AlertPriority.R
     public string? Cue { get; init; }
     public float CueDb { get; init; } = -4f;
     /// <summary>A battlefield voice line by name, or null. Played through the
-    /// scene's PlayVo, so its per-line cooldown still holds.</summary>
+    /// scene's PlayVo, so its per-line cooldown still holds, and (P8-44) handed
+    /// to the announcer at THIS alert's Priority, so the voice queue ranks by
+    /// the same ladder as the stack and keeps no ranking of its own.</summary>
     public string? Vo { get; init; }
     /// <summary>A minimap ping at this map position (world X, Z), or null.</summary>
     public Vector2? PingAt { get; init; }
@@ -116,7 +118,7 @@ public partial class AlertService : VBoxContainer
     private readonly List<Entry> _waiting = new();
     private long _seq;
     private System.Action<string, float>? _playCue;
-    private System.Action<string>? _playVo;
+    private System.Action<string, AlertPriority>? _playVo;
     private System.Action<Vector2, Color>? _ping;
     private System.Action<Vector2>? _jump;
     private System.Func<double> _now = () => Time.GetTicksMsec() / 1000.0;
@@ -134,8 +136,8 @@ public partial class AlertService : VBoxContainer
     /// <summary>Wire the side effects. Each is the scene's own, so a cue
     /// still goes through the AudioDirector, a voice line through PlayVo and
     /// its cooldowns, a ping onto the minimap and the jump record through
-    /// RecordAlert.</summary>
-    public void Init(System.Action<string, float> playCue, System.Action<string> playVo,
+    /// RecordAlert. The voice line goes with the alert's priority (P8-44).</summary>
+    public void Init(System.Action<string, float> playCue, System.Action<string, AlertPriority> playVo,
                      System.Action<Vector2, Color> ping, System.Action<Vector2> jump)
     {
         _playCue = playCue;
@@ -184,7 +186,7 @@ public partial class AlertService : VBoxContainer
         // The side effects fire NOW whether or not the line had to wait: the
         // klaxon and the ping are the alert, and the line is its caption.
         if (a.Cue != null) _playCue?.Invoke(a.Cue, a.CueDb);
-        if (a.Vo != null) _playVo?.Invoke(a.Vo);
+        if (a.Vo != null) _playVo?.Invoke(a.Vo, a.Priority);
         if (a.PingAt is { } at)
         {
             _ping?.Invoke(at, a.PingColour);

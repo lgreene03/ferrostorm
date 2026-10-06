@@ -298,6 +298,10 @@ public partial class SkirmishLive : Node3D
     /// </summary>
     private int WeaponOfStruct(int structType) => _world.GetStructureType(structType).WeaponId;
 
+    /// <summary>W3-01: an entity's sim WeaponId, for the effects layer's
+    /// per-weapon families and (P8-44) its per-weapon reports; 0 for none.</summary>
+    private int WeaponOfEntity(int id) => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0;
+
     /// <summary>DEF-01: a weapon's range in world units. Fix64.Raw is public and
     /// FracBits is 32, so this is the same conversion SnapshotInterpolator.ToDouble
     /// uses. Weapon 0 (none) has no ring.
@@ -479,6 +483,8 @@ public partial class SkirmishLive : Node3D
     public int EnemySuperweaponAlerts { get; private set; }
     public int PromotionCues { get; private set; }
     public int DeployCues { get; private set; }
+    /// <summary>P8-44: placement cues played, one a tick at most.</summary>
+    public int PlacementCues { get; private set; }
     public int EliminationNotices { get; private set; }
     public int SupportPowerNotices { get; private set; }
     /// <summary>Actors retired as boarders (shrunk into their Carrier), counted
@@ -852,6 +858,9 @@ public partial class SkirmishLive : Node3D
         _effects = new CombatEffects();
         AddChild(_effects);
         _effects.Camera = _cam;
+        // P8-44: a weapon the report table does not name is classed off its
+        // LIVE def (WeaponSounds), read through the world as it stands.
+        _effects.WeaponDefOf = id => _world.GetWeaponType(id);
 
         BuildHud();
 
@@ -2064,8 +2073,7 @@ public partial class SkirmishLive : Node3D
         // modified. (P8-10, D34: a boarding is Boarded and an unload Unloaded,
         // so every Died here is a death and every ProductionComplete a
         // production; the effects layer draws them as such.)
-        _effects.OnTickEvents(_world.Events, _actors, _audio,
-            id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0,
+        _effects.OnTickEvents(_world.Events, _actors, _audio, WeaponOfEntity,
             id => CombatEffects.DeathLookOf(_world, id));   // P8-43: the death effect from sim identity
         // P8-10: before the sweep, so a weapon first seen this tick is known
         // when its READY is read in the same tick. The first tick of a RESUMED
@@ -2079,6 +2087,7 @@ public partial class SkirmishLive : Node3D
         // credited to the seat that used it, and a READY raised after the
         // capture to the seat that holds it.
         _tickOwner.Clear();
+        bool placedCue = false;
         foreach (var ev in _world.Events)
         {
             // DEF-08 clause 3: a placed or destroyed barrier changes its
@@ -2088,6 +2097,19 @@ public partial class SkirmishLive : Node3D
                 && ev.A >= 0 && ev.A < _world.EntityCount
                 && _world.Entities[ev.A].Kind == EntityKind.Wall)
                 _wallsDirty = true;
+            // P8-44: a placement of MY OWN has its own cue (cue_placed, a
+            // foundation set down), once a tick however many segments a wall
+            // run landed. The PLACE click already acknowledged the gesture;
+            // this is the sim accepting it. Another seat's placement is silent
+            // by design (eventgate's silent table): its building rising in
+            // sight is the news, and a cue for one in the fog would be a maphack.
+            if (ev.Type == GameEventType.StructurePlaced && !placedCue && ev.A >= 0 && ev.A < _world.EntityCount
+                && _world.Entities[ev.A].PlayerId == LocalPlayerId)
+            {
+                placedCue = true;
+                PlacementCues++;
+                _audio.Play("cue_placed", -6);
+            }
             // P8-10: the PRODUCING factory's doors, and only for a real
             // production. This opened every factory's doors on the map for any
             // ProductionComplete at all: every other seat's completions, every
@@ -2166,7 +2188,7 @@ public partial class SkirmishLive : Node3D
                 if (_actors.ContainsKey(ev.A)) _diedIds[ev.A] = CombatEffects.DeathLookOf(_world, ev.A).Kind;
                 var fallen = _world.Entities[ev.A];
                 if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
-                    PlayVo("vo_unit_lost");
+                    PlayVo("vo_unit_lost", AlertPriority.Notice);   // P8-44: news, below every warning
             }
             // P8-10, decision D34: a BOARDING is its own event (A the unit, B the
             // Carrier) where it used to be a Died, so it draws no death and asks
@@ -2584,7 +2606,8 @@ public partial class SkirmishLive : Node3D
             // changed, silently; the moment a unit earns its rank is now a
             // toast, a cue and a gold ring at the unit. Own units only: an
             // enemy's veterancy shows on its pips, which is information enough.
-            // Bespoke promotion audio is P8-44's; this is the interim cue.
+            // P8-44: its own cue (cue_promoted, a rising struck-metal pair),
+            // where P8-10 lent it ui_confirm, the sound of every button.
             if (ev.Type == GameEventType.Promoted && ev.A >= 0 && ev.A < _world.EntityCount)
             {
                 var u = _world.Entities[ev.A];
@@ -2593,7 +2616,7 @@ public partial class SkirmishLive : Node3D
                     PromotionCues++;
                     string rank = ev.B >= 2 ? "ELITE" : "VETERAN";
                     string who = u.Kind == EntityKind.Unit ? UnitNameOf(u.UnitType) : "HARVESTER";
-                    Raise(new Alert($"{who} PROMOTED: {rank}", AlertPriority.Notice) { Subject = ev.A, Cue = "ui_confirm", CueDb = -8f });
+                    Raise(new Alert($"{who} PROMOTED: {rank}", AlertPriority.Notice) { Subject = ev.A, Cue = "cue_promoted", CueDb = -8f });
                     _effects.OrderMarker(new Vector3((float)(u.X.Raw / 4294967296.0), 0, (float)(u.Y.Raw / 4294967296.0)), 2);
                 }
             }
@@ -2601,6 +2624,7 @@ public partial class SkirmishLive : Node3D
             // P8-10: an MCV unpacking is an event the player ordered and waits
             // on, and it finished in silence: the refusal spoke (SPAWN-02) and
             // the success did not. A, the consumed MCV; B, the new yard.
+            // P8-44: its own cue (cue_deployed, a servo unfolding into a lock).
             if (ev.Type == GameEventType.Deployed && ev.B >= 0 && ev.B < _world.EntityCount)
             {
                 var yard = _world.Entities[ev.B];
@@ -2609,7 +2633,7 @@ public partial class SkirmishLive : Node3D
                     DeployCues++;
                     Raise(new Alert("CONSTRUCTION YARD ESTABLISHED", AlertPriority.Notice)
                     {
-                        Subject = ev.B, Cue = "ui_confirm", CueDb = -6f, PingAt = MapPos(yard.X, yard.Y), PingColour = PingPower,
+                        Subject = ev.B, Cue = "cue_deployed", CueDb = -6f, PingAt = MapPos(yard.X, yard.Y), PingColour = PingPower,
                     });
                     _effects.OrderMarker(new Vector3((float)(yard.X.Raw / 4294967296.0), 0, (float)(yard.Y.Raw / 4294967296.0)), 2);
                 }
@@ -3216,8 +3240,14 @@ public partial class SkirmishLive : Node3D
     /// instead, so no existing sound moved to make room for the voice. Wall
     /// time for the window, the _lastAttackAlert precedent, so the cooldown
     /// means the same thing live and under stepped verification. The clips are
-    /// placeholder TTS pending the legal-review check recorded in doc 24.</summary>
-    private void PlayVo(string name)
+    /// placeholder TTS pending the legal-review check recorded in doc 24.
+    ///
+    /// P8-44: a line that passes its cooldown is handed to the announcer's
+    /// channel at `priority`, the alert ladder's (an alert's own, through
+    /// AlertService), where it plays one at a time, the more important first,
+    /// with duplicates collapsed (Announcer). It played on the UI pool, where
+    /// two lines asked for together talked over each other.</summary>
+    private void PlayVo(string name, AlertPriority priority)
     {
         // P8-10: counted BEFORE the cooldown. The cooldown decides whether a
         // line is heard; the request is the client deciding to say it at all,
@@ -3230,12 +3260,13 @@ public partial class SkirmishLive : Node3D
         if (!_audio.Has(name)) return;   // asset set absent: stay silent, the toasts still speak
         _voLastAt[name] = now;
         _voPlays[name] = _voPlays.GetValueOrDefault(name) + 1;
-        _audio.Play(name, -4);
+        _audio.Announce(name, priority);
     }
 
-    /// <summary>Verification read: how many times a line ACTUALLY played, so a
-    /// test can prove the cooldown held under a massacre (the LowPowerAlerts
-    /// counting pattern).</summary>
+    /// <summary>Verification read: how many times a line passed its cooldown
+    /// and was handed to the announcer, so a test can prove the cooldown held
+    /// under a massacre (the LowPowerAlerts counting pattern). The channel may
+    /// still collapse or drop it (AudioView.AnnouncerView counts those).</summary>
     public int VoPlays(string name) => _voPlays.GetValueOrDefault(name);
 
     private readonly Dictionary<string, int> _voRequests = new();
@@ -3818,8 +3849,9 @@ public partial class SkirmishLive : Node3D
         _spectateNotice.Text = "ELIMINATED: SPECTATING\nyour forces are gone and the battle goes on; "
                              + $"press {Settings.KeyName(Settings.BindOf("cancel"))} for uplink";
         _spectateNotice.Visible = true;
-        // The line the offline verdict plays for the same moment.
-        PlayVo("vo_mission_failed");
+        // The line the offline verdict plays for the same moment. P8-44: a
+        // verdict is critical, so it cuts in over whatever is being said.
+        PlayVo("vo_mission_failed", AlertPriority.Critical);
     }
 
     /// <summary>Raise the closing banner and stand the match down. Split out of
@@ -3852,7 +3884,7 @@ public partial class SkirmishLive : Node3D
         // TICKET-P6-VO-01: the closing line, beside the banner. One site
         // covers skirmish and campaign both: a mission verdict arrives here
         // through World.Winner exactly as an elimination does.
-        PlayVo(iWon ? "vo_mission_accomplished" : "vo_mission_failed");
+        PlayVo(iWon ? "vo_mission_accomplished" : "vo_mission_failed", AlertPriority.Critical);
     }
 
     private bool _paused;
@@ -6033,6 +6065,15 @@ public partial class SkirmishLive : Node3D
     public Vector3? StrikeReticleAt(int launcherId) => _effects.StrikeReticleAt(launcherId);
     /// <summary>SFX requests by name (AudioDirector.PlayRequests).</summary>
     public int AudioRequests(string name) => _audio.PlayRequests(name);
+    /// <summary>P8-44 verification surface: the scene's own AudioDirector, for
+    /// the announcer, the positional pool and their test clock.</summary>
+    public AudioDirector AudioView => _audio;
+    /// <summary>P8-44 verification hook: push ONE synthetic Fired event through
+    /// the REAL effects layer with the scene's own weapon resolver, as a tick
+    /// would, so a check can hear which report a shooter's weapon makes.</summary>
+    public void FireEventForTest(int attackerId, int targetId) =>
+        _effects.OnTickEvents(new[] { new GameEvent(GameEventType.Fired, attackerId, targetId) }, _actors, _audio,
+            WeaponOfEntity);
     public bool SuperweaponSpotted(int id) => _spottedSuperweapons.Contains(id);
     /// <summary>The superweapon total the gauge reads, through its one seam.</summary>
     public int SuperweaponChargeTotalForTest(int structType = World.OrbitalCannonStructType) => SuperweaponChargeTotal(structType);

@@ -13,7 +13,10 @@ namespace Ferrostorm;
 ///
 /// Pools:
 ///   - 4 x AudioStreamPlayer   for UI and non-positional sounds (Play)
-///   - 8 x AudioStreamPlayer3D for positional battlefield sounds (PlayAt)
+///   - 32 x AudioStreamPlayer3D for positional battlefield sounds (PlayAt),
+///     shared out by family with a cap each (P8-44)
+///   - 1 x AudioStreamPlayer   the announcer's channel, one voice line at a
+///     time from a priority queue (Announce, P8-44)
 ///   - 3 x AudioStreamPlayer   music decks for the score playlist (P8-46),
 ///     which loads its Ogg tracks from res://audio/music/ by name
 ///
@@ -24,7 +27,6 @@ public partial class AudioDirector : Node
 {
     private const string AudioDir = "res://audio/";
     private const int UiPoolSize = 4;
-    private const int PositionalPoolSize = 8;
     private const float AmbientVolumeDb = -18.0f;
     // TICKET-P6-MUSIC-01: the score's mix positions, kept by P8-46. Calm tracks
     // sit well under the effects (the score is atmosphere, not a lead line);
@@ -48,7 +50,6 @@ public partial class AudioDirector : Node
 
     private readonly Dictionary<string, AudioStream> _streams = new();
     private readonly List<AudioStreamPlayer> _uiPool = new();
-    private readonly List<AudioStreamPlayer3D> _positionalPool = new();
     private AudioStreamPlayer _ambientPlayer = null!;   // created in _Ready, like every scene field in this codebase
     // P8-46: three decks on the Music bus. One carries the live track; the
     // others carry tracks fading out, so a change that lands mid-crossfade
@@ -65,9 +66,9 @@ public partial class AudioDirector : Node
     private float _combatIntensity;   // target 0..1, written by the scene
     private float _combatLevel;       // smoothed level actually on the fader
 
-    // Round-robin cursors; stealing the oldest voice is acceptable for RTS SFX.
+    // Round-robin cursor for the UI pool; stealing the oldest click is fine.
+    // The positional pool steals by family instead (P8-44, PlayAt).
     private int _uiCursor;
-    private int _positionalCursor;
 
     public override void _Ready()
     {
@@ -89,8 +90,13 @@ public partial class AudioDirector : Node
         {
             var player = new AudioStreamPlayer3D { Name = $"WorldVoice{i}", Bus = AudioBuses.Sfx };
             AddChild(player);
-            _positionalPool.Add(player);
+            _voices.Add(new Voice(player));
         }
+
+        // P8-44: the announcer's own channel, on the Ui bus the voice lines
+        // have always played on, so the settings slider still holds them.
+        _announcer = new AudioStreamPlayer { Name = "AnnouncerVoice", Bus = AudioBuses.Ui };
+        AddChild(_announcer);
 
         _ambientPlayer = new AudioStreamPlayer { Name = "AmbientVoice", Bus = AudioBuses.Ambient };
         AddChild(_ambientPlayer);
@@ -198,22 +204,234 @@ public partial class AudioDirector : Node
         player.Play();
     }
 
-    /// <summary>Play a positional battlefield sound at a world position.</summary>
+    // ---------------- P8-44: the positional effects pool ----------------
+    //
+    // FEEL-08. Eight voices taken round robin, so the ninth shot of a fight
+    // cut off whatever had played eight sounds ago: a building's explosion,
+    // the superweapon's impact, anything. A big fight was a stutter of
+    // half-sounds and nothing else could be heard over it. Now 32 voices are
+    // shared out by FAMILY, each family with a cap, and the caps sum to the
+    // pool. That is the whole guarantee: a family under its cap always finds a
+    // free voice, because the others together can hold no more than their own
+    // caps, so gunfire can never starve the explosions, the impacts or
+    // anything else, and the pool can never run out. A family AT its cap
+    // steals from itself: the quietest voice at the listener first (distance,
+    // in whole decibels), then the oldest.
+
+    public const int PositionalPoolSize = 32;
+    public enum SfxFamily { Gunfire, Explosion, Impact, Other }
+    private static readonly int[] FamilyCaps = { 14, 10, 4, 4 };   // sum == PositionalPoolSize
+    public static int FamilyCap(SfxFamily f) => FamilyCaps[(int)f];
+
+    /// <summary>The family a positional sound belongs to, by its name: every
+    /// weapon report is shot_*, every death and blast explosion_*, death_*
+    /// or collapse_*, and the superweapon's impact has a family of its own so
+    /// the loudest event in the game is never stolen by a firefight.</summary>
+    public static SfxFamily FamilyOf(string name) =>
+        name.StartsWith("shot_") ? SfxFamily.Gunfire
+        : name.StartsWith("explosion_") || name.StartsWith("death_") || name.StartsWith("collapse_") ? SfxFamily.Explosion
+        : name == "superweapon_impact" ? SfxFamily.Impact
+        : SfxFamily.Other;
+
+    private sealed class Voice
+    {
+        public readonly AudioStreamPlayer3D Player;
+        public SfxFamily Family;
+        public double EndsAt = -1;
+        public long Seq;
+        public Vector3 At;
+        public Voice(AudioStreamPlayer3D player) => Player = player;
+    }
+
+    private readonly List<Voice> _voices = new();
+    private long _voiceSeq;
+
+    /// <summary>Play a positional battlefield sound at a world position, on a
+    /// voice of its family (see above). A voice is busy until its stream's own
+    /// length has played at its pitch, a declared end rather than the player's
+    /// Playing flag, which a 3D player only raises on its next physics frame.</summary>
     public void PlayAt(string name, Vector3 pos, float pitch = 1f)
     {
         CountRequest(name);
-        if (!TryGetStream(name, out var stream) || _positionalPool.Count == 0)
+        if (!TryGetStream(name, out var stream) || _voices.Count == 0)
             return;
+        double now = Now();
+        var family = FamilyOf(name);
+        var voice = PickVoice(family, now);
+        if (voice.EndsAt > now) StolenVoices++;
 
-        var player = _positionalPool[_positionalCursor];
-        _positionalCursor = (_positionalCursor + 1) % _positionalPool.Count;
+        voice.Player.Stop();
+        voice.Player.Stream = stream;
+        voice.Player.GlobalPosition = pos;
+        voice.Player.PitchScale = pitch;
+        voice.Player.Play();
+        voice.Family = family;
+        voice.At = pos;
+        voice.Seq = ++_voiceSeq;
+        voice.EndsAt = now + stream.GetLength() / Mathf.Max(pitch, 0.05f);
 
-        player.Stop();
-        player.Stream = stream;
-        player.GlobalPosition = pos;
-        player.PitchScale = pitch;
-        player.Play();
+        int all = 0, mine = 0;
+        foreach (var v in _voices)
+            if (v.EndsAt > now) { all++; if (v.Family == family) mine++; }
+        PeakPositionalSounding = System.Math.Max(PeakPositionalSounding, all);
+        _peakFamily[(int)family] = System.Math.Max(_peakFamily[(int)family], mine);
     }
+
+    private Voice PickVoice(SfxFamily family, double now)
+    {
+        int inFamily = 0;
+        foreach (var v in _voices) if (v.EndsAt > now && v.Family == family) inFamily++;
+        bool atCap = inFamily >= FamilyCap(family);
+        if (!atCap)
+            foreach (var v in _voices) if (v.EndsAt <= now) return v;
+        // At the cap, steal within the family, and only a voice that is still
+        // SOUNDING: an idle voice keeps its last family (or the enum's first)
+        // and its last position, and taking one would grow the family past its
+        // cap while calling it a steal. (Below the cap with no free voice
+        // cannot happen while the caps sum to the pool; if it ever did, the
+        // quietest sounding voice of any family goes rather than none.)
+        Voice? pick = null;
+        foreach (var v in _voices)
+        {
+            if (v.EndsAt <= now || (atCap && v.Family != family)) continue;
+            if (pick == null || Quieter(v, pick)) pick = v;
+        }
+        return pick ?? _voices[0];
+    }
+
+    /// <summary>Is `a` a better voice to steal than `b`: quieter at the
+    /// listener by a whole decibel or more, or as loud and older.</summary>
+    private bool Quieter(Voice a, Voice b)
+    {
+        float da = Mathf.Floor(AudibilityDb(a)), db = Mathf.Floor(AudibilityDb(b));
+        return da != db ? da < db : a.Seq < b.Seq;
+    }
+
+    /// <summary>A voice's level at the listener from distance alone, the
+    /// player's own inverse-distance law: 0 dB inside its unit size, falling
+    /// 6 dB for each doubling beyond. No listener, no difference.</summary>
+    private float AudibilityDb(Voice v)
+    {
+        if (ListenerPosition() is not { } ear) return 0f;
+        float unit = Mathf.Max(v.Player.UnitSize, 0.01f);
+        float d = Mathf.Max(ear.DistanceTo(v.At), unit);
+        return -20f * (float)System.Math.Log10(d / unit);
+    }
+
+    private Vector3? _listenerForTest;
+    private Vector3? ListenerPosition() =>
+        _listenerForTest ?? (IsInsideTree() ? GetViewport()?.GetCamera3D()?.GlobalPosition : null);
+
+    // ---- P8-44 verification surface for the pool: the declared state the
+    // pool steals by, never a recomputation of it.
+    public int StolenVoices { get; private set; }
+    public int PeakPositionalSounding { get; private set; }
+    private readonly int[] _peakFamily = new int[4];
+    public int PeakFamilySounding(SfxFamily f) => _peakFamily[(int)f];
+    public int PositionalVoices => _voices.Count;
+    public int PositionalSounding
+    {
+        get
+        {
+            double now = Now();
+            int n = 0;
+            foreach (var v in _voices) if (v.EndsAt > now) n++;
+            return n;
+        }
+    }
+    public int FamilySounding(SfxFamily f)
+    {
+        double now = Now();
+        int n = 0;
+        foreach (var v in _voices) if (v.EndsAt > now && v.Family == f) n++;
+        return n;
+    }
+    /// <summary>The play order numbers of a family's sounding voices, so a
+    /// check can see WHICH were stolen; LastVoiceSeq is the newest.</summary>
+    public List<long> SoundingSeqs(SfxFamily f)
+    {
+        double now = Now();
+        var l = new List<long>();
+        foreach (var v in _voices) if (v.EndsAt > now && v.Family == f) l.Add(v.Seq);
+        l.Sort();
+        return l;
+    }
+    public long LastVoiceSeq => _voiceSeq;
+    public void SetListenerForTest(Vector3? at) => _listenerForTest = at;
+    /// <summary>Silence the pool and forget its peaks, so a stage starts from
+    /// an empty pool whatever the stages before it played.</summary>
+    public void ResetPoolForTest()
+    {
+        foreach (var v in _voices) { v.Player.Stop(); v.EndsAt = -1; }
+        StolenVoices = 0;
+        PeakPositionalSounding = 0;
+        System.Array.Clear(_peakFamily);
+    }
+
+    // ---------------- P8-44: the announcer channel ----------------
+
+    /// <summary>The level every voice line has played at (PlayVo's -4).</summary>
+    public const float AnnouncerDb = -4f;
+    private AudioStreamPlayer _announcer = null!;
+    private readonly Announcer _announcerQueue = new();
+
+    /// <summary>Ask the announcer for a voice line at an alert priority. It
+    /// plays when the channel is free and nothing more important waits, or
+    /// cuts in if it is critical (Announcer). Starting happens in
+    /// StepAnnouncer, so lines asked for in the same frame are ranked
+    /// together rather than in the order they happened to be asked.</summary>
+    public void Announce(string line, AlertPriority priority)
+    {
+        CountRequest(line);
+        if (!TryGetStream(line, out var stream)) return;
+        _announcerQueue.Request(line, priority, stream.GetLength(), Now());
+    }
+
+    /// <summary>One step of the channel: what _Process calls every frame,
+    /// public so the harness can move it on its own clock.</summary>
+    public void StepAnnouncer()
+    {
+        var start = _announcerQueue.Advance(Now(), out bool cut);
+        if (cut) _announcer.Stop();
+        if (start == null || !_streams.TryGetValue(start, out var stream)) return;
+        _announcer.Stop();
+        _announcer.Stream = stream;
+        _announcer.VolumeDb = AnnouncerDb;
+        _announcer.PitchScale = 1f;
+        _announcer.Play();
+    }
+
+    /// <summary>P8-44 verification surface: the queue itself, read only.</summary>
+    public Announcer AnnouncerView => _announcerQueue;
+    /// <summary>Players of any kind carrying a voice line (vo_*) and playing
+    /// right now, read off the players: one channel means never more than one.</summary>
+    public int VoiceLinesSounding
+    {
+        get
+        {
+            int n = 0;
+            bool Vo(AudioStream? s)
+            {
+                if (s == null) return false;
+                foreach (var (name, st) in _streams) if (st == s) return name.StartsWith("vo_");
+                return false;
+            }
+            if (_announcer.Playing && Vo(_announcer.Stream)) n++;
+            foreach (var p in _uiPool) if (p.Playing && Vo(p.Stream)) n++;
+            return n;
+        }
+    }
+    public void ResetAnnouncerForTest()
+    {
+        _announcer.Stop();
+        _announcerQueue.Reset();
+    }
+
+    // ---- P8-44: one clock for the pool and the announcer. Wall time in play;
+    // the harness hands in its own so a stage can freeze or step time.
+    private System.Func<double>? _clockForTest;
+    private double Now() => _clockForTest?.Invoke() ?? Time.GetTicksMsec() / 1000.0;
+    public void SetClockForTest(System.Func<double>? clock) => _clockForTest = clock;
 
     /// <summary>
     /// Start the looping ambient wind bed at low volume. The WAV itself is
@@ -322,7 +540,11 @@ public partial class AudioDirector : Node
         if (_musicOn) BeginTrack(_musicState);
     }
 
-    public override void _Process(double delta) => StepMusic(delta);
+    public override void _Process(double delta)
+    {
+        StepMusic(delta);
+        StepAnnouncer();   // P8-44
+    }
 
     /// <summary>One frame of the score: smooth the intensity, move the state,
     /// hand over a track that is about to end, and slew every deck toward its
@@ -430,6 +652,9 @@ public partial class AudioDirector : Node
     /// this cue? Play answers a missing name with a warning and silence, so a
     /// test that only calls Play proves nothing about the asset existing.</summary>
     public bool Has(string name) => _streams.ContainsKey(name);
+    /// <summary>P8-44 verification read: a loaded sound's own length in
+    /// seconds, 0 when absent.</summary>
+    public double SoundSeconds(string name) => _streams.TryGetValue(name, out var s) ? s.GetLength() : 0.0;
 
     // P8-10: how many times each SFX name was ASKED for, through Play or
     // PlayAt, before the pool or the asset had any say. A request is the
@@ -478,16 +703,12 @@ public partial class AudioDirector : Node
                 db = Mathf.Max(db, deck.Player.VolumeDb);
         return db;
     }
-    /// <summary>Is a UI-pool player actually carrying this named stream right
-    /// now? This is the read that proves a VO line reached a live player with
-    /// the right clip, not merely that Play was called with a string.</summary>
-    public bool IsVoicePlaying(string name)
-    {
-        if (!_streams.TryGetValue(name, out var s)) return false;
-        foreach (var p in _uiPool)
-            if (p.Playing && p.Stream == s) return true;
-        return false;
-    }
+    /// <summary>Is the announcer's channel actually carrying this named stream
+    /// right now? This is the read that proves a VO line reached a live player
+    /// with the right clip, not merely that it was asked for. (P8-44: the
+    /// lines left the UI pool for the channel.)</summary>
+    public bool IsVoicePlaying(string name) =>
+        _streams.TryGetValue(name, out var s) && _announcer.Playing && _announcer.Stream == s;
 
     private bool TryGetStream(string name, [NotNullWhen(true)] out AudioStream? stream)
     {
