@@ -456,8 +456,16 @@ public partial class SkirmishLive : Node3D
     /// LIVING entities, which is how every death came to take the structure's
     /// sink. A mobile that leaves without dying (an MCV unpacking, which the
     /// sim reports as Deployed) is not a corpse and keeps the sink it had.
-    /// Pruned as the actor goes.</summary>
-    private readonly HashSet<int> _diedIds = new();
+    /// Pruned as the actor goes.
+    ///
+    /// P8-43: and it records what the sim says the entity WAS at its death
+    /// (CombatEffects.DeathLookOf), the same reading the effects layer chose
+    /// the death effect from, so the effect and the retirement always agree:
+    /// infantry and vehicles tumble (a vehicle's corpse is kept as its husk),
+    /// a structure collapses in stages, anything else sinks. This is the row's
+    /// "corpse tumble from a recorded Mobile flag": P8-59 had already built it,
+    /// and the flag became the whole death look.</summary>
+    private readonly Dictionary<int, CombatEffects.DeathKind> _diedIds = new();
     /// <summary>The radar's three faces. Offline wins over Jammed: with no
     /// uplink, or no power for it, the map is dark for a reason in your own
     /// base, and a jam on top changes nothing you can act on.</summary>
@@ -2057,7 +2065,8 @@ public partial class SkirmishLive : Node3D
         // so every Died here is a death and every ProductionComplete a
         // production; the effects layer draws them as such.)
         _effects.OnTickEvents(_world.Events, _actors, _audio,
-            id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0);
+            id => id >= 0 && id < _world.EntityCount ? _world.Entities[id].WeaponId : 0,
+            id => CombatEffects.DeathLookOf(_world, id));   // P8-43: the death effect from sim identity
         // P8-10: before the sweep, so a weapon first seen this tick is known
         // when its READY is read in the same tick. The first tick of a RESUMED
         // match learns silently (see SpotSuperweapons for what a resumed player
@@ -2152,8 +2161,9 @@ public partial class SkirmishLive : Node3D
             // harvesters are the "unit lost" of the classic genre.
             if (ev.Type == GameEventType.Died && ev.A >= 0 && ev.A < _world.EntityCount)
             {
-                // P8-59: its actor is retired as a death (SyncActors).
-                if (_actors.ContainsKey(ev.A)) _diedIds.Add(ev.A);
+                // P8-59: its actor is retired as a death (SyncActors), and
+                // P8-43: as the death the effects layer drew, from the same look.
+                if (_actors.ContainsKey(ev.A)) _diedIds[ev.A] = CombatEffects.DeathLookOf(_world, ev.A).Kind;
                 var fallen = _world.Entities[ev.A];
                 if (fallen.PlayerId == LocalPlayerId && Mobile(fallen.Kind))
                     PlayVo("vo_unit_lost");
@@ -4488,10 +4498,22 @@ public partial class SkirmishLive : Node3D
                 // unreachable. The boarder's path keys off _boardedIds, filled
                 // from the Boarded event, and comes first; anything else that
                 // leaves the view (a structure, or an MCV that unpacked) sinks.
+                //
+                // P8-43: the death look recorded with the Died event decides
+                // the rest, the one CombatEffects drew the death from. Infantry
+                // and vehicles are exactly P8-59's "a unit or harvester that
+                // died" (DeathLookOf reads them off the same Unit and Harvester
+                // kinds), so they tumble; a vehicle's corpse is handed to the
+                // effects layer first and kept as its charred husk. A structure
+                // that died collapses in stages on the effects layer's clock.
                 var corpse = _actors[id];
                 bool boarded = _boardedIds.Remove(id);
-                bool died = _diedIds.Remove(id);
-                bool deadUnit = died && id < _world.EntityCount && Mobile(_world.Entities[id].Kind);
+                CombatEffects.DeathKind? diedAs = _diedIds.Remove(id, out var kindAtDeath) ? kindAtDeath : null;
+                bool deadUnit = diedAs is CombatEffects.DeathKind.Infantry or CombatEffects.DeathKind.Vehicle;
+                // A hidden corpse (an enemy dying in the fog) is not kept: a
+                // husk that waited there would be news the fog never gave.
+                bool husk = !boarded && diedAs == CombatEffects.DeathKind.Vehicle && corpse.Visible;
+                if (husk) _effects.LeaveHusk(corpse);
                 var tw = corpse.CreateTween();
                 if (boarded)
                 {
@@ -4515,6 +4537,29 @@ public partial class SkirmishLive : Node3D
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
                     tw.SetParallel(false);
                 }
+                else if (diedAs == CombatEffects.DeathKind.Structure)
+                {
+                    // P8-43: a building that died COLLAPSES in three movements
+                    // on CombatEffects' collapse clock: it lurches over with the
+                    // blast, holds while the corners go, then drops with the
+                    // fall. Still a sinking (P8-59's count), only staged.
+                    Sinkings++;
+                    var rng = new System.Random(id);
+                    var lean = new Vector3(((float)rng.NextDouble() - 0.5f) * 0.12f, 0, ((float)rng.NextDouble() - 0.5f) * 0.12f);
+                    var rest = corpse.Position;
+                    tw.SetParallel();
+                    tw.TweenProperty(corpse, "rotation", corpse.Rotation + lean, CombatEffects.CollapseSecondaryAt * 0.7f)
+                        .SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+                    tw.TweenProperty(corpse, "position", rest + new Vector3(0, -0.15f, 0), CombatEffects.CollapseSecondaryAt * 0.7f);
+                    tw.SetParallel(false);
+                    tw.TweenInterval(CombatEffects.CollapseFallAt - CombatEffects.CollapseSecondaryAt * 0.7f);
+                    tw.SetParallel();
+                    tw.TweenProperty(corpse, "position", rest + new Vector3(0, -1.1f, 0), 0.7f)
+                        .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+                    tw.TweenProperty(corpse, "rotation", corpse.Rotation + lean * 2.5f, 0.7f)
+                        .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+                    tw.SetParallel(false);
+                }
                 else
                 {
                     Sinkings++;
@@ -4522,7 +4567,8 @@ public partial class SkirmishLive : Node3D
                         corpse.Position + new Vector3(0, -0.9f, 0), 1.1f)
                         .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
                 }
-                tw.TweenCallback(Callable.From(() => corpse.QueueFree()));
+                // A husk's life is the effects layer's (LeaveHusk) from here.
+                if (!husk) tw.TweenCallback(Callable.From(() => corpse.QueueFree()));
                 if (_hpBars.TryGetValue(id, out var hb))
                 {
                     hb.Back.QueueFree();
@@ -5958,6 +6004,17 @@ public partial class SkirmishLive : Node3D
     public AlertService AlertsView => _alerts;
     public SuperweaponGauge SuperweaponGaugeView => _swGauge;
     public int DeathBursts => _effects.DeathBursts;
+    /// <summary>P8-43 verification surface: the live effects layer, for its
+    /// per-kind death counts, its husks and its collapse seam.</summary>
+    public CombatEffects EffectsView => _effects;
+    /// <summary>P8-43 verification hook: rename an actor's node, so a check
+    /// can prove the death effect is chosen from the sim and not from the
+    /// model's name (the old rule read "yard", "factory" and "refinery" off
+    /// it). Nothing in a played game calls it.</summary>
+    public void RenameActorForTest(int id, string name)
+    {
+        if (_actors.TryGetValue(id, out var node)) node.Name = name;
+    }
     /// <summary>P8-57 verification seam: one tracer through the live effects
     /// layer's real SpawnTracer (CombatEffects.TracerForTest).</summary>
     public Transform3D? TracerForTest(Vector3 from, Vector3 to) => _effects.TracerForTest(from, to);

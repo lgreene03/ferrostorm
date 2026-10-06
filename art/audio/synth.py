@@ -323,6 +323,49 @@ def explosion_large():
     return edge_fade(out, fade_out=0.10)
 
 
+def death_infantry():
+    """Soft fall (~320 ms), P8-43: a squad going down, not a vehicle going
+    up. A muffled body knock (a sine dropping 150 to 70 Hz with a very short
+    decay) under a short scuff of low band-passed brown noise, the dust of
+    the puff the effect draws. No detonation layer and nothing bright, so a
+    rifle squad's death can never be mistaken for explosion_small; no voice
+    and no cry."""
+    rng = random.Random(114)
+    knock = exp_decay(sine_sweep(0.16, 150.0, 70.0, curve=0.6), tau=0.035, attack=0.002)
+    scuff = band_pass(brown_noise(0.32, rng), 520.0, q=0.9)
+    scuff = envelope(scuff, [(0.0, 0.0), (0.06, 1.0), (0.35, 0.55), (1.0, 0.0)])
+    settle = band_pass(white_noise(0.22, rng), 1800.0, q=1.5)
+    settle = exp_decay(settle, tau=0.040, attack=0.010)
+    out = mix(knock, gain(scuff, 0.8), gain(settle, 0.12))
+    return edge_fade(out, fade_out=0.04)
+
+
+def collapse_rumble():
+    """A building giving way (~1.3 s), P8-43: the third stage of a
+    structure's collapse, after the blast and the secondary pops. A slow
+    low-passed brown-noise rumble swelling in and settling out, a sub sine
+    sagging 55 to 30 Hz underneath, and a scatter of short band-passed
+    debris ticks thinning out over the tail, so it reads as mass coming
+    down rather than another explosion. Original synthesis."""
+    rng = random.Random(115)
+    dur = 1.3
+    rumble = low_pass(brown_noise(dur, rng), lambda i: 700.0 - 450.0 * (i / (SR * dur)))
+    rumble = envelope(rumble, [(0.0, 0.0), (0.12, 1.0), (0.45, 0.8), (1.0, 0.0)])
+    sub = sine_sweep(dur, 55.0, 30.0, curve=0.8)
+    sub = envelope(sub, [(0.0, 0.0), (0.1, 0.9), (0.6, 0.5), (1.0, 0.0)])
+    debris = silence(dur)
+    for k in range(14):
+        at = int(SR * (0.08 + 0.9 * (k / 14.0) ** 1.4 + rng.uniform(-0.02, 0.02)))
+        tick = band_pass(white_noise(0.05, rng), rng.uniform(1100.0, 2600.0), q=3.0)
+        tick = exp_decay(tick, tau=0.010, attack=0.0005)
+        level = 0.5 * (1.0 - k / 16.0)
+        for i, s in enumerate(tick):
+            if 0 <= at + i < len(debris):
+                debris[at + i] += s * level
+    out = mix(rumble, gain(sub, 0.7), gain(debris, 0.5))
+    return edge_fade(out, fade_in=0.005, fade_out=0.10)
+
+
 def alert_attack():
     """Urgent two-tone klaxon (~700 ms): four short pulses alternating a
     minor third (D5 down to B4), each pulse a sine with a bite of third
@@ -1501,6 +1544,8 @@ SOUNDS = [
     ("shot_rocket.wav", shot_rocket),
     ("explosion_small.wav", explosion_small),
     ("explosion_large.wav", explosion_large),
+    ("death_infantry.wav", death_infantry),        # P8-43
+    ("collapse_rumble.wav", collapse_rumble),      # P8-43
     ("alert_attack.wav", alert_attack),
     ("alert_harvester.wav", alert_harvester),
     ("alert_low_power.wav", alert_low_power),

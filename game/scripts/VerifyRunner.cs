@@ -1468,6 +1468,7 @@ public partial class VerifyRunner : Node
         RunProductionChimeStages(g, me, ally, foe);
         RunFactoryDoorStage(g, me, foe);          // after the barracks the Carrier needs
         RunCarrierEventStages(g, me, foe);
+        RunDeathEffectStages(g, me, foe);         // P8-43: a death's effect from what the sim says it was
         RunBoardingPairStage(g, me, foe);
         RunPromotionAndDeployStages(g, me, foe);
         RunContactEventStages(g, me, foe);
@@ -1737,6 +1738,121 @@ public partial class VerifyRunner : Node
                   "Unloaded", "...and asks for neither the completion chime nor vo_unit_ready, and opens no factory's doors");
         _eventsCovered.Add(GameEventType.Boarded);
         _eventsCovered.Add(GameEventType.Unloaded);
+    }
+
+    /// <summary>
+    /// P8-43 (FEEL-06, SP-08): each kind of death has its own effect, chosen
+    /// from what the sim says the entity WAS. The old rule read the actor: any
+    /// mobile is drawn at 1.3 scale, so every unit death took the large
+    /// explosion and a burning wreck, and a building got the small one unless
+    /// its node's NAME said yard, factory or refinery. An enemy cannon tank is
+    /// set on one fixture of mine at a time, each left at one hit point: a
+    /// rifle squad whose actor is renamed after a construction yard, a heavy
+    /// tank whose actor is renamed after a rifle squad, and a power plant.
+    /// Each must draw its own effect and none of the others, and the renames
+    /// must change nothing. Then a squad boards a Carrier and must draw none.
+    /// </summary>
+    private void RunDeathEffectStages(SkirmishLive g, int me, int foe)
+    {
+        var lw = g.LiveWorld;
+        var fx = g.EffectsView;
+        if (GroundNear(g, me) is not { } d)
+        {
+            EventGate(false, "Died/effect", "quiet ground for the death-effect fixtures (none: a fixture failure)");
+            return;
+        }
+        int gunner = SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), d.X + 2, d.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        // A collapse still running from an earlier stage would interleave its
+        // stages with the one this stage watches, so run them out first.
+        fx.StepCollapsesForTest(2.0);
+
+        (bool Died, int Puffs, int Blasts, int Collapses, int Husks, int Tumbles, int Sinks, int Soft, int Bangs) Kill(int victim)
+        {
+            int p0 = fx.InfantryPuffs, b0 = fx.VehicleBlasts, c0 = fx.StructureCollapses, h0 = fx.HusksLeft;
+            int t0 = g.CorpseTumbles, s0 = g.Sinkings, soft0 = g.AudioRequests("death_infantry");
+            int bang0 = g.AudioRequests("explosion_small") + g.AudioRequests("explosion_large");
+            g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, gunner, Fix64.Zero, Fix64.Zero, victim));
+            for (int t = 0; t < 150 && lw.Entities[victim].Alive; t++) g.StepTicks(1);
+            g.PumpActorsForTest();
+            return (!lw.Entities[victim].Alive, fx.InfantryPuffs - p0, fx.VehicleBlasts - b0, fx.StructureCollapses - c0,
+                    fx.HusksLeft - h0, g.CorpseTumbles - t0, g.Sinkings - s0, g.AudioRequests("death_infantry") - soft0,
+                    g.AudioRequests("explosion_small") + g.AudioRequests("explosion_large") - bang0);
+        }
+        int OneHp(int id)
+        {
+            var e = lw.Entities[id];
+            e.Hp = 1;
+            lw.SetEntityForTest(id, e);
+            return id;
+        }
+
+        // Infantry: a dust puff and a soft fall, and the corpse tumbles.
+        int squad = OneHp(SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), d.X, d.Y));
+        g.PumpActorsForTest();
+        g.RenameActorForTest(squad, "com_construction_yard");
+        var inf = Kill(squad);
+        EventGate(inf.Died && inf.Puffs == 1 && inf.Blasts == 0 && inf.Collapses == 0 && inf.Husks == 0 && inf.Tumbles == 1,
+                  "Died/effect", $"a rifle squad shot dead goes down in a dust PUFF, not a vehicle's fireball, though its actor is "
+                  + $"named after a construction yard; it tumbles and leaves no husk (died {inf.Died}: {inf.Puffs} puff, "
+                  + $"{inf.Blasts} blasts, {inf.Collapses} collapses, {inf.Husks} husks, {inf.Tumbles} tumble)");
+        EventGate(inf.Died && inf.Soft == 1 && inf.Bangs == 0, "Died/effect",
+                  $"...and is heard as a soft fall, not an explosion (death_infantry {inf.Soft}, explosions {inf.Bangs})");
+
+        // Vehicle: a fireball, and the corpse tumbles and is kept as a husk.
+        int tank = OneHp(SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("dir_cannon_tank"), d.X, d.Y - 1));
+        HoldFire(lw, tank);
+        g.PumpActorsForTest();
+        g.RenameActorForTest(tank, "com_rifle_squad");
+        int standing0 = fx.HusksStanding;
+        var veh = Kill(tank);
+        EventGate(veh.Died && veh.Blasts == 1 && veh.Puffs == 0 && veh.Collapses == 0 && veh.Tumbles == 1 && veh.Bangs == 1,
+                  "Died/effect", $"a tank shot dead goes up in a fireball, though its actor is named after a rifle squad, and its "
+                  + $"corpse tumbles (died {veh.Died}: {veh.Blasts} blast, {veh.Puffs} puffs, {veh.Collapses} collapses, "
+                  + $"{veh.Tumbles} tumble, {veh.Bangs} explosion)");
+        EventGate(veh.Died && veh.Husks == 1 && fx.HusksStanding == standing0 + 1 && fx.NewestHuskCharred(), "Died/effect",
+                  $"...and leaves its HUSK: the actor itself, charred on every mesh and lying where it fell ({veh.Husks} left, "
+                  + $"{fx.HusksStanding - standing0} more standing, charred {fx.NewestHuskCharred()})");
+
+        // Structure: a collapse in stages, and the actor sinks.
+        int plant = OneHp(lw.SpawnPowerPlant(me, d.X - 1, d.Y + 2));
+        g.PumpActorsForTest();
+        var bld = Kill(plant);
+        var stages = fx.StepCollapsesForTest(1.5);
+        EventGate(bld.Died && bld.Collapses == 1 && bld.Puffs == 0 && bld.Blasts == 0 && bld.Husks == 0
+                  && bld.Sinks == 1 && bld.Tumbles == 0, "Died/effect",
+                  $"a power plant shot down COLLAPSES rather than bursting like a unit, and sinks without tumbling (died "
+                  + $"{bld.Died}: {bld.Collapses} collapse, {bld.Puffs} puffs, {bld.Blasts} blasts, {bld.Sinks} sinking, "
+                  + $"{bld.Tumbles} tumbles)");
+        EventGate(bld.Died && stages.Count == 3 && stages[0] == 1 && stages[1] == 2 && stages[2] == 3, "Died/effect",
+                  $"...in STAGES, run through the collapse's own clock: the blast, the corner blasts of a 2x2 building, then the "
+                  + $"fall, in that order (stages {string.Join(",", stages)})");
+        RemoveFixture(lw, gunner);
+
+        // Boarding is no death: none of the four effects, no husk.
+        if (GroundNear(g, me) is not { } q)
+        {
+            EventGate(false, "Died/effect", "quiet ground for the boarding control (none: a fixture failure)");
+            return;
+        }
+        int carrier = SpawnOfType(lw, me, World.CarrierUnitType, q.X + 1, q.Y);
+        int rider = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), q.X, q.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        int any0 = fx.DeathBursts, p1 = fx.InfantryPuffs, b1 = fx.VehicleBlasts, c1 = fx.StructureCollapses, m1 = fx.MineBlasts;
+        int h1 = fx.HusksLeft, soft1 = g.AudioRequests("death_infantry"), aboard0 = g.Boardings;
+        g.QueueCommandForTest(CommandType.LoadTransport, rider, carrier);
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        bool boarded = lw.CargoOf(carrier).Count == 1 && !lw.Entities[rider].Alive
+                       && TickHad(lw, ev => ev.Type == GameEventType.Boarded && ev.A == rider);
+        int drawn = fx.DeathBursts - any0 + fx.InfantryPuffs - p1 + fx.VehicleBlasts - b1 + fx.StructureCollapses - c1
+                    + fx.MineBlasts - m1 + fx.HusksLeft - h1 + g.AudioRequests("death_infantry") - soft1;
+        EventGate(boarded && drawn == 0 && g.Boardings == aboard0 + 1, "Died/effect",
+                  $"a squad that BOARDS draws no death effect of any kind, no husk and no fall sound, and shrinks into the hold "
+                  + $"(boarded {boarded}, {drawn} effects, {g.Boardings - aboard0} boarding)");
+        RemoveFixture(lw, carrier);
     }
 
     /// <summary>The factory the door stage built for the local seat, so the
@@ -2491,9 +2607,17 @@ public partial class VerifyRunner : Node
             g.AlertsView.ResetForTest();
             g.StepOneTick();
             string n3 = StructureCatalogue.DisplayNameOf(lw.Entities[e3].StructType);
-            EventGate(inFlightUnseen && g.SuperweaponSpotted(e3) && g.ToastText == $"ENEMY {n3} SPOTTED: STRIKE INBOUND",
+            // Read off the STACK, not the last thing said: the enemy commander
+            // fires any weapon of its own that is READY on its next think (the
+            // fixture above just brought one ready), and a launch in this same
+            // tick raises ENEMY STRIKE INBOUND after the sighting, which
+            // overwrote LastSaid once P8-43's stage moved this check onto a
+            // think tick. The rule is what the player is shown about e3.
+            var st3 = g.AlertsView.StackTexts();
+            EventGate(inFlightUnseen && g.SuperweaponSpotted(e3) && st3.Contains($"ENEMY {n3} SPOTTED: STRIKE INBOUND")
+                      && !st3.Exists(t => t.StartsWith($"ENEMY {n3} SPOTTED: CHARGING")),
                       "superweapon/spotted-in-flight", $"an enemy superweapon first seen with its strike in flight is announced "
-                      + $"as STRIKE INBOUND, not as charging (\"{g.ToastText}\")");
+                      + $"as STRIKE INBOUND, not as charging ({JoinLines(st3)})");
         }
         else EventGate(false, "superweapon/spotted-in-flight", "quiet ground by the enemy yard and on my side (none: a fixture failure)");
 
