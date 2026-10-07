@@ -346,7 +346,46 @@ public sealed class MapData
         // same and hash differently, which is a replay-compatibility break for
         // no gain.
         for (int p = 0; p < seats; p++) world.GrantCredits(p, startCredits);
-        for (int p = 0; p < seats; p++) world.SpawnConstructionYard(p, Starts[p].Cx, Starts[p].Cy);
+        // P8-62 (ADR-076): THE OPENING HAND IS A TRUE HALF TURN. A map's start
+        // is one CELL, and tools/mapgen.py rotates it as one cell, but the yard
+        // is a footprint. Anchored at the start cell, a 2x2 yard always grew
+        // right and down from it, so the yard of a start past the centre stood
+        // one cell off the exact rotation of its partner's on each axis, and
+        // the opening force was mirrored left to right only. Now the whole hand
+        // is laid out in the start's own frame, per axis: on an axis where the
+        // start cell stands short of the map's centre the layout is as it was
+        // authored (the yard grows from the start cell towards the centre, the
+        // harvester towards the centre and the squads away from it); on an
+        // axis where it stands past the centre the same layout is reflected
+        // about the start cell. The yard therefore always covers its start
+        // cell and grows towards the centre, and two starts that are each
+        // other's half turn as cells get hands that are each other's half turn
+        // exactly. Read off the yard's REGISTERED footprint, not a literal 2,
+        // so the reflection stays exact for any footprint the schema allows.
+        //
+        // Four or more seats: the rule is a property of each start's position,
+        // not of a seat number, so ANY two starts related by a reflection in a
+        // centre line, or by both (the half turn), get hands related the same
+        // way. skirmish-09's four corners are one orbit of exactly those, so
+        // its four hands are images of one another too. What the rule cannot
+        // express is a quarter turn alone: starts related only by a 90-degree
+        // rotation (say, at the middles of a square map's four edges) would get
+        // hands that are reflections rather than rotations. No map ships one.
+        // The tie: a start cell standing on a centre line (an odd dimension)
+        // keeps the authored layout on that axis. That is NOT a half turn for
+        // a pair: two starts that are each other's half turn on that line
+        // both keep it, so their hands are translations of each other on that
+        // axis rather than rotations. mapgate refuses such a two-seat map, no
+        // shipped map has one, and ADR-076 lists it under what remains
+        // asymmetric (ADR-075's tie clause decides when it needs a rule).
+        int yardFootprint = world.FootprintOf(4);   // the yard's type, as SpawnConstructionYard reads it
+        for (int p = 0; p < seats; p++)
+        {
+            int sx = Starts[p].Cx, sy = Starts[p].Cy;
+            world.SpawnConstructionYard(p,
+                TowardsCentre(sx, Width) > 0 ? sx : sx - (yardFootprint - 1),
+                TowardsCentre(sy, Height) > 0 ? sy : sy - (yardFootprint - 1));
+        }
         for (int p = 0; p < seats; p++)
         {
             int sx = Starts[p].Cx, sy = Starts[p].Cy;
@@ -354,16 +393,22 @@ public sealed class MapData
             // "player 0 leans right, player 1 leans left", a binary that has no
             // meaning once there is a seat 2. Read as a PROPERTY rather than as
             // a seat number it says "lay the force out towards the middle of the
-            // map", and that is what this is. On all eight committed skirmish
-            // maps start 0 sits left of centre and start 1 sits right of it, so
-            // this reproduces the old ternary seat for seat on every map that
-            // ships, while also being meaningful for a seat anywhere on a map
-            // with four or eight of them.
-            int side = 2 * sx < Width ? 1 : -1;
-            world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2));
+            // map", and that is what this is, now on both axes (P8-62): the
+            // harvester two cells towards the centre vertically, the squads two
+            // cells away from it, where both used to be fixed below and above.
+            int side = TowardsCentre(sx, Width), vside = TowardsCentre(sy, Height);
+            world.SpawnHarvester(p, Map.CellCentre(sx + 3 * side), Map.CellCentre(sy + 2 * vside));
             for (int i = 0; i < 3; i++)
-                world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2),
+                world.SpawnUnit(p, Map.CellCentre(sx + (2 + i) * side), Map.CellCentre(sy - 2 * vside),
                     Fix64.FromFraction(1, 4), 100, ArmourClass.None, 2);
         }
     }
+
+    /// <summary>P8-62 (ADR-076): +1 when cell <paramref name="c"/> stands short of
+    /// the centre of an axis <paramref name="size"/> cells long, so a start there
+    /// keeps the authored layout on that axis; -1 when it stands past the centre,
+    /// so the layout is reflected about the start cell. A cell on the centre line
+    /// of an odd axis takes +1, the one tie, which is not exact for a pair of
+    /// starts on that line (see the tie above).</summary>
+    private static int TowardsCentre(int c, int size) => 2 * c < size ? 1 : -1;
 }

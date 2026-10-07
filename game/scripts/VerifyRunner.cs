@@ -1921,10 +1921,26 @@ public partial class VerifyRunner : Node
         EventGate(dark && g.ActorDimmedForTest(nest) && !g.ActorDetectedTintForTest(nest), "Sabotaged/cloak",
                   "sabotaged while detected, it wears the DIM, which takes precedence over the wash instead of fighting it "
                   + $"for the overlay (dark {dark})");
-        for (int t = 0; t < World.SabotageDurationTicks + 5 && lw.IsDisabled(nest); t++) g.StepTicks(1);
+        // The scout is the fixture's detector, not the subject: the check is
+        // that the resolver hands the overlay back to the wash once the dim
+        // lifts on a STILL-detected nest. Over the 450 dark ticks an enemy
+        // opening force can reach this quiet ground (it did once P8-62 moved
+        // the opening hands) and kill the scout, which would make the nest
+        // undetected and the check meaningless, so the scout is kept whole.
+        for (int t = 0; t < World.SabotageDurationTicks + 5 && lw.IsDisabled(nest); t++)
+        {
+            g.StepTicks(1);
+            var keep = lw.Entities[scout];
+            if (keep.Alive && keep.Hp < keep.MaxHp) { keep.Hp = keep.MaxHp; lw.SetEntityForTest(scout, keep); }
+        }
         g.PumpActorsForTest();
+        var nestNow = lw.Entities[nest];
+        var scoutNow = lw.Entities[scout];
+        bool stillDetected = nestNow.Alive && (nestNow.DetectedMask & (1 << me)) != 0;
         EventGate(!lw.IsDisabled(nest) && !g.ActorDimmedForTest(nest) && g.ActorDetectedTintForTest(nest), "Sabotaged/cloak",
-                  "...and when the dim lifts the wash is back, because the nest is still detected: neither look wiped the other");
+                  "...and when the dim lifts the wash is back, because the nest is still detected: neither look wiped the other "
+                  + $"(nest alive {nestNow.Alive}, scout alive {scoutNow.Alive}, still detected {stillDetected}, "
+                  + $"dimmed {g.ActorDimmedForTest(nest)}, wash {g.ActorDetectedTintForTest(nest)}, tick {lw.Tick})");
     }
 
     /// <summary>P8-10 review, item 6: an enemy launches its superweapon and I
