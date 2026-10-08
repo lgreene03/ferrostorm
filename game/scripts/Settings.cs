@@ -141,7 +141,22 @@ public static class Settings
         ("group_1", "GROUP 1"), ("group_2", "GROUP 2"), ("group_3", "GROUP 3"),
         ("group_4", "GROUP 4"), ("group_5", "GROUP 5"), ("group_6", "GROUP 6"),
         ("group_7", "GROUP 7"), ("group_8", "GROUP 8"), ("group_9", "GROUP 9"),
+        // P8-35: group 0 and the four camera bookmarks. project.godot has
+        // declared all five since DR-05 and DR-07 and the battle answers to
+        // them, but they were missing from this table, so the settings page
+        // could not rebind them, the conflict check could not see them (any
+        // other action could be bound onto 0 or F1 and both would fire), and
+        // the CONTROLS page, which is generated from this table, would not
+        // have listed them.
+        ("group_0", "GROUP 0"),
+        ("bookmark_1", "CAMERA BOOKMARK 1"), ("bookmark_2", "CAMERA BOOKMARK 2"),
+        ("bookmark_3", "CAMERA BOOKMARK 3"), ("bookmark_4", "CAMERA BOOKMARK 4"),
     };
+
+    /// <summary>P8-35: raised after any binding changes (a rebind accepted, or
+    /// RESET DEFAULTS), so a page that shows the bindings, the CONTROLS page,
+    /// re-reads them rather than showing the keys it was built with.</summary>
+    public static event System.Action? BindsChanged;
 
     private static readonly Dictionary<string, Key> _defaultBinds = new();
     private static readonly Dictionary<string, Key> _binds = new();
@@ -326,6 +341,7 @@ public static class Settings
         _binds[action] = key;
         ApplyBinds();
         Save();
+        BindsChanged?.Invoke();
         return null;
     }
 
@@ -358,5 +374,6 @@ public static class Settings
         foreach (var kv in _defaultBinds) _binds[kv.Key] = kv.Value;
         ApplyAll();
         Save();
+        BindsChanged?.Invoke();
     }
 }

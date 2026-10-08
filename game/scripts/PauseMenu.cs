@@ -34,24 +34,47 @@ public partial class PauseMenu : Control
     /// drawn under the new one for even one frame is a visible flicker.</summary>
     private VBoxContainer Page(string heading, int halfW = 280, int halfH = 210)
     {
-        foreach (var c in _pageRoot.GetChildren())
-        {
-            if (c is Control ctl) { ctl.Visible = false; ctl.MouseFilter = MouseFilterEnum.Ignore; }
-            c.QueueFree();
-        }
+        ClearPage();
         var host = new Control { AnchorRight = 1, AnchorBottom = 1, MouseFilter = MouseFilterEnum.Ignore };
         _pageRoot.AddChild(host);
         return UplinkUi.OverlayBox(host, heading, halfW, halfH);
     }
 
+    private void ClearPage()
+    {
+        foreach (var c in _pageRoot.GetChildren())
+        {
+            if (c is Control ctl) { ctl.Visible = false; ctl.MouseFilter = MouseFilterEnum.Ignore; }
+            c.QueueFree();
+        }
+        ControlsShown = null;
+        SettingsShown = null;
+    }
+
     private void ShowRoot()
     {
-        var v = Page("OPERATIONS", 280, 210);
+        // P8-35: 30 px taller each way for the SETTINGS and CONTROLS row, so a
+        // LAN match's caveat and a save's flash still fit beneath it.
+        var v = Page("OPERATIONS", 280, 240);
         v.AddChild(UplinkUi.Note(_game.ModeLine()));
         v.AddChild(new HSeparator());
         v.AddChild(UplinkUi.MenuButton("RESUME", () => _game.ClosePause()));
         v.AddChild(UplinkUi.MenuButton("SAVE GAME", () => ShowSlots(saving: true), enabled: _game.CanSave));
         v.AddChild(UplinkUi.MenuButton("LOAD GAME", () => ShowSlots(saving: false)));
+        // P8-35: SETTINGS and CONTROLS from inside a battle, side by side so
+        // the page keeps its size. SETTINGS is the main menu's own page with
+        // BACK pointed here, so a rebind made mid-battle is the same rebind,
+        // live at once, and CONTROLS is the same generated page the main menu
+        // opens.
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 10);
+        var settings = UplinkUi.MenuButton("SETTINGS", ShowSettings);
+        settings.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        row.AddChild(settings);
+        var controls = UplinkUi.MenuButton("CONTROLS", ShowControls);
+        controls.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        row.AddChild(controls);
+        v.AddChild(row);
         v.AddChild(UplinkUi.MenuButton("ABANDON OPERATION", () => _game.QuitToMenu()));
         if (_flash.Length > 0) v.AddChild(UplinkUi.Note(_flash, 13));
         if (!_game.CanSave)
@@ -60,6 +83,44 @@ public partial class PauseMenu : Control
             v.AddChild(UplinkUi.Note(_game.IsNetworked
                 ? "saving is disabled in a LAN match: a save is one machine's snapshot, and the other player's battle carries on without it"
                 : "saving is disabled during replay playback", 11));
+    }
+
+    /// <summary>P8-35: the generated CONTROLS page, BACK to the root.</summary>
+    private void ShowControls()
+    {
+        var v = Page("CONTROLS", 320, 300);
+        var page = new ControlsPage();
+        v.AddChild(page);
+        v.AddChild(UplinkUi.MenuButton("BACK", ShowRoot));
+        ControlsShown = page;
+    }
+
+    /// <summary>P8-35: the settings page itself, opaque over the battle, with
+    /// BACK returning here. The cancel key still closes the whole menu, as it
+    /// does from every other page.</summary>
+    private void ShowSettings()
+    {
+        ClearPage();
+        var page = new SettingsScene { OnBack = ShowRoot };
+        _pageRoot.AddChild(page);
+        SettingsShown = page;
+    }
+
+    // ---- P8-35 verification surface: what the menu shows, pressed the way a
+    // click presses it.
+    public ControlsPage? ControlsShown { get; private set; }
+    public SettingsScene? SettingsShown { get; private set; }
+
+    /// <summary>Press a button on the page showing, through its own signal.</summary>
+    public bool PressForTest(string text)
+    {
+        foreach (var n in _pageRoot.FindChildren("*", nameof(Button), true, false))
+            if (n is Button b && IsInstanceValid(b) && b.IsVisibleInTree() && b.Text == text && !b.Disabled)
+            {
+                b.EmitSignal(BaseButton.SignalName.Pressed);
+                return true;
+            }
+        return false;
     }
 
     private void ShowSlots(bool saving)

@@ -192,7 +192,18 @@ public partial class MainMenu : Control
         v.AddChild(MenuButton("LOAD GAME", ShowLoad));
         v.AddChild(MenuButton("REPLAYS", ShowReplays));
         v.AddChild(MenuButton("LAN", ShowLan));
-        v.AddChild(MenuButton("SETTINGS", () => GetTree().ChangeSceneToFile("res://scenes/Settings.tscn")));
+        // P8-35: CONTROLS beside SETTINGS, on one row, so the panel P8-40
+        // sized to its content does not grow by a button's height.
+        var settingsRow = new HBoxContainer();
+        settingsRow.AddThemeConstantOverride("separation", 10);
+        var settingsButton = MenuButton("SETTINGS", () => GetTree().ChangeSceneToFile("res://scenes/Settings.tscn"));
+        settingsButton.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        settingsRow.AddChild(settingsButton);
+        var controlsButton = MenuButton("CONTROLS", ShowControls);
+        controlsButton.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        controlsButton.TooltipText = "Every key the battle answers to, and what each is bound to now.";
+        settingsRow.AddChild(controlsButton);
+        v.AddChild(settingsRow);
         // P8-11, decision D25: no REPLAY THEATRE. It opened the baked-JSON
         // scene, which needed a hand-exported file no build ships and so
         // showed a black screen with no way out; REPLAYS above already plays
@@ -541,6 +552,30 @@ public partial class MainMenu : Control
         MatchConfig.MapPath = SelectedMapPath;
         MatchConfig.MissionPath = null;
         _smoke = LanSmoke.Start(MatchConfig.CurrentSetup(), ticks);
+    }
+
+    // ---------------- P8-35: controls ----------------
+
+    /// <summary>The CONTROLS page over the menu: the same generated page the
+    /// pause menu opens, so the two can never list different things.</summary>
+    private void ShowControls()
+    {
+        var overlay = FullOverlay();
+        var v = OverlayBox(overlay, "CONTROLS", 300, 300);
+        var page = new ControlsPage();
+        v.AddChild(page);
+        v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+        _controlsPage = page;
+    }
+
+    private ControlsPage? _controlsPage;
+
+    /// <summary>P8-35 verification hook: press CONTROLS through its own signal
+    /// and return the page it opened (null if none opened).</summary>
+    public ControlsPage? OpenControlsForTest()
+    {
+        _controlsPage = null;
+        return PressMenuButtonForTest("CONTROLS") ? _controlsPage : null;
     }
 
     // ---------------- campaign ----------------

@@ -94,8 +94,23 @@ public partial class SettingsScene : Control
         outer.AddChild(UplinkUi.MenuButton("BACK", () =>
         {
             Settings.Save();
+            if (OnBack is { } back) { back(); return; }
             GetTree().ChangeSceneToFile("res://scenes/MainMenu.tscn");
         }));
+    }
+
+    /// <summary>P8-35: where BACK goes when this page is not its own scene.
+    /// The pause menu opens the same page over a battle and sets this, so BACK
+    /// returns to the pause menu rather than to the main menu (which would end
+    /// the match). Null when the page is the scene the main menu changed to.</summary>
+    public System.Action? OnBack;
+
+    /// <summary>Verification hook: press BACK through its own signal.</summary>
+    public bool PressBackForTest()
+    {
+        foreach (var b in FindChildren("*", nameof(Button), true, false))
+            if (b is Button btn && btn.Text == "BACK") { btn.EmitSignal(BaseButton.SignalName.Pressed); return true; }
+        return false;
     }
 
     // ---------------- audio ----------------

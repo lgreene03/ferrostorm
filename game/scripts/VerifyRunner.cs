@@ -1307,6 +1307,9 @@ public partial class VerifyRunner : Node
         RunFaultContainmentStages();
         // P8-34: every match ends on a results screen, in scenes of its own.
         RunResultsStages();
+        // P8-35: the controls page, settings from the pause menu, the new
+        // rebindable keys and the strong and weak lines.
+        RunControlsStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -8112,6 +8115,280 @@ public partial class VerifyRunner : Node
             MatchConfig.AllowedStructures = wasStructs;
             MatchConfig.AllowedUnits = wasUnits;
             DeleteHarnessFiles();
+        }
+    }
+
+    // ---------------- P8-35: controlsgate ----------------
+
+    private void ControlsGate(bool ok, string stage, string what) => Check(ok, $"controlsgate/{stage}: {what}");
+
+    /// <summary>What a controls page must show, computed from the table it is
+    /// generated from: every Bindable entry in table order, with its key now.</summary>
+    private static List<(string Label, string Key)> BindableNow()
+    {
+        var l = new List<(string, string)>();
+        foreach (var (action, label) in Settings.Bindable) l.Add((label, Settings.KeyName(Settings.BindOf(action))));
+        return l;
+    }
+
+    /// <summary>The first difference between the rows a page shows and the
+    /// rows wanted, or "" when they agree row for row.</summary>
+    private static string RowsDiff(List<(string Label, string Key)> shown, List<(string Label, string Key)> want)
+    {
+        if (shown.Count != want.Count) return $"{shown.Count} rows shown for {want.Count} entries";
+        for (int i = 0; i < want.Count; i++)
+            if (shown[i] != want[i]) return $"row {i} shows {shown[i].Label} {shown[i].Key}, wanted {want[i].Label} {want[i].Key}";
+        return "";
+    }
+
+    /// <summary>The key a controls page shows beside a label.</summary>
+    private static string RowKey(ControlsPage? p, string label)
+    {
+        if (p == null) return "(no page)";
+        foreach (var (l, k) in p.RowsShown()) if (l == label) return k;
+        return "(no row)";
+    }
+
+    /// <summary>
+    /// P8-35, one group. The keys were listed nowhere a player could read
+    /// them; the settings page could not be reached from a battle; group 0
+    /// and the four camera bookmarks answered in the battle but could not be
+    /// rebound and were invisible to the conflict check; and a unit's tooltip
+    /// said how to build it and nothing about what it was for. Every binding
+    /// the stages move is put back at the end, and nothing they do is saved.
+    /// </summary>
+    private void RunControlsStages()
+    {
+        GD.Print("  --    controlsgate (P8-35): the controls page, settings in a battle, the new rebindable keys, strong and weak lines");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        var keysWas = new Dictionary<string, Key>();
+        foreach (var (a, _) in Settings.Bindable) keysWas[a] = Settings.BindOf(a);
+        Settings.SaveSuppressedForTest = true;
+        try
+        {
+            RunControlsTableStage();
+            RunControlsMenuStage();
+            RunControlsPauseStage();
+            RunMatchupTooltipStage();
+        }
+        finally
+        {
+            // Two passes, so a key one stage moved between two actions is not
+            // refused as a conflict on its way back.
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, Key.None);
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, k);
+            Settings.SaveSuppressedForTest = saveWas;
+        }
+    }
+
+    /// <summary>The table the page is generated from and the project's input
+    /// map agree in both directions, so nothing the battle answers to is left
+    /// off the page or out of the conflict check.</summary>
+    private void RunControlsTableStage()
+    {
+        var declared = new SortedSet<string>();
+        foreach (var a in InputMap.GetActions())
+        {
+            string s = a.ToString();
+            if (!s.StartsWith("ui_")) declared.Add(s);
+        }
+        var table = new SortedSet<string>();
+        foreach (var (a, _) in Settings.Bindable) table.Add(a);
+        var missing = new SortedSet<string>(declared);
+        missing.ExceptWith(table);
+        var undeclared = new SortedSet<string>(table);
+        undeclared.ExceptWith(declared);
+        ControlsGate(missing.Count == 0 && undeclared.Count == 0 && table.Contains("group_0") && table.Contains("bookmark_4"), "table",
+                     $"every action project.godot declares is in Settings.Bindable and every Bindable action is declared, group 0 and "
+                     + $"the four camera bookmarks included ({declared.Count} declared; missing from the table: "
+                     + $"{(missing.Count == 0 ? "none" : string.Join(", ", missing))}; not declared: "
+                     + $"{(undeclared.Count == 0 ? "none" : string.Join(", ", undeclared))})");
+    }
+
+    /// <summary>The main menu's CONTROLS page lists the table, and follows a
+    /// rebind made while it is open.</summary>
+    private void RunControlsMenuStage()
+    {
+        var menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+        AddChild(menu);
+        try
+        {
+            var page = menu.OpenControlsForTest();
+            string diff = page == null ? "no page opened" : RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(page != null && diff.Length == 0, "menu",
+                         $"the main menu's CONTROLS button opens a page listing all {Settings.Bindable.Length} Bindable entries in table "
+                         + $"order, each with the key it is bound to now{(diff.Length > 0 ? $"; but {diff}" : "")}");
+            if (page == null) return;
+            string? clash = Settings.TryRebind("group_0", Key.K);
+            string shown = RowKey(page, "GROUP 0");
+            string after = RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(clash == null && shown == Settings.KeyName(Key.K) && after.Length == 0, "menu",
+                         $"...and a binding changed while it is open shows on it at once (GROUP 0 reads {shown})");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "menu", $"the stage threw: {ex}"); }
+        finally { menu.QueueFree(); }
+    }
+
+    /// <summary>Inside a battle: the pause key, CONTROLS, SETTINGS with a real
+    /// key capture for group 0 and bookmark 1, the conflict check both ways,
+    /// BACK to the operations menu, and the rebound keys working in the
+    /// battle while the old ones do nothing.</summary>
+    private void RunControlsPauseStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            g.PressKey(Settings.BindOf("pause_menu"));
+            var pm = g.PauseMenuView;
+            ControlsGate(pm != null && g.PauseOpen, "pause", "precondition: the pause key opens the operations menu");
+            if (pm == null) return;
+
+            bool opened = pm.PressForTest("CONTROLS");
+            var page = pm.ControlsShown;
+            string diff = page == null ? "no page opened" : RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(opened && page != null && diff.Length == 0, "pause",
+                         $"CONTROLS in the pause menu opens the same generated page, every Bindable entry with its live key"
+                         + $"{(diff.Length > 0 ? $"; but {diff}" : "")}");
+            bool back = pm.PressForTest("BACK");
+            ControlsGate(back && pm.ControlsShown == null && g.PauseOpen, "pause", "...and its BACK returns to the operations menu");
+
+            bool openedSettings = pm.PressForTest("SETTINGS");
+            var sp = pm.SettingsShown;
+            if (sp == null)
+            {
+                ControlsGate(false, "pause", $"SETTINGS in the pause menu opened no settings page (pressed {openedSettings})");
+                return;
+            }
+            Key mark2Was = Settings.BindOf("bookmark_2"), stopWas = Settings.BindOf("stop");
+            bool drove = sp.DriveRebind("group_0", Key.K);
+            string n1 = sp.NoticeText;
+            drove &= sp.DriveRebind("bookmark_1", Key.F9);
+            string n2 = sp.NoticeText;
+            ControlsGate(drove && Settings.BindOf("group_0") == Key.K && Settings.BindOf("bookmark_1") == Key.F9
+                         && sp.BindTextOf("group_0") == Settings.KeyName(Key.K), "pause",
+                         $"SETTINGS in the pause menu opens the settings page over the battle, where GROUP 0 and CAMERA BOOKMARK 1 "
+                         + $"rebind through its own key capture (\"{n1}\", \"{n2}\")");
+            sp.DriveRebind("bookmark_2", Key.A);
+            string n3 = sp.NoticeText;
+            sp.DriveRebind("stop", Key.K);
+            string n4 = sp.NoticeText;
+            ControlsGate(Settings.BindOf("bookmark_2") == mark2Was && Settings.BindOf("stop") == stopWas
+                         && n3.Contains(Settings.LabelOf("attack_move")) && n4.Contains("GROUP 0"), "pause",
+                         $"the conflict check covers the new keys both ways: a bookmark onto ATTACK-MOVE's key and STOP onto GROUP 0's "
+                         + $"are refused, each naming the holder (\"{n3}\", \"{n4}\")");
+            bool backed = sp.PressBackForTest();
+            bool reopened = pm.PressForTest("CONTROLS");
+            string g0 = RowKey(pm.ControlsShown, "GROUP 0"), b1 = RowKey(pm.ControlsShown, "CAMERA BOOKMARK 1");
+            ControlsGate(backed && g.PauseOpen && reopened && g0 == Settings.KeyName(Key.K) && b1 == Settings.KeyName(Key.F9), "pause",
+                         $"BACK from the settings page returns to the operations menu, not the main menu, and its CONTROLS page now "
+                         + $"reads GROUP 0 {g0} and CAMERA BOOKMARK 1 {b1}");
+
+            g.PressKey(Settings.BindOf("cancel"));
+            g.PressKey(Settings.BindOf("select_all_army"));
+            int army = g.SelectionCount;
+            g.PressKeyWithCtrl(Key.K);
+            g.ClearSelectionForTest();
+            g.PressKey(Key.Key0);
+            int byOld = g.SelectionCount;
+            g.PressKey(Key.K);
+            int byNew = g.SelectionCount;
+            ControlsGate(!g.PauseOpen && army > 0 && byOld == 0 && byNew == army, "group",
+                         $"rebound to K, group 0 assigns on CTRL+K and recalls on K in the battle, and 0 recalls nothing now ({byNew} of "
+                         + $"{army} by K, {byOld} by 0)");
+            g.ClearSelectionForTest();
+
+            g.FocusCameraOn(20f, 30f, 22f);
+            g.PressKeyWithCtrl(Key.F9);
+            g.FocusCameraOn(70f, 10f, 22f);
+            g.PressKey(Key.F1);
+            var stayed = g.CameraGroundTargetForTest;
+            g.PressKey(Key.F9);
+            var flown = g.CameraGroundTargetForTest;
+            bool stood = Mathf.Abs(stayed.X - 70f) < 0.5f && Mathf.Abs(stayed.Z - 10f) < 0.5f;
+            bool recalled = Mathf.Abs(flown.X - 20f) < 0.5f && Mathf.Abs(flown.Z - 30f) < 0.5f;
+            ControlsGate(stood && recalled, "bookmark",
+                         $"rebound to F9, camera bookmark 1 stores on CTRL+F9 and recalls on F9, and F1 does nothing now (after F1 "
+                         + $"{stayed.X:0.0},{stayed.Z:0.0}; after F9 {flown.X:0.0},{flown.Z:0.0})");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "pause", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The strong and weak lines in the sidebar's unit tooltips, read
+    /// as the tooltip shows them: first against the shipped matrix, then after
+    /// the live matrix is changed before tick 0, the way /data changes it.</summary>
+    private void RunMatchupTooltipStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            var sb = g.SidebarView;
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad"), tank = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            int flak = UnitCatalogue.TypeIdOf("com_flak_track"), flyer = UnitCatalogue.TypeIdOf("com_strike_flyer");
+            int howitzer = UnitCatalogue.TypeIdOf("dir_howitzer"), engineer = UnitCatalogue.TypeIdOf("com_engineer");
+            var live = lw.DamageMatrixSnapshot();
+            var compiled = DamageMatrix.ToArray();
+            bool shipped = live.Length == compiled.Length;
+            for (int i = 0; shipped && i < live.Length; i++) shipped = live[i] == compiled[i];
+            string Mismatch((int Type, string Strong, string Weak)[] want)
+            {
+                var bad = new List<string>();
+                foreach (var (t, s, w) in want)
+                {
+                    string tip = sb.UnitTooltipForTest(t) ?? "(no button)";
+                    if (!tip.Contains(s) || !tip.Contains(w)) bad.Add($"{UnitCatalogue.DisplayNameOf(t)} reads \"{tip.Replace("\n", " / ")}\"");
+                }
+                return string.Join("; ", bad);
+            }
+            string first = Mismatch(new[]
+            {
+                (rifle, "STRONG AGAINST: UNARMOURED (100%)", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+                (tank, "STRONG AGAINST: HEAVY ARMOUR (100%)", "WEAK AGAINST: ANTI-ARMOUR FIRE (100%)"),
+                (flak, "STRONG AGAINST: AIRCRAFT (75%), AND IT CANNOT FIRE ON THE GROUND", "WEAK AGAINST: ANTI-ARMOUR FIRE (75%)"),
+                (flyer, "STRONG AGAINST: HEAVY ARMOUR (100%)", "WEAK AGAINST: ANTI-AIR FIRE (75%)"),
+                (howitzer, "STRONG AGAINST: STRUCTURES (100%)", "WEAK AGAINST: ANTI-ARMOUR FIRE (75%)"),
+                (engineer, "STRONG AGAINST: NOTHING, IT CARRIES NO WEAPON", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+            });
+            ControlsGate(lw.Tick == 0 && shipped && first.Length == 0, "tooltips",
+                         $"against the shipped matrix the unit tooltips carry strong and weak lines derived from it: the rifle squad strong "
+                         + $"against the unarmoured, the cannon tank against heavy armour, the flak track against aircraft and nothing on the "
+                         + $"ground, the strike flyer hurt only by anti-air fire, the howitzer against structures, the engineer unarmed "
+                         + $"(tick {lw.Tick}, shipped matrix {shipped}){(first.Length > 0 ? $"; but {first}" : "")}");
+
+            // Three cells moved, before tick 0 as only /data may move them: the
+            // anti-armour warhead now hits light armour hardest, the
+            // anti-building warhead hurts heavy armour most, and the
+            // anti-infantry warhead ties across unarmoured and light.
+            int a = DamageMatrix.ArmourClasses;
+            live[(int)Warhead.AntiArmour * a + (int)ArmourClass.Light] = 120;
+            live[(int)Warhead.AntiBuilding * a + (int)ArmourClass.Heavy] = 150;
+            live[(int)Warhead.AntiInfantry * a + (int)ArmourClass.Light] = 100;
+            lw.RegisterDamageMatrix(live);
+            g.StepOneTick();
+            string second = Mismatch(new[]
+            {
+                (rifle, "STRONG AGAINST: UNARMOURED AND LIGHT ARMOUR (100%)", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+                (tank, "STRONG AGAINST: LIGHT ARMOUR (120%)", "WEAK AGAINST: ANTI-BUILDING FIRE (150%)"),
+                (flak, "STRONG AGAINST: AIRCRAFT (120%), AND IT CANNOT FIRE ON THE GROUND", "WEAK AGAINST: ANTI-ARMOUR FIRE (120%)"),
+                (engineer, "STRONG AGAINST: NOTHING, IT CARRIES NO WEAPON", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+            });
+            ControlsGate(second.Length == 0, "tooltips",
+                         $"...and with three cells of the live matrix changed the lines follow it, a tie named as a tie, while the "
+                         + $"engineer's, which no changed cell touches, stay as they were{(second.Length > 0 ? $"; but {second}" : "")}");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "tooltips", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
         }
     }
 }

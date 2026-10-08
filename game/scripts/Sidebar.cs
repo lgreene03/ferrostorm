@@ -352,7 +352,42 @@ public partial class Sidebar : PanelContainer
         _placeButton = MakeButton(new BuildItem("PLACE >>", 0, ""), () => _game.EnterPlacement(_readyType));
         _placeButton.Visible = false;
         v.AddChild(_placeButton);
+        RefreshMatchups();
     }
+
+    // ---- P8-35: strong and weak against, in every unit button's tooltip ----
+
+    private const string BuildTip = "Left-click: build     Right-click: cancel / refund";
+    private readonly Dictionary<int, string> _matchupLines = new();
+    private int _matrixSeen;
+    private bool _matchupsBuilt;
+
+    /// <summary>Derive each unit's STRONG and WEAK AGAINST lines from the live
+    /// world (Matchups), once, and again whenever the live damage matrix is
+    /// not the one they were derived from. The matrix is fixed once a match
+    /// starts, so in play this derives once; it is asked every refresh so the
+    /// lines can never describe a table the match is not playing.</summary>
+    private void RefreshMatchups()
+    {
+        var w = _game.LiveWorld;
+        int fp = Matchups.MatrixFingerprint(w);
+        if (_matchupsBuilt && fp == _matrixSeen) return;
+        _matchupsBuilt = true;
+        _matrixSeen = fp;
+        foreach (var (typeId, b) in _unitButtons)
+        {
+            _matchupLines[typeId] = $"{Matchups.StrongLine(w, typeId)}\n{Matchups.WeakLine(w, typeId)}";
+            b.TooltipText = UnitTooltip(typeId);
+        }
+    }
+
+    private string UnitTooltip(int typeId) =>
+        _matchupLines.TryGetValue(typeId, out var lines) ? $"{BuildTip}\n{lines}" : BuildTip;
+
+    /// <summary>Verification read: a unit button's tooltip as the player
+    /// would see it, or null when the unit has no button.</summary>
+    public string? UnitTooltipForTest(int typeId) =>
+        _unitButtons.TryGetValue(typeId, out var b) ? b.TooltipText : null;
 
     /// <summary>One structure button, into the tab that owns it. The two
     /// structure tabs share this because they share a producer: the split is
@@ -484,7 +519,7 @@ public partial class Sidebar : PanelContainer
         // issued nowhere). Left-click still builds; the tooltip advertises both.
         if (onCancel != null)
         {
-            b.TooltipText = "Left-click: build     Right-click: cancel / refund";
+            b.TooltipText = BuildTip;
             b.GuiInput += ev =>
             {
                 if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true })
@@ -522,6 +557,7 @@ public partial class Sidebar : PanelContainer
         int supply, int draw, System.Func<int[]?, bool> prereqsMet,
         ProducerLine yardLane2 = default, int readyStructureType2 = 0)
     {
+        RefreshMatchups();   // P8-35: a no-op unless the live matrix changed
         bool hasYard = yard.Live;
         var yardQ = yard.Queue;
         float yardProgress = yard.HeadProgress;

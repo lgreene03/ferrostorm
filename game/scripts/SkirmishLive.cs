@@ -7159,6 +7159,8 @@ public partial class SkirmishLive : Node3D
     public ulong ReplayFinalHash => _replayFinalHash;
     public bool Resumed => _resumed;
     public bool PauseOpen => _pauseMenu != null;
+    /// <summary>P8-35 verification read: the pause menu as it stands, or null.</summary>
+    public PauseMenu? PauseMenuView => _pauseMenu;
     public MatchSetup Setup => _setup;
     public int FactionOf(int player) => _world.FactionOf(player);
     // ADR-006 verification surface: the live match's catalogue reads and the
