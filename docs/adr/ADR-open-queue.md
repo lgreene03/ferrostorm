@@ -197,7 +197,10 @@ the same commit.
   play back unchanged. Signed off with conditions by the Architect on
   2026-10-05; its before-merge conditions C1 to C11 are met in the pull
   request that lands it, and it is ratified under D5 and D36 (D36: it lands
-  before F5 is met).
+  before F5 is met). Its frame clause was amended on 2026-10-08 under its C7
+  and decision D38: once P8-62, P8-63, P8-53 and P8-64 had landed, the
+  sheltered frame scored 28 against 26 of 32, so the canonical frame is now
+  the sheltered one, judged jointly with ADR-077's multiplication.
 - ADR-076: RATIFIED 2026-10-06 - ADR-076-the-start-is-a-true-half-turn.md
   (rows P8-62 and P8-63, ADR-075's causes 1 and 2; row P8-64, cause 4, held
   back under D37). Number claimed here per the numbering law, in the same
