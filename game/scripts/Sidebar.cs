@@ -381,8 +381,35 @@ public partial class Sidebar : PanelContainer
         }
     }
 
-    private string UnitTooltip(int typeId) =>
-        _matchupLines.TryGetValue(typeId, out var lines) ? $"{BuildTip}\n{lines}" : BuildTip;
+    private string UnitTooltip(int typeId)
+    {
+        string tip = _matchupLines.TryGetValue(typeId, out var lines) ? $"{BuildTip}\n{lines}" : BuildTip;
+        return _capped.Contains(typeId) ? $"{tip}\n{CapLine(typeId)}" : tip;
+    }
+
+    // ---- P8-42: a unit at its cap greys, and says why ----
+
+    private readonly HashSet<int> _capped = new();
+
+    /// <summary>The greyed button's reason, from the live catalogue's cap.</summary>
+    private string CapLine(int typeId) =>
+        $"AT ITS LIMIT: {_game.LiveWorld.GetUnitType(typeId).MaxAlive} ALREADY IN THE FIELD; ANOTHER CAN BE ORDERED WHEN IT FALLS";
+
+    /// <summary>Verification reads: is a unit's button greyed, and which
+    /// visible slot of its tab is it (what ALT and a digit press)?</summary>
+    public bool UnitButtonDisabledForTest(int typeId) => _unitButtons.TryGetValue(typeId, out var b) && b.Disabled;
+    public int VisibleSlotOfUnitForTest(int typeId)
+    {
+        if (!_unitButtons.TryGetValue(typeId, out var target)) return -1;
+        int seen = 0;
+        foreach (var child in _tabPages[_tabs.CurrentTab].GetChildren())
+            if (child is Button b && b.Visible)
+            {
+                if (b == target) return seen;
+                seen++;
+            }
+        return -1;
+    }
 
     /// <summary>Verification read: a unit button's tooltip as the player
     /// would see it, or null when the unit has no button.</summary>
@@ -454,7 +481,17 @@ public partial class Sidebar : PanelContainer
             if (child is Button b && b.Visible)
             {
                 if (seen++ != index) continue;
-                if (b.Disabled) return false;
+                if (b.Disabled)
+                {
+                    // P8-42: a slot greyed at its cap says why rather than
+                    // refusing in silence: the mouse has the tooltip, and the
+                    // key goes to the button's own order path, whose cap
+                    // check refuses it through the one Deny with the same
+                    // words a racing press gets. Nothing is sent.
+                    foreach (var (typeId, ub) in _unitButtons)
+                        if (ub == b && _capped.Contains(typeId)) _game.QueueUnit(typeId);
+                    return false;
+                }
                 b.EmitSignal(Godot.BaseButton.SignalName.Pressed);
                 return true;
             }
@@ -490,7 +527,9 @@ public partial class Sidebar : PanelContainer
         b.AddThemeStyleboxOverride("normal", normal);
         b.AddThemeStyleboxOverride("hover", hover);
         // W3-16: a real pressed state (darker gold, thicker border) so clicks
-        // give feedback, and a disabled state so unaffordable items read dim.
+        // give feedback, and a disabled state so refused items read dim (P8-42:
+        // no producer, a full yard, a hero at its cap or an unaffordable
+        // barrier; an unaffordable queued item stays lit and queues).
         var pressed = (StyleBoxFlat)normal.Duplicate();
         pressed.BgColor = new Color(0.23f, 0.19f, 0.11f);
         pressed.BorderColor = FerriteGold;
@@ -619,7 +658,11 @@ public partial class Sidebar : PanelContainer
             // the other lane is still free the player can keep queueing, which
             // is the whole point of the second line; only both slots full
             // disables the tab.
-            b.Disabled = !hasYard || credits < def.Cost
+            // P8-42: a queued building the treasury cannot pay for yet still
+            // queues (the yard builds pay-as-you-build, and the press says it
+            // will wait); only a BARRIER, bought outright as it lands, greys
+            // for want of credits.
+            b.Disabled = !hasYard || (IsBarrierType(typeId) && credits < def.Cost)
                          || (!IsBarrierType(typeId) && readyStructureType > 0 && readyStructureType2 > 0);
             int n = structCounts.GetValueOrDefault(typeId);
             // Head progress comes from whichever lane actually holds this type
@@ -651,7 +694,15 @@ public partial class Sidebar : PanelContainer
             var q = line.Queue;
             int n = 0;
             foreach (int t in q) if (t == typeId) n++;
-            b.Disabled = !line.Live || credits < _unitCost(typeId);
+            // P8-42: an unaffordable unit is NOT greyed any more. The sim
+            // builds pay-as-you-build, so the order queues and waits for the
+            // credits, and the press says so (SkirmishLive.QueueUnit). What
+            // greys a unit is the sim's own refusal of the ORDER: no producer,
+            // or (the heroes) its cap reached, World.AtMaxAlive, which the sim
+            // asks before it queues anything. The tooltip says which.
+            bool capped = line.Live && _game.LiveWorld.AtMaxAlive(_game.LocalPlayerId, typeId);
+            if (capped ? _capped.Add(typeId) : _capped.Remove(typeId)) b.TooltipText = UnitTooltip(typeId);
+            b.Disabled = !line.Live || capped;
             b.Text = _baseText[b] + QueueSuffix(n, q.Count > 0 && typeId == q[0],
                 _unitBuildTicks(typeId), line.HeadProgress);
             ((ColorRect)b.GetNode("Fill")).OffsetRight =

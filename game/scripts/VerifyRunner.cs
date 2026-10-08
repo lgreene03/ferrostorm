@@ -1310,6 +1310,8 @@ public partial class VerifyRunner : Node
         // P8-35: the controls page, settings from the pause menu, the new
         // rebindable keys and the strong and weak lines.
         RunControlsStages();
+        // P8-42: refusals explain themselves, through one Deny.
+        RunDenyStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -8385,6 +8387,468 @@ public partial class VerifyRunner : Node
                          + $"engineer's, which no changed cell touches, stay as they were{(second.Length > 0 ? $"; but {second}" : "")}");
         }
         catch (System.Exception ex) { ControlsGate(false, "tooltips", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    // ---------------- P8-42: denygate ----------------
+
+    private void DenyGate(bool ok, string stage, string what) => Check(ok, $"denygate/{stage}: {what}");
+
+    /// <summary>The counts a refusal moves, taken before a gesture, on a quiet
+    /// stack, so an earlier line's repeat window cannot swallow this one.</summary>
+    private readonly record struct DenyMark(int Denials, int Raised, int Cues, int Confirms, int Pending);
+
+    private static DenyMark MarkDenials(SkirmishLive g)
+    {
+        g.AlertsView.ResetForTest();
+        return new DenyMark(g.Denials, g.AlertsView.RaisedCount, g.AudioRequests(SkirmishLive.DenyCue),
+                            g.AudioRequests("ui_confirm"), g.PendingCommands.Count);
+    }
+
+    /// <summary>Did the gesture since the mark say exactly this reason exactly
+    /// once, through Deny, with one deny cue and no other line raised?</summary>
+    private static bool SaidOnce(SkirmishLive g, DenyMark m, string reason, out string measured)
+    {
+        int d = g.Denials - m.Denials, r = g.AlertsView.RaisedCount - m.Raised;
+        int c = g.AudioRequests(SkirmishLive.DenyCue) - m.Cues;
+        int lines = 0;
+        foreach (string t in g.AlertsView.StackTexts()) if (t == reason) lines++;
+        measured = $"{d} denial, {r} line raised, {c} deny cue, {lines} such line on the stack, last \"{g.LastDenial}\"";
+        return d == 1 && r == 1 && c == 1 && lines == 1 && g.LastDenial == reason;
+    }
+
+    /// <summary>
+    /// P8-42, one group. Refusals had grown up site by site: some toasted with
+    /// a borrowed click, some in silence, a refused placement only clicked, an
+    /// order the treasury could not pay for was greyed out although the sim
+    /// would have queued it, a hero at its cap and a factory with a blocked
+    /// exit said the same thing, and a right click on an aircraft nothing
+    /// selected could hit sent orders that could never be carried out. Every
+    /// refusal now goes through ONE Deny with its own cue, and each stage
+    /// reads that it said its reason exactly once.
+    /// </summary>
+    private void RunDenyStages()
+    {
+        GD.Print("  --    denygate (P8-42): every refusal says its reason once, through one Deny with its own cue");
+        RunDenyFundsStage();
+        RunDenyCapStage();
+        RunDenyAirStage();
+        RunDenySweepStage();
+    }
+
+    /// <summary>An empty treasury: the unit and building buttons stay lit,
+    /// and a press still queues (the sim builds pay-as-you-build) and says it
+    /// will wait; the line holds at nothing until the credits come.</summary>
+    private void RunDenyFundsStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } bq)
+            {
+                DenyGate(false, "funds", "quiet ground beside my yard for a barracks (none: a fixture failure)");
+                return;
+            }
+            int barracks = lw.SpawnBarracks(me, bq.X, bq.Y);
+            int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+            lw.GrantCredits(me, -lw.Credits(me));
+            // Three ticks, the frame half on the last two: the panel reads the
+            // interpolated view, which takes a fixture in a tick behind the sim.
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            const int plant = 1;
+            string rifleName = UnitCatalogue.DisplayNameOf(rifle), plantName = StructureCatalogue.DisplayNameOf(plant);
+            bool lit = !sb.UnitButtonDisabledForTest(rifle) && sb.StructButtonVisible(plant);
+
+            var m = MarkDenials(g);
+            bool pressed = sb.PressUnitButton(rifle);
+            string want = $"NOT ENOUGH CREDITS: {rifleName} QUEUED, IT BUILDS AS THEY COME IN";
+            bool once = SaidOnce(g, m, want, out string said);
+            int confirms = g.AudioRequests("ui_confirm") - m.Confirms;
+            g.StepTicks(1);
+            var q = lw.QueueContents(barracks);
+            bool queued = q.Count == 1 && q[0] == rifle;
+            DenyGate(lit && pressed && queued && once && confirms == 0 && g.AudioView.Has(SkirmishLive.DenyCue), "funds",
+                     $"with the treasury at 0 the {rifleName} button stays lit, and a press still QUEUES the squad (the sim builds "
+                     + $"pay-as-you-build) and says why exactly once through Deny with its own cue and no confirmation ({said}; "
+                     + $"queued {queued}, {confirms} confirmations)");
+
+            var m2 = MarkDenials(g);
+            bool pressedPlant = sb.PressStructButton(plant);
+            string wantPlant = $"NOT ENOUGH CREDITS: {plantName} QUEUED, IT BUILDS AS THEY COME IN";
+            bool plantOnce = SaidOnce(g, m2, wantPlant, out string plantSaid);
+            g.StepTicks(1);
+            bool plantQueued = lw.QueueContents(yard).Count == 1;
+            DenyGate(pressedPlant && plantOnce && plantQueued, "funds",
+                     $"...and so does a building at the yard, which builds the same way ({plantSaid}; queued {plantQueued})");
+
+            g.StepTicks(200);
+            int progress = lw.Entities[barracks].BuildProgress;
+            bool waiting = progress == 0 && lw.QueueContents(barracks).Count == 1;
+            // The plant is taken off the yard by its own right click first:
+            // both lines draw on one treasury, so with it still queued the
+            // squad's price would be shared between them.
+            bool cancelled = sb.RightClickStructButton(plant);
+            g.StepTicks(1);
+            lw.GrantCredits(me, lw.GetUnitType(rifle).Cost);
+            int built = -1;
+            for (int t = 0; t < 1500 && built < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events) if (ev.Type == GameEventType.ProductionComplete && ev.C == barracks) built = ev.A;
+            }
+            DenyGate(waiting && cancelled && lw.QueueContents(yard).Count == 0 && built >= 0, "funds",
+                     $"...the line holds at nothing while the treasury is empty (progress {progress} after 200 ticks), and once it "
+                     + $"holds the price, the plant cancelled, the squad is built, paid as it goes (squad {built})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "funds", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The hero cap: the button greys at the cap with a tooltip, the
+    /// key on the greyed slot is refused once, and a second hero queued while
+    /// none stood is held at the cap and SAYS it is the cap, where a factory
+    /// whose exit is blocked says that instead.</summary>
+    private void RunDenyCapStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            int hero = -1;
+            foreach (int id in lw.UnitTypeIds())
+            {
+                var d = lw.GetUnitType(id);
+                if (d.MaxAlive > 0 && (d.Faction == lw.FactionOf(me) || d.Faction == World.FactionCommon)) { hero = id; break; }
+            }
+            if (hero < 0 || GroundNear(g, me) is not { } bq)
+            {
+                DenyGate(false, "cap", $"precondition: a capped unit of my side ({hero}) and ground for a barracks");
+                return;
+            }
+            int barracks = lw.SpawnBarracks(me, bq.X, bq.Y);
+            if (GroundNear(g, me) is not { } rq)
+            {
+                DenyGate(false, "cap", "quiet ground for the radar uplink the hero is built behind (none: a fixture failure)");
+                return;
+            }
+            lw.SpawnRadarUplink(me, rq.X, rq.Y);
+            lw.GrantCredits(me, 20000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            for (int i = 0; i < Sidebar.TabTitleCount && sb.CurrentTabForTest != Sidebar.TabInfantry; i++)
+                g.PressKey(Settings.BindOf("sidebar_tab"));
+            string name = UnitCatalogue.DisplayNameOf(hero);
+            int cap = lw.GetUnitType(hero).MaxAlive;
+            bool lit = sb.UnitButtonVisible(hero) && !sb.UnitButtonDisabledForTest(hero);
+
+            var near = OpenCellBeside(lw, bq.X, bq.Y, 3);
+            int standing = near is { } c ? SpawnOfType(lw, me, hero, c.X, c.Y) : -1;
+            g.StepOneTick();
+            bool grey = sb.UnitButtonVisible(hero) && sb.UnitButtonDisabledForTest(hero);
+            string tip = sb.UnitTooltipForTest(hero) ?? "";
+            string capTip = $"AT ITS LIMIT: {cap} ALREADY IN THE FIELD; ANOTHER CAN BE ORDERED WHEN IT FALLS";
+            bool unpressable = !sb.PressUnitButton(hero);
+            DenyGate(lit && standing >= 0 && grey && tip.Contains(capTip) && unpressable, "cap",
+                     $"the {name} button is lit with none in the field and GREYS once {cap} stands, its tooltip saying why "
+                     + $"(\"{tip.Replace("\n", " / ")}\"), and a greyed button cannot be pressed");
+
+            int slot = sb.VisibleSlotOfUnitForTest(hero);
+            var m = MarkDenials(g);
+            if (slot >= 0 && slot < 9) g.PressKeyWithAlt((Key)((int)Key.Key1 + slot));
+            string capWant = $"{name} AT ITS LIMIT: {cap} ALREADY IN THE FIELD";
+            bool once = SaidOnce(g, m, capWant, out string said);
+            bool nothingSent = g.PendingCommands.Count == m.Pending;
+            g.StepTicks(1);
+            DenyGate(slot >= 0 && once && nothingSent && lw.QueueContents(barracks).Count == 0, "cap",
+                     $"ALT+{slot + 1} on the greyed slot is refused and says why exactly once through Deny, sending nothing ({said})");
+
+            // The hold: none in the field, two ordered; the first walks out and
+            // the second, finished and paid, waits on the cap.
+            RemoveFixture(lw, standing);
+            g.StepOneTick();
+            bool relit = !sb.UnitButtonDisabledForTest(hero);
+            bool p1 = sb.PressUnitButton(hero), p2 = sb.PressUnitButton(hero);
+            g.StepTicks(1);
+            bool both = lw.QueueContents(barracks).Count == 2;
+            int total = lw.GetUnitType(hero).BuildTicks * 100;
+            int first = -1;
+            for (int t = 0; t < lw.GetUnitType(hero).BuildTicks * 3 && first < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events) if (ev.Type == GameEventType.ProductionComplete && ev.C == barracks) first = ev.A;
+            }
+            for (int t = 0; t < lw.GetUnitType(hero).BuildTicks * 3
+                            && !(lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= total); t++)
+                g.StepTicks(1);
+            bool heldAtCap = first >= 0 && lw.QueueContents(barracks).Count == 1
+                             && lw.Entities[barracks].BuildProgress >= total && lw.AtMaxAlive(me, hero);
+            var m2 = MarkDenials(g);
+            g.StepOneTick();
+            string holdWant = $"{name} WAITING: {cap} ALREADY IN THE FIELD";
+            bool holdOnce = SaidOnce(g, m2, holdWant, out string holdSaid);
+            bool noExit = !g.AlertsView.StackTexts().Exists(t => t.StartsWith("EXIT BLOCKED"));
+            DenyGate(relit && p1 && p2 && both && heldAtCap && holdOnce && noExit, "hold",
+                     $"with none in the field two are ordered; the first walks out and the second, finished and paid, is HELD at the "
+                     + $"cap, and the barracks says it waits on the cap, not on a blocked exit, once (first {first}, held {heldAtCap}; {holdSaid})");
+
+            // The control: the held hero cancelled (a full refund), every cell
+            // within three of the barracks door taken, and a rifle squad
+            // ordered. Its hold is the blocked exit, and says so.
+            g.CancelUnit(hero);
+            g.StepOneTick();
+            int bx = Map.CellOf(lw.Entities[barracks].X), by = Map.CellOf(lw.Entities[barracks].Y);
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int blockers = 0;
+            for (int dy = -3; dy <= 3; dy++)
+                for (int dx = -3; dx <= 3; dx++)
+                {
+                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) < 2) continue;
+                    int x = bx + dx, y = by + dy;
+                    if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1 || lw.Map.IsBlocked(x, y)) continue;
+                    bool taken = false;
+                    for (int i = 0; i < lw.EntityCount && !taken; i++)
+                        taken = lw.Entities[i].Alive && Map.CellOf(lw.Entities[i].X) == x && Map.CellOf(lw.Entities[i].Y) == y;
+                    if (taken) continue;
+                    SpawnOfType(lw, me, rifle, x, y);
+                    blockers++;
+                }
+            bool ordered = sb.PressUnitButton(rifle);
+            int rifleTotal = lw.GetUnitType(rifle).BuildTicks * 100;
+            for (int t = 0; t < lw.GetUnitType(rifle).BuildTicks * 3
+                            && !(lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= rifleTotal); t++)
+                g.StepTicks(1);
+            bool exitHeld = lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= rifleTotal;
+            var m3 = MarkDenials(g);
+            g.StepOneTick();
+            string exitWant = $"EXIT BLOCKED: {UnitCatalogue.DisplayNameOf(rifle)} WAITING FOR A CLEAR CELL";
+            bool exitOnce = SaidOnce(g, m3, exitWant, out string exitSaid);
+            DenyGate(ordered && exitHeld && exitOnce, "hold",
+                     $"...where a rifle squad held behind {blockers} squads at the door says EXIT BLOCKED instead, once ({exitSaid})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "cap", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>An aircraft nothing selected can reach: the cursor reads
+    /// Invalid and the click is refused once, sending nothing; with an
+    /// anti-air gun in the selection the same pointer is an Attack. And the
+    /// sim's rule read both ways: an anti-air gun alone over a tank is
+    /// refused too.</summary>
+    private void RunDenyAirStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            var army = ArmedOwn(lw, me);
+            if (army.Count == 0)
+            {
+                DenyGate(false, "air", "precondition: an army of my own (none)");
+                return;
+            }
+            int a0 = army[0];
+            int flyerType = UnitCatalogue.TypeIdOf("com_strike_flyer"), flakType = UnitCatalogue.TypeIdOf("com_flak_track");
+            int tankType = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            var c0 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a0].X), Map.CellOf(lw.Entities[a0].Y), 2);
+            int flyer = c0 is { } fc ? SpawnOfType(lw, foe, flyerType, fc.X, fc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            if (flyer < 0)
+            {
+                DenyGate(false, "air", "precondition: an enemy aircraft beside my army (no open cell)");
+                return;
+            }
+            Vector2 FlyerOnScreen()
+            {
+                float x = Fx(lw.Entities[flyer].X), z = Fx(lw.Entities[flyer].Y);
+                g.FocusCameraOn(x, z, 22f);
+                g.PumpActorsForTest();
+                return g.ScreenOf(x, z);
+            }
+            g.PressKey(Settings.BindOf("select_all_army"));
+            bool noAa = true;
+            for (int i = 0; i < lw.EntityCount; i++)
+                if (g.IsSelected(i) && lw.Entities[i].WeaponId != 0 && lw.GetWeaponType(lw.Entities[i].WeaponId).AntiAir) noAa = false;
+            var at = FlyerOnScreen();
+            string cursor = g.CursorNameAt(at);
+            var m = MarkDenials(g);
+            g.PressRightClick(at);
+            bool none = g.PendingCommands.Count == m.Pending;
+            bool once = SaidOnce(g, m, "NOTHING SELECTED CAN HIT AIRCRAFT", out string said);
+            DenyGate(g.DrawnForLocalSeatForTest(flyer) && g.SelectionCount > 0 && noAa && cursor == "Invalid" && none && once, "air",
+                     $"over an enemy aircraft in sight, with a selection of {g.SelectionCount} and no anti-air gun among them, the cursor "
+                     + $"reads {cursor} and the right click is refused once, sending nothing ({said})");
+
+            var c1 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a0].X), Map.CellOf(lw.Entities[a0].Y), 1);
+            int flak = c1 is { } kc ? SpawnOfType(lw, me, flakType, kc.X, kc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            g.PressKey(Settings.BindOf("select_all_army"));
+            var at2 = FlyerOnScreen();
+            string cursor2 = g.CursorNameAt(at2);
+            var m2 = MarkDenials(g);
+            g.PressRightClick(at2);
+            int attacks = 0;
+            for (int i = m2.Pending; i < g.PendingCommands.Count; i++)
+                if (g.PendingCommands[i].Type == CommandType.Attack && g.PendingCommands[i].AuxId == flyer) attacks++;
+            DenyGate(flak >= 0 && g.IsSelected(flak) && cursor2 == "Attack" && attacks > 0 && g.Denials == m2.Denials, "air",
+                     $"...and with a flak track in the selection the same pointer reads {cursor2} and the click is an order "
+                     + $"({attacks} attack orders on the aircraft, {g.Denials - m2.Denials} denials)");
+
+            g.StepTicks(1);
+            var c2 = OpenCellBeside(lw, Map.CellOf(lw.Entities[flak].X), Map.CellOf(lw.Entities[flak].Y), 2);
+            int tank = c2 is { } tc ? SpawnOfType(lw, foe, tankType, tc.X, tc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            g.SelectOnlyForTest(flak);
+            float tx = tank >= 0 ? Fx(lw.Entities[tank].X) : 0f, tz = tank >= 0 ? Fx(lw.Entities[tank].Y) : 0f;
+            g.FocusCameraOn(tx, tz, 22f);
+            g.PumpActorsForTest();
+            var at3 = g.ScreenOf(tx, tz);
+            string cursor3 = g.CursorNameAt(at3);
+            var m3 = MarkDenials(g);
+            g.PressRightClick(at3);
+            bool none3 = g.PendingCommands.Count == m3.Pending;
+            bool once3 = SaidOnce(g, m3, "NOTHING SELECTED CAN HIT GROUND TARGETS", out string said3);
+            DenyGate(tank >= 0 && cursor3 == "Invalid" && none3 && once3, "air",
+                     $"the same rule read the other way: the flak track alone over an enemy tank reads {cursor3} and the click is "
+                     + $"refused once, sending nothing ({said3})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "air", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The refusals that were already toasts, each driven by its own
+    /// gesture: every one now says its reason exactly once through Deny, with
+    /// the deny cue and no second line beside it.</summary>
+    private void RunDenySweepStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            StandDownOpposition(lw, foe);
+            void Refused(string what, string reason, System.Action gesture)
+            {
+                var m = MarkDenials(g);
+                gesture();
+                bool once = SaidOnce(g, m, reason, out string said);
+                DenyGate(once, "sweep", $"{what} says \"{reason}\" exactly once through Deny ({said})");
+            }
+            g.ClearSelectionForTest();
+            Refused("the attack-move key with nothing selected", "ATTACK-MOVE NEEDS COMBAT UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("attack_move")));
+            Refused("the guard key with nothing selected", "GUARD NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("guard")));
+            Refused("the hold-fire key with nothing selected", "HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("hold_fire")));
+            Refused("the patrol key with nothing selected", "PATROL NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("patrol")));
+            Refused("the superweapon key with none standing", "NO SUPERWEAPON",
+                    () => g.PressKey(Settings.BindOf("launch_super")));
+            Refused("the support power key with no building granting one", "NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE",
+                    () => g.PressKey(Settings.BindOf("support_power")));
+
+            g.PressKey(Settings.BindOf("select_all_army"));
+            Refused("the repair key over an undamaged army", "NO DAMAGE TO REPAIR",
+                    () => g.PressKey(Settings.BindOf("repair")));
+
+            int harvester = g.FindEntity(EntityKind.Harvester, me);
+            int field = -1;
+            float best = float.MaxValue;
+            for (int i = 0; i < lw.EntityCount && harvester >= 0; i++)
+            {
+                var e = lw.Entities[i];
+                if (!e.Alive || e.Kind != EntityKind.FerriteField) continue;
+                float d = (Fx(e.X) - Fx(lw.Entities[harvester].X)) * (Fx(e.X) - Fx(lw.Entities[harvester].X))
+                          + (Fx(e.Y) - Fx(lw.Entities[harvester].Y)) * (Fx(e.Y) - Fx(lw.Entities[harvester].Y));
+                if (d < best) { best = d; field = i; }
+            }
+            bool noRefinery = g.FindEntity(EntityKind.Refinery, me) < 0;
+            if (harvester >= 0 && field >= 0 && noRefinery)
+            {
+                g.SelectOnlyForTest(harvester);
+                float fx = Fx(lw.Entities[field].X), fz = Fx(lw.Entities[field].Y);
+                g.FocusCameraOn(fx, fz, 22f);
+                g.PumpActorsForTest();
+                Refused("a harvester sent to ferrite with no refinery standing", "NO REFINERY - BUILD ONE FIRST",
+                        () => g.PressRightClick(g.ScreenOf(fx, fz)));
+            }
+            else DenyGate(false, "sweep", $"precondition: a harvester ({harvester}), a field ({field}) and no refinery ({noRefinery})");
+
+            int carrierType = UnitCatalogue.TypeIdOf("com_carrier");
+            var (yx, yy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+            var cc = OpenCellBeside(lw, yx, yy, 3);
+            int carrier = cc is { } k ? SpawnOfType(lw, me, carrierType, k.X, k.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            if (carrier >= 0)
+            {
+                g.SelectOnlyForTest(carrier);
+                Refused("the unload key on an empty Carrier", "NOTHING ABOARD", () => g.PressKey(Settings.BindOf("unload")));
+            }
+            else DenyGate(false, "sweep", "precondition: an empty Carrier of my own (no open cell)");
+
+            // A placement on ground the sim refuses: a power plant made ready
+            // through its button, PLACE pressed, and the click put on the yard.
+            const int plant = 1;
+            lw.GrantCredits(me, 5000);
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            bool pressed = sb.PressStructButton(plant);
+            for (int t = 0; t < 1500 && g.ReadyStructureForTest != plant; t++) g.StepTicks(1);
+            g.StepOneTick();
+            bool placing = sb.PressPlaceButton();
+            float ax = Fx(lw.Entities[g.FindEntity(EntityKind.ConstructionYard, me)].X);
+            float az = Fx(lw.Entities[g.FindEntity(EntityKind.ConstructionYard, me)].Y);
+            g.FocusCameraOn(ax, az, 22f);
+            g.PumpActorsForTest();
+            if (pressed && placing)
+                Refused("a placement click on the yard itself",
+                        $"{StructureCatalogue.DisplayNameOf(plant)} CANNOT GO THERE: BLOCKED, OCCUPIED OR OUT OF BUILD RANGE",
+                        () => g.PressLeftClick(g.ScreenOf(ax, az)));
+            else DenyGate(false, "sweep", $"precondition: a power plant made ready and PLACE pressed (pressed {pressed}, placing {placing})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "sweep", $"the stage threw: {ex}"); }
         finally
         {
             DeleteRecording(g);

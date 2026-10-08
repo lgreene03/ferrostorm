@@ -1460,13 +1460,23 @@ public partial class SkirmishLive : Node3D
         if (_yardId >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
-            _audio.Play("ui_confirm", -6);
+            // P8-42: the yard builds pay-as-you-build like every producer, so
+            // a building the treasury cannot pay for yet still queues, and the
+            // press says it will wait rather than confirming.
+            if (_world.Credits(LocalPlayerId) < _world.GetStructureType(structType).Cost)
+                Deny(FundsReason(ProducerNameOf(structType)));
+            else _audio.Play("ui_confirm", -6);
         }
     }
 
     public void QueueUnit(int unitType)
     {
         if (!UnitAllowed(unitType)) return;
+        // P8-42: at its cap the sim drops the order (World.AtMaxAlive, its
+        // first enforcement point), so it is not sent and the press says why.
+        // The sidebar greys the button at the cap too; this is the hotkey's
+        // path and a press racing the frame that greyed it.
+        if (_world.AtMaxAlive(LocalPlayerId, unitType)) { Deny(UnitCapReason(unitType)); return; }
         // ADR-009 clause 6: route by the unit's OWN produced_at, through the
         // live catalogue the sim gates on. Sending every unit to the factory
         // would now be sending the infantry somewhere that refuses them, and
@@ -1476,17 +1486,20 @@ public partial class SkirmishLive : Node3D
         if (producer >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
-            _audio.Play("ui_confirm", -6);
+            // P8-42: an order the treasury cannot pay for yet still queues
+            // (pay-as-you-build: the line holds until the credits arrive), so
+            // the press is kept and says it will wait.
+            if (_world.Credits(LocalPlayerId) < _world.GetUnitType(unitType).Cost)
+                Deny(FundsReason(UnitNameOf(unitType)));
+            else _audio.Play("ui_confirm", -6);
         }
         else
         {
             // P8-9: no producer standing is said, never swallowed. The panel
             // hides a unit whose producer is gone, but the producer can fall
             // between the frame that drew the button and the press, and a
-            // press that did nothing in silence is REP-D1's sin. The NO
-            // REFINERY denial's words and sound.
-            ShowToast($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
-            _audio.Play("ui_click", -12);
+            // press that did nothing in silence is REP-D1's sin.
+            Deny($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
         }
     }
 
@@ -2687,11 +2700,7 @@ public partial class SkirmishLive : Node3D
                     && _world.Entities[mcv].Alive
                     && _world.Entities[mcv].Kind == EntityKind.Unit
                     && _world.Entities[mcv].UnitType == McvUnitType;
-                if (stillMcv)
-                {
-                    ShowToast("DEPLOY BLOCKED - CLEAR THE AREA");
-                    _audio.Play("ui_click", -12);   // the established denial voice
-                }
+                if (stillMcv) Deny("DEPLOY BLOCKED - CLEAR THE AREA");   // P8-42: the one refusal path
                 (decided ??= new List<int>()).Add(mcv);
             }
             if (decided != null) foreach (int id in decided) _pendingDeploys.Remove(id);
@@ -3008,6 +3017,46 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>P8-10: an alert with everything that goes with it.</summary>
     private void Raise(Alert a) => _alerts.Raise(a);
+
+    /// <summary>
+    /// P8-42: THE refusal path. Every press the game turns down says why
+    /// through here, as a routine line on the one alert stack carrying the
+    /// deny cue. The refusals had grown up site by site: some toasted with the
+    /// old denial voice (ui_click at -12, a click that also meant "accepted"
+    /// elsewhere), some toasted in silence, a refused placement only clicked,
+    /// and a click on a target nothing selected could hit sent orders the sim
+    /// could not carry out. A repeat inside the stack's window refreshes the
+    /// line already showing and replays nothing, so a key pressed five times
+    /// is one line and one cue. Not a new channel: the cue is the alert
+    /// service's own, played through the AudioDirector like every other.
+    /// Public because the sidebar's hotkey path refuses through it as well.
+    /// </summary>
+    public void Deny(string reason)
+    {
+        Denials++;
+        LastDenial = reason;
+        _alerts.Raise(new Alert(reason) { Cue = DenyCue, CueDb = -10f });
+    }
+
+    /// <summary>P8-42: the refusal's own sound (art/audio/synth.py ui_deny).</summary>
+    public const string DenyCue = "ui_deny";
+
+    /// <summary>P8-42 verification reads: refusals counted where they are
+    /// made, and the last one's words.</summary>
+    public int Denials { get; private set; }
+    public string LastDenial { get; private set; } = "";
+
+    /// <summary>P8-42: what a press on an order the treasury cannot pay for
+    /// says. The order still QUEUES, because the sim builds pay-as-you-build
+    /// (World.ProductionSystem drains each slice as progress accrues and holds
+    /// the line while the treasury cannot cover the next), so the press is
+    /// kept and the reason is that it will wait. The game's own words: the
+    /// genre's stock announcer line for this moment is not echoed.</summary>
+    public static string FundsReason(string name) => $"NOT ENOUGH CREDITS: {name} QUEUED, IT BUILDS AS THEY COME IN";
+
+    /// <summary>P8-42: a unit at its per-player cap (the heroes, World.AtMaxAlive).</summary>
+    private string UnitCapReason(int unitType) =>
+        $"{UnitNameOf(unitType)} AT ITS LIMIT: {_world.GetUnitType(unitType).MaxAlive} ALREADY IN THE FIELD";
 
     /// <summary>A sim position as a minimap position (world X, Z), the
     /// rally-marker idiom of raw over 2^32.</summary>
@@ -3373,7 +3422,11 @@ public partial class SkirmishLive : Node3D
         if (force && anyArmed && PickNeutralBridge(screen) >= 0) return GameCursor.Attack;
         int enemy = PickHostile(screen);
         if (contactAt >= 0 && (allContact || enemy < 0)) return GameCursor.Enter;
-        if (enemy >= 0) return GameCursor.Attack;
+        // P8-42: Invalid over a hostile nothing selected can engage (an
+        // aircraft under a selection with no anti-air gun, above all), because
+        // the click refuses it: the same question IssueOrder asks.
+        if (enemy >= 0)
+            return EngageRefusal(enemy, AnySelectedContactCanAct(screen)) != null ? GameCursor.Invalid : GameCursor.Attack;
         // P8-7: an own Carrier, with something selected that can board it, is
         // the boarding verb: the same two questions IssueOrder asks. A full one
         // reads as refused, because the click refuses it.
@@ -3389,6 +3442,43 @@ public partial class SkirmishLive : Node3D
             && PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField) >= 0)
             return GameCursor.Harvest;
         return GameCursor.Move;
+    }
+
+    /// <summary>
+    /// P8-42: why nothing selected can act on this hostile, or null when
+    /// something can. A gun can if its weapon engages the target by the sim's
+    /// own rule (World.WeaponCanEngage: an anti-air gun hits aircraft and only
+    /// aircraft); a contact unit that can walk into it can too. An aircraft
+    /// that nothing selected can reach is refused whatever is selected; a
+    /// ground target is refused only for an armed selection none of whose
+    /// guns can reach it (an anti-air screen ordered at a tank), so an
+    /// unarmed selection's walk at a ground target is left as it was.
+    /// </summary>
+    private string? EngageRefusal(int target, bool contactCan)
+    {
+        if (contactCan || target < 0 || target >= _world.EntityCount) return null;
+        var t = _world.Entities[target];
+        bool anyArmed = false;
+        foreach (int id in _selection)
+        {
+            if (id < 0 || id >= _world.EntityCount) continue;
+            var s = _world.Entities[id];
+            if (!s.Alive || s.PlayerId != LocalPlayerId || !Mobile(s.Kind) || s.WeaponId == 0) continue;
+            anyArmed = true;
+            if (_world.WeaponCanEngage(_world.GetWeaponType(s.WeaponId), in t)) return null;
+        }
+        if (_world.IsAirborne(in t)) return "NOTHING SELECTED CAN HIT AIRCRAFT";
+        return anyArmed ? "NOTHING SELECTED CAN HIT GROUND TARGETS" : null;
+    }
+
+    /// <summary>P8-42: can any selected contact unit walk into what is under
+    /// the cursor? Every one is asked, as IssueOrder sends every one.</summary>
+    private bool AnySelectedContactCanAct(Vector2 screen)
+    {
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind) && ContactOf(v.UnitType) != ContactVerb.None
+                && PickContactTarget(screen, v.UnitType) >= 0) return true;
+        return false;
     }
 
     /// <summary>The engineer's catalogue id (com_engineer), named for the same
@@ -3771,13 +3861,22 @@ public partial class SkirmishLive : Node3D
             bool held = false;
             // ADR-009: every unit producer can hold, not just the factory. A
             // walled-in barracks that never says so is the same silent stall
-            // the toast exists to break.
-            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind is EntityKind.Factory or EntityKind.Barracks)
+            // the toast exists to break. P8-42: the Airfield too, the third
+            // unit producer (World.IsProducer is private to the sim).
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind is EntityKind.Factory or EntityKind.Barracks or EntityKind.Airfield)
             {
                 var q = _world.QueueContents(i);
                 held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
+                // P8-42: the sim HOLDS a finished unit for two reasons, and
+                // they want opposite answers from the player: a capped unit
+                // waits for the one in the field to fall (World.AtMaxAlive,
+                // its second enforcement point), while a blocked exit wants
+                // the spawn ground cleared. The cap is asked first, because a
+                // capped hero waits whatever stands at the door.
                 if (held && _exitBlockedShown.Add(i))
-                    ShowToast($"EXIT BLOCKED  -  {UnitNameOf(q[0])} WAITING");
+                    Deny(_world.AtMaxAlive(LocalPlayerId, q[0])
+                        ? $"{UnitNameOf(q[0])} WAITING: {_world.GetUnitType(q[0]).MaxAlive} ALREADY IN THE FIELD"
+                        : $"EXIT BLOCKED: {UnitNameOf(q[0])} WAITING FOR A CLEAR CELL");
             }
             if (!held) _exitBlockedShown.Remove(i);
         }
@@ -4210,6 +4309,19 @@ public partial class SkirmishLive : Node3D
     /// different questions over the same rule. CanPlace calls it too rather than
     /// restating it: writing the expression twice here is how the drag and the
     /// click came to disagree in the first place.</summary>
+    /// <summary>P8-42: why CanPlace said no, asked in its own order: the
+    /// sim's geometry first (ValidPlacement: the ground, what stands on it and
+    /// the build radius), then a barrier's upfront price, then the barrier cap.</summary>
+    private string PlacementRefusal(int ax, int ay, int type)
+    {
+        string name = ProducerNameOf(type);
+        if (!_world.ValidPlacement(LocalPlayerId, ax, ay, type))
+            return $"{name} CANNOT GO THERE: BLOCKED, OCCUPIED OR OUT OF BUILD RANGE";
+        if (_world.Credits(LocalPlayerId) < _world.GetStructureType(type).Cost)
+            return $"NOT ENOUGH CREDITS: A {name} COSTS {_world.GetStructureType(type).Cost}";
+        return $"{name} LIMIT REACHED: {World.MaxBarriersPerPlayer} STANDING";
+    }
+
     private bool CanAffordAnotherBarrier(int type, int aheadInRun) =>
         _world.Credits(LocalPlayerId) >= (long)_world.GetStructureType(type).Cost * (aheadInRun + 1)
         // The SIM'S count, not the interpolated view's. The view trails by up to
@@ -5298,9 +5410,8 @@ public partial class SkirmishLive : Node3D
         if (damaged.Count == 0)
         {
             // Nothing issued, nothing acknowledged - but silence reads as a
-            // dead key, so say why (the P5-ECON-06 denial pattern throughout).
-            ShowToast("NO DAMAGE TO REPAIR");
-            _audio.Play("ui_click", -12);
+            // dead key, so say why (P8-42: through the one refusal path).
+            Deny("NO DAMAGE TO REPAIR");
             return;
         }
         float cxs = 0, cys = 0;
@@ -5308,21 +5419,18 @@ public partial class SkirmishLive : Node3D
         int depot = NearestOwnDepotTo(new Vector2(cxs / damaged.Count, cys / damaged.Count));
         if (depot < 0)
         {
-            ShowToast($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(ServiceDepotStructType).Cost} cr)");
-            _audio.Play("ui_click", -12);
+            Deny($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(ServiceDepotStructType).Cost} cr)");
             return;
         }
         var (supply, draw) = OwnPower();
         if (supply < draw)
         {
-            ShowToast("DEPOT OFFLINE: BROWN-OUT");   // World's depot gate, said out loud
-            _audio.Play("ui_click", -12);
+            Deny("DEPOT OFFLINE: BROWN-OUT");   // World's depot gate, said out loud
             return;
         }
         if (_world.Credits(LocalPlayerId) < 1)
         {
-            ShowToast("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
-            _audio.Play("ui_click", -12);
+            Deny("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
             return;
         }
         var dp = _latest[depot];
@@ -5404,7 +5512,7 @@ public partial class SkirmishLive : Node3D
         int movers = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit) movers++;
-        if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
+        if (movers == 0) { Deny("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
         DisarmAllArmedOrders();                    // ADR-015: the armed orders are exclusive
         _attackMoveArmed = true;
@@ -5421,13 +5529,13 @@ public partial class SkirmishLive : Node3D
     {
         if (_replay != null) return;               // a spectator issues no orders
         int id = FindOwnStructure(EntityKind.Superweapon);
-        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        if (id < 0 || id >= _world.EntityCount) { Deny("NO SUPERWEAPON"); return; }
         var sw = _world.Entities[id];
-        if (sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON ALREADY LAUNCHED"); return; }
+        if (sw.StrikeTicks >= 0) { Deny("SUPERWEAPON ALREADY LAUNCHED"); return; }
         if (sw.ChargeTicks > 0)
         {
             int secs = Mathf.CeilToInt(sw.ChargeTicks / (float)World.TicksPerSecond);
-            ShowToast($"SUPERWEAPON CHARGING   {secs}s");
+            Deny($"SUPERWEAPON CHARGING   {secs}s");
             return;
         }
         DisarmAllArmedOrders();
@@ -5478,9 +5586,9 @@ public partial class SkirmishLive : Node3D
         _superArmed = false;
         if (GroundPoint(screen) is not { } p) return;
         int id = FindOwnStructure(EntityKind.Superweapon);
-        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        if (id < 0 || id >= _world.EntityCount) { Deny("NO SUPERWEAPON"); return; }
         var sw = _world.Entities[id];
-        if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON NOT READY"); return; }
+        if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { Deny("SUPERWEAPON NOT READY"); return; }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         _pending.Add(new Command(0, LocalPlayerId, CommandType.LaunchSuper, id, cx, cy));
@@ -5571,7 +5679,7 @@ public partial class SkirmishLive : Node3D
             DisarmSupportPower($"{SupportPowerBar.NameOf(powerId)} TARGETING CANCELLED");
             return;
         }
-        if (SupportPowerRefusal(structureId, powerId) is { } why) { ShowToast(why); return; }
+        if (SupportPowerRefusal(structureId, powerId) is { } why) { Deny(why); return; }
         if (SupportPowerBar.IsTargeted(powerId)) ArmSupportPower(structureId, powerId);
         else FireSupportPower(structureId, powerId, null);
     }
@@ -5591,7 +5699,7 @@ public partial class SkirmishLive : Node3D
     {
         if (_replay != null) return;               // a spectator issues no orders
         var all = CollectSupportPowers();
-        if (all.Count == 0) { ShowToast("NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE"); return; }
+        if (all.Count == 0) { Deny("NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE"); return; }
         int start = 0;
         if (_powerArmed is { } a)
             for (int i = 0; i < all.Count; i++)
@@ -5606,8 +5714,8 @@ public partial class SkirmishLive : Node3D
         // Nothing ready: name the soonest, so the refusal is an answer.
         var soonest = all[0];
         foreach (var e in all) if (e.ChargeTicks < soonest.ChargeTicks) soonest = e;
-        ShowToast($"NO SUPPORT POWER READY   {SupportPowerBar.NameOf(soonest.PowerId)} IN "
-                  + $"{Mathf.CeilToInt(soonest.ChargeTicks / (float)World.TicksPerSecond)}s");
+        Deny($"NO SUPPORT POWER READY   {SupportPowerBar.NameOf(soonest.PowerId)} IN "
+             + $"{Mathf.CeilToInt(soonest.ChargeTicks / (float)World.TicksPerSecond)}s");
     }
 
     private void ArmSupportPower(int structureId, int powerId)
@@ -5656,7 +5764,7 @@ public partial class SkirmishLive : Node3D
         if (SupportPowerRefusal(armed.Structure, armed.Power) is { } why)
         {
             _powerArmed = null;
-            ShowToast(why);
+            Deny(why);
             return;
         }
         // Clamped inside the map, so the cell asked about below is a real cell
@@ -5665,7 +5773,7 @@ public partial class SkirmishLive : Node3D
         if (armed.Power == World.TunnelDeploymentPowerId
             && !_world.IsVisible(LocalPlayerId, Mathf.FloorToInt(cx), Mathf.FloorToInt(cz)))
         {
-            ShowToast("TUNNEL DEPLOYMENT NEEDS GROUND YOU CAN SEE");
+            Deny("TUNNEL DEPLOYMENT NEEDS GROUND YOU CAN SEE");
             return;
         }
         _powerArmed = null;
@@ -5741,7 +5849,7 @@ public partial class SkirmishLive : Node3D
                 owned++;
                 if (id >= 0 && id < _world.EntityCount && _world.Entities[id].Stance == Stance.HoldFire) held++;
             }
-        if (owned == 0) { ShowToast("HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (owned == 0) { Deny("HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED"); return; }
         bool release = held == owned;              // all already holding: weapons free
         var target = release ? Stance.Aggressive : Stance.HoldFire;
         foreach (int id in _selection)
@@ -5765,7 +5873,7 @@ public partial class SkirmishLive : Node3D
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)Stance.Guard));
                 n++;
             }
-        if (n == 0) { ShowToast("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (n == 0) { Deny("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
         _audio.Play("ui_click", -10);
         ShowToast($"GUARD   ({n} UNITS)");
     }
@@ -5779,7 +5887,7 @@ public partial class SkirmishLive : Node3D
         int movers = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit) movers++;
-        if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (movers == 0) { Deny("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();
         DisarmAllArmedOrders();                    // the armed orders are exclusive
         _patrolArmed = true;
@@ -5934,8 +6042,7 @@ public partial class SkirmishLive : Node3D
         if (carriers == 0) return false;
         if (n == 0)
         {
-            ShowToast("NOTHING ABOARD");
-            _audio.Play("ui_click", -12);
+            Deny("NOTHING ABOARD");
             return true;
         }
         _audio.Play("ui_confirm", -8);
@@ -6038,9 +6145,11 @@ public partial class SkirmishLive : Node3D
     public bool PlaceAtCell(int ax, int ay)
     {
         // TICKET-P5-SPAWN-01: same predicate as the ghost tint, so a red
-        // ghost and a refused click are the same answer given twice.
-        if (_placingType <= 0 || !CanPlace(ax, ay, _placingType))
-        { _audio.Play("ui_click", -12); return false; }
+        // ghost and a refused click are the same answer given twice. P8-42:
+        // and the refused click says which answer it was, where it only
+        // clicked.
+        if (_placingType <= 0) return false;
+        if (!CanPlace(ax, ay, _placingType)) { Deny(PlacementRefusal(ax, ay, _placingType)); return false; }
         _pending.Add(new Command(0, LocalPlayerId, CommandType.PlaceStructure, _yardId,
             Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
         // DEF-08 clause 7: a barrier STAYS IN MODE - the classic loop is draw,
@@ -7292,6 +7401,14 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int enemy = PickHostile(screen);
+        // P8-42: a hostile nothing selected can act on is refused and said,
+        // rather than sent as Attack orders the sim cannot carry out (the
+        // cursor read Invalid over it for the same reason).
+        if (enemy >= 0 && EngageRefusal(enemy, AnySelectedContactCanAct(screen)) is { } cannot)
+        {
+            Deny(cannot);
+            return;
+        }
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
         // P8-7: an own Carrier under the cursor is a boarding target, offered
         // only while the selection holds something it can carry (CursorFor
@@ -7371,18 +7488,10 @@ public partial class SkirmishLive : Node3D
             else continue;
             issued++;
         }
-        if (deniedHarvest)
-        {
-            // The established denial pattern: no ui_deny asset exists, and an
-            // invalid structure placement already speaks with ui_click at -12.
-            ShowToast("NO REFINERY - BUILD ONE FIRST");
-            _audio.Play("ui_click", -12);
-        }
-        if (deniedBoard)
-        {
-            ShowToast($"CARRIER FULL   {World.CarrierCapacity}/{World.CarrierCapacity} ABOARD");
-            _audio.Play("ui_click", -12);
-        }
+        // P8-42: both through the one refusal path, with its own cue, where
+        // they borrowed ui_click at -12 because no deny sound existed.
+        if (deniedHarvest) Deny("NO REFINERY - BUILD ONE FIRST");
+        if (deniedBoard) Deny($"CARRIER FULL   {World.CarrierCapacity}/{World.CarrierCapacity} ABOARD");
         // A click that queued nothing gets no acknowledgement. P5-ECON-06 clause
         // 4 only suppresses the gold harvest marker, which would leave a denied
         // harvest drawing the MOVE ring and playing the move sound instead: the
