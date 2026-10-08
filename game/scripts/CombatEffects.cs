@@ -229,6 +229,11 @@ public partial class CombatEffects : Node3D
     /// feed the trauma pool. Null means no shake.</summary>
     public RtsCamera? Camera;
 
+    /// <summary>P8-44: the live weapon table, for the report of a weapon the
+    /// sound table does not name (WeaponSounds.FireSoundOf). Null means the
+    /// table's own fallback.</summary>
+    public System.Func<int, WeaponDef>? WeaponDefOf;
+
     // W3-01: at most 8 muzzle omni lights alive at once; the billboard quad
     // always spawns so dense fights stay readable without a light storm.
     private int _liveMuzzleLights;
@@ -332,9 +337,10 @@ public partial class CombatEffects : Node3D
 
     /// <summary>Consume one tick's worth of sim events and spawn effects.
     /// weaponOf resolves an attacker entity id to its sim WeaponId so each
-    /// weapon class gets its own effect family (W3-01).</summary>
+    /// weapon class gets its own effect family (W3-01); deathOf resolves a
+    /// dying entity id to what the sim says it WAS (P8-43, DeathLookOf).</summary>
     public void OnTickEvents(IReadOnlyList<GameEvent> events, IReadOnlyDictionary<int, Node3D> actors,
-        AudioDirector audio, System.Func<int, int>? weaponOf = null)
+        AudioDirector audio, System.Func<int, int>? weaponOf = null, System.Func<int, DeathLook>? deathOf = null)
     {
         if (events == null || actors == null) return;
         foreach (var ev in events)
@@ -342,7 +348,8 @@ public partial class CombatEffects : Node3D
             switch (ev.Type)
             {
                 case GameEventType.Fired: OnFired(ev, actors, audio, weaponOf); break;
-                case GameEventType.Died: OnDied(ev, actors, audio); break;                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
+                case GameEventType.Died: OnDied(ev, actors, audio, deathOf); break;
+                case GameEventType.SuperweaponImpact: OnSuperweaponImpact(ev, audio); break;
                 // P8-10 (FEEL-07): NO production chime here any more. This
                 // played production_done for EVERY ProductionComplete, so the
                 // local speakers announced each enemy and allied completion
@@ -533,9 +540,13 @@ public partial class CombatEffects : Node3D
 
         // The report is POSITIONAL, so it is placed only when the shooter is on
         // screen: a 3D sound at an unseen position is a quieter version of the
-        // same giveaway.
+        // same giveaway. P8-44: each weapon class its own report, from the
+        // weapon's id (WeaponSounds), where two sounds served all ten.
         if (seeShooter)
-            audio?.PlayAt(w == 2 || w == 7 ? "shot_rifle" : "shot_cannon", from, AudioDirector.Jitter(0.06f));   // W3-21
+        {
+            var (report, pitch) = WeaponSounds.FireSoundOf(w, WeaponDefOf?.Invoke(w));
+            audio?.PlayAt(report, from, pitch * AudioDirector.Jitter(0.06f));   // W3-21
+        }
     }
 
     private void SpawnMuzzle(Vector3 from, float quadSize, float lightEnergy)
@@ -865,18 +876,110 @@ public partial class CombatEffects : Node3D
         ProcessMaterial = HarvestProcess,
     };
 
-    // ---- Died: flash + smoke + scars + wrecks + shake (W3-06/07/13) ----
+    // ---- Died: P8-43, the effect is chosen from what the sim says the entity WAS ----
+    //
+    // FEEL-06 and SP-08. This chose "big" from the ACTOR: its scale over 1.2,
+    // or its node name containing "yard", "factory" or "refinery". Every mobile
+    // actor is drawn at UnitVisualScale (1.3), so every unit death was "big": a
+    // rifle squad went up in the large explosion and left a burning wreck, while
+    // a power plant, at scale 1 with no matching name, got the small one. The
+    // choice now comes from the sim alone (DeathLookOf): the entity's kind, its
+    // unit type's producer in the live catalogue, its armour, and its building's
+    // footprint. Never the model, its name or its scale.
+    //
+    // Each kind has its own effect, and each agrees with what P8-59's
+    // retirement does with the actor, because SkirmishLive records the same
+    // DeathLook against the dead id (its _diedIds, the row's "recorded Mobile
+    // flag") and retires the actor from it:
+    //   Infantry   a dust puff and a soft fall; the actor tumbles (W2-06)
+    //   Vehicle    a fireball; the actor tumbles and is kept as a charred husk
+    //   Structure  a collapse in stages; the actor lurches, holds, then falls
+    //   Mine       its detonation, one blast; the actor sinks
+    //   None       a ferrite field: ground, not a thing that explodes (its only
+    //              death is a seismic strike, which draws its own impact)
 
-    /// <summary>P8-10 verification read: death bursts drawn (flash, smoke,
-    /// scorch and explosion together), counted where they are spawned.</summary>
+    /// <summary>P8-43: what a dying entity WAS, as the sim says it.</summary>
+    public enum DeathKind { None, Infantry, Vehicle, Structure, Mine }
+
+    /// <summary>P8-43: the kind and its size. Large is a heavy hull (the
+    /// catalogue's heavy armour: tanks, the harvester, the MCV) or a building
+    /// with a 2x2 footprint.</summary>
+    public readonly record struct DeathLook(DeathKind Kind, bool Large);
+
+    /// <summary>P8-43: the death look of entity `id` in `w`, read after it
+    /// died (its kind, type and armour outlive it). Infantry are the units the
+    /// live catalogue says are produced at the Barracks, the sidebar's own
+    /// INFANTRY rule (ADR-009 clause 6), so a scout (armour none, built at the
+    /// factory) is a vehicle and an engineer is infantry. A unit with no type
+    /// is the bare SpawnUnit of a fixture or an old opening hand, which the
+    /// model library draws as a rifle squad: the sim gave it no armour if it
+    /// is one. Aircraft are machines and leave a husk where they fall.</summary>
+    public static DeathLook DeathLookOf(World w, int id)
+    {
+        if (w == null || id < 0 || id >= w.EntityCount) return default;
+        var e = w.Entities[id];
+        switch (e.Kind)
+        {
+            case EntityKind.Unit:
+            {
+                var def = w.GetUnitType(e.UnitType);
+                bool infantry = def.Hp > 0 ? def.ProducedAt == World.BarracksStructType : e.Armour == ArmourClass.None;
+                return infantry ? new DeathLook(DeathKind.Infantry, false)
+                                : new DeathLook(DeathKind.Vehicle, e.Armour == ArmourClass.Heavy);
+            }
+            case EntityKind.Harvester:
+                return new DeathLook(DeathKind.Vehicle, e.Armour == ArmourClass.Heavy);
+            case EntityKind.FerriteField:
+                return new DeathLook(DeathKind.None, false);
+            case EntityKind.Mine:
+                return new DeathLook(DeathKind.Mine, false);
+            default:
+            {
+                int fp = w.GetStructureType(e.StructType).Footprint;
+                return new DeathLook(DeathKind.Structure, (fp > 0 ? fp : World.FootprintSize) >= 2);
+            }
+        }
+    }
+
+    /// <summary>P8-10 verification read: death effects drawn, of any kind,
+    /// counted where they are spawned. P8-43 splits them by kind below.</summary>
     public int DeathBursts { get; private set; }
+    /// <summary>P8-43 verification reads, one per kind, counted where each
+    /// effect starts: never recomputed from the actor.</summary>
+    public int InfantryPuffs { get; private set; }
+    public int VehicleBlasts { get; private set; }
+    public int StructureCollapses { get; private set; }
+    public int MineBlasts { get; private set; }
+    /// <summary>Collapse stages that have actually gone off, counted inside
+    /// each stage's own callback, so a collapse that never ran its stages
+    /// counts nothing.</summary>
+    public int CollapseStagesFired { get; private set; }
+    /// <summary>Husks left: dead vehicles' actors charred and kept.</summary>
+    public int HusksLeft { get; private set; }
 
-    private void OnDied(GameEvent ev, IReadOnlyDictionary<int, Node3D> actors, AudioDirector? audio)
+    private void OnDied(GameEvent ev, IReadOnlyDictionary<int, Node3D> actors, AudioDirector? audio,
+        System.Func<int, DeathLook>? deathOf)
     {
         if (!Live(actors, ev.A, out var node)) return;
+        // No identity to read (a caller that resolves none) draws the one
+        // neutral blast rather than guessing a kind from the model.
+        var look = deathOf?.Invoke(ev.A) ?? new DeathLook(DeathKind.Mine, false);
+        if (look.Kind == DeathKind.None) return;
         DeathBursts++;
         Vector3 pos = node.GlobalPosition;
+        switch (look.Kind)
+        {
+            case DeathKind.Infantry: InfantryPuff(pos, audio); break;
+            case DeathKind.Vehicle: VehicleBlast(pos, look.Large, audio); break;
+            case DeathKind.Structure: StructureCollapse(pos, look.Large, audio); break;
+            default: MineBlasts++; Blast(pos, 1.2f, 0.12f, audio, "explosion_small"); break;
+        }
+    }
 
+    /// <summary>The fireball every machine death shares: an expanding
+    /// emissive sphere, a smoke puff, a scorch and a shake.</summary>
+    private void Blast(Vector3 pos, float scorch, float shake, AudioDirector? audio, string sound)
+    {
         // Expanding emissive sphere; the shared material stays orange and the
         // orange-to-dark read comes from the alpha fade against the ground.
         var flash = SpawnMesh(FlashMesh, FlashMat, pos + new Vector3(0, 0.3f, 0));
@@ -884,32 +987,256 @@ public partial class CombatEffects : Node3D
         FadeAndFree(flash, 0.3f)
             .Parallel().TweenProperty(flash, "scale", Vector3.One * 1.9f, 0.3f)
             .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
-
         // One-shot smoke puff, freed shortly after its particles expire.
+        SpawnBurst(SmokeQuad, SmokeProcess, pos + new Vector3(0, 0.3f, 0), amount: 12, lifetime: 1.2f, freeAfter: 1.5f);
+        AddScorch(pos, scorch);
+        Shake(shake, pos);
+        audio?.PlayAt(sound, pos, AudioDirector.Jitter(0.05f));   // W3-21
+    }
+
+    // Infantry: a low dust puff the colour of the ground, not smoke and fire.
+    private static readonly QuadMesh DustQuad = MakeDustQuad();
+    private static readonly ParticleProcessMaterial PuffProcess = new()
+    {
+        Direction = new Vector3(0, 1, 0),
+        Spread = 75.0f,
+        InitialVelocityMin = 0.5f,
+        InitialVelocityMax = 1.1f,
+        Gravity = new Vector3(0, -0.6f, 0),
+        ScaleMin = 0.5f,
+        ScaleMax = 0.9f,
+        DampingMin = 1.5f,
+        DampingMax = 2.5f,
+        Color = new Color(0.46f, 0.41f, 0.33f, 0.65f),
+    };
+
+    private static QuadMesh MakeDustQuad()
+    {
+        var q = new QuadMesh { Size = new Vector2(0.4f, 0.4f) };
+        q.Material = new StandardMaterial3D
+        {
+            ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            VertexColorUseAsAlbedo = true,
+            BillboardMode = BaseMaterial3D.BillboardModeEnum.Particles,
+        };
+        return q;
+    }
+
+    private void InfantryPuff(Vector3 pos, AudioDirector? audio)
+    {
+        InfantryPuffs++;
+        SpawnBurst(DustQuad, PuffProcess, pos + new Vector3(0, 0.15f, 0), amount: 9, lifetime: 0.9f, freeAfter: 1.2f);
+        audio?.PlayAt("death_infantry", pos, AudioDirector.Jitter(0.08f));
+    }
+
+    private void VehicleBlast(Vector3 pos, bool heavy, AudioDirector? audio)
+    {
+        VehicleBlasts++;
+        Blast(pos, heavy ? 2.0f : 1.4f, heavy ? 0.22f : 0.14f, audio, heavy ? "explosion_large" : "explosion_small");
+        if (heavy) SpawnBurnSite(pos);
+    }
+
+    // ---- P8-43: the husk a dead vehicle leaves ----
+
+    private static readonly StandardMaterial3D HuskMat = new()
+    {
+        AlbedoColor = new Color(0.075f, 0.068f, 0.062f),
+        Roughness = 1.0f,
+        EmissionEnabled = true,
+        Emission = new Color(0.30f, 0.07f, 0.01f),
+        EmissionEnergyMultiplier = 0.35f,
+    };
+    /// <summary>How long a husk lies on the field before it sinks away, and
+    /// how many may lie at once (the oldest goes first, the wreck cap's shape).</summary>
+    public const float HuskSeconds = 8.0f;
+    public const int MaxHusks = 16;
+    private readonly Queue<Node3D> _husks = new();
+
+    /// <summary>
+    /// Keep a dead vehicle's own actor as its burnt-out husk: every mesh is
+    /// charred, the team ring and the selection ring go, its emitters stop, and
+    /// it is handed to this layer, which owns its life from here. SkirmishLive
+    /// calls it as it retires the actor, before P8-59's tumble starts, so the
+    /// hull tumbles and settles charred and then lies there for HuskSeconds
+    /// with a thin smoke before sinking away. The husk IS the actor, so it lies
+    /// exactly where and how the vehicle fell.
+    /// </summary>
+    public void LeaveHusk(Node3D corpse)
+    {
+        HusksLeft++;
+        Char(corpse);
+        corpse.Reparent(this);
         var smoke = new GpuParticles3D
         {
-            Amount = 12,
-            Lifetime = 1.2f,
-            OneShot = true,
-            Explosiveness = 0.9f,
-            ProcessMaterial = SmokeProcess,
-            DrawPass1 = SmokeQuad,
+            Amount = 8,
+            Lifetime = 2.0f,
             Emitting = true,
+            DrawPass1 = SmokeQuad,
+            ProcessMaterial = SmokeColumnProcess,
+            Position = new Vector3(0, 0.3f, 0),
+            Name = "HuskSmoke",
         };
-        AddChild(smoke);
-        smoke.GlobalPosition = pos + new Vector3(0, 0.3f, 0);
-        var stw = smoke.CreateTween();
-        stw.TweenInterval(1.5f);
-        stw.TweenCallback(Callable.From(smoke.QueueFree));
+        corpse.AddChild(smoke);
+        var tw = corpse.CreateTween();
+        tw.TweenInterval(HuskSeconds);
+        tw.TweenCallback(Callable.From(() => smoke.Emitting = false));
+        tw.TweenProperty(corpse, "position", corpse.Position + new Vector3(0, -0.7f, 0), 1.5f)
+            .SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+        tw.TweenCallback(Callable.From(corpse.QueueFree));
+        _husks.Enqueue(corpse);
+        while (_husks.Count > MaxHusks)
+        {
+            var oldest = _husks.Dequeue();
+            if (IsInstanceValid(oldest)) oldest.QueueFree();
+        }
+    }
 
-        var scale = node.Scale;
-        string name = node.Name.ToString().ToLowerInvariant();
-        bool big = Mathf.Max(scale.X, Mathf.Max(scale.Y, scale.Z)) > 1.2f
-            || name.Contains("yard") || name.Contains("factory") || name.Contains("refinery");
-        AddScorch(pos, big ? 2.2f : 1.2f);
-        if (big) SpawnBurnSite(pos);
-        Shake(big ? 0.30f : 0.12f, pos);
-        audio?.PlayAt(big ? "explosion_large" : "explosion_small", pos, AudioDirector.Jitter(0.05f));   // W3-21
+    private static void Char(Node n)
+    {
+        foreach (var c in n.GetChildren())
+        {
+            if (c is GpuParticles3D p) p.Emitting = false;
+            else if (c is MeshInstance3D m && m.Name.ToString() is "TeamRing" or "SelRing") m.Visible = false;
+            else if (c is GeometryInstance3D g)
+            {
+                g.MaterialOverride = HuskMat;
+                g.MaterialOverlay = null;
+            }
+            Char(c);
+        }
+    }
+
+    /// <summary>P8-43 verification reads: husks lying on the field now, and
+    /// whether the newest one wears the char on every visible mesh, read off
+    /// the meshes themselves.</summary>
+    public int HusksStanding
+    {
+        get
+        {
+            int n = 0;
+            foreach (var h in _husks) if (IsInstanceValid(h) && !h.IsQueuedForDeletion()) n++;
+            return n;
+        }
+    }
+
+    public bool NewestHuskCharred()
+    {
+        Node3D? newest = null;
+        foreach (var h in _husks) newest = h;
+        if (newest == null || !IsInstanceValid(newest)) return false;
+        int meshes = 0;
+        bool Walk(Node n)
+        {
+            foreach (var c in n.GetChildren())
+            {
+                if (c is MeshInstance3D m && m.Visible && m.MaterialOverride != HuskMat) return false;
+                if (c is MeshInstance3D m2 && m2.Visible) meshes++;
+                if (!Walk(c)) return false;
+            }
+            return true;
+        }
+        return Walk(newest) && meshes > 0;
+    }
+
+    // ---- P8-43: a structure collapses in stages ----
+
+    /// <summary>When each stage of a collapse goes off, seconds after the
+    /// death: the blast, the secondary blasts at the corners (2x2 buildings
+    /// only), and the fall. SkirmishLive's staged sink of the actor itself
+    /// keeps to the same clock, so the building lurches with the blast, holds
+    /// while the corners go, and drops with the fall.</summary>
+    public const float CollapseSecondaryAt = 0.35f, CollapseFallAt = 0.8f;
+
+    private static readonly ParticleProcessMaterial CollapseDustProcess = new()
+    {
+        EmissionShape = ParticleProcessMaterial.EmissionShapeEnum.Sphere,
+        EmissionSphereRadius = 1.0f,
+        Direction = new Vector3(0, 1, 0),
+        Spread = 60.0f,
+        InitialVelocityMin = 0.6f,
+        InitialVelocityMax = 1.4f,
+        Gravity = new Vector3(0, 0.1f, 0),
+        ScaleMin = 1.0f,
+        ScaleMax = 2.0f,
+        DampingMin = 0.6f,
+        DampingMax = 1.2f,
+        Color = new Color(0.40f, 0.37f, 0.32f, 0.6f),
+    };
+    private readonly List<Tween> _collapses = new();
+    private List<int>? _stageCapture;
+
+    private void StructureCollapse(Vector3 pos, bool large, AudioDirector? audio)
+    {
+        StructureCollapses++;
+        _collapses.RemoveAll(t => !t.IsValid() || !t.IsRunning());
+        var site = new Node3D { Name = "Collapse" };
+        AddChild(site);
+        site.GlobalPosition = pos;
+        var tw = site.CreateTween();
+        tw.TweenCallback(Callable.From(() =>
+        {
+            Stage(1);
+            var flash = SpawnMesh(FlashMesh, FlashMat, pos + new Vector3(0, 0.4f, 0));
+            flash.Scale = Vector3.One * 0.5f;
+            FadeAndFree(flash, 0.35f)
+                .Parallel().TweenProperty(flash, "scale", Vector3.One * (large ? 2.6f : 1.7f), 0.35f)
+                .SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+            AddScorch(pos, large ? 2.6f : 1.5f);
+            Shake(large ? 0.30f : 0.15f, pos);
+            audio?.PlayAt(large ? "explosion_large" : "explosion_small", pos, AudioDirector.Jitter(0.05f));
+        }));
+        if (large)
+        {
+            tw.TweenInterval(CollapseSecondaryAt);
+            tw.TweenCallback(Callable.From(() =>
+            {
+                Stage(2);
+                for (int k = 0; k < 4; k++)
+                {
+                    var corner = pos + new Vector3(k % 2 == 0 ? -0.7f : 0.7f, 0.5f, k < 2 ? -0.7f : 0.7f);
+                    var pop = SpawnMesh(FlashMesh, FlashMat, corner);
+                    pop.Scale = Vector3.One * 0.25f;
+                    FadeAndFree(pop, 0.2f).Parallel().TweenProperty(pop, "scale", Vector3.One * 0.8f, 0.2f);
+                    SpawnDirt(corner, 10);
+                }
+                audio?.PlayAt("explosion_small", pos, AudioDirector.Jitter(0.08f));
+            }));
+        }
+        tw.TweenInterval(large ? CollapseFallAt - CollapseSecondaryAt : CollapseFallAt);
+        tw.TweenCallback(Callable.From(() =>
+        {
+            Stage(3);
+            SpawnBurst(SmokeQuad, CollapseDustProcess, pos + new Vector3(0, 0.3f, 0),
+                amount: large ? 24 : 12, lifetime: 2.5f, freeAfter: 3.0f);
+            if (large) SpawnBurnSite(pos);
+            Shake(0.10f, pos);
+            audio?.PlayAt("collapse_rumble", pos, AudioDirector.Jitter(0.04f));
+        }));
+        tw.TweenCallback(Callable.From(site.QueueFree));
+        _collapses.Add(tw);
+    }
+
+    private void Stage(int n)
+    {
+        CollapseStagesFired++;
+        _stageCapture?.Add(n);
+    }
+
+    /// <summary>P8-43 verification seam: advance every running collapse by
+    /// `seconds` through its own tween (Tween.CustomStep, in small steps), so a
+    /// single-frame check can watch the stages go off in order. Returns the
+    /// stage numbers that fired, in order. Nothing in a played game calls it.</summary>
+    public List<int> StepCollapsesForTest(double seconds)
+    {
+        _stageCapture = new List<int>();
+        for (double t = 0; t < seconds; t += 0.05)
+            foreach (var tw in new List<Tween>(_collapses))
+                if (tw.IsValid() && tw.IsRunning()) tw.CustomStep(0.05);
+        _collapses.RemoveAll(tw => !tw.IsValid() || !tw.IsRunning());
+        var fired = _stageCapture;
+        _stageCapture = null;
+        return fired;
     }
 
     // ---- W3-10: the superweapon sequence ----
