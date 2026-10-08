@@ -25,6 +25,12 @@ public partial class MainMenu : Control
     /// <summary>Verification surface: the last notice actually shown.</summary>
     public string NoticeShownForTest { get; private set; } = "";
 
+    /// <summary>P8-34: the mission whose briefing this menu opens on arrival,
+    /// set by the results screen's NEXT MISSION; 0 for none. Static for
+    /// BattleRefusedNotice's reason (the battle scene is torn down as it
+    /// writes it), and consumed by the next _Ready.</summary>
+    public static int PendingBriefing;
+
     private OptionButton _factionPick = null!;
     private OptionButton _mapPick = null!;
     private OptionButton _aiPick = null!;
@@ -175,6 +181,10 @@ public partial class MainMenu : Control
         _creditPick = Row(rows, "TREASURY", "The credits every side starts with.");
         _creditPick.AddItem("5000"); _creditPick.AddItem("8000"); _creditPick.AddItem("12000");
         _creditPick.Select(1);
+        // P8-34: the rows open on the last match this menu started, so a
+        // player's chosen setup survives a restart instead of resetting to the
+        // defaults above every time.
+        ApplyRemembered();
 
         v.AddChild(new HSeparator());
         v.AddChild(MenuButton("COMMENCE OPERATION", StartSkirmish));
@@ -211,7 +221,25 @@ public partial class MainMenu : Control
             v2.AddChild(new HSeparator());
             v2.AddChild(MenuButton("UNDERSTOOD", () => overlay.QueueFree()));
         }
+
+        // P8-34: the results screen's NEXT MISSION lands here, on the next
+        // mission's briefing, because the briefing is the one way into a
+        // mission and the place it says what it wants.
+        if (PendingBriefing > 0)
+        {
+            int next = PendingBriefing;
+            PendingBriefing = 0;
+            if (Campaign.ByIndex(next) is { } e && CampaignProgress.IsUnlocked(e.Index))
+            {
+                BriefingShownForTest = e.Index;
+                ShowBriefing(e.Path, e.Index, e.Title, e.Structs, e.Units);
+            }
+        }
     }
+
+    /// <summary>Verification read: the mission whose briefing the menu opened
+    /// on arrival (P8-34's NEXT MISSION), or 0.</summary>
+    public int BriefingShownForTest { get; private set; }
 
     // ---------------- TICKET-P5-SAVE-01: saves and replays ----------------
 
@@ -252,8 +280,15 @@ public partial class MainMenu : Control
     private void LaunchBattle()
     {
         NetSession.Reset();
+        if (LaunchBattleForTest is { } launch) { launch(); return; }
         GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
     }
+
+    /// <summary>P8-34 verification seam, the battle scene's LeaveForMenuForTest
+    /// idiom: when set, a launch calls this instead of changing scene, so the
+    /// harness can press COMMENCE OPERATION and read what the menu remembered.
+    /// Null in every played game; nothing in the client ever sets it.</summary>
+    public System.Action? LaunchBattleForTest;
 
     /// <summary>The replay browser over user://replays. Playback re-simulates
     /// the recorded command stream through the live battle pipeline, so a
@@ -403,7 +438,9 @@ public partial class MainMenu : Control
     private void StartHost()
     {
         if (_lobby is { State: LanLobby.Phase.Connecting }) return;   // one at a time
-        _lobby = LanLobby.Host(LanSetupFromMenu());
+        var setup = LanSetupFromMenu();
+        RememberSetup(setup);   // P8-34: a hosted match is the last match too
+        _lobby = LanLobby.Host(setup);
         var addresses = LanLobby.LocalAddresses();
         string where = addresses.Count > 0
             ? string.Join(" or ", addresses) + $":{LanLobby.DefaultPort}"
@@ -516,16 +553,53 @@ public partial class MainMenu : Control
         var missions = Campaign.Load();
         var overlay = FullOverlay();
         var v = OverlayBox(overlay, "CAMPAIGN");
+        // P8-34: the campaign has a shape now. A won mission is marked, the
+        // next one opens, and anything past it stays locked until the mission
+        // before it is won, which CampaignProgress remembers across restarts.
+        bool anyLocked = false;
         foreach (var m in missions)
         {
             var local = m;
-            v.AddChild(MenuButton($"{local.Index:00}  {local.Title.ToUpperInvariant()}", () =>
+            bool open = CampaignProgress.IsUnlocked(local.Index);
+            anyLocked |= !open;
+            string state = CampaignProgress.HasWon(local.Index) ? "   WON" : open ? "" : "   LOCKED";
+            var b = UplinkUi.MenuButton($"{local.Index:00}  {local.Title.ToUpperInvariant()}{state}", () =>
             {
                 overlay.QueueFree();
                 ShowBriefing(local.Path, local.Index, local.Title, local.Structs, local.Units);
-            }));
+            }, enabled: open);
+            if (!open) b.TooltipText = $"Win mission {local.Index - 1:00} to unlock this one.";
+            v.AddChild(b);
         }
+        if (anyLocked) v.AddChild(UplinkUi.Note("each mission opens when the one before it is won", 11));
         v.AddChild(MenuButton("BACK", () => overlay.QueueFree()));
+        _campaignOverlay = overlay;
+    }
+
+    private Control? _campaignOverlay;
+
+    /// <summary>P8-34 verification hook: open the campaign list exactly as its
+    /// button does and return each mission row's text and whether it can be
+    /// pressed, in list order.</summary>
+    public List<(string Text, bool Enabled)> OpenCampaignForTest()
+    {
+        ShowCampaign();
+        var rows = new List<(string, bool)>();
+        if (_campaignOverlay == null) return rows;
+        var buttons = new List<Button>();
+        void Walk(Node n)
+        {
+            foreach (Node c in n.GetChildren())
+            {
+                if (c is Button b && b.Text != "BACK") buttons.Add(b);
+                Walk(c);
+            }
+        }
+        Walk(_campaignOverlay);
+        foreach (var b in buttons) rows.Add((b.Text, !b.Disabled));
+        _campaignOverlay.QueueFree();
+        _campaignOverlay = null;
+        return rows;
     }
 
     private void ShowBriefing(string missionPath, int index, string title,
@@ -701,7 +775,70 @@ public partial class MainMenu : Control
         // other one (doc 24). Selected is the faction constant by construction.
         MatchConfig.Faction = _factionPick.Selected;
         MatchConfig.OppositionFaction = 1 - _factionPick.Selected;
+        RememberSetup(MatchConfig.CurrentSetup());
         LaunchBattle();
+    }
+
+    /// <summary>P8-34: keep what was just started for the next time the menu
+    /// opens. A failed write is logged and the match starts anyway: forgetting
+    /// a menu choice is not worth refusing a battle over.</summary>
+    private static void RememberSetup(MatchSetup setup)
+    {
+        try { LastMatchMemory.Remember(setup); }
+        catch (System.Exception e) { GD.PushWarning($"could not remember the last match setup: {e.Message}"); }
+    }
+
+    /// <summary>P8-34: put the rows back on the last match started here. Every
+    /// value is matched against what the rows actually offer (a theatre by its
+    /// path, a treasury by its text, a count clamped to the theatre's seats),
+    /// so a stale or hand-edited file selects the nearest real choice or
+    /// nothing, never an index the row does not have.</summary>
+    private void ApplyRemembered()
+    {
+        if (LastMatchMemory.Recall() is not { } s) return;
+        _factionPick.Select(System.Math.Clamp(s.Faction, 0, _factionPick.ItemCount - 1));
+        for (int i = 0; i < _cards.Count; i++)
+            if (GameFiles.Rel(_cards[i].Path) == s.MapPath)
+            {
+                _mapPick.Select(i);
+                break;
+            }
+        // Select() raises no ItemSelected, so what follows from the theatre is
+        // run here, exactly as a pick would run it.
+        OnTheatreChanged();
+        if (s.Seats >= 2) _oppCountPick.Select(System.Math.Clamp(s.Seats - 2, 0, _oppCountPick.ItemCount - 1));
+        RefreshTeams();
+        if (!_teamPick.Disabled) _teamPick.Select(System.Math.Clamp(s.TeamMode, 0, _teamPick.ItemCount - 1));
+        _aiPick.Select(System.Math.Clamp(s.AiPreset, 0, _aiPick.ItemCount - 1));
+        _diffPick.Select(System.Math.Clamp(s.AiDifficulty, 0, _diffPick.ItemCount - 1));
+        for (int i = 0; i < _creditPick.ItemCount; i++)
+            if (_creditPick.GetItemText(i) == s.StartCredits.ToString()) _creditPick.Select(i);
+    }
+
+    /// <summary>P8-34 verification reads: what each setup row is showing.</summary>
+    public (int Faction, int Theatre, int Opponents, int Teams, int Ai, int Difficulty, string Credits) RowsSelectedForTest =>
+        (_factionPick.Selected, _mapPick.Selected, _oppCountPick.Selected, _teamPick.Selected,
+         _aiPick.Selected, _diffPick.Selected, _creditPick.GetItemText(_creditPick.Selected));
+    public void ChooseFactionForTest(int i) => _factionPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public void ChooseAiForTest(int i) => _aiPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public void ChooseDifficultyForTest(int i) => _diffPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    public void ChooseTreasuryForTest(int i) => _creditPick.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, i);
+    /// <summary>Press COMMENCE OPERATION through its own signal.</summary>
+    public bool PressMenuButtonForTest(string text)
+    {
+        var buttons = new List<Button>();
+        void Walk(Node n)
+        {
+            foreach (Node c in n.GetChildren())
+            {
+                if (c is Button b and not OptionButton && b.Text == text) buttons.Add(b);
+                Walk(c);
+            }
+        }
+        Walk(this);
+        if (buttons.Count == 0 || buttons[0].Disabled) return false;
+        buttons[0].EmitSignal(BaseButton.SignalName.Pressed);
+        return true;
     }
 
     /// <summary>Offscreen verification hooks (the RunSmokeForTest precedent):

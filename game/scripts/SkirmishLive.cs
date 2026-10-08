@@ -187,6 +187,13 @@ public partial class SkirmishLive : Node3D
     /// playing back; empty for a fresh match. Named in a fault report.</summary>
     private string _sourcePath = "";
     private PauseMenu? _pauseMenu;
+    /// <summary>P8-34: this seat's match numbers, folded in after every step
+    /// (PostStepSweep), and the results screen that shows them at the end.</summary>
+    private MatchStats _stats = null!;
+    private ResultsScreen? _results;
+    /// <summary>P8-34: the mission NEXT MISSION opens the briefing of, or 0
+    /// when the results screen offers none.</summary>
+    private int _nextMission;
 
     // P8-11: fault containment round the tick drain. An exception thrown by the
     // sim step or by the client's work for a tick used to escape into Godot,
@@ -825,6 +832,9 @@ public partial class SkirmishLive : Node3D
         // player starts into a playback of the last one they watched.
         MatchConfig.LoadPath = null;
         MatchConfig.ReplayPath = null;
+        // P8-34: the tally starts from the world as assembled, a resumed save's
+        // included (it then counts from the save's tick, and says so).
+        _stats = new MatchStats(_world, LocalPlayerId);
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual, map.Decor);
@@ -1140,9 +1150,11 @@ public partial class SkirmishLive : Node3D
         _replayFinalHash = got;
         _replayVerified = got == _replay!.FinalHash;
         _banner.AddThemeFontSizeOverride("font_size", 22);
+        // P8-34: the way out is the LIVE cancel binding, not the word "escape",
+        // which was wrong for every player who had rebound it.
         _banner.Text = _replayVerified
-            ? $"REPLAY COMPLETE\n\n{_world.Tick} TICKS RE-SIMULATED\n0x{got:X16} MATCHES THE RECORDING\n\npress escape for uplink"
-            : $"REPLAY DIVERGED\n\n0x{got:X16}\nvs recorded 0x{_replay.FinalHash:X16}\n\npress escape for uplink";
+            ? $"REPLAY COMPLETE\n\n{_world.Tick} TICKS RE-SIMULATED\n0x{got:X16} MATCHES THE RECORDING\n\npress {CancelKeyName} for the main menu"
+            : $"REPLAY DIVERGED\n\n0x{got:X16}\nvs recorded 0x{_replay.FinalHash:X16}\n\npress {CancelKeyName} for the main menu";
         _banner.AddThemeColorOverride("font_color",
             _replayVerified ? BattlefieldView.DirectorateMark : new Color(0.85f, 0.25f, 0.2f));
         _banner.Visible = true;
@@ -2057,6 +2069,11 @@ public partial class SkirmishLive : Node3D
     /// </summary>
     private void PostStepSweep()
     {
+        // P8-34: the tick is tallied FIRST, before the victory latch below can
+        // raise the results screen, so the blow that ends a match is counted on
+        // the screen it brings up. The owner cache is still the pre-tick one
+        // here (RememberStructureOwners refreshes it at the end of the sweep).
+        _stats.Observe(_world, _structureOwner, IsHostileSeat);
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
         _fog.UpdateFrom(_world, LocalPlayerId);
@@ -3874,18 +3891,123 @@ public partial class SkirmishLive : Node3D
         // joiner who had just won was shown DEFEAT in the loser's red and played
         // the failure line, while the host who lost was congratulated. The last
         // thing a match says, and it said the opposite of what happened.
-        _banner.Text = (iWon ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
-        // The winner's banner wears the winner's own team colour through the
+        // The winner's verdict wears the winner's own team colour through the
         // one-place law, which is identical to the old DirectorateMark at seat 0
         // and correct at every seat above it.
-        _banner.AddThemeColorOverride("font_color",
-            iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f));
-        _banner.Visible = true;
-        // TICKET-P6-VO-01: the closing line, beside the banner. One site
+        string verdict = iWon ? "VICTORY" : "DEFEAT";
+        var colour = iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f);
+        if (_replay != null)
+        {
+            // A RECORDING is not a match being played: it cannot be retried and
+            // has nothing to unlock, and it ends on its own verdict banner
+            // (FinishPlayback, on this same tick when the recording closed at
+            // the verdict). So playback keeps the banner, which now names the
+            // live cancel binding.
+            _banner.Text = $"{verdict}\n\npress {CancelKeyName} for the main menu";
+            _banner.AddThemeColorOverride("font_color", colour);
+            _banner.Visible = true;
+        }
+        else
+        {
+            // P8-34: a campaign win is remembered BEFORE the screen offers the
+            // next mission, so the unlock it promises is already on disk. A
+            // write failure is said on the screen rather than thrown: this runs
+            // inside the tick, and a full disk must not halt a won match.
+            string? progressNote = null;
+            if (iWon && _setup.IsMission && _net == null)
+            {
+                try { CampaignProgress.RecordWin(_setup.MissionIndex); }
+                catch (System.Exception e)
+                {
+                    GD.PushError($"campaign progress could not be saved: {e}");
+                    progressNote = "campaign progress could not be saved, so the next mission stays locked after a restart";
+                }
+            }
+            ShowResults(iWon, verdict, colour, progressNote);
+        }
+        // TICKET-P6-VO-01: the closing line, beside the verdict. One site
         // covers skirmish and campaign both: a mission verdict arrives here
         // through World.Winner exactly as an elimination does.
         PlayVo(iWon ? "vo_mission_accomplished" : "vo_mission_failed", AlertPriority.Critical);
     }
+
+    /// <summary>The cancel key as the player has it bound, for every line that
+    /// tells them how to leave.</summary>
+    private static string CancelKeyName => Settings.KeyName(Settings.BindOf("cancel"));
+
+    /// <summary>P8-34: can THIS client restart this match? Offline, yes: it
+    /// built the world from its setup and can build it again. Not in LAN,
+    /// because a restart is a new lockstep session on both machines and one
+    /// peer cannot start the other's; and not in playback, which is a
+    /// recording rather than a match.</summary>
+    private bool CanRetry => _net == null && _replay == null;
+
+    /// <summary>P8-34: the results screen, in place of the banner a played
+    /// match used to end on.</summary>
+    private void ShowResults(bool iWon, string verdict, Color colour, string? progressNote)
+    {
+        _banner.Visible = false;
+        _results?.QueueFree();
+        _nextMission = iWon && _setup.IsMission && _net == null
+                       && Campaign.ByIndex(_setup.MissionIndex + 1) is not null
+            ? _setup.MissionIndex + 1 : 0;
+        var notes = new List<string>();
+        if (_stats.StartTick > 0) notes.Add($"counted from the loaded save at tick {_stats.StartTick}");
+        if (_net != null)
+            notes.Add("RETRY is not offered in a LAN match: this machine cannot restart the other player's battle. "
+                      + "Host a new one from the LAN screen.");
+        if (progressNote != null) notes.Add(progressNote);
+        _results = new ResultsScreen();
+        _hud.AddChild(_results);
+        _results.Init(new ResultsScreen.Model(
+            verdict, colour, _setup.Describe(),
+            ResultsScreen.RowsOf(_stats, _world.Tick), notes,
+            CanRetry ? RetryMatch : null,
+            _nextMission > 0 ? NextMission : null,
+            _nextMission > 0 ? Campaign.ByIndex(_nextMission)?.Title : null,
+            QuitToMenu, CancelKeyName));
+    }
+
+    /// <summary>
+    /// P8-34: RETRY. The same match from the start: the setup this scene was
+    /// built from goes back into MatchConfig through the one setup-to-config
+    /// copy (ApplyFrom), so the map, sides, opposition, treasury and, for a
+    /// mission, its allow-lists are exactly what the player just played, and
+    /// the scene is assembled afresh by the one place a match is assembled
+    /// (_Ready), the way LOAD GAME does it. The seat is carried as well, which
+    /// in any offline match is seat 0; the harness drives from seat 1 and a
+    /// retry there must be the same match too. A resumed save retries from
+    /// the start of its match, not from the save.
+    /// </summary>
+    public void RetryMatch()
+    {
+        if (!CanRetry) return;
+        FinishRecording();
+        MatchConfig.ApplyFrom(_setup);
+        MatchConfig.LoadPath = null;
+        MatchConfig.ReplayPath = null;
+        LocalSeat = LocalPlayerId;
+        NetSession.Reset();
+        if (RestartSceneForTest is { } restart) { restart(); return; }
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+    }
+
+    /// <summary>P8-34: NEXT MISSION opens the next mission's BRIEFING on the
+    /// main menu rather than dropping the player straight into it, because the
+    /// briefing is where the mission says what it wants (F13), and the menu's
+    /// briefing path is the one way into a mission.</summary>
+    public void NextMission()
+    {
+        if (_nextMission <= 0) return;
+        MainMenu.PendingBriefing = _nextMission;
+        QuitToMenu();
+    }
+
+    /// <summary>P8-34 verification seam, the LoadSceneForTest idiom for RETRY:
+    /// when set, a retry calls this instead of changing scene, because the
+    /// harness IS the running scene. Null in every played game; nothing in the
+    /// client ever sets it.</summary>
+    public System.Action? RestartSceneForTest;
 
     private bool _paused;
     private Label _objective = null!;
@@ -6687,8 +6809,17 @@ public partial class SkirmishLive : Node3D
     /// label's own text rather than recomputing the verdict, because
     /// recomputing it is how a check comes to agree with the bug - and this
     /// banner told a winning joiner they had lost.</summary>
-    public string BannerTextForTest => _banner.Text;
-    public bool BannerVisibleForTest => _banner.Visible;
+    /// <summary>P8-34: a played match's verdict is the results screen's
+    /// heading now, so the read follows what is on screen: the results
+    /// screen's heading and its way-out line while it stands, the banner
+    /// otherwise (a replay's verdict, which keeps the banner).</summary>
+    public string BannerTextForTest => _results is { } r && IsInstanceValid(r) && r.IsInsideTree()
+        ? $"{r.HeadingText}\n\n{r.FooterText}" : _banner.Text;
+    public bool BannerVisibleForTest => (_results is { } r && IsInstanceValid(r) && r.IsInsideTree() && r.Visible) || _banner.Visible;
+    /// <summary>P8-34 verification reads: the results screen as SHOWN, or null
+    /// while there is none, and the live tally behind it.</summary>
+    public ResultsScreen? ResultsView => _results is { } r && IsInstanceValid(r) && r.IsInsideTree() ? r : null;
+    public MatchStats StatsView => _stats;
 
     /// <summary>Verification hook: report this player eliminated, through the
     /// REAL path the sim's PlayerEliminated event drives. P7-8a: this no longer
@@ -6720,7 +6851,22 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification hook: clear the victory latch so a second verdict
     /// can be driven in one run. Test-only by name and by nature - nothing in a
     /// played match un-wins a match.</summary>
-    public void ResetVictoryForTest() { _winner = -1; _matchOver = false; _banner.Visible = false; }
+    public void ResetVictoryForTest()
+    {
+        _winner = -1;
+        _matchOver = false;
+        _banner.Visible = false;
+        // P8-34: and the results screen goes with the verdict it showed. Taken
+        // out of the tree at once, not only queued, so a read in the same frame
+        // sees it gone.
+        if (_results is { } r && IsInstanceValid(r))
+        {
+            r.GetParent()?.RemoveChild(r);
+            r.QueueFree();
+        }
+        _results = null;
+        _nextMission = 0;
+    }
 
     /// <summary>Verification hook: hand an entity to another player, as a
     /// capture does. Through the sim's own scenario-scripting SetEntity, so the

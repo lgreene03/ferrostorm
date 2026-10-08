@@ -222,8 +222,15 @@ public static class Settings
         }
     }
 
+    /// <summary>Verification seam (P8-34): while set, Save writes nothing, so
+    /// the harness can rebind keys through the real paths without touching the
+    /// player's own settings file. False in every played game; nothing in the
+    /// client ever sets it.</summary>
+    public static bool SaveSuppressedForTest;
+
     public static void Save()
     {
+        if (SaveSuppressedForTest) return;
         var cfg = new ConfigFile();
         cfg.SetValue("audio", "master", MasterVolume);
         cfg.SetValue("audio", "sfx", SfxVolume);
