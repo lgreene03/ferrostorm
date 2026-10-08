@@ -6044,6 +6044,42 @@ public sealed partial class World
     private static readonly (int Dx, int Dy)[] SpawnOffsets =
         { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) };
 
+    // P8-64 (ADR-076 clause 3 as amended under D38, Architect condition C1):
+    // the cells SpawnOffsets misses, which the production exit tries after its
+    // eleven, one list per footprint parity. Declared after SpawnOffsets
+    // because they are derived from it at type initialisation.
+    private static readonly (int Dx, int Dy)[] ExitMissedOddFootprint = ExitCellsMissed(evenFootprint: false);
+    private static readonly (int Dx, int Dy)[] ExitMissedEvenFootprint = ExitCellsMissed(evenFootprint: true);
+
+    /// <summary>
+    /// P8-64 (ADR-076 clause 3 as amended under D38, Architect condition C1):
+    /// the offsets that close SpawnOffsets under reflection through the
+    /// footprint's centre on each axis, in a fixed order. Measured from the
+    /// centre cell, the reflection of an offset d through the footprint's
+    /// centre is -d for an odd footprint, whose centre cell is its middle, and
+    /// -1 - d for an even one, whose centre cell is its bottom-right cell
+    /// (CellOf floors the centre point). The order is the list's own: each of
+    /// the eleven in turn, then its reflection in x, its reflection in y and
+    /// its half turn, each kept only if neither the eleven nor an earlier
+    /// entry already holds it. Derived from SpawnOffsets rather than written
+    /// out, so the two cannot drift apart. List.Contains on a value tuple is an
+    /// ordinal comparison, so the result is the same on every machine.
+    /// </summary>
+    private static (int Dx, int Dy)[] ExitCellsMissed(bool evenFootprint)
+    {
+        int k = evenFootprint ? -1 : 0;
+        var held = new List<(int Dx, int Dy)>(SpawnOffsets);
+        var missed = new List<(int Dx, int Dy)>();
+        foreach (var (dx, dy) in SpawnOffsets)
+            foreach (var image in new[] { (k - dx, dy), (dx, k - dy), (k - dx, k - dy) })
+            {
+                if (held.Contains(image)) continue;
+                held.Add(image);
+                missed.Add(image);
+            }
+        return missed.ToArray();
+    }
+
     /// <summary>
     /// P8-64 (ADR-076 clause 3): THE EXIT ORDER IS READ IN THE PRODUCER'S OWN
     /// FRAME. SpawnOffsets is one fixed list, south of the producer first, and
@@ -6062,10 +6098,26 @@ public sealed partial class World
     /// handed the reflected cell and offset, so the walk out of the mouth turns
     /// with them.
     ///
-    /// ownFrame false is the authored order, the rule before clause 3. Nothing
-    /// in the sim asks for it: it exists for ProductionExitOpen, so that
-    /// pillarprobe can print clause 3's reversal measurement (C7) from the
-    /// sim's own search rather than a copy of it.
+    /// THE BLIND SPOTS ARE CLOSED (the amendment of clause 3 under D38,
+    /// Architect condition C1). From an even footprint's bottom-right centre
+    /// cell the eleven probe the left and top sides at the cell beside the
+    /// footprint but the right and bottom sides one cell clear, so each frame
+    /// has cells beside the footprint it never tries, and the reflection moves
+    /// them onto the side facing the centre: measured on skirmish-08, a
+    /// barracks held a paid unit at 100 per cent from t=8840 with the cell
+    /// beside it on that side open. So after its eleven, unchanged, the own
+    /// frame tries the cells they miss (ExitCellsMissed), in an order fixed in
+    /// the authored frame and reflected exactly as the eleven are. The set it
+    /// searches is then closed under reflection through the footprint's centre
+    /// on each axis: two producers that are each other's mirror search mirrored
+    /// cells in mirrored order, and every cell the authored order tries is
+    /// tried in every frame.
+    ///
+    /// ownFrame false is the authored order alone, the rule before clause 3:
+    /// the eleven, unreflected, with nothing after them. Nothing in the sim
+    /// asks for it: it exists for ProductionExitOpen, so that pillarprobe can
+    /// print clause 3's reversal measurement (C7) from the sim's own search
+    /// rather than a copy of it.
     /// </summary>
     private bool FindProductionExit(in Entity producer, bool ownFrame,
                                     out int scx, out int scy, out int sdx, out int sdy)
@@ -6073,26 +6125,27 @@ public sealed partial class World
         scx = Map.CellOf(producer.X);
         scy = Map.CellOf(producer.Y);
         int fx = 1, fy = 1;
+        bool evenFootprint = FootprintOf(producer.StructType) % 2 == 0;
         if (ownFrame)
         {
             fx = producer.X + producer.X > Fix64.FromInt(Map.Width) ? -1 : 1;
             fy = producer.Y + producer.Y > Fix64.FromInt(Map.Height) ? -1 : 1;
-            bool evenFootprint = FootprintOf(producer.StructType) % 2 == 0;
             if (fx < 0 && evenFootprint) scx--;
             if (fy < 0 && evenFootprint) scy--;
         }
         foreach (var (ox, oy) in SpawnOffsets)
-        {
-            int dx = ox * fx, dy = oy * fy;
-            int nx = scx + dx, ny = scy + dy;
-            if (!Map.InBounds(nx, ny) || Map.IsBlocked(nx, ny)) continue;
-            if (CellOccupied(nx, ny)) continue;
-            sdx = dx; sdy = dy;
-            return true;
-        }
+            if (ExitCellOpen(scx + ox * fx, scy + oy * fy)) { sdx = ox * fx; sdy = oy * fy; return true; }
+        if (ownFrame)
+            foreach (var (ox, oy) in evenFootprint ? ExitMissedEvenFootprint : ExitMissedOddFootprint)
+                if (ExitCellOpen(scx + ox * fx, scy + oy * fy)) { sdx = ox * fx; sdy = oy * fy; return true; }
         sdx = 0; sdy = 0;
         return false;
     }
+
+    // SPAWN-04's test for one candidate exit cell: on the map, not blocked
+    // terrain (a structure's cells are blocked there), and no standing entity.
+    private bool ExitCellOpen(int nx, int ny)
+        => Map.InBounds(nx, ny) && !Map.IsBlocked(nx, ny) && !CellOccupied(nx, ny);
 
     /// <summary>
     /// P8-64 (ADR-076 clause 3, Architect condition C7): would this producer's

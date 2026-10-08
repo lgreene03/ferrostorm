@@ -3034,12 +3034,18 @@ int SpawnGate()
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
         int barracks = w.SpawnBarracks(0, 10, 10);
-        // Wall the whole ring: the producer's centre cell is (11,11); block
-        // every spawn candidate. The map, not units, blocks here - the
-        // walled-in case is the one that can persist forever and must stay
-        // honest.
-        foreach (var (dx, dy) in new[] { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) })
-            w.Map.SetBlocked(11 + dx, 11 + dy, true);
+        // Wall the whole search: the producer's centre cell is (11,11), and
+        // every open cell within three of its footprint is blocked. That holds
+        // every cell the exit search tries in any frame, the eleven of the
+        // fixed ring and the cells they miss (ADR-076 clause 3 as amended under
+        // D38, which walled only the eleven before the search was closed under
+        // reflection), without the gate reading the search's order. The map,
+        // not units, blocks here - the walled-in case is the one that can
+        // persist forever and must stay honest.
+        int wallFoot = w.FootprintOf(World.BarracksStructType);
+        for (int x = 10 - 3; x < 10 + wallFoot + 3; x++)
+            for (int y = 10 - 3; y < 10 + wallFoot + 3; y++)
+                if (!w.Map.IsBlocked(x, y)) w.Map.SetBlocked(x, y, true);
         w.InvalidateFlowCache();
         cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
@@ -3070,8 +3076,14 @@ int SpawnGate()
             if (ev.Type == GameEventType.ProductionComplete)
                 return Fail("spawngate: no completion event may fire across 100 held ticks");
         // Free one cell: the mouth clears and the producer resumes THAT tick.
+        // The cell beyond it, (11,14), is freed with it as the way out: the
+        // wall covers everything within three of the footprint, so without it
+        // the released rifle would stand boxed in on the mouth and the second
+        // could never follow. The mouth, (11,13), is still the search's first
+        // cell, so the release is asserted there exactly as before.
         events.Clear();
         w.Map.SetBlocked(11, 13, false);
+        w.Map.SetBlocked(11, 14, false);
         w.InvalidateFlowCache();
         StepN(2);
         if (w.EntityCount != preCount + 1)
@@ -3257,6 +3269,109 @@ int SpawnGate()
                         + "- the exit does not reflect with the producer on one axis (P8-64, C6)");
     }
 
+    // 10. P8-64 (ADR-076 clause 3 as amended under D38, the Architect's
+    //     condition C1): THE EXIT SEARCH HAS NO BLIND SPOT. The skirmish-08 trap,
+    //     built on purpose. Every open cell within three of a barracks' footprint
+    //     is walled except ONE: a cell beside the footprint on the side facing
+    //     the map centre (in x, in the row of the footprint's centre cell; then,
+    //     separately, in y, in its column), which none of the fixed ring's eleven
+    //     offsets reaches in the producer's own frame. Measured on skirmish-08
+    //     (the x case), a commander's barracks held a paid unit
+    //     at 100 per cent from t=8840, on and off for thousands of ticks, with
+    //     exactly that cell open. Here each barracks must release its rifle on
+    //     the tick it finishes, into that cell, and the rifles and their exit
+    //     targets must be each other's images, raw: two barracks that are each
+    //     other's half turn on a 64x64 map, then stage 9's three on a 64 by 48
+    //     map, reflected in x only and in y only. Seat 0's open cell is read off
+    //     its anchor and the footprint, and every other seat's off the map's
+    //     reflections, never off the search's order.
+    {
+        int Trap(ulong seed, int width, int height, (int X, int Y)[] anchors, (int X, int Y)[] open, string what)
+        {
+            var w = new World(seed, width, height, players: anchors.Length);
+            int fb = w.FootprintOf(World.BarracksStructType), fp = w.FootprintOf(World.DirectoratePlantStructType);
+            int total = w.GetUnitType(2).BuildTicks * 100;
+            var bs = new int[anchors.Length];
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                w.GrantCredits(p, 20000);
+                // A plant in the seat's own corner, so the barracks runs at full power.
+                w.SpawnPowerPlant(p, anchors[p].X < width / 2 ? 2 : width - fp - 2, anchors[p].Y < height / 2 ? 2 : height - fp - 2);
+                bs[p] = w.SpawnBarracks(p, anchors[p].X, anchors[p].Y);
+            }
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                for (int x = anchors[p].X - 3; x < anchors[p].X + fb + 3; x++)
+                    for (int y = anchors[p].Y - 3; y < anchors[p].Y + fb + 3; y++)
+                        if ((x, y) != open[p] && !w.Map.IsBlocked(x, y)) w.Map.SetBlocked(x, y, true);
+                if (w.Map.IsBlocked(open[p].X, open[p].Y))
+                    return Fail($"spawngate: {what}: seat {p}'s trap cell ({open[p].X},{open[p].Y}) is blocked before the stage starts");
+                cmds.Add(new Command(0, p, CommandType.Produce, bs[p], Fix64.Zero, Fix64.Zero, 2));
+            }
+            w.InvalidateFlowCache();
+            int first = w.EntityCount;
+            for (int t = 0; t < 75 + 20 && w.EntityCount < first + anchors.Length; t++)
+            {
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                cmds.Clear();
+                for (int p = 0; p < anchors.Length; p++)
+                    if (w.QueueLength(bs[p]) > 0 && w.Entities[bs[p]].BuildProgress >= total)
+                        return Fail($"spawngate: {what}: seat {p}'s barracks at ({anchors[p].X},{anchors[p].Y}) held a finished rifle at "
+                                    + $"100 per cent on tick {w.Tick} with the cell beside it on its centre-facing side, "
+                                    + $"({open[p].X},{open[p].Y}), open - the exit search has a blind spot there "
+                                    + "(P8-64, ADR-076 clause 3 as amended under D38, C1)");
+            }
+            if (w.EntityCount != first + anchors.Length)
+                return Fail($"spawngate: {what}: the trapped barracks produced {w.EntityCount - first} rifles, not {anchors.Length} on one tick");
+            var u0 = w.Entities[first];
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                var u = w.Entities[first + p];
+                if (u.PlayerId != p)
+                    return Fail($"spawngate: {what}: the trapped barracks' rifles came out in an unexpected order");
+                if (Map.CellOf(u.X) != open[p].X || Map.CellOf(u.Y) != open[p].Y)
+                    return Fail($"spawngate: {what}: seat {p}'s rifle came out at ({u.X},{u.Y}), not in the one open cell ({open[p].X},{open[p].Y})");
+                // The image of seat 0's rifle under the reflection relating the
+                // two barracks: in x where the anchors differ in x, in y where
+                // they differ in y, both for the half turn.
+                Fix64 ix = anchors[p].X == anchors[0].X ? u0.X : Fix64.FromInt(width) - u0.X;
+                Fix64 iy = anchors[p].Y == anchors[0].Y ? u0.Y : Fix64.FromInt(height) - u0.Y;
+                Fix64 itx = anchors[p].X == anchors[0].X ? u0.TargetX : Fix64.FromInt(width) - u0.TargetX;
+                Fix64 ity = anchors[p].Y == anchors[0].Y ? u0.TargetY : Fix64.FromInt(height) - u0.TargetY;
+                if (u.X != ix || u.Y != iy || u.TargetX != itx || u.TargetY != ity)
+                    return Fail($"spawngate: {what}: seat {p}'s rifle at ({u.X},{u.Y}) bound for ({u.TargetX},{u.TargetY}) is not the image "
+                                + $"({ix},{iy}) bound for ({itx},{ity}) of seat 0's - the trapped exit does not mirror (P8-64, C1)");
+            }
+            return 0;
+        }
+        const int Size = 64, W = 64, H = 48;
+        int fb10 = new World(23, Size, Size, 2).FootprintOf(World.BarracksStructType);
+        // Run twice, with the open cell on the side facing the centre in x and
+        // then in y, so a search closed under one axis's reflection only fails
+        // one of the two. Seat 0 stands short of the centre on both axes, so its
+        // open cell in x is the column just past its footprint (anchor +
+        // footprint) in the row of its bottom-right centre cell (anchor +
+        // footprint - 1), and in y the row just past it in that cell's column.
+        // The image of a cell c on an axis of length n is n - 1 - c.
+        foreach (bool ySide in new[] { false, true })
+        {
+            string side = ySide ? "open in y" : "open in x";
+            (int X, int Y) Open0(int ax, int ay) => ySide ? (ax + fb10 - 1, ay + fb10) : (ax + fb10, ay + fb10 - 1);
+            var h0 = Open0(10, 10);
+            int halfTurn = Trap(23, Size, Size,
+                new[] { (10, 10), (Size - fb10 - 10, Size - fb10 - 10) },
+                new[] { h0, (Size - 1 - h0.X, Size - 1 - h0.Y) },
+                $"the half-turned trap, {side}");
+            if (halfTurn != 0) return halfTurn;
+            var s0 = Open0(25, 16);
+            int oneAxis = Trap(24, W, H,
+                new[] { (25, 16), (W - fb10 - 25, 16), (25, H - fb10 - 16) },
+                new[] { s0, (W - 1 - s0.X, s0.Y), (s0.X, H - 1 - s0.Y) },
+                $"the single-axis trap, {side}");
+            if (oneAxis != 0) return oneAxis;
+        }
+    }
+
     Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically) and a BARRACKS now accepts it too (ADR-009 clause 5, B2's deferred question answered); " +
                       "3 rallied rifles left the barracks mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
                       "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
@@ -3264,7 +3379,10 @@ int SpawnGate()
                       "deleted nothing, stalled the line honestly, and released with C the instant a cell freed at exactly 400 credits for two rifles; " +
                       "a 2-cell rally under occupancy spawned 4+1 units at distinct positions with one at the rally; SetRally round-trips the replay format; " +
                       "two barracks that are each other's half turn set their rifles down, and walk them out, at exactly each other's half turn, " +
-                      "and two reflected in one axis only, on a map that is not square, at exactly that reflection (P8-64, ADR-076 clause 3, C6)");
+                      "and two reflected in one axis only, on a map that is not square, at exactly that reflection (P8-64, ADR-076 clause 3, C6); " +
+                      "and walled in but for the one cell beside them facing the centre, in x and then in y, which the fixed ring never reaches, " +
+                      "barracks on the half turn and on each single axis released their rifles into it on the tick they finished, as each other's images " +
+                      "(P8-64, ADR-076 clause 3 as amended under D38, C1)");
     return 0;
 }
 
@@ -17259,11 +17377,16 @@ int PillarProbe()
     // its exit search found every cell blocked. Each such producer tick is
     // counted, and then asked, through the sim's own search
     // (World.ProductionExitOpen), which order would release it NOW: the
-    // unreflected (authored) order alone, or the reflected (own-frame) order
-    // alone. Read after the step, so a cell freed during the step's movement
-    // counts as open; both orders are asked at the same instant, so the two
-    // readings compare like with like. The counts read the world only, so
-    // the sweep plays exactly as before.
+    // unreflected (authored) order alone, or the own-frame search alone. Read
+    // after the step, so a cell freed during the step's movement counts as
+    // open; both orders are asked at the same instant, so the two readings
+    // compare like with like. The counts read the world only, so the sweep
+    // plays exactly as before. Since clause 3's amendment under D38 (C1) the
+    // own-frame search tries the eleven and then the cells they miss, a set
+    // closed under reflection that holds every cell the authored order tries,
+    // so "the unreflected order alone" reads 0 by construction; the reversal
+    // now compares the held total with the same line from a build whose
+    // ProductionSystem asks the authored order (ADR-076, C2).
     var exitHeld = new long[specs.Count];
     var exitUnreflectedOnly = new long[specs.Count];
     var exitReflectedOnly = new long[specs.Count];
@@ -17363,11 +17486,11 @@ int PillarProbe()
     // the holds, those only the other order would have released.
     Console.WriteLine($"pillarprobe: ADR-076 clause 3, producer ticks holding a finished unit at 100 per cent with every exit cell blocked: "
         + $"{exitHeld.Sum()}, of which the unreflected (authored) order alone would have released {exitUnreflectedOnly.Sum()} and the "
-        + $"reflected (own-frame) order alone {exitReflectedOnly.Sum()} (both read after the step)");
+        + $"own-frame search (its eleven, then the cells they miss) alone {exitReflectedOnly.Sum()} (both read after the step)");
     for (int i = 0; i < specs.Count; i++)
         if (exitUnreflectedOnly[i] > 0 || exitReflectedOnly[i] > 0)
             Console.WriteLine($"  {specs[i].Map} {FactionLetter(specs[i].F0)}{FactionLetter(specs[i].F1)} o{(specs[i].Swap ? 1 : 0)}: "
-                              + $"held {exitHeld[i]}, unreflected order alone would release {exitUnreflectedOnly[i]}, reflected alone {exitReflectedOnly[i]}");
+                              + $"held {exitHeld[i]}, unreflected order alone would release {exitUnreflectedOnly[i]}, own-frame search alone {exitReflectedOnly[i]}");
     Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
     return 0;
 }
