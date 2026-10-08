@@ -2045,6 +2045,16 @@ int SelfTest()
     var two = Fix64.FromInt(2);
     if ((two * Fix64.FromInt(3)).ToIntRound() != 6) return Fail("Fix64 mul");
     if ((Fix64.FromInt(7) / two).Raw != Fix64.FromInt(7).Raw / 2) return Fail("Fix64 div");
+    // P8-53 (ADR-077): the product truncates toward zero, so negating either
+    // factor negates the product exactly. The pin is the smallest case that
+    // tells the rules apart: one unit in the last place times a half is -2^31
+    // before the shift, which a floor rounds to -1 and truncation to 0.
+    if ((new Fix64(-1) * Fix64.Half).Raw != 0) return Fail("Fix64 mul: a negative product truncates toward zero (ADR-077)");
+    var mx = Fix64.FromFraction(7, 3); var my = Fix64.FromFraction(-5, 11);
+    if (mx * my != -(mx * -my) || (-mx) * (-my) != mx * my || mx * my != my * mx)
+        return Fail("Fix64 mul: negating a factor negates the product exactly (ADR-077)");
+    if ((mx * -my).Raw != (long)(((System.Int128)mx.Raw * -my.Raw) >> Fix64.FracBits))
+        return Fail("Fix64 mul: a product at or above zero is the plain shift, unchanged by ADR-077");
     if (Fix64.FromFraction(1, 2) != Fix64.Half) return Fail("Fix64 fraction");
     if (Fix64.Sqrt(Fix64.FromInt(144)).ToIntRound() != 12) return Fail("Fix64 sqrt");
     var s2 = Fix64.Sqrt(two);
@@ -15320,7 +15330,13 @@ int LanAiSeatsGate()
     // opening hands are now laid out in each start's own frame, so the yards
     // of the three starts right of or below the centre moved a cell towards it
     // and their forces were mirrored on the second axis.
-    const ulong NoAiPinned = 0x1377C844B399DD6DUL;
+    // RE-PINNED by P8-53 (ADR-077), from 0x1377C844B399DD6D: Fix64
+    // multiplication now truncates toward zero, so the negative products in
+    // these 400 ticks of movement round one unit in the last place nearer
+    // zero than they did, and the world hashes differently. The frame
+    // flip before it (ADR-075's amendment) left this hash alone, because no
+    // commander plays here; P8-64 after it leaves it alone too.
+    const ulong NoAiPinned = 0x8CE212EBF6C1FBFBUL;
     ulong controlHash;
     {
         var run = PlayLan(8101, ControlTicks, None);
@@ -18015,11 +18031,13 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with ADR-075's
-    /// frame flipped to the sheltered one (its amendment of 2026-10-08,
-    /// decision D38, which moves every match a commander plays; with P8-63
-    /// landed, ADR-076's free harvester at the corner facing the map centre,
-    /// they read 313482, 65877 and 155083; with P8-62 alone, the opening
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-53 landed
+    /// (ADR-077: Fix64 multiplication truncates toward zero, which moves every
+    /// match in which a negative product's low bits are not zero, so every
+    /// match; with ADR-075's frame flipped to the sheltered one, its amendment
+    /// of 2026-10-08 under decision D38, they read 268174, 43896 and 138439;
+    /// with P8-63 landed, ADR-076's free harvester at the corner facing the
+    /// map centre, they read 313482, 65877 and 155083; with P8-62 alone, the opening
     /// hand a true half turn, they read 268451, 44232 and 120654; on main
     /// after the P8-21 pull request, ADR-075, they read 269005,
     /// 44857 and 155592; at 9dd23cd, main after P8-18, they
@@ -18046,9 +18064,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 268174),
-        ("skirmish-08", 43896),
-        ("skirmish-09", 138439),
+        ("skirmish-07", 313102),
+        ("skirmish-08", 54855),
+        ("skirmish-09", 155297),
     };
 }
 

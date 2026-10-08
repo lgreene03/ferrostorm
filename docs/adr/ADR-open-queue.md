@@ -223,3 +223,21 @@ the same commit.
   "Architect sign-off" section); C1 to C7 are met by route A in pull request 166
   (branch claude/p8-62-63-start, rebased from claude/p8-62-63-half-turn),
   and it is ratified under D5, D36 and D37.
+- ADR-077: PROPOSED 2026-10-08 - ADR-077-multiplication-truncates-toward-zero.md
+  (row P8-53, ADR-075's cause 3, decision D38). Number claimed here per the
+  numbering law, in the same commit as the draft; 076 is held by P8-62 and
+  P8-63, so 077 is the next free number. `Fix64` multiplication truncates
+  toward zero (`p >= 0 ? p >> 32 : -((-p) >> 32)` on the Int128 product,
+  integer only), so `(-x)*y == -(x*y)` exactly, as division already rounds.
+  Lands as stage 2 of D38's one pull request (branch
+  claude/p8-53-trunc-shelter-on), after ADR-075's frame flip and before
+  ADR-076 clause 3, judged jointly with them on P8-53's measured matrix:
+  13 goldens move in this stage, one cause, attributed in the ADR; catalogue
+  checksum unchanged; no save or wire change; `lanaiseatsgate`'s control pin
+  re-pinned with a note. A sim rule, so old replays diverge and a mixed-build
+  LAN game desyncs rather than being refused (Q024). It records that F11
+  gets worse (Directorate 6/6 against Sodality 0/6), that the green
+  `mission` golden depends on the sheltered frame avoiding an exact movement
+  tie (row P8-66 filed), and that the F5 gain is one deterministic sample
+  while `mirrorprobe`'s loss of the multiplication split is the robust
+  result. The Architect's sign-off is owed before merge.

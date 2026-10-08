@@ -36,8 +36,20 @@ public readonly struct Fix64 : IEquatable<Fix64>, IComparable<Fix64>
     public static Fix64 operator -(Fix64 a, Fix64 b) => new(a.Raw - b.Raw);
     public static Fix64 operator -(Fix64 a) => new(-a.Raw);
 
+    /// <summary>P8-53 (ADR-077): the product TRUNCATES TOWARD ZERO, as division
+    /// already does. The Int128 product of the two raw values is exact, and
+    /// shifting it right by FracBits floors it, which rounded a negative
+    /// product one unit in the last place further from zero than its positive
+    /// twin: (-x)*y differed from -(x*y), so two mirrored computations split
+    /// from tick 2. A negative product is now negated, shifted and negated
+    /// back, so (-x)*y == -(x*y) exactly; a product at or above zero is shifted
+    /// exactly as before, so it is unchanged. Integer arithmetic only:
+    /// |a.Raw * b.Raw| is at most 2^126, so -p cannot overflow Int128.</summary>
     public static Fix64 operator *(Fix64 a, Fix64 b)
-        => new((long)(((System.Int128)a.Raw * b.Raw) >> FracBits));
+    {
+        System.Int128 p = (System.Int128)a.Raw * b.Raw;
+        return new((long)(p >= 0 ? p >> FracBits : -((-p) >> FracBits)));
+    }
 
     public static Fix64 operator /(Fix64 a, Fix64 b)
     {
