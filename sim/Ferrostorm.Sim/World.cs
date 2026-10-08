@@ -3542,8 +3542,11 @@ public sealed partial class World
                 int placed = 0;
                 foreach (var cu in hold)
                 {
-                    // The producers' own spawn ring, walked in its committed
-                    // order, so two clients set the hold down identically.
+                    // The producers' spawn ring, walked in its authored order,
+                    // so two clients set the hold down identically. Producers
+                    // have read it in their own frame since P8-64 (ADR-076
+                    // clause 3); the unload has not, a recorded asymmetry
+                    // (ADR-076, "What remains asymmetric").
                     int sx = -1, sy = -1;
                     foreach (var (dx, dy) in SpawnOffsets)
                     {
@@ -6042,6 +6045,66 @@ public sealed partial class World
         { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) };
 
     /// <summary>
+    /// P8-64 (ADR-076 clause 3): THE EXIT ORDER IS READ IN THE PRODUCER'S OWN
+    /// FRAME. SpawnOffsets is one fixed list, south of the producer first, and
+    /// an even footprint's centre cell is its BOTTOM-RIGHT cell (CellOf floors
+    /// the centre point), so two producers that were each other's half turn
+    /// set their units down at cells that were not. With ownFrame the list is
+    /// reflected along each axis on which the producer's centre stands past the
+    /// map's centre, so the first choice always faces the centre, and on a
+    /// reflected axis an even footprint's centre cell is taken on the reflected
+    /// side too (its top-left cell there), which is exactly the mirror of the
+    /// bottom-right one. A producer short of the centre on an axis, or on its
+    /// centre line (the tie, ADR-076's convention), walks that axis as the list
+    /// was authored. The x frame reads the width and the y frame the height,
+    /// each from its own axis, which spawngate stage 9's single-axis pair on a
+    /// map that is not square pins (Architect condition C6). SetExitMove is
+    /// handed the reflected cell and offset, so the walk out of the mouth turns
+    /// with them.
+    ///
+    /// ownFrame false is the authored order, the rule before clause 3. Nothing
+    /// in the sim asks for it: it exists for ProductionExitOpen, so that
+    /// pillarprobe can print clause 3's reversal measurement (C7) from the
+    /// sim's own search rather than a copy of it.
+    /// </summary>
+    private bool FindProductionExit(in Entity producer, bool ownFrame,
+                                    out int scx, out int scy, out int sdx, out int sdy)
+    {
+        scx = Map.CellOf(producer.X);
+        scy = Map.CellOf(producer.Y);
+        int fx = 1, fy = 1;
+        if (ownFrame)
+        {
+            fx = producer.X + producer.X > Fix64.FromInt(Map.Width) ? -1 : 1;
+            fy = producer.Y + producer.Y > Fix64.FromInt(Map.Height) ? -1 : 1;
+            bool evenFootprint = FootprintOf(producer.StructType) % 2 == 0;
+            if (fx < 0 && evenFootprint) scx--;
+            if (fy < 0 && evenFootprint) scy--;
+        }
+        foreach (var (ox, oy) in SpawnOffsets)
+        {
+            int dx = ox * fx, dy = oy * fy;
+            int nx = scx + dx, ny = scy + dy;
+            if (!Map.InBounds(nx, ny) || Map.IsBlocked(nx, ny)) continue;
+            if (CellOccupied(nx, ny)) continue;
+            sdx = dx; sdy = dy;
+            return true;
+        }
+        sdx = 0; sdy = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// P8-64 (ADR-076 clause 3, Architect condition C7): would this producer's
+    /// exit search find an open cell now, in its own frame (the rule) or in the
+    /// authored order (the rule before clause 3)? Observation only, for
+    /// pillarprobe's clause 3 line: it reads the world and changes nothing, the
+    /// sim never calls it, and nothing it returns is hashed or saved.
+    /// </summary>
+    public bool ProductionExitOpen(int producerId, bool ownFrame)
+        => FindProductionExit(_entities[producerId], ownFrame, out _, out _, out _, out _);
+
+    /// <summary>
     /// TICKET-P2-SIM-02/03: power totals and factory queues. Per GDD s5, when
     /// supply falls below draw, production speed scales linearly down to 50%.
     /// Progress accrues in integer percent-ticks: 100/tick at full power.
@@ -6269,19 +6332,10 @@ public sealed partial class World
                 // silently would be SPAWN-D2 all over again.
                 if (AtMaxAlive(p, queuedType)) { _entities[i] = e; continue; }
                 // Spawn-cell occupancy (SPAWN-04): terrain AND standing
-                // entities, via ValidPlacement's own predicate (CellOccupied).
-                int scx = Map.CellOf(e.X), scy = Map.CellOf(e.Y);
-                int sdx = 0, sdy = 0;
-                bool found = false;
-                foreach (var (dx, dy) in SpawnOffsets)
-                {
-                    int nx = scx + dx, ny = scy + dy;
-                    if (!Map.InBounds(nx, ny) || Map.IsBlocked(nx, ny)) continue;
-                    if (CellOccupied(nx, ny)) continue;
-                    sdx = dx; sdy = dy; found = true;
-                    break;
-                }
-                if (!found)
+                // entities, via ValidPlacement's own predicate (CellOccupied),
+                // walked in the producer's own frame (P8-64, ADR-076 clause 3;
+                // FindProductionExit above).
+                if (!FindProductionExit(in e, ownFrame: true, out int scx, out int scy, out int sdx, out int sdy))
                 {
                     // Every offset blocked: the unit is HELD at 100 per cent,
                     // fully paid, and retried next tick. The queue head is not
@@ -6471,9 +6525,12 @@ public sealed partial class World
     ///     radius - a building reaches as far as it can see.
     ///   - HOW MANY: CarrierCapacity, one transport's worth. A tunnel that moved
     ///     an unbounded army would not be a trick, it would be teleportation.
-    ///   - WHERE THEY LAND: the producers' own SpawnOffsets ring, walked in its
-    ///     committed order, which is what the transport unload already uses so
-    ///     two peers set the same units down in the same cells.
+    ///   - WHERE THEY LAND: the producers' SpawnOffsets ring, walked in its
+    ///     authored order, which is what the transport unload already uses so
+    ///     two peers set the same units down in the same cells. Producers have
+    ///     read the ring in their own frame since P8-64 (ADR-076 clause 3); the
+    ///     tunnel and the unload have not, a recorded asymmetry (ADR-076,
+    ///     "What remains asymmetric").
     ///   - WHERE IT MAY AIM: only ground the player can SEE. That is the
     ///     counterplay GDD s8 asks for, expressed as a rule rather than a number:
     ///     deny the Sodality vision and you deny it the tunnel.

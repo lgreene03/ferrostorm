@@ -60,8 +60,9 @@ moved, is invisible to both.** Five rows have now shipped such a change:
   a mixed-build LAN pair desyncs on the first tick. Five commander goldens
   move, in two stages; no catalogue value, save format or wire format moves
   (ADR-076, "Compatibility"). Its third clause, the production exit (P8-64),
-  is held back under tracker decision D37 and would be a further change of
-  the same class when it lands.
+  held back under tracker decision D37, re-lands under D38 in the pull
+  request that also carries ADR-077: a further change of the same class,
+  moving three goldens in its stage, with no catalogue, save or wire change.
 - **ADR-077's multiplication (P8-53).** `Fix64` multiplication truncates
   toward zero instead of flooring, so a negative product whose low bits are
   not zero comes out one unit in the last place nearer zero. A rule of the

@@ -222,7 +222,14 @@ the same commit.
   Signed off with conditions by the Architect on 2026-10-06 (the ADR's
   "Architect sign-off" section); C1 to C7 are met by route A in pull request 166
   (branch claude/p8-62-63-start, rebased from claude/p8-62-63-half-turn),
-  and it is ratified under D5, D36 and D37.
+  and it is ratified under D5, D36 and D37. Clause 3 re-lands on 2026-10-08
+  as stage 3 of D38's pull request (branch claude/p8-53-trunc-shelter-on),
+  with the Architect's C6 (spawngate's single-axis pair) and C7 (pillarprobe
+  prints its reversal measurement) met there; three goldens move in that
+  stage. Its own reversal reads met on that head's sample (one skirmish-08
+  game, traced to SpawnOffsets' blind spots about an even footprint), so a
+  decision is owed before that pull request merges (the ADR's section
+  "Clause 3 re-landed (D38)").
 - ADR-077: PROPOSED 2026-10-08 - ADR-077-multiplication-truncates-toward-zero.md
   (row P8-53, ADR-075's cause 3, decision D38). Number claimed here per the
   numbering law, in the same commit as the draft; 076 is held by P8-62 and
