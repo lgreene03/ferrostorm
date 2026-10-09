@@ -58,6 +58,8 @@ using Ferrostorm.Sim;
 //   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts);
 //                        seats=4 (P8-66, ADR-078) plays the four-seat maps with every seat, seat 0 against each other seat under the reflection or half turn relating their starts, then each seat's income to t=9000
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
+//   spendprobe         - P8-22, ADR-079: what the commander banks and for how long, and how many barracks and factories it holds, in rung mirrors
+//                        (Normal and Hard by default) on every shipped map in the four faction pairings (not a gate; nothing asserts)
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
@@ -18349,6 +18351,172 @@ int EndGate()
         $"All {results.Length} matches ended with a result before {MeasurementHarness.WindowCloseTicks} ticks.");
 }
 
+int SpendProbe()
+{
+    // P8-22 (ADR-079, AI-03, ML-04, OJ-04, D6): WHAT THE COMMANDER BANKS, AND
+    // FOR HOW LONG. D6 records a Hard commander holding 16401 credits at 540 s
+    // on one factory, and P8-22 is the row that spends it, so this is the
+    // measurement it is judged by. Rung mirrors (Normal against Normal and Hard
+    // against Hard by default) on every shipped map in all four faction
+    // pairings, from the authored starts, in the shipped setup (PlayMeasured),
+    // to 27000 ticks or a result. Each seat's treasury is read once a second
+    // (every 15 ticks, the commander's beat at both rungs): its mean, its mean
+    // in each five-minute window, its peak, the share of seconds at or above
+    // three levels and the longest unbroken stretch at each, how many barracks
+    // and factories it held at once, and what its producers delivered.
+    //
+    // A probe by ADR-061's rule: the observer only reads the world, so each
+    // match plays exactly as it would unobserved, and it prints and asserts
+    // nothing. "Banked credit over time" is the pooled mean, every sampled
+    // second of every seat of a rung and faction weighed alike, so a match that
+    // runs long counts for more of the time it banked.
+    //
+    // The three levels are numbers the commander already reads: 1500, the
+    // margin its radar and faction-defence rungs keep; 4500, its superweapon
+    // rung's threshold, the dearest credit test in its ladder; and 6500, that
+    // threshold plus one factory. Every unbroken stretch at or above a level
+    // that ENDED before its match did is also binned by length, which is what
+    // tells a surplus that lasts from one a single delivery made.
+    const int SampleTicks = 15, WindowTicks = 4500;
+    int[] levels = { 1500, 4500, 6500 };
+    int[] bins = { 30, 60, 120, 300 };   // seconds; a run shorter than the first, ..., at least the last
+    string root = MeasureRoot();
+    var o = MeasureOptions("spendprobe", false, "maps", "pairs", "rungs", "orient", "ticks", "seed", "jobs");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var rungs = MeasureRungs(o.GetValueOrDefault("rungs") ?? "NN,HH");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "0");
+    int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    ulong seed = OptSeed(o);
+    var specs = new List<MatchSpec>();
+    foreach (var map in maps)
+        foreach (var (f0, f1, _) in pairs)
+            foreach (var (a, b) in rungs)
+                foreach (bool swap in orients)
+                    specs.Add(new MatchSpec(map, swap, f0, f1, a, b, 0, 0, seed, ticks));
+    int windows = (ticks + WindowTicks - 1) / WindowTicks;
+    Console.WriteLine($"spendprobe: {specs.Count} matches ({maps.Length} maps x {pairs.Length} faction pairings x {rungs.Length} rung "
+        + $"pairings x {orients.Length} orientation(s)), cap {ticks} ticks, seed {seed}; each seat's treasury read every "
+        + $"{SampleTicks} ticks. A probe: nothing asserts.");
+    var sw = Stopwatch.StartNew();
+    var seats = new SpendSeat[specs.Count][];
+    string Seat(MatchSpec s, int p, SpendSeat d)
+    {
+        var win = new List<string>();
+        for (int k = 0; k < windows; k++) win.Add(d.WinN[k] == 0 ? "-" : $"{d.WinSum[k] / d.WinN[k]}");
+        var at = new List<string>();
+        for (int k = 0; k < levels.Length; k++)
+            at.Add($">={levels[k]} {Pct(d.AtOrAbove[k], d.Samples)}% (longest {d.Longest[k] * SampleTicks / World.TicksPerSecond} s"
+                   + (d.Longest[k] > 0 ? $" from t={d.LongestFrom[k]})" : ")"));
+        return $"      seat {p} ({FactionName(p == 0 ? s.F0 : s.F1)} {(p == 0 ? s.D0 : s.D1)}): mean banked {(d.Samples == 0 ? 0 : d.Sum / d.Samples)}, "
+             + $"by 5-minute window {string.Join("/", win)}, peak {d.Peak} at t={d.PeakTick}; {string.Join(", ", at)}; "
+             + $"most barracks {d.MaxBarracks}, most factories {d.MaxFactories}, units {d.Units} and harvesters {d.Harvesters} "
+             + $"delivered worth {d.Delivered}";
+    }
+    string Pct(long n, long of) => of == 0 ? "0" : $"{n * 100 / of}";
+    var results = RunOrdered(specs.Count, jobs, i =>
+    {
+        var d = new[] { new SpendSeat(windows, levels.Length, bins.Length + 1), new SpendSeat(windows, levels.Length, bins.Length + 1) };
+        var r = PlayMeasured(root, specs[i], w =>
+        {
+            foreach (var ev in w.Events)
+            {
+                if (ev.Type != GameEventType.ProductionComplete || ev.A < 0 || ev.A >= w.EntityCount || ev.A == ev.C) continue;
+                var made = w.Entities[ev.A];
+                if (made.PlayerId is not (0 or 1)) continue;
+                if (made.Kind == EntityKind.Unit) d[made.PlayerId].Units++;
+                else if (made.Kind == EntityKind.Harvester) d[made.PlayerId].Harvesters++;
+                else continue;
+                d[made.PlayerId].Delivered += w.GetUnitType(ev.B).Cost;
+            }
+            if (w.Tick % SampleTicks != 0) return;
+            for (int p = 0; p < 2; p++)
+            {
+                var s = d[p];
+                long credits = w.Credits(p);
+                s.Samples++;
+                s.Sum += credits;
+                int k = Math.Min((w.Tick - 1) / WindowTicks, windows - 1);
+                s.WinSum[k] += credits;
+                s.WinN[k]++;
+                if (credits > s.Peak) { s.Peak = credits; s.PeakTick = w.Tick; }
+                for (int l = 0; l < levels.Length; l++)
+                {
+                    if (credits >= levels[l])
+                    {
+                        if (s.Run[l] == 0) s.RunFrom[l] = w.Tick;
+                        s.AtOrAbove[l]++;
+                        if (++s.Run[l] > s.Longest[l]) { s.Longest[l] = s.Run[l]; s.LongestFrom[l] = s.RunFrom[l]; }
+                    }
+                    else if (s.Run[l] > 0)
+                    {
+                        int seconds = s.Run[l] * SampleTicks / World.TicksPerSecond, b = 0;
+                        while (b < bins.Length && seconds >= bins[b]) b++;
+                        s.Ended[l * (bins.Length + 1) + b]++;
+                        s.Run[l] = 0;
+                    }
+                }
+                s.MaxBarracks = Math.Max(s.MaxBarracks, CountOwned(w, p, e => e.Kind == EntityKind.Barracks));
+                s.MaxFactories = Math.Max(s.MaxFactories, CountOwned(w, p, e => e.Kind == EntityKind.Factory));
+            }
+        });
+        seats[i] = d;
+        return r;
+    }, (i, r) =>
+    {
+        var s = r.Spec;
+        string result = r.Winner >= 0 ? $"seat {r.Winner} won at {r.EndTick}" : $"no result at {r.EndTick}";
+        Console.WriteLine($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} {s.D0}/{s.D1} o{(s.Swap ? 1 : 0)}: {result}");
+        Console.WriteLine(Seat(s, 0, seats[i][0]));
+        Console.WriteLine(Seat(s, 1, seats[i][1]));
+    });
+    sw.Stop();
+    Console.WriteLine("spendprobe: pooled over every seat of a rung and side (every sampled second weighed alike):");
+    var rungSet = new List<AiDifficulty>();
+    foreach (var (a, b) in rungs) { if (!rungSet.Contains(a)) rungSet.Add(a); if (!rungSet.Contains(b)) rungSet.Add(b); }
+    foreach (var rung in rungSet)
+        foreach (int faction in new[] { World.FactionDirectorate, World.FactionSodality })
+        {
+            var pool = new List<SpendSeat>();
+            for (int i = 0; i < specs.Count; i++)
+                for (int p = 0; p < 2; p++)
+                    if ((p == 0 ? specs[i].D0 : specs[i].D1) == rung && (p == 0 ? specs[i].F0 : specs[i].F1) == faction)
+                        pool.Add(seats[i][p]);
+            if (pool.Count == 0) continue;
+            long samples = pool.Sum(x => (long)x.Samples), sum = pool.Sum(x => x.Sum);
+            var win = new List<string>();
+            for (int k = 0; k < windows; k++)
+            {
+                long n = pool.Sum(x => (long)x.WinN[k]), t = pool.Sum(x => x.WinSum[k]);
+                win.Add(n == 0 ? "-" : $"{t / n}");
+            }
+            var at = new List<string>();
+            for (int l = 0; l < levels.Length; l++)
+            {
+                var runs = pool.Select(x => (double)x.Longest[l] * SampleTicks / World.TicksPerSecond).ToList();
+                var ended = new List<string>();
+                for (int b = 0; b <= bins.Length; b++)
+                {
+                    string label = b == 0 ? $"<{bins[0]}" : b == bins.Length ? $">={bins[^1]}" : $"{bins[b - 1]}-{bins[b]}";
+                    ended.Add($"{label} s {pool.Sum(x => x.Ended[l * (bins.Length + 1) + b])}");
+                }
+                at.Add($">={levels[l]} {Pct(pool.Sum(x => (long)x.AtOrAbove[l]), samples)}% of seconds (longest run: median {MedianOf(runs):F0} s, "
+                       + $"most {runs.Max():F0} s; runs that ended, by length: {string.Join(", ", ended)})");
+            }
+            var peaks = pool.Select(x => (double)x.Peak).ToList();
+            Console.WriteLine($"  {rung} {FactionName(faction)} ({pool.Count} seats): mean banked {(samples == 0 ? 0 : sum / samples)}, "
+                + $"by 5-minute window {string.Join("/", win)}; peak median {MedianOf(peaks):F0}, most {peaks.Max():F0}; {string.Join("; ", at)}; "
+                + $"most barracks {pool.Max(x => x.MaxBarracks)}, most factories {pool.Max(x => x.MaxFactories)} "
+                + $"(seats holding more than one of either: {pool.Count(x => x.MaxBarracks > 1 || x.MaxFactories > 1)}); "
+                + $"mean per seat {pool.Sum(x => (long)x.Units) / pool.Count} units and {pool.Sum(x => (long)x.Harvesters) / pool.Count} harvesters "
+                + $"delivered worth {pool.Sum(x => x.Delivered) / pool.Count}");
+        }
+    int decided = results.Count(r => r.Winner >= 0);
+    Console.WriteLine($"spendprobe: {decided} of {results.Length} matches decided; elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
 int SeatFairGate()
 {
     // P8-13, F5 (AI-04, ML-01, BAL-01): "start position does not decide the
@@ -19131,6 +19299,7 @@ return args.Length == 0
         "seatfairgate" => Measured(SeatFairGate),
         "mirrorprobe" => Measured(MirrorProbe),
         "endgate" => Measured(EndGate),
+        "spendprobe" => Measured(SpendProbe),
         "cheesegate" => Measured(CheeseGate),
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
@@ -19278,6 +19447,27 @@ sealed class MeasuredMatch
     /// Construction Yard died, and whether a superweapon impact killed it.</summary>
     public readonly int[] LastYardDeath = { -1, -1 };
     public readonly bool[] LastYardBySuperweapon = new bool[2];
+}
+
+/// <summary>P8-22 (ADR-079): what spendprobe reads of one seat over one match.
+/// Samples are taken every 15 ticks; WinSum and WinN hold one entry per
+/// five-minute window; the level arrays one entry per treasury level, Longest
+/// and Run counted in samples. Delivered is the catalogue cost of every unit
+/// and harvester its producers completed.</summary>
+sealed class SpendSeat
+{
+    public SpendSeat(int windows, int levels, int bins)
+    {
+        WinSum = new long[windows]; WinN = new int[windows];
+        AtOrAbove = new int[levels]; Longest = new int[levels]; LongestFrom = new int[levels];
+        Run = new int[levels]; RunFrom = new int[levels]; Ended = new int[levels * bins];
+    }
+    public long Sum, Peak, Delivered;
+    public int Samples, PeakTick, MaxBarracks, MaxFactories, Units, Harvesters;
+    public readonly long[] WinSum;
+    /// <summary>Ended[level * bins + bin]: stretches at or above a level that
+    /// ended before the match did, by length bin.</summary>
+    public readonly int[] WinN, AtOrAbove, Longest, LongestFrom, Run, RunFrom, Ended;
 }
 
 /// <summary>P8-13: how one cheese raid ended (aiairgate, cheesegate).</summary>
