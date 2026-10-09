@@ -287,9 +287,8 @@ the same commit.
   truncation in both frames, so ADR-075's frame and ADR-077's rounding are
   uncoupled; C7 keeps the sheltered frame (28 against 24 of 32); start split
   8/10. Proposed 2026-10-09. Signed off with conditions by the Architect on
-  2026-10-09 (the ADR's section "Architect sign-off"), in the pull request
-  from branch worktree-wf_0a2c56bf-754-1 into main, whose number that
-  section records when it opens. Conditions 1 to 4 are met in it by one
+  2026-10-09 (the ADR's section "Architect sign-off"), in pull request 172
+  (branch claude/p8-66-tie-break). Conditions 1 to 4 are met in it by one
   goldens-neutral commit each: a step whose squared length truncates to
   zero is not a tie (the division by zero closed, measured firing 0 times
   over `pillargate`'s sweep and the goldens); every reversal clause reads
