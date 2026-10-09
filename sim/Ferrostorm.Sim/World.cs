@@ -539,10 +539,14 @@ public sealed partial class World
         // shape this phase keeps finding. Keyed on the DEF carrying a power, so
         // it is a no-op for every building in the shipped catalogue and this row
         // stays hash-neutral.
-        if (IsStructure(e.Kind) && e.ChargeTicks == 0 && HasSupportPowers(GetStructureType(e.StructType)))
+        //
+        // P8-61: the charge is the building's registered charge_ticks, which
+        // registration demands of any def granting a power.
+        if (IsStructure(e.Kind) && e.ChargeTicks == 0 && GetStructureType(e.StructType) is var powerDef
+            && HasSupportPowers(powerDef))
         {
             var seeded = e;
-            seeded.ChargeTicks = SupportPowerChargeTicks;
+            seeded.ChargeTicks = powerDef.ChargeTicks;
             _entities.Add(seeded);
             return seeded.Id;
         }
@@ -1483,8 +1487,10 @@ public sealed partial class World
         // silently unread.
         //
         // ChargeTicks: the superweapon's charge cycle, which SpawnSuperweapon
-        // starts and the impact restarts. A SUPERWEAPON's alone; a support
-        // power's charge is the compiled absolute SupportPowerChargeTicks.
+        // starts and the impact restarts. P8-61: and on a building granting
+        // support powers, the one charge those powers share, which the spawn
+        // starts and each use restarts. It was the compiled absolute
+        // SupportPowerChargeTicks, which is now this column's reference.
         int ChargeTicks = 0,
         // StrikeDamage: the base damage of this building's STRIKE, never of its
         // gun (that is WeaponId). The orbital cannon's blast and the Bastion's
@@ -1493,7 +1499,11 @@ public sealed partial class World
         // its impact is P8-19's to rework.
         int StrikeDamage = 0,
         // RevealTicks: how long this building's orbital scan lights the ground.
-        int RevealTicks = 0)
+        int RevealTicks = 0,
+        // P8-61: how long this building's radar jam blinds each hostile
+        // player. It was the compiled absolute RadarJamTicks, now this
+        // column's reference.
+        int JamTicks = 0)
     {
         // Hand-declared for the same reason as UnitTypeDef: the synthesized
         // comparison would test the Prereqs array reference and quietly fail
@@ -1534,6 +1544,7 @@ public sealed partial class World
             && ChargeTicks == other.ChargeTicks
             && StrikeDamage == other.StrikeDamage
             && RevealTicks == other.RevealTicks
+            && JamTicks == other.JamTicks   // P8-61, for the same reason
             && PrereqsEqual(Prereqs, other.Prereqs);
         public override int GetHashCode()
         {
@@ -1542,6 +1553,7 @@ public sealed partial class World
             h.Add(PowerDraw); h.Add(SightCells); h.Add(Footprint); h.Add(WeaponId);
             h.Add(MaxAlive); h.Add(Tab); h.Add(Faction); h.Add(Detector); h.Add(DestroysFields);
             h.Add(ChargeTicks); h.Add(StrikeDamage); h.Add(RevealTicks);   // P8-18
+            h.Add(JamTicks);                                               // P8-61
             if (SupportPowerIds != null) foreach (int sp in SupportPowerIds) h.Add(sp); // P7-21/P7-23
             if (Prereqs != null) foreach (int p in Prereqs) h.Add(p);
             return h.ToHashCode();
@@ -1622,24 +1634,28 @@ public sealed partial class World
         // number rather than one of its own.
         // P8-18 (ADR-073): and the two powers' own numbers, the precision
         // strike's damage and the scan's reveal, as the compiled reference
-        // dir_bastion.yaml must reproduce.
+        // dir_bastion.yaml must reproduce. P8-61: and the charge the two
+        // share, as every building granting a power now carries.
         17 => new StructureTypeDef(1400, EntityKind.Bastion, 300, Hp: 1600, PowerDraw: 40, SightCells: 7, WeaponId: 4, Prereqs: new[] { 12 }, Faction: FactionDirectorate,
                                    Tab: BuildTab.Defence,
                                    SupportPowerIds: new[] { OrbitalScanPowerId, PrecisionStrikePowerId },
+                                   ChargeTicks: SupportPowerChargeTicks,
                                    StrikeDamage: PrecisionStrikeDamage, RevealTicks: OrbitalScanRevealTicks),
         // P7-26: and the Shroud Nest carries GDD s3 line 30's DECOY ARMY. The
         // name is the argument - a shroud is deception - and it is cheap and
         // early, which suits a trick the Sodality's "cheap infantry swarms"
         // doctrine wants in the opening rather than the endgame.
         18 => new StructureTypeDef(400, EntityKind.Emplacement, 110, Hp: 260, PowerDraw: 15, SightCells: 6, WeaponId: 8, Prereqs: new[] { 1 }, Faction: FactionSodality,
-                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { DecoyArmyPowerId }),
+                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { DecoyArmyPowerId },
+                                   ChargeTicks: SupportPowerChargeTicks),   // P8-61
         // P7-25: and the Veil carries GDD s3 line 30's TUNNEL DEPLOYMENT. The
         // building that hides things is where concealed transit belongs, and
         // ADR-060 measured that no commander ever built one - a persistent aura
         // was not worth 1500 credits on its own. This gives it a second reason
         // to exist without changing a single one of its numbers.
         7 => new StructureTypeDef(1500, EntityKind.VeilProjector, 250, Hp: 900, PowerDraw: 60, SightCells: 6, Prereqs: new[] { 1 }, Faction: FactionSodality,
-                                  Tab: BuildTab.Defence, SupportPowerIds: new[] { TunnelDeploymentPowerId }),
+                                  Tab: BuildTab.Defence, SupportPowerIds: new[] { TunnelDeploymentPowerId },
+                                  ChargeTicks: SupportPowerChargeTicks),   // P8-61
         8 => new StructureTypeDef(1200, EntityKind.ServiceDepot, 200, Hp: 1000, PowerDraw: 30, SightCells: 4, Prereqs: new[] { 2 },
                                   Tab: BuildTab.Buildings),
         // Barrier segment (ADR-005). BuildTicks 0 keeps it out of the Construction
@@ -1776,7 +1792,10 @@ public sealed partial class World
                                    // Sodality's sensor building is where sensor warfare belongs -
                                    // my eyes on, your eyes off, from one structure a scout can
                                    // find and kill, which is s8's counterplay by construction.
-                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { RadarJammingPowerId }),
+                                   // P8-61: its charge and its jam, as sod_watch_post.yaml
+                                   // must reproduce.
+                                   Tab: BuildTab.Defence, SupportPowerIds: new[] { RadarJammingPowerId },
+                                   ChargeTicks: SupportPowerChargeTicks, JamTicks: RadarJamTicks),
         // P7-5c (DR-04): the Sodality's SEISMIC CHARGE. GDD s8 says "one
         // superweapon per faction", so every number it shares with the orbital
         // cannon is shared ON PURPOSE - same 4000 credits, same 600 build
@@ -1927,6 +1946,11 @@ public sealed partial class World
     /// </summary>
     public const int MaxChargeTicks = 108000, MaxStrikeDamage = 100000, MaxRevealTicks = 27000;
 
+    /// <summary>P8-61: the jam's ceiling is the reveal's, a whole 30-minute
+    /// match, derived rather than chosen: a jam longer than that is a blackout
+    /// for the match, which no power may be.</summary>
+    public const int MaxJamTicks = MaxRevealTicks;
+
     /// <summary>
     /// P8-18 (ADR-073, Architect condition C7): WHICH pacing columns the sim
     /// reads on a building, defined ONCE. StructureCatalogue.ToTypeDef asks it
@@ -1936,14 +1960,18 @@ public sealed partial class World
     /// charge; a superweapon that does not destroy fields, or a building granting
     /// the precision strike, reads its strike; a building granting the orbital
     /// scan reads its reveal. P8-19 changes the strike rule here, in one place,
-    /// when the seismic charge's damage moves into strike_damage.
+    /// when the seismic charge's damage moves into strike_damage. P8-61: a
+    /// building granting any support power reads its charge too (the one its
+    /// powers share), and a building granting radar jamming reads its jam.
     /// </summary>
-    internal static (bool Charge, bool Strike, bool Reveal) PacingColumnsRead(EntityKind kind, bool destroysFields, int[]? supportPowerIds)
+    internal static (bool Charge, bool Strike, bool Reveal, bool Jam) PacingColumnsRead(EntityKind kind, bool destroysFields, int[]? supportPowerIds)
     {
         bool superweapon = kind == EntityKind.Superweapon;
+        bool grantsAny = supportPowerIds is { Length: > 0 };
         bool grantsStrike = supportPowerIds != null && Array.IndexOf(supportPowerIds, PrecisionStrikePowerId) >= 0;
         bool grantsScan = supportPowerIds != null && Array.IndexOf(supportPowerIds, OrbitalScanPowerId) >= 0;
-        return (superweapon, (superweapon && !destroysFields) || grantsStrike, grantsScan);
+        bool grantsJam = supportPowerIds != null && Array.IndexOf(supportPowerIds, RadarJammingPowerId) >= 0;
+        return (superweapon || grantsAny, (superweapon && !destroysFields) || grantsStrike, grantsScan, grantsJam);
     }
 
     /// <summary>
@@ -1957,17 +1985,19 @@ public sealed partial class World
     /// gate's fixture silently stopped exercising a real reveal. The rules mirror
     /// the loader's: a superweapon needs a charge; a superweapon that does not
     /// destroy fields, or a building granting the precision strike, needs a
-    /// strike; a building granting the orbital scan needs a reveal. Each is also
-    /// bounded above by the ceilings beside it. A column the sim does not read on
+    /// strike; a building granting the orbital scan needs a reveal. P8-61: a
+    /// building granting any power needs a charge, and one granting radar
+    /// jamming a jam. Each is also bounded above by the ceilings beside it. A column the sim does not read on
     /// this def is left alone here, where the loader refuses it, because a file
     /// is an authoring surface and a code-built def's unread column is inert.
     /// </summary>
     internal static void ValidatePacing(int typeId, in StructureTypeDef d)
     {
         var read = PacingColumnsRead(d.Kind, d.DestroysFields, d.SupportPowerIds);
-        Bound("ChargeTicks", d.ChargeTicks, read.Charge, MaxChargeTicks, "a superweapon's charge");
+        Bound("ChargeTicks", d.ChargeTicks, read.Charge, MaxChargeTicks, "a superweapon's charge or the charge its support powers share");
         Bound("StrikeDamage", d.StrikeDamage, read.Strike, MaxStrikeDamage, "the orbital cannon's blast or a precision strike");
         Bound("RevealTicks", d.RevealTicks, read.Reveal, MaxRevealTicks, "an orbital scan's reveal");
+        Bound("JamTicks", d.JamTicks, read.Jam, MaxJamTicks, "a radar jam's duration");   // P8-61
 
         void Bound(string column, int value, bool readHere, int max, string what)
         {
@@ -2202,6 +2232,13 @@ public sealed partial class World
                 // reveal would kill or reveal different things. Folded beside
                 // the other columns that decide what a command does.
                 h.Add(d.ChargeTicks); h.Add(d.StrikeDamage); h.Add(d.RevealTicks);
+                // P8-61: and the jam, on the same rule; the support powers'
+                // charge moved into ChargeTicks above, so it is folded there.
+                // Peers holding different jams would hold different deadlines
+                // from the same command stream, and a jammed player's radar
+                // would come back on one machine while it stayed dark on the
+                // other.
+                h.Add(d.JamTicks);
                 // P7-21: which support power this building unlocks. It decides
                 // whether a UseSupportPower command is ACCEPTED and what it
                 // does, so two peers holding different answers would watch one
@@ -3634,7 +3671,8 @@ public sealed partial class World
                 // be full. Rejected: an independent charge per power, which
                 // needs per-(entity, power) state, moves goldens, and buys a
                 // player nothing except never having to choose.
-                e.ChargeTicks = SupportPowerChargeTicks;
+                // P8-61: restarted at the building's registered charge_ticks.
+                e.ChargeTicks = GetStructureType(e.StructType).ChargeTicks;
                 _events.Add(new GameEvent(GameEventType.SupportPowerUsed, c.EntityId, power, px, py));
                 // P7-22: the first power with an effect. GDD s3 line 25's
                 // ORBITAL SCAN, Directorate, doctrine word "surgical".
@@ -3679,10 +3717,12 @@ public sealed partial class World
                 else if (power == DecoyArmyPowerId) ApplyDecoyArmy(c.PlayerId, px, py);
                 else if (power == RadarJammingPowerId)
                 {
+                    // P8-61: for the firing building's registered jam_ticks.
+                    int jam = GetStructureType(e.StructType).JamTicks;
                     for (int pl = 0; pl < _players; pl++)
                     {
                         if (TeamOf(pl) == TeamOf(c.PlayerId)) continue;
-                        _radarJamUntil[pl] = Tick + RadarJamTicks;
+                        _radarJamUntil[pl] = Tick + jam;
                     }
                 }
                 // NOTE, and it is the honest state of this row: no EFFECT is
@@ -3979,6 +4019,10 @@ public sealed partial class World
     /// is pinned here and the superweapon moves alone. "Shorter" is no longer
     /// true by construction; supportpowergate stage 1 measures it instead, by
     /// charging both side by side in a running world.
+    ///
+    /// P8-61 (ADR-073, Architect condition C6): the COMPILED REFERENCE for the
+    /// charge_ticks of every building granting a power, which each of their
+    /// /data files must reproduce. The sim reads the registered def, not this.
     /// </summary>
     public const int SupportPowerChargeTicks = 500;
 
@@ -4054,6 +4098,9 @@ public sealed partial class World
     /// P8-18 (ADR-073, D1): pinned as an ABSOLUTE at the 166 ticks the
     /// derivation gave, for the reason the charge above was. The duty cycle
     /// still holds (166 of 500), and radarjamminggate stage 4 measures it.
+    ///
+    /// P8-61 (ADR-073, Architect condition C6): the COMPILED REFERENCE for
+    /// sod_watch_post's jam_ticks. The jam reads the registered def, not this.
     /// </summary>
     public const int RadarJamTicks = 166;
 
@@ -6396,7 +6443,7 @@ public sealed partial class World
             }
             // P7-21: support powers charge on the same terms as the superweapon
             // and on a shorter clock (GDD s8's "shorter timers"; an absolute
-            // since P8-18, see SupportPowerChargeTicks). Keyed on
+            // since P8-18, the building's charge_ticks since P8-61). Keyed on
             // the DEF carrying a power, never on a kind or a type id, so a
             // building acquires one the day its file says so.
             //

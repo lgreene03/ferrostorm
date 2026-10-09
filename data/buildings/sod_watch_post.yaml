@@ -32,6 +32,12 @@ build_tab: defence
 # construction: the Watch Post is unarmed, visible and killable by design
 # (GDD line 56), so "scout the structure, kill it" needs no arranging.
 support_powers: [radar_jamming]
+# P8-61: the power's charge and the jam's length, moved here from sim constants.
+# The charge is every power's 500 ticks (once a third of the superweapon's); the
+# jam was a third of that charge and is pinned at the 166 ticks that gave, so a
+# victim of a jam fired on every recharge is blind at most a third of the time.
+charge_ticks: 500
+jam_ticks: 166
 notes: >
   Reveals cloaked hostiles within sight_range, which for a detector IS the
   detection radius: the sim has never carried a separate detection range, and

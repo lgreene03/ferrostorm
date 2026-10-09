@@ -44,3 +44,7 @@ support_powers: [orbital_scan, precision_strike]
 # flicker rather than a scan.
 strike_damage: 300
 reveal_ticks: 150
+# P8-61: the one charge the scan and the strike share, moved here from the sim
+# constant. It was a third of the superweapon's charge and is pinned at the 500
+# ticks (33 seconds) that gave, so the superweapon could move alone (ADR-073).
+charge_ticks: 500

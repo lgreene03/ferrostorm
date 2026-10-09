@@ -40,10 +40,12 @@ public static class DataLoader
         string BuildTab = "none",
         // P8-18 (ADR-073): the superweapon's charge, the strike damage and the
         // scan's reveal. Absent means 0, and ToTypeDef demands each exactly
-        // where the sim reads it and refuses it everywhere else.
+        // where the sim reads it and refuses it everywhere else. P8-61: the
+        // charge is a support-power building's too, and the jam joins them.
         int ChargeTicks = 0,
         int StrikeDamage = 0,
-        int RevealTicks = 0);
+        int RevealTicks = 0,
+        int JamTicks = 0);
 
     public static Dictionary<string, string> ParseFlatYaml(string text)
     {
@@ -248,6 +250,7 @@ public static class DataLoader
             ChargeTicks: m.ContainsKey("charge_ticks") ? ReqInt(m, "charge_ticks") : 0,
             StrikeDamage: m.ContainsKey("strike_damage") ? ReqInt(m, "strike_damage") : 0,
             RevealTicks: m.ContainsKey("reveal_ticks") ? ReqInt(m, "reveal_ticks") : 0,
+            JamTicks: m.ContainsKey("jam_ticks") ? ReqInt(m, "jam_ticks") : 0,   // P8-61
             Notes: m.TryGetValue("notes", out var n) ? n : "");
     }
 
@@ -790,12 +793,13 @@ public static class StructureCatalogue
                 throw new FormatException($"'{s.Id}' authors {key} {value}, above the ceiling of {max}.");
         }
         Pacing("charge_ticks", s.ChargeTicks, read.Charge, World.MaxChargeTicks,
-               "a superweapon's charge (a support power's charge is the compiled SupportPowerChargeTicks)");
+               "a superweapon's charge or the charge a building's support powers share");
         // The seismic charge strikes too, but its damage is the compiled
         // SeismicDamage until P8-19 reworks its impact, so it is refused there.
         Pacing("strike_damage", s.StrikeDamage, read.Strike, World.MaxStrikeDamage,
                "the orbital cannon's blast or a precision strike");
         Pacing("reveal_ticks", s.RevealTicks, read.Reveal, World.MaxRevealTicks, "an orbital scan's reveal");
+        Pacing("jam_ticks", s.JamTicks, read.Jam, World.MaxJamTicks, "a radar jam's duration");   // P8-61
         return new(s.Cost, kind, s.BuildTimeTicks, s.Hp, s.PowerSupply, s.PowerDraw,
                s.SightRange, s.Footprint,
                s.WeaponIds.Count > 0 ? UnitCatalogue.WeaponIdOf(s.WeaponIds[0]) : 0,
@@ -834,8 +838,9 @@ public static class StructureCatalogue
                // this project's most-repeated defect: a building advertising an
                // ability in its file that the sim never granted.
                powers,
-               // P8-18: and the three pacing numbers, validated above.
-               s.ChargeTicks, s.StrikeDamage, s.RevealTicks);
+               // P8-18: and the three pacing numbers, validated above; P8-61
+               // adds the jam as a fourth.
+               s.ChargeTicks, s.StrikeDamage, s.RevealTicks, s.JamTicks);
     }
 
     /// <summary>

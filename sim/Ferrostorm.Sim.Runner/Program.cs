@@ -39,7 +39,7 @@ using Ferrostorm.Sim;
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
 //   weapondatagate     - the nine data/weapons files reproduce the compiled table exactly AND the sim fires what they say, so editing one changes the game
 //   aituninggate       - the seven data/ai files reproduce the compiled commander exactly, the sim plays what they say, and a changed AI number moves the catalogue checksum (the LAN desync guard)
-//   powerdatagate      - P8-18, ADR-073: charge_ticks, strike_damage and reveal_ticks reproduce the compiled reference, the sim builds, recharges, strikes and reveals by the REGISTERED numbers, each moves the checksum, and the loader demands each where it is read and refuses it elsewhere
+//   powerdatagate      - P8-18, ADR-073: charge_ticks, strike_damage and reveal_ticks (and since P8-61 a power building's charge_ticks and jam_ticks) reproduce the compiled reference, the sim builds, recharges, strikes, reveals and jams by the REGISTERED numbers, each moves the checksum, and the loader demands each where it is read and refuses it elsewhere
 //   catalogueloadgate  - ONE RegisterAll(world, /data) call loads every kind, an unrecognised /data directory is refused by name, and a bare World still plays the compiled numbers
 //   campaigngate       - P7-9: the manifest's ids all resolve, a mission can be won by ARRIVING, and a noshortgame mission can still be LOST (Q016)
 //   factiondefencegate - P7-2b: each side builds only its own defence; the Bastion is tough and dear, the Nest cloaks and decloaks on firing
@@ -11453,8 +11453,16 @@ int SupportPowerGate()
     // carries the Bastion's REGISTERED reveal as well. Without it the def
     // registered with RevealTicks 0, and every stage below exercised a scan
     // that lit the map for at most one tick; registration now refuses that.
+    // P8-61: and the Bastion's registered charge, which registration now
+    // demands of any building granting a power, so the carrier charges on the
+    // number a shipped power building carries.
     World.StructureTypeDef Carrying(World w)
-        => w.GetStructureType(Carrier) with { SupportPowerIds = new[] { TestPower }, RevealTicks = w.GetStructureType(17).RevealTicks };
+        => w.GetStructureType(Carrier) with
+        {
+            SupportPowerIds = new[] { TestPower },
+            ChargeTicks = w.GetStructureType(17).ChargeTicks,
+            RevealTicks = w.GetStructureType(17).RevealTicks,
+        };
 
     World WithPower(ulong seed, out int bld)
     {
@@ -11468,9 +11476,10 @@ int SupportPowerGate()
     // --- 1. SHORTER THAN THE SUPERWEAPON, asserted as the relation rather than
     //        as the number. GDD s8 says "shorter timers"; the superweapon is the
     //        only other timer in that sentence, so that is the bound. Since
-    //        P8-18 (ADR-073) the two are separate numbers, the superweapon's in
-    //        /data and the power's a compiled absolute, so this stage is the only
-    //        thing holding "shorter" true.
+    //        P8-18 (ADR-073) the two are separate numbers, both in /data since
+    //        P8-61 (each file reproducing its compiled reference, which is what
+    //        this bare world plays), so this stage is the only thing holding
+    //        "shorter" true.
     {
         // MEASURED, not compared. P7-21 wrote this stage as two `const` against
         // `const` comparisons, which the compiler FOLDED AWAY - it proved 500 <
@@ -11609,8 +11618,14 @@ int PowerDataGate()
     // on files the sim never read, so stage 2 REGISTERS a value no file carries
     // and asserts the sim plays it, each beside a control. Additive: a
     // standalone mode and a Match battery stage, never a golden.
+    //
+    // P8-61 (ADR-073, Architect condition C6): the support powers' charge and
+    // the radar jam left their sim constants too, as charge_ticks on every
+    // building granting a power and jam_ticks on the Watch Post. Each stage
+    // below now carries them, and stage 2e plays them from a scratch catalogue.
     const int Cannon = World.OrbitalCannonStructType;   // 6
     const int Bastion = 17;
+    const int WatchPost = 21;
     string dataDir =Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../..", "data"));
     string buildingsDir = Path.Combine(dataDir, "buildings");
 
@@ -11629,11 +11644,30 @@ int PowerDataGate()
     {
         var got = loaded.GetStructureType(t);
         var want = World.DefaultStructureType(t);
-        if (got.ChargeTicks != want.ChargeTicks || got.StrikeDamage != want.StrikeDamage || got.RevealTicks != want.RevealTicks)
+        if (got.ChargeTicks != want.ChargeTicks || got.StrikeDamage != want.StrikeDamage || got.RevealTicks != want.RevealTicks
+            || got.JamTicks != want.JamTicks)
             return Fail($"powerdata: {StructureCatalogue.IdOf(t)} authors charge_ticks {got.ChargeTicks}, strike_damage "
-                        + $"{got.StrikeDamage}, reveal_ticks {got.RevealTicks}, and the compiled reference says "
-                        + $"{want.ChargeTicks}, {want.StrikeDamage}, {want.RevealTicks}. Fix the file, not the reference.");
+                        + $"{got.StrikeDamage}, reveal_ticks {got.RevealTicks}, jam_ticks {got.JamTicks}, and the compiled "
+                        + $"reference says {want.ChargeTicks}, {want.StrikeDamage}, {want.RevealTicks}, {want.JamTicks}. "
+                        + "Fix the file, not the reference.");
     }
+    // P8-61: and every building granting a power carries its compiled
+    // reference charge, the jamming one its jam, so a power building that
+    // dropped its charge_ticks could not hide behind a reference of 0.
+    int powerBuildings = 0;
+    for (int t = 1; t <= World.MaxStructType; t++)
+    {
+        var got = loaded.GetStructureType(t);
+        if (got.SupportPowerIds is not { Length: > 0 }) continue;
+        powerBuildings++;
+        if (got.ChargeTicks != World.SupportPowerChargeTicks)
+            return Fail($"powerdata: {StructureCatalogue.IdOf(t)} grants a support power and charges in {got.ChargeTicks} "
+                        + $"ticks, not the {World.SupportPowerChargeTicks} every power building's reference carries");
+        if (Array.IndexOf(got.SupportPowerIds, World.RadarJammingPowerId) >= 0 && got.JamTicks != World.RadarJamTicks)
+            return Fail($"powerdata: {StructureCatalogue.IdOf(t)} grants radar jamming for {got.JamTicks} ticks, not the "
+                        + $"reference {World.RadarJamTicks}");
+    }
+    if (powerBuildings == 0) return Fail("powerdata: no building in /data grants a support power, so the P8-61 transcription measured nothing");
 
     // --- 2. THE SIM PLAYS THE REGISTERED NUMBER. Each value below is one no
     //        file carries, so a pass cannot be the compiled table agreeing.
@@ -11736,6 +11770,81 @@ int PowerDataGate()
                         + "ticks on, so the reveal is still a sim constant");
     }
 
+    // 2e. P8-61 (ADR-073, Architect condition C6): the support powers' charge
+    //     and the radar jam, from a SCRATCH CATALOGUE. The shipped Watch Post
+    //     file with its two lines changed to values no file carries, parsed and
+    //     registered through the loader's own path, so each number travels from
+    //     the text to the sim as a shipped edit would; the control is the same
+    //     file unchanged. Measured as behaviour (does it fire, is the enemy still
+    //     jammed), never by reading the entity's counter back.
+    const int OddPowerCharge = 123, OddJam = 40;
+    {
+        string stockText = File.ReadAllText(Path.Combine(buildingsDir, "sod_watch_post.yaml"));
+        string scratchText = stockText
+            .Replace($"charge_ticks: {World.SupportPowerChargeTicks}", $"charge_ticks: {OddPowerCharge}", StringComparison.Ordinal)
+            .Replace($"jam_ticks: {World.RadarJamTicks}", $"jam_ticks: {OddJam}", StringComparison.Ordinal);
+        var stockPost = StructureCatalogue.ToTypeDef(DataLoader.ParseStructure(stockText));
+        var scratchPost = StructureCatalogue.ToTypeDef(DataLoader.ParseStructure(scratchText));
+        if (!scratchPost.Equals(stockPost with { ChargeTicks = OddPowerCharge, JamTicks = OddJam }))
+            return Fail($"powerdata: the scratch Watch Post did not parse to the shipped one with charge_ticks {OddPowerCharge} "
+                        + $"and jam_ticks {OddJam} (it carries {scratchPost.ChargeTicks} and {scratchPost.JamTicks}), so stage 2e "
+                        + "would not be measuring the edit it names");
+        if (stockPost.ChargeTicks <= OddPowerCharge + 5 || stockPost.JamTicks <= OddJam + 5)
+            return Fail($"powerdata: the stock Watch Post's charge ({stockPost.ChargeTicks}) or jam ({stockPost.JamTicks}) is too "
+                        + "short for stage 2e's control");
+
+        (World W, int Post) Jammer(ulong seed, World.StructureTypeDef def)
+        {
+            var w = new World(seed, 64, 64, players: 2);
+            w.SetFaction(0, World.FactionSodality);
+            w.SetFaction(1, World.FactionDirectorate);
+            w.RegisterStructureType(WatchPost, def);
+            w.SpawnPowerPlant(0, 4, 4, supply: 5000);
+            return (w, w.SpawnFactionDefence(0, WatchPost, 10, 10));
+        }
+        bool Jam(World w, int post)
+        {
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.UseSupportPower, post, Fix64.Zero, Fix64.Zero,
+                                       World.RadarJammingPowerId) });
+            return w.Events.Any(ev => ev.Type == GameEventType.SupportPowerUsed);
+        }
+        void Run(World w, int ticks) { for (int t = 0; t < ticks; t++) w.Step(default); }
+
+        var (ws, ps) = Jammer(4812, stockPost);
+        var (wo, po) = Jammer(4813, scratchPost);
+        // The charge a power building is BUILT with.
+        Run(ws, OddPowerCharge + 5); Run(wo, OddPowerCharge + 5);
+        if (Jam(ws, ps))
+            return Fail($"powerdata control: a stock Watch Post fired {OddPowerCharge + 5} ticks after it was built, inside "
+                        + $"its {stockPost.ChargeTicks}-tick charge");
+        if (!Jam(wo, po))
+            return Fail($"powerdata: a Watch Post whose file says charge_ticks {OddPowerCharge} was still charging "
+                        + $"{OddPowerCharge + 5} ticks after it was built, so a power building's charge is still the sim "
+                        + $"constant {World.SupportPowerChargeTicks} and the file is decoration");
+        if (!wo.IsRadarJammed(1))
+            return Fail("powerdata: the scratch Watch Post fired and the enemy was not jammed, so the jam stage measures nothing");
+        // The jam's length. The stock post fires once its own charge is in.
+        Run(ws, stockPost.ChargeTicks);
+        if (!Jam(ws, ps))
+            return Fail($"powerdata control: a stock Watch Post did not fire {stockPost.ChargeTicks} ticks after its first "
+                        + "refusal, so the jam's control measures nothing");
+        Run(ws, OddJam + 5); Run(wo, OddJam + 5);
+        if (!ws.IsRadarJammed(1))
+            return Fail($"powerdata control: a stock jam lifted {OddJam + 5} ticks after firing, inside its {stockPost.JamTicks}");
+        if (wo.IsRadarJammed(1))
+            return Fail($"powerdata: a Watch Post whose file says jam_ticks {OddJam} still had the enemy jammed "
+                        + $"{OddJam + 5} ticks after firing, so the jam is still the sim constant {World.RadarJamTicks}");
+        // The charge each use RESTARTS: OddPowerCharge + 5 ticks after firing.
+        Run(ws, OddPowerCharge - OddJam); Run(wo, OddPowerCharge - OddJam);
+        if (Jam(ws, ps))
+            return Fail($"powerdata control: a stock Watch Post fired again {OddPowerCharge + 5} ticks after a use, inside "
+                        + $"its {stockPost.ChargeTicks}-tick charge");
+        if (!Jam(wo, po))
+            return Fail($"powerdata: a Watch Post whose file says charge_ticks {OddPowerCharge} had not recharged "
+                        + $"{OddPowerCharge + 5} ticks after a use, so the restart is still the sim constant "
+                        + $"{World.SupportPowerChargeTicks}");
+    }
+
     // --- 3. Each column moves the catalogue checksum (ADR-032): two peers
     //        holding different files would refuse each other before tick 0.
     ulong stockSum = new World(4809).CatalogueChecksum;
@@ -11746,6 +11855,9 @@ int PowerDataGate()
                  ("charge_ticks", Cannon, d => d with { ChargeTicks = d.ChargeTicks + 1 }),
                  ("strike_damage", Cannon, d => d with { StrikeDamage = d.StrikeDamage + 1 }),
                  ("reveal_ticks", Bastion, d => d with { RevealTicks = d.RevealTicks + 1 }),
+                 // P8-61: the power building's charge and the jam.
+                 ("charge_ticks on a power building", WatchPost, d => d with { ChargeTicks = d.ChargeTicks + 1 }),
+                 ("jam_ticks", WatchPost, d => d with { JamTicks = d.JamTicks + 1 }),
              })
     {
         var w = new World(4810);
@@ -11774,11 +11886,19 @@ int PowerDataGate()
                  ("a turret with a charge_ticks", Text("dir_turret") + "\ncharge_ticks: 500\n"),
                  ("a seismic charge with a strike_damage", Text("sod_seismic_charge") + "\nstrike_damage: 350\n"),
                  ("a Watch Post with a reveal_ticks", Text("sod_watch_post") + "\nreveal_ticks: 75\n"),
+                 // P8-61: a power building's charge and the jam, the same rule.
+                 ("a Watch Post with no charge_ticks", Without(Text("sod_watch_post"), "charge_ticks")),
+                 ("a Shroud Nest with no charge_ticks", Without(Text("sod_shroud_nest"), "charge_ticks")),
+                 ("a Watch Post with no jam_ticks", Without(Text("sod_watch_post"), "jam_ticks")),
+                 ("a Bastion with a jam_ticks", Text("dir_bastion") + "\njam_ticks: 166\n"),
+                 ("a jam_ticks above the ceiling", Text("sod_watch_post").Replace(
+                     $"jam_ticks: {World.RadarJamTicks}", $"jam_ticks: {World.MaxJamTicks + 1}", StringComparison.Ordinal)),
              })
         if (!Refused(text))
             return Fail($"powerdata: the loader accepted {why}. A number the sim needs must be demanded, and one it "
                         + "never reads must be refused, or a file can promise what the game does not do");
-    if (Refused(Text("dir_superweapon")) || Refused(Text("dir_bastion")) || Refused(Text("sod_seismic_charge")))
+    if (Refused(Text("dir_superweapon")) || Refused(Text("dir_bastion")) || Refused(Text("sod_seismic_charge"))
+        || Refused(Text("sod_watch_post")) || Refused(Text("sod_veil_projector")) || Refused(Text("sod_shroud_nest")))
         return Fail("powerdata: the loader refused a shipped file, so stage 4's refusals prove nothing");
     // The loader's ceiling (P8-18 audit): a strike above World.MaxStrikeDamage
     // would let DamageOf's baseDamage * pct wrap.
@@ -11788,6 +11908,7 @@ int PowerDataGate()
     // --- 5. P8-18 audit: REGISTRATION demands the same columns the loader does,
     //        so a def built in code cannot carry the record's zero defaults
     //        where the sim reads them. Each refusal must NAME its column.
+    int regRefusals = 0;
     {
         string? RegRefusal(int type, Func<World.StructureTypeDef, World.StructureTypeDef> edit)
         {
@@ -11802,13 +11923,22 @@ int PowerDataGate()
                      ("an orbital cannon with no strike", Cannon, "StrikeDamage", d => d with { StrikeDamage = 0 }),
                      ("a Bastion with no precision strike damage", Bastion, "StrikeDamage", d => d with { StrikeDamage = 0 }),
                      ("a Bastion with no scan reveal", Bastion, "RevealTicks", d => d with { RevealTicks = 0 }),
+                     // P8-61: with the power's charge supplied, so the refusal
+                     // is the missing reveal and not the charge.
                      ("a Radar Uplink granted the scan with no reveal (supportpowergate's old carrier)", Radar, "RevealTicks",
-                      d => d with { SupportPowerIds = new[] { World.OrbitalScanPowerId } }),
+                      d => d with { SupportPowerIds = new[] { World.OrbitalScanPowerId }, ChargeTicks = World.SupportPowerChargeTicks }),
                      ("a charge above the ceiling", Cannon, "ChargeTicks", d => d with { ChargeTicks = World.MaxChargeTicks + 1 }),
                      ("a strike above the ceiling", Cannon, "StrikeDamage", d => d with { StrikeDamage = World.MaxStrikeDamage + 1 }),
                      ("a reveal above the ceiling", Bastion, "RevealTicks", d => d with { RevealTicks = World.MaxRevealTicks + 1 }),
+                     // P8-61: a power building's charge and the jam.
+                     ("a Bastion with no charge for its powers", Bastion, "ChargeTicks", d => d with { ChargeTicks = 0 }),
+                     ("a Radar Uplink granted a power with no charge (supportpowergate's carrier before P8-61)", Radar,
+                      "ChargeTicks", d => d with { SupportPowerIds = new[] { World.TunnelDeploymentPowerId } }),
+                     ("a Watch Post with no jam", WatchPost, "JamTicks", d => d with { JamTicks = 0 }),
+                     ("a jam above the ceiling", WatchPost, "JamTicks", d => d with { JamTicks = World.MaxJamTicks + 1 }),
                  })
         {
+            regRefusals++;
             string? msg = RegRefusal(type, edit);
             if (msg == null)
                 return Fail($"powerdata: registration accepted {why}. A code-built def must meet the loader's rule, or a "
@@ -11824,6 +11954,8 @@ int PowerDataGate()
                      ("the stock seismic charge, which has no strike_damage", World.SeismicChargeStructType, d => d),
                      ("a cannon at every ceiling", Cannon, d => d with { ChargeTicks = World.MaxChargeTicks, StrikeDamage = World.MaxStrikeDamage }),
                      ("a Bastion at the reveal ceiling", Bastion, d => d with { RevealTicks = World.MaxRevealTicks }),
+                     ("a Watch Post at the charge and jam ceilings", WatchPost,
+                      d => d with { ChargeTicks = World.MaxChargeTicks, JamTicks = World.MaxJamTicks }),   // P8-61
                  })
             if (RegRefusal(type, edit) is { } refused)
                 return Fail($"powerdata control: registration refused {why}: {refused}");
@@ -11876,14 +12008,19 @@ int PowerDataGate()
     if (OneStrikeRefinery(2499))
         return Fail($"powerdata: the one-strike check passed strike_damage 2499, so it cannot catch a cannon that no longer kills a refinery");
 
+    var stockPostDef = loaded.GetStructureType(WatchPost);
     Console.WriteLine($"powerdatagate: the superweapon's charge ({stockCharge} ticks), the orbital cannon's blast "
-                      + $"({stockCannon.StrikeDamage}), the precision strike ({stockBastion.StrikeDamage}) and the scan's "
-                      + $"reveal ({stockBastion.RevealTicks} ticks) come from /data/buildings and reproduce the compiled "
+                      + $"({stockCannon.StrikeDamage}), the precision strike ({stockBastion.StrikeDamage}), the scan's "
+                      + $"reveal ({stockBastion.RevealTicks} ticks), and since P8-61 the charge every power building's powers "
+                      + $"share ({stockPostDef.ChargeTicks} ticks on all {powerBuildings}) and the Watch Post's jam "
+                      + $"({stockPostDef.JamTicks} ticks) come from /data/buildings and reproduce the compiled "
                       + $"reference; registered at {OddCharge}, {OddBlast}, {OddStrike} and {OddReveal} the sim built, "
-                      + $"recharged, struck and revealed by those numbers instead; each moves the catalogue checksum; "
+                      + $"recharged, struck and revealed by those numbers instead, and a scratch Watch Post file saying "
+                      + $"charge_ticks {OddPowerCharge} and jam_ticks {OddJam} fired, jammed and recharged by those; each "
+                      + "moves the catalogue checksum; "
                       + "the loader demands each key where it is read and refuses it everywhere else; registration in code "
-                      + $"demands the same columns and refuses eight bad defs by name; every ceiling ({World.MaxChargeTicks}, "
-                      + $"{World.MaxStrikeDamage}, {World.MaxRevealTicks}) is enforced; and every registered superweapon keeps "
+                      + $"demands the same columns and refuses {regRefusals} bad defs by name; every ceiling ({World.MaxChargeTicks}, "
+                      + $"{World.MaxStrikeDamage}, {World.MaxRevealTicks}, {World.MaxJamTicks}) is enforced; and every registered superweapon keeps "
                       + $"D33's first launch at or after {MeasurementHarness.F8FirstLaunchTicks} (2 x charge + build = "
                       + $"{2 * stockCannon.ChargeTicks + stockCannon.BuildTicks} for the cannon); and the cannon's strike "
                       + $"kills a refinery in one blow on the /data catalogue ({loaded.DamageOf(cannonStrike, Warhead.Omni, ArmourClass.Structure)} "
