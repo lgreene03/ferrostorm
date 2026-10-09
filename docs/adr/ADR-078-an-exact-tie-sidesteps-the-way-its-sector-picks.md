@@ -1,5 +1,5 @@
 # ADR-078: a walker whose step a separation push exactly undoes sidesteps, to the side the map sector it stands in picks
-- Status: **Proposed** (row P8-66 of docs/tickets/P8-formidable-tracker.md), 2026-10-09. Drafted by the implementer agent. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it is a rule of the sim, so old replays diverge (Q024). It lands as two commits: a goldens-neutral one that adds the observation and the probes, and the rule.
+- Status: **Ratified under D39** of docs/tickets/P8-formidable-tracker.md (row P8-66), 2026-10-09, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with conditions of 2026-10-09 (section "Architect sign-off" below), in the pull request from branch `worktree-wf_0a2c56bf-754-1` into main, whose number that section records when it opens. Proposed on 2026-10-09. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it is a rule of the sim, so old replays diverge (Q024). It lands as two commits, a goldens-neutral one that adds the observation and the probes, and the rule, followed by one goldens-neutral commit for each of the Architect's conditions 1 to 4 (sections "Division by zero closed", "What it measured", "Consequences" and the tracker's rows P8-74 to P8-78); condition 5 is this status and its records, and condition 6 is that pull request's CI and merge hygiene. Drafted by the implementer agent.
 - Date: 2026-10-09
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: TDD s3 (crowd movement) and s1 ("determinism is the product"); doc 26 section 2 ("rotational symmetry for fairness"); ADR-014 (the no-progress backstop), ADR-027 (crowd-aware movement), ADR-075's amendment of 2026-10-08 and its C7 measure, ADR-076's half turn, ADR-077 ("The coupling, stated plainly"); criterion F5 and decision D38 of the P8 tracker; the balance tool's mirror self-check (doc 12, P8-14)
@@ -95,7 +95,7 @@ Each figure below was measured on this ADR's goldens-neutral commit, which plays
 
 **The isolating measurement.** This ADR's goldens-neutral commit is the rule with only the sidestep's application removed (the tie is still detected and recorded). Its `golden 2026` gives all 25 of main's hashes. Restored, the rule gives the five moves above and nothing else.
 
-**The proxy budget re-measured.** `longmatchperf rebaseline=1` reads 313148, 54894 and 87023 for skirmish-07, 08 and 09, against the budget of 223650, 54910 and 138277 that D38's head still reproduces. The proxy is not binding (P8-31), so the budget is re-baselined to the new figures and recorded, not judged.
+**The proxy budget re-measured.** `longmatchperf rebaseline=1` reads 313148, 54894 and 87023 for skirmish-07, 08 and 09, against the budget of 223650, 54910 and 138277 that D38's head still reproduces. The proxy is not binding (P8-31), so the budget is re-baselined to the new figures and recorded, not judged. Read again at this pull request's head, after the Architect's conditions 1 to 4, it reads 313148, 54894 and 87023, each inside, so it is not re-baselined again.
 
 ## Division by zero closed (the Architect's condition 1)
 
@@ -168,3 +168,88 @@ SeparationSystem's older gaps, which the tie-break now reaches, are measured tog
 **Committed to.** A walker in an exact cancellation goes to the side its sector picks, and is left on a centre line or a diagonal. A change to the side, the trigger, the zero set or the length moves at least the five goldens above and every replay, and is judged by the reversal above, not by preference. Two more points (added under condition 3):
 - `ExactTiesThisTick`, and `ExactTiePositionsThisTick` beside it, stay runner-only. A world made by `Load` reads them empty until it steps, so a reader in the sim, the AI or the client would make a loaded world differ from a continuous one.
 - The rule is exact only for symmetries that fix the map centre: the sector is read from the offset to `(W/2, H/2)`, and every symmetry it is exact under (the half turn, the centre-line reflections and the diagonal above, and the other diagonal and, on a square map, the quarter turn, which the Architect checked) fixes that point. A map whose seats are related any other way, by a rotation about another point, a translation or a glide reflection, is judged against this rule before it ships.
+
+## Architect sign-off
+
+- Date: 2026-10-09
+- Reviewer: Systems Architect (A3).
+- Pull request: the P8-66 pull request from branch `worktree-wf_6a8149c1-e19-1` into main. Its number is to be recorded here when it opens. I reviewed its two commits at 0e0a41a on top of main at 56d9636 (D38, pull request 169): d6326df, stage A, which is goldens neutral and adds `World.ExactTiesThisTick`, `frozenprobe` and `mirrorprobe seats=4`; and 0e0a41a, the rule. A determinism audit and an adversarial verifier each reviewed it independently.
+  - Recorded at ratification (D39, 2026-10-09). The two commits reviewed were cherry-picked, unchanged but for the runner's header comment, where the conflict with P8-72 was resolved by keeping both lines, onto main at 5863ffa (P8-72 and P8-73, pull request 170), on branch `worktree-wf_0a2c56bf-754-1`. The pull request is the one from that branch into main, and its number is recorded here when it opens: **pull request (number pending)**. Conditions 1 to 4 are met in it by one goldens-neutral commit each, and condition 5 by the ratifying commit; condition 6 is its CI and merge hygiene.
+- Verdict: **signed off with conditions.** The rule is approved, and so are the five golden moves as attributed. The pull request merges once conditions 1 to 6 below are met in it.
+
+**Reproduced, on macOS only.** The builds below are the audit's and the verifier's, each in a tree of its own. I read the code against them and worked through the rule's arithmetic myself.
+- `golden 2026` gives the 25 committed lines. Five move (`skirmish`, `expansion`, `aisuper`, `mission`, `airanswer`) and twenty are byte-identical. The catalogue checksum, the save format and the wire format do not move.
+- Stage A, the rule without its application, gives main's 25. A build that prints each world's first sidestep prints one before exactly the five moved scenarios, and each names the walker, tick and side the ADR names.
+- The `selftest` stage fails by name in four builds: without the rule, with the walker's own right, with the side facing the centre, and without the line rule.
+- `tools/ci-local.sh` is green on 19 steps. `pillargate --bind` passes on both halves, and `aiairgate`, `cheesegate`, `powerdatagate`, `lanaiseatsgate`'s pin and the balance gate pass. The balance gate's mirror self-check holds on all 40 runs.
+- With the rule removed, `frozenprobe` reproduces D38's 6 harvesters and 14 units. At the head it reads 0 held by an exact cancellation, 0 held for 450 consecutive ticks and 0 caught in a cycle.
+
+Windows and Linux are left to CI.
+
+**The break is justified, and this time the case rests on results that do not depend on chaos.** The defect was reproduced first, at main in the centre-facing frame, down to the raw units of the mission harvester's two steps and the push between them. Over `pillargate`'s sweep the rule takes walkers held by an exact cancellation from 8 to 0, walkers held for 450 consecutive ticks from 42 to 0, and walkers caught in a cycle from 166 to 0. `mission` passes under truncation in both frames, so ADR-075's frame and ADR-077's rounding are no longer coupled through it. That coupling is why I carried this row ahead of the next movement or commander-frame row. The readouts that are chaotic at this sample are labelled as such, and none was used to choose the rule: the start split (8/10), F11 (3/6 against 1/6), the C7 margin (28 against 24 of 32) and `seatfairgate`'s mean gap. P8-66's three done conditions read as written. ADR-075's flip still stands under C7, and ADR-077's first reversal is not met.
+
+**The design holds.** Keying the side on where the walker stands, relative to the map centre, is the right call:
+- **Why position.** A twin can only be told apart from its walker, in a way its symmetry preserves, by its position relative to the centre. A reflection turns a heading's right into its left, and a world axis or an entity id splits the half turn's seats by construction. The sector sign is the smallest positional choice.
+- **Symmetry checked.** I checked the sector sign under the half turn, both centre-line reflections, both diagonals and, on a square map, the quarter turn. Every rotation keeps it and every reflection negates it, just as each does to the walker's right. The tie tests are products of mapped factors, and those are odd since ADR-077.
+- **Arithmetic and state.** The rule is integer and `Fix64` only. It keeps no state, and it reads only fields that are hashed and saved.
+- **Placement.** It sits where its step really is this tick's. MovementSystem runs directly before SeparationSystem and resets PrevX and PrevY for every walker SeparationSystem visits, and nothing else moves a walker between the two.
+- **The observation.** Only the runner reads it.
+- **The zero set.** On a mirror line the zero set is a forced limit. On a non-square map's diagonals, and on the two-seat maps' lines, it is a choice. It is measured at zero held walkers and has a reversal of its own.
+- **Alternatives.** Each one was built, and each was rejected on a CI gate or a measured harm, not on preference.
+
+**What is wrong.**
+- **A latent crash.** `stepLen` truncates to zero for any step shorter than 2^-16 cells, because `DistSq` truncates, and `/ stepLen` then throws inside `World.Step`. Both peers throw alike, so it is not a desync, but it aborts a match or a replay. The snap onto a building's clamped face can produce such a step. Only ADR-071's reach rules keep it unreached today, and an instrumented count reads zero over the sweep, the goldens and a 1200-case harness. The fix is one line and goldens neutral, so it is a merge condition.
+- **Reversal clauses that cannot be read.** Two-seat `mirrorprobe` never consults the observation, so the second clause has no output on the two-seat maps. The line rule's clause shares `frozenprobe`'s held count with the first clause and has no figure of its own.
+- **The record is wrong in four places.**
+  - "To the last unit": the line test compares truncated products.
+  - The head-on walkers go opposite ways in world terms, each to its own right.
+  - The mirror claim holds per walker. At system level it holds only while SeparationSystem visits twins in mirrored order.
+  - "All outside P8-66's class" holds only by the probe's own collinear detector.
+- **Two measured costs are missing from Consequences.** `endgate` rises from 14 to 24 of 72 unresolved. The sidestep can also double the push's displacement on one axis in a single tick, past a blocked-cell test that checks only the destination cell.
+- **Records lag.** The rows owed are not filed, and D38's entry does not record its own reversals read at this head.
+
+**Conditions before merge.**
+
+1. **Close the division by zero (goldens neutral).**
+   - In `SidestepForExactTie`, test `Fix64.DistSq(stepX, stepY) == Fix64.Zero` in place of the exact-zero step test, returning false before either tie test, so a step too short for the rule to measure is not a tie.
+   - Land it as a further commit on this pull request. `golden 2026` must stay byte-identical to the 25 lines at 0e0a41a.
+   - ADR-078 records the mechanism, the path that can reach it and the zero count. Add the case to the P8-66 `selftest` stage if it can be built through the public surface; otherwise the ADR says how it was demonstrated.
+   - Any golden this moves comes back to me.
+2. **Make every reversal clause readable from the tool it names (goldens neutral).**
+   - At each first break, two-seat `mirrorprobe` prints whether a walker in an exact cancellation on that tick is among what differs, in the words `seats=4` already uses. It is re-read at the head and the reading is recorded in "What it measured".
+   - `frozenprobe` splits "held by an exact cancellation" into sidestepped and left on a line, with the runner computing the sector sign itself. Both figures are recorded at the head.
+   - `MirrorProbeFour` formats its percentages with InvariantCulture, as `P()` does.
+3. **Correct the record** in ADR-078, and in the `World.cs` comment and the tracker cell wherever they repeat it.
+   - The line test is equality of truncated products, so a push a few raw units off the line counts as on it; `expansion`'s first release is one. The test is deterministic and odd, so the symmetry argument stands, and `frozenprobe`'s "exact" has the same tolerance.
+   - Walkers meeting head on in one sector go opposite ways in world terms, each to its own right. "Harder" and the `selftest`'s comment say what actually parts them.
+   - The mirror claim is exact per walker, given mirrored inputs. At system level it also needs SeparationSystem, which applies each push at once in entity order, to visit twins in mirrored order. Twins whose ids are inverted, such as units produced on one tick for opposite seats, can part through a tie between them. That is the existing id-order class (ADR-075, P8-54), not one this row creates. The `selftest` cannot see it, because it spawns every image in the same order.
+   - "The frozen walkers left are all outside P8-66's class" holds by the probe's own collinear detector. Say so, and name the skirmish-08 harvester held off its line from t=7967 to the end of its match.
+   - "Harder" gains `endgate`'s rise from 14 to 24 of 72 unresolved, naming the newly unresolved matches from its output at stage A and at the head, unattributed unless measured. It also gains the sidestep's wall reach: on a diagonal tie the sidestep can double the push's displacement on one axis in a tick, and the blocked-cell test checks only the destination cell.
+   - "Committed to" gains two points. `ExactTiesThisTick` stays runner-only, because it reads empty after a Load, so a reader in the sim, the AI or the client would make a loaded world differ from a continuous one. And the rule is exact only for symmetries that fix the map centre, so a map whose seats are related any other way is judged before it ships.
+4. **File the rows found while measuring, with owners,** at the next free numbers after those claimed on the in-flight P8-72 and P8-73 branch:
+   - ADR-027's yield cannot fire (sim-engineer).
+   - The exact hold off the step's line, the triangle, with a detector of its own (sim-engineer).
+   - The commander parks idle harvesters on one occupied point (ai-engineer).
+   - SeparationSystem's remaining symmetry and reach gaps, measured together (sim-engineer):
+     - a moving aircraft is shoved by ground units although ADR-028 says it is not, and it can now be sidestepped;
+     - the exact-overlap fallback pushes along world x by id order;
+     - testing x before y against blocked cells is not exact under the diagonal reflection near walls;
+     - the sidestep's wall reach.
+   - `Fix64.ToString` prints a negative value's floor and then its fraction (sim-engineer).
+5. **Status and records.**
+   - The orchestrator ratifies ADR-078 under a decision of the P8 tracker.
+   - ADR-078's status, its open-queue entry and row P8-66 cite this section and the pull request's number.
+   - D38's entry records both of its reversals as read at this head, and neither is met. The frame: sheltered 28 of 32 at 7.17 per cent, centre-facing 24 at 8.94. ADR-077's first: flooring alone 28 of 32 at 10.97 per cent, start split 12/4.
+6. **CI and hygiene.**
+   - All three CI jobs are green on the pull request, and the determinism job reproduces the five new hashes on Windows and Linux.
+   - `tools/ci-local.sh` is run again at the final head.
+   - If P8-72 merges first, the rebased head passes `pillargate --bind` in CI's ubuntu leg.
+   - Nothing under `.claude/agent-memory` is committed, and no attribution trailer is added.
+   - Any commit beyond these conditions, or any golden other than the five, comes back to me. A cross-platform golden mismatch stops the merge under ADR-078's own reversal.
+
+**Carried.**
+- My D38 carry (P8-66 lands before the next movement or commander-frame row) is discharged when this pull request merges. Until then, no such row merges ahead of it.
+- P8-24 takes `endgate`'s rise. P8-33 takes F11, now 3/6 against 1/6, as a chaotic input.
+- P8-31 sets `longmatchperf`'s binding budget from a stated reason, not from the last row's reading. The proxy has been re-baselined to whatever each sim row read, in D38 and again here, where skirmish-07 rose 40 per cent as that match now runs to t=24841 rather than 13381. skirmish-07's wall p999 reads 22.3 ms against the 8 ms bar (16.2 at D38).
+- Q024 is settled before the first published build. It now names six code-only rule changes.
+- If `frozenprobe` ever finds a walker held by a tie left on a line, the finer zero set in ADR-078's third reversal is judged then. The judging starts with the two-seat maps, where only the half turn must hold and the lines are not mirrors.
