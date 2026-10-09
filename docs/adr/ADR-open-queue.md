@@ -266,3 +266,24 @@ the same commit.
   moves no golden) and a goldens-neutral commit, and D38, read again at its
   final head under condition C3, stands. Ratified under D38; C6 is that pull
   request's CI and merge hygiene.
+- ADR-078: PROPOSED 2026-10-09 - ADR-078-an-exact-tie-sidesteps-the-way-its-sector-picks.md
+  (row P8-66, carried by the Architect's sign-off on D38). Number claimed here
+  per the numbering law, in the same commit as the draft; 077 is held by
+  P8-53, so 078 is the next free number. When a walker's step and its
+  separation push lie on one line and the push undoes the step, the push
+  gains a sideways part as long as itself, to the walker's right or left as
+  the sector it stands in picks (the centre lines and the diagonals through
+  the centre cut a map into eight, alternating), and on one of those lines
+  the tie is left. Exact under the half turn, the centre-line reflections and
+  the balance arena's diagonal; the walker's own right alone failed the
+  balance gate's mirror self-check. Five goldens move (`skirmish`,
+  `expansion`, `aisuper`, `mission`, `airanswer`), one cause, each with the
+  first walker it released; catalogue checksum unchanged; no save or wire
+  change; the `longmatchperf` proxy budget re-baselined. A sim rule, so old
+  replays diverge and a mixed-build LAN game desyncs rather than being
+  refused (Q024). `frozenprobe` reads no walker held by an exact
+  cancellation or caught in a cycle (8 frozen, 42 held for 450 consecutive
+  ticks and 166 cycling at D38's head), and `mission` passes under
+  truncation in both frames, so ADR-075's frame and ADR-077's rounding are
+  uncoupled; C7 keeps the sheltered frame (28 against 24 of 32); start split
+  8/10. Awaiting the Architect's review.

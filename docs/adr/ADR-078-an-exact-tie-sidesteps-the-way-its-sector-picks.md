@@ -1,0 +1,142 @@
+# ADR-078: a walker whose step a separation push exactly undoes sidesteps, to the side the map sector it stands in picks
+- Status: **Proposed** (row P8-66 of docs/tickets/P8-formidable-tracker.md), 2026-10-09. Drafted by the implementer agent. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it is a rule of the sim, so old replays diverge (Q024). It lands as two commits: a goldens-neutral one that adds the observation and the probes, and the rule.
+- Date: 2026-10-09
+- Deciders: Architect agent + Luke
+- GDD/TDD feature served: TDD s3 (crowd movement) and s1 ("determinism is the product"); doc 26 section 2 ("rotational symmetry for fairness"); ADR-014 (the no-progress backstop), ADR-027 (crowd-aware movement), ADR-075's amendment of 2026-10-08 and its C7 measure, ADR-076's half turn, ADR-077 ("The coupling, stated plainly"); criterion F5 and decision D38 of the P8 tracker; the balance tool's mirror self-check (doc 12, P8-14)
+
+## Context
+
+A walker can report Moving and stay where it is for good. MovementSystem steps it towards its aim; SeparationSystem then pushes it away from whatever it overlaps. When that push lies exactly along the step's line, points against the step and is at least as long, the push undoes the whole step and has no sideways part that could steer the walker round what it presses on. Flooring multiplication used to supply one by accident, a unit in the last place at a time. ADR-077 made multiplication truncate toward zero, so the arithmetic is symmetric and such a tie now holds exactly.
+
+**Reproduced first.** Main (56d9636, D38's merged head) with ADR-075's two `TryFindPlacement` comparisons reversed (the centre-facing frame) and nothing else changed: `golden 2026` throws "mission: the ambush zone was never sprung". A per-tick trace of mission-01 shows its only harvester (entity 13) stopping at t=563 at (10.203015, 22.796984), Moving and ToField towards (14.5, 20.5), and never moving again; the credits fall to 1900 and stay there. A harvester steps twice a tick, once in MovementSystem and once in HarvestSystem's `MoveTo`. The trace in raw units (2^-32) shows the whole tie: a first step of (546660089, -546660089); a separation push from the idle opening squad on the same diagonal of (-1093320180, 1093320180), the first step reversed and doubled to within two units; and a second step of (546660091, -546660091), which returns the harvester exactly to where the tick began. So the tie the row describes is real, it is exact, and it is the mission's only failure.
+
+**Why nothing self-corrects.** ADR-014's no-progress backstop and the StallTicks net reach only a flow-pathing Unit. A harvester and a straight Move are outside both, and HarvestSystem re-arms a ToField harvester's walk every tick anyway, so benching it would not hold. ADR-027's yield acts only on a unit that is not Moving, and SeparationSystem visits only walkers that are, so the yield cannot fire at all: a build that prints every time its condition holds prints nothing over `golden 2026` and `seatfairgate`'s 32 matches. That is a separate defect, recorded under "Consequences" and not acted on here.
+
+**The class, measured.** `frozenprobe` (added with this ADR) runs over `pillargate`'s 72-match sweep and reads only the world. It counts units and harvesters that report Moving and stand still for 450 or more consecutive ticks, and gives each a cause. It also counts walkers in an exact cancellation on 450 or more consecutive ticks, and walkers caught in a cycle, in one on at least half the ticks of some 450-tick window. At D38's head it reads 6 harvesters and 14 units frozen, ADR-077's figure exactly, and 8 of them are held by an exact cancellation. 42 walkers are in one on 450 or more consecutive ticks, more than the frozen count sees because a held walker can drift a unit in the last place along its line, and 166 are in one on at least half the ticks of some window.
+
+## Decision
+
+**When the push undoes the step exactly along the step's line, the push gains a sideways part as long as itself, at right angles to the step, to the side the walker's sector picks.** In `SeparationSystem`, after the push from every neighbour is summed and before it is applied, `SidestepForExactTie` reads the walker's step this tick, `(sx, sy) = (X - PrevX, Y - PrevY)`, and the push `(px, py)`. It finds a tie when the walker has a speed and a step, `sx * py == sy * px` (the push lies on the step's line, to the last unit), and `sx * px + sy * py <= -(sx * sx + sy * sy)` (the push points against the step and is at least as long).
+
+The side comes from where the walker stands. Let `(qx, qy)` be its offset from the map centre `(W/2, H/2)`. The map's two centre lines and its two diagonals through the centre cut it into eight sectors, and `sign(qx) * sign(qy) * sign(|qx| - |qy|)` alternates from one to the next. Where it is positive the walker goes to its own right, the step turned a quarter turn clockwise on screen (y grows downwards), `(-sy, sx)`. Where it is negative the walker goes to its left. Where it is zero, on one of the four lines, the tie is left as it is. The sideways part is that direction scaled to the push's length, `(-sy, sx) * (±|p|) / |s|`. The blocked-cell test that governs the push governs the sidestep too. Integer and `Fix64` only; no state is kept, hashed or saved.
+
+The step is this tick's own: MovementSystem sets `PrevX` and `PrevY` just before it moves a walker, and within SeparationSystem only the walker's own push moves it. A walker of speed zero is never stepped and is excluded. A harvester's second step comes later, in HarvestSystem, so a held harvester shows the rule a push about twice its first step, which the at-least-as-long test catches.
+
+**Exact under every symmetry a map or a mirrored arena here has about its centre.** Write `g` for any of them: the half turn `(x, y) -> (W - x, H - y)` that relates every two-seat map's starts (ADR-076); the reflections in the centre lines that relate skirmish-09's seats to seat 0 alongside its half turn; and the reflection in the diagonal `y = x` that the balance tool's mirror arena is built on. Each is an isometry fixing the centre.
+
+- `g` maps a walker's step exactly (a difference of positions) and its push exactly. Each neighbour's contribution is a product and a quotient of mapped differences, `Fix64` multiplication and division are both odd since ADR-077, and the sum is exact integer addition in any order. So the two tie tests, products of mapped factors, hold for a walker exactly when they hold for its twin.
+- The sector's sign is unchanged by the half turn, and negated by each reflection: a reflection in a centre line negates one of `sign(qx)` and `sign(qy)`, and the diagonal reflection swaps `|qx|` and `|qy|`. A rotation keeps the walker's own right its right, and a reflection turns it into its left, exactly as it negates the sign. The two cancel, so the twin's sidestep is the image of the walker's. The lengths are square roots of sums of squares and do not change.
+- The zero set, the four lines, is carried onto itself by every `g`. A walker on one of them is left, and so is its twin.
+
+So a walker and any twin sidestep as each other's image, or are both left. The `selftest` checks it on every tick under all four symmetries. On a centre line the zero is not a choice but the limit: the reflection in that line maps the walker onto itself, and no rule could pick a side that is its own mirror image. The same holds on a diagonal of a square map such as the balance arena. On a diagonal of a map that is not square, leaving the tie is a choice, made so that one rule serves every map. This is the known limit, and it is far narrower than "every tie under a reflection". The probe counts what it leaves: no walker is held by a tie left on a line over the sweep.
+
+**How the rule was chosen, in the order it was measured.** Each alternative below was built in a scratch tree and measured on the same gates.
+
+- The walker's own right on every tie, the simplest rule, is exact under the half turn but not under any reflection, since a reflection turns right into left. That limit is not merely a four-seat one: **the balance gate fails**. The balance tool fights each mirror matchup in an arena mirrored across the diagonal and requires it to end symmetric, and with this rule eight of those mirror runs ended lopsided, so CI's determinism job would go red.
+- The side facing the map centre is exact under every reflection through the centre for ties whose step line misses the centre, but it still failed five mirror runs. The failures came from ties whose step line passed exactly through the arena's centre, since leaving exactly those ties made it pass. But the side this rule picks flips as a walker circles something: over the sweep it caught 12 walkers in cycles, sidestepped back and forth on every other tick.
+- The sector rule above keeps one hand across each sector, so a circling walker is not flipped. Over the sweep it caught none in a cycle. Without its rule for the four lines it failed five mirror runs too; with it, the balance gate passes.
+
+The start split was not used to choose; it is reported below.
+
+The pieces that land with it:
+- `World.ExactTiesThisTick` lists the walkers found in an exact cancellation during the last tick, sidestepped or left on a line, in entity order. It is an observation on `FlowFieldBuilds`' terms: never read by the sim, never hashed, never saved.
+- `frozenprobe` and `mirrorprobe seats=4` are probes by ADR-061's rule, asserting nothing.
+- A `selftest` stage in a 96-cell world builds a walker ordered straight past a standing unit, east along a row, west along a row and north-east on a diagonal (the mission's case); two walkers meeting head on along a row; and a tie on the centre line. Every one is spawned beside its images under the half turn and the reflections in x, y and the diagonal. Every walker must arrive, each first sidestep must go to the side its sector picks, the centre-line tie must be left, and every image must stay its walker's exact image on every tick. It fails by name without the rule ("the walker north-east along a diagonal past a standing unit was in an exact cancellation at t=10 and moved from (24.075735,38.924264) to (24.075735,38.924264), not to its own right"). It also fails by name with the walker's own right on every tie ("... and its reflection in x part at t=10"), with the side facing the centre ("the walker west along a row past a standing unit ... not to its own right"), and without the rule for the four lines ("the walker east along the centre line past a standing unit and its reflection in the diagonal part at t=11").
+
+## What it measured (seed 2026, macOS)
+
+Each figure below was measured on this ADR's goldens-neutral commit, which plays exactly as main does (D38's merged head, 56d9636), and at this ADR's head. Each variant was built in its own scratch tree with its one mutation asserted to apply exactly once.
+
+| | D38's head | This head |
+|---|---|---|
+| Frozen walkers over `pillargate`'s sweep (harvesters, units) | 6 and 14 | 2 and 17 |
+| of which held by an exact cancellation | 8 | **0** |
+| In an exact cancellation on 450+ consecutive ticks | 42 | **0** |
+| In a cycle (half the ticks of some 450-tick window) | 166 | **0** |
+| In one on 450+ ticks of a match in all | 80 | 0 |
+| Longest freeze | 10814 ticks | 5882 ticks |
+| `mission` in the sheltered frame | won at t=3291 | won at t=4458 |
+| `mission` in the centre-facing frame | THROWS | won at t=4356 |
+| `seatfairgate`, sheltered frame (within 15 per cent, mean gap, start split) | 28 of 32, 9.06, 12/10 | 28 of 32, 7.17, 8/10 |
+| `seatfairgate`, centre-facing frame | 26 of 32, 10.78, 15/11 | 24 of 32, 8.94, 10/10 |
+| `pillargate --bind`, matches launching of 72 (sheltered, centre-facing) | 60, 40 | 64, 34 |
+| balance gate (its mirror self-check) | PASS | PASS |
+| `endgate`, unresolved of 72 (non-binding) | 14 | 24 |
+
+**No walker is held by an exact cancellation at this head**, and none is in one for 450 consecutive ticks, in a cycle, or on 450 ticks of a match in all. The units still frozen are in classes the rule does not touch: 11 stand on their own target with Moving re-armed every tick, and 6 have no next cell in the sim's own flow field; both classes existed at D38's head (4 and 6). The two frozen harvesters are one harvester counted in each orientation of skirmish-08's mixed pairing. Traced, two idle units stand either side of its path, and their combined push is not on its first step's line, so the tie test does not see it; its first step, the push and its second step close a triangle that returns it exactly to where the tick began. That is an exact hold of a different shape (D38's head also froze two harvesters that the probe files under "other", not traced here). It is recorded under "Consequences" for a row of its own, because a tie-break on the step's line cannot reach it.
+
+**The mission passes under truncation in both frames,** so the frame and the rounding are uncoupled. In the centre-facing frame the rule first fires at t=562 on entity 13 at (10.154630, 22.845370), the tick before D38's head freezes it, and sends it south-east (its sector picks its right); the mission is won at t=4356, and `match 2026` exits 0 in that frame too.
+
+**ADR-075's frame judged again by its C7 measure at this head.** The sheltered frame scores 28 of 32 matches with each seat's income within 15 per cent, mean gap over all 32 7.17 per cent (o0 7.17, o1 7.17). The centre-facing frame scores 24 of 32, mean gap 8.94 per cent (o0 8.94, o1 8.94). The count decides, so the flip's reversal is not met and **the sheltered frame stays**. Stated beside it and not used: `aiairgate` and `cheesegate` pass in both frames; the centre-facing frame fails `pillargate`'s first-launch half (34 of 72, against a bar of 36); start splits 8/10 and 10/10. In both frames every one of the 16 pairs reads the same income gap and the same winning start in both orientations, where D38's head differs in one (skirmish-08's Sodality mirror, 10.6 against 10.7 per cent).
+
+**Every binding gate is green at this head.** `pillargate --bind`: "pillargate (F8 rate): PASS (binding). At most 3.5 launches per seat per 30 minutes (bar 5)." and "pillargate (F8 first launch): PASS (binding). Median first launch 11536 (band 10800 to 14400), 64 of 72 matches launched (at least half)." `aiairgate` PASS: 3, 3, 3 and 3 harvesters alive when the last flyer fell (Normal then Hard, Directorate then Sodality), where D38's head read 3, 3, 3 and 4. D32's no-raid control reads 5, 0, 7 and 0 (5, 0, 8 and 8), so D32's reversal is still not met. `cheesegate` PASS, 10 of 10. The balance gate PASS, its mirror self-check holding on all 40 mirror runs (28 mutual annihilations and 12 identical cloaked runs, as at D38's head); F11 reads Directorate 3/6 against Sodality 1/6 of cells, from 6/6 against 0/6, still not met and still P8-33's. `golden 2026` gives the 25 lines of `sim/golden-hashes.txt` in order, and `determinism 2026` double-runs all 25. `match 2026` exits 0, with `powerdatagate` and `lanaiseatsgate` inside it; `lanaiseatsgate`'s pin 0x8CE212EBF6C1FBFB holds, so no tie fires in its 400 ticks.
+
+**The start split is inside 60/40:** 8/10 of 18 decided matches by start, 9/9 by seat (D38's head 12/10 and 11/11). The start split is the readout ADR-077 calls chaotic, and it was not used to choose the rule. Across the rules built for this row it ranged from 4/14 to 12/6, so this figure is stated, not claimed as an improvement.
+
+**`mirrorprobe` finds the tie-break as a first break on no mirror.** On the two-seat maps its output equals D38's head except on two mirrors. skirmish-06's Sodality mirror first breaks at t=2131 rather than t=2034, on the same kind of break (a harvester's sub-cell position on its way to the refinery). skirmish-02's Sodality mirror breaks at the same tick, t=2493, on a different unit of the same kind (a unit standing exactly on a cell boundary, ADR-075's class 5). On skirmish-09's four seats (`mirrorprobe seats=4`) every relation breaks where it did and before the first exact tie anywhere. In the Directorate mirror the half turn and the reflection in y break at t=2388 and the reflection in x at t=2563, with the first tie at t=2866. In the Sodality mirror the half turn and the reflection in x break at t=2493 and the reflection in y at t=2668, with the first tie at t=3224. Each seat's income to t=9000 against seat 0's (half turn, reflection in x, reflection in y) reads 5.3, 12.1 and 2.1 per cent in the Directorate mirror and 4.6, 1.9 and 1.3 in the Sodality one. That is 6 of 6 relations within 15 per cent, against 5 of 6 at D38's head (7.2, 20.6 and 1.7; 7.2, 0.9 and 3.9). `seatfairgate` plays only the two-seat maps, so these four-seat incomes are its measure here; after the first break they are a chaotic readout too.
+
+**ADR-077's first reversal, read at this head.** With flooring multiplication restored alone, this head reads 28 of 32 within 15 per cent, mean gap 10.97 per cent (o0 10.97, o1 10.97), start split 12/4, outside 60/40, with `pillargate --bind` passing both halves (60 of 72 launching). By C7 that ties truncation's count and loses on the mean gap (10.97 against 7.17), and its start split fails besides, so the reversal is not met.
+
+## Golden hashes
+
+`golden 2026`, diffed in order against main's `sim/golden-hashes.txt`. **Five move and twenty are byte-identical.** One cause moves all five: in each scenario a walker's step and its separation push cancel exactly at least once, and the rule sidesteps it. A build that prints the first sidestep of each world prints one before exactly these five scenarios and none before the other twenty. Each line names the first walker the rule released. The catalogue checksum (0x1255012DCF3D3A68) does not move: no /data value changes.
+
+- `skirmish` **0x6F2A2F3D76E3FA7B to 0x14812D51448A0082**. First released at t=4030: entity 79, a seat 1 unit (unit type 8) at (38.483510, 35.981333), stepping (-0.028237, -0.147319) and pushed back exactly as far; its sector picks its left, west. Report line unchanged (37 entities destroyed, treasuries 14571/12861).
+- `expansion` **0xF63BE246FF03034F to 0x4277BB647D47AFF7**. First released at t=2112: entity 5, seat 0's harvester, ToField at (58.740691, 30.500000), stepping 0.18 east and pushed back 0.258795 along its row; its sector picks its left, north. Report line unchanged.
+- `aisuper` **0x19083C9294A66758 to 0x6C0A2027A2575357**. First released at t=2755: entity 27, a seat 0 unit (unit type 7) at (10.500000, 32.500000), stepping 0.15 north and pushed back 0.15; its sector picks its left, west. Report line unchanged.
+- `mission` **0x20E040A2BA041007 to 0x50C5916BA6AD026A**. First released at t=1447: entity 18, the harvester, ToField at (10.154630, 22.845370) towards (14.5, 20.5), the configuration that holds it for good in the centre-facing frame, met once here; its sector picks its right, south-east. Victory moves from t=3291 to t=4458.
+- `airanswer` **0x7A67B67B5ABDCF81 to 0x23A616103F612EFB**. First released at t=1050, after the third flyer is down: entity 19, a seat 0 unit (unit type 16) at (9.760000, 32.500000), stepping 0.26 east and pushed back 0.59; its sector picks its left, north. Every report line is unchanged (first Flak Track at t=611, first flyer down at t=667, 3 of 3 down), and every assertion ADR-072 gave it passes.
+
+**The isolating measurement.** This ADR's goldens-neutral commit is the rule with only the sidestep's application removed (the tie is still detected and recorded). Its `golden 2026` gives all 25 of main's hashes. Restored, the rule gives the five moves above and nothing else.
+
+**The proxy budget re-measured.** `longmatchperf rebaseline=1` reads 313148, 54894 and 87023 for skirmish-07, 08 and 09, against the budget of 223650, 54910 and 138277 that D38's head still reproduces. The proxy is not binding (P8-31), so the budget is re-baselined to the new figures and recorded, not judged.
+
+## Compatibility
+
+This is a rule of the sim that moves no catalogue value, so it is the class Q024 (docs/questions/Q024-a-sim-rules-epoch-for-replays-and-the-lan-hello.md) asks about, and Q024 now names it.
+
+**Old replays diverge, and are not refused.** A replay re-simulates its command stream. Every match in `pillargate`'s sweep meets an exact tie, so a replay recorded before this ADR replays differently from its first one and ends REPLAY DIVERGED with both hashes. Its catalogue line matches, so it is not refused up front.
+
+**Saves load and continue.** No save field, version or format changes. A save written before this ADR loads unchanged and continues under the rule.
+
+**A mixed-build LAN game desyncs, and is not refused.** Both peers pass the hello, which compares only the catalogue checksum, and they diverge at the first exact tie; the relay's state-hash comparison every 30 ticks reports the desync. This is acceptable only because no build has been published, and Q024's decide-by ("before the first published build") stands.
+
+## Alternatives rejected
+
+Each was built and measured as above, the frame clause included.
+
+**The walker's own right on every tie** (the first draft of this row, salvaged from an earlier attempt). It is exact under the half turn and frees every held walker (0 held by an exact cancellation, 0 in a cycle). Rejected because it is not exact under any reflection, and that fails a CI gate. The balance gate's mirror self-check failed on 8 of its mirror runs, which the arena mirrored across the diagonal must end symmetric. Measured beside it: 26 of 32 within 15 per cent in the sheltered frame, start split 12/6, outside 60/40.
+
+**The walker's left on every tie.** The same reflection failure, by symmetry. It also throws in `mission` in the centre-facing frame ("mission: the camp was never destroyed within the time limit"), so it would not uncouple the frame from the rounding.
+
+**The side of the step facing the map centre.** It is exact under every reflection through the centre for a tie whose step line misses the centre: its sign is the cross product of the step with the offset to the centre, which each reflection negates as it negates the walker's right. It still failed five of the balance arena's mirror runs, all from ties whose step line passed exactly through the arena's centre, since leaving exactly those ties made it pass. Even then the side this rule picks flips as a walker circles something. Over the sweep it caught 12 walkers in cycles and 26 in a tie on 450 or more ticks of a match, firing 37528 times against this rule's 7538. Traced, a harvester circling an occupied point is sidestepped on every other tick for thousands of ticks (at most 225 in any 450). Its start split is 4/14.
+
+**The sector rule without its rule for the four lines** (the walker's right there instead of leaving the tie). It failed five mirror runs of the balance gate. On the lines the sector's sign is zero, so any fixed hand there cannot flip as the arena's reflection requires, and leaving those ties made it pass.
+
+**Fire on any push against the step along its line, not only one that undoes it** (built with the walker's own right). It is a much wider intervention. It moves seven goldens (`pathing` and `attackmove` as well), fires 63382 times over the sweep, nudges every walker that follows another along a line, and caught 20 walkers in cycles. The row asks for a tie-break where the step and the push cancel, and this is more than that.
+
+**Extend ADR-014's no-progress backstop to every walker that reports Moving** (the row's other option). Rejected because benching gives up rather than breaking the tie. A held ToField or ToRefinery harvester is re-armed by HarvestSystem's `MoveTo` on the very next tick, so the bench would not even hold, and a held unit would be benched short of its destination. The mission's harvester would stay where it is either way.
+
+**A world axis** (always south, say) or **an entity id** (the lower id goes right, say). Rejected without measurement because each is a seat split by construction. A world axis sends a walker and its rotated twin the same way in world terms, and the two seats' ids differ, so an id rule picks different sides for twins.
+
+**Leave it, and keep the frame coupled to the rounding.** Rejected because ADR-077 and ADR-075's amendment both make the `mission` golden's green depend on where the sheltered frame happens to put a base, and the Architect's sign-off on D38 carries this row ahead of the next movement or commander-frame row for that reason.
+
+## What reverses it
+
+- **The rule has failed its purpose** if `frozenprobe` at a head carrying it reads any walker held by an exact cancellation, or any walker in one on 450 or more consecutive ticks or in a cycle. All three read 0 here.
+- **The rule has broken a symmetry** if `mirrorprobe`, on the two-seat maps or with `seats=4`, finds a walker in an exact cancellation among what differs at a first break; if the balance gate's mirror self-check fails; or if `selftest`'s images part. None of these happens here.
+- **The line rule has started to cost something** if `frozenprobe` finds a walker held by a tie left on a centre line or a diagonal. It finds none here. Then a finer zero set is judged, one that leaves only the lines that are mirrors of the map in question.
+- **A cross-platform golden mismatch in CI** stops it before merge, as it would any golden move.
+
+## Consequences
+
+**Easier.** No walker is held by an exact cancellation over the sweep, and none is caught in a cycle: 8 frozen, 42 held for 450 consecutive ticks and 166 cycling at D38's head, none here. The `mission` golden passes in both frames under truncation, so ADR-075's frame and ADR-077's rounding are no longer coupled through it, and either can be judged again on its own measure. The tie-break is exact under the half turn, the centre-line reflections and the balance arena's diagonal, so the two-seat mirrors, skirmish-09's four-seat mirrors and the balance tool's mirror arena stay as symmetric as ADR-076 and ADR-077 made them.
+
+**Harder.** Every replay recorded before this ADR diverges, and a mixed-build LAN pair desyncs rather than being refused (Q024). A tie on a centre line or a diagonal through the centre is left unbroken, by construction; none held a walker over the sweep. A walker's side depends on where it stands, not on its heading, so two walkers meeting head on are both sent the same way in world terms. The order SeparationSystem visits them in parts them instead: the first to be sidestepped is off the line before the second is pushed, as in the `selftest`'s head-on pair. Three defects found while measuring are outside this row and are left for rows of their own:
+- ADR-027's yield cannot fire, because SeparationSystem visits only walkers that are Moving and the yield asks for one that is not. Measured, its condition held on no tick of `golden 2026` or `seatfairgate`.
+- A harvester can be held exactly by a push off its first step's line, its two steps and the push closing a triangle (one harvester in this sweep, counted in both orientations of its pairing). A tie-break on the step's line cannot see that hold.
+- The commander parks idle harvesters on one occupied point. With the walker's own right such a harvester circled the parked one; with this rule none was caught in a cycle, but the order that sends it there is still wrong.
+
+A smaller one is in `Fix64.ToString`, which prints a negative value's floor and then its fraction, so -0.254559 reads "-1.745441". It is diagnostic output only, and it misled one trace here.
+
+**Committed to.** A walker in an exact cancellation goes to the side its sector picks, and is left on a centre line or a diagonal. A change to the side, the trigger, the zero set or the length moves at least the five goldens above and every replay, and is judged by the reversal above, not by preference.

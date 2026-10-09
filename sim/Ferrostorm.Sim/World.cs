@@ -5753,9 +5753,8 @@ public sealed partial class World
     /// displaced (stationary units act as soft obstacles), processed in entity
     /// index order with immediate application, so results are order-fixed and
     /// deterministic. Exact-overlap fallback direction derives from ids.
-    /// P8-66: a walker whose step its push exactly opposes and undoes is
-    /// detected (SidestepForExactTie) and recorded in ExactTiesThisTick; the
-    /// push is applied unchanged.
+    /// P8-66 (ADR-078): a walker whose step its push exactly opposes and
+    /// undoes is sidestepped (SidestepForExactTie).
     /// </summary>
     private void SeparationSystem()
     {
@@ -5900,10 +5899,16 @@ public sealed partial class World
             settled:
             if (pushX != Fix64.Zero || pushY != Fix64.Zero)
             {
-                // P8-66: an exact cancellation is detected and recorded for
-                // the runner's probes, and the push is applied unchanged.
-                if (SidestepForExactTie(in e, pushX, pushY, out _, out _))
+                // P8-66 (ADR-078): movement's tie-break for an exact
+                // cancellation, added to the push before it is applied, so the
+                // blocked-cell test below governs the sidestep as it does the
+                // push.
+                if (SidestepForExactTie(in e, pushX, pushY, out Fix64 sideX, out Fix64 sideY))
+                {
+                    pushX += sideX;
+                    pushY += sideY;
                     _exactTies.Add(i);
+                }
                 Fix64 nx = Fix64.Clamp(e.X + pushX, Fix64.Half, Fix64.FromInt(Map.Width) - Fix64.Half);
                 Fix64 ny = Fix64.Clamp(e.Y + pushY, Fix64.Half, Fix64.FromInt(Map.Height) - Fix64.Half);
                 if (!Map.IsBlocked(Map.CellOf(nx), Map.CellOf(e.Y))) e.X = nx;
@@ -6026,9 +6031,7 @@ public sealed partial class World
     private readonly Dictionary<int, List<int>> _buckets = new(); // rebuilt per tick; keyed access only
 
     /// <summary>
-    /// P8-66: movement's tie-break for an exact cancellation, DETECTED ONLY
-    /// for now: SeparationSystem records the walker and applies its push
-    /// unchanged, so the runner's probes can count the class.
+    /// P8-66 (ADR-078): movement's tie-break for an exact cancellation.
     /// MovementSystem steps a walker towards its aim, and SeparationSystem then
     /// pushes it away from whatever it overlaps. When that push lies exactly
     /// along the step's line (their cross product is zero to the last unit),
@@ -6097,13 +6100,15 @@ public sealed partial class World
 
     private static int SignOf(Fix64 v) => v > Fix64.Zero ? 1 : v < Fix64.Zero ? -1 : 0;
 
-    // P8-66: the walkers SeparationSystem found in an exact cancellation
-    // this tick, in entity index order.
+    // P8-66 (ADR-078): the walkers SeparationSystem found in an exact
+    // cancellation this tick, sidestepped or left on a line, in entity index
+    // order.
     private readonly List<int> _exactTies = new();
 
-    /// <summary>P8-66: the walkers found in an exact cancellation during the
-    /// last tick, in entity index order, read by the runner's frozenprobe and
-    /// mirrorprobe.
+    /// <summary>P8-66 (ADR-078): the walkers found in an exact cancellation
+    /// during the last tick, each sidestepped by movement's tie-break or, on a
+    /// centre line or a diagonal through the map centre, left as it was, in
+    /// entity index order, read by the runner's frozenprobe and mirrorprobe.
     /// OBSERVATION ONLY, on FlowFieldBuilds' terms: it is rebuilt at the start
     /// of every SeparationSystem, never read by the sim, never hashed and
     /// never saved, so a world made by Load reads it empty until it steps.</summary>

@@ -56,13 +56,13 @@ using Ferrostorm.Sim;
 //   aiairgate          - P8-13, F3: three Strike Flyers raiding harvesters from t=4500 on skirmish-01 die and an AI harvester survives them, Normal and Hard, both factions, each beside a printed no-raid control (binding since P8-17)
 //   seatfairgate       - P8-13, F5: Normal mirrors on every two-seat map with starts swapped keep each seat's income within 15 per cent and the win split within 60/40 by seat and by start (non-binding until F5 is met: P8-21 oriented the placement scan and left both clauses unmet, ADR-075)
 //   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts);
-//                        seats=4 (P8-66) plays the four-seat maps with every seat, seat 0 against each other seat under the reflection or half turn relating their starts, then each seat's income to t=9000
+//                        seats=4 (P8-66, ADR-078) plays the four-seat maps with every seat, seat 0 against each other seat under the reflection or half turn relating their starts, then each seat's income to t=9000
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
-//   frozenprobe        - P8-66: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
+//   frozenprobe        - P8-66, ADR-078: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
 //                        rebaseline=1 prints the proxy budget lines for the matches as they play now
@@ -2276,6 +2276,130 @@ int SelfTest()
         Console.WriteLine($"selftest: /data/fields reproduces the compiled ferrite regrowth twin exactly ({World.DefaultRegrowAmount} per {World.DefaultRegrowIntervalTicks} ticks)");
     }
     else return Fail("selftest: data/fields not found, regrowth tuning; this proof must not be skipped");
+
+    // P8-66 (ADR-078): exact cancellations in a 96-cell world, each beside its
+    // images under every symmetry the tie-break must keep: the half turn
+    // (ADR-076's two-seat maps), the reflection in either centre line
+    // (skirmish-09's seats) and the reflection in the diagonal (the balance
+    // tool's mirror arena). A walker ordered straight past a standing unit,
+    // along the line through both centres, is pushed back as far as it steps:
+    // east and west along a row and north-east on a diagonal (mission-01's
+    // harvester was the diagonal). Two walkers meeting head on along a row
+    // push each other back the same way. A straight Move has no stall
+    // backstop, so without the tie-break each stands there for good. With it,
+    // a walker sidesteps to the side its sector picks (every walker here
+    // stands where that is its own right), goes round and arrives, and every
+    // image stays its walker's exact image on every tick, which a sidestep
+    // keyed on the walker's heading alone, on a world axis or on entity ids
+    // would break. One more tie stands on the centre line, where a reflection
+    // maps the walker onto itself: the tie-break must leave it, and its
+    // images, exactly as they are.
+    {
+        const int N = 96;
+        var tw = new World(1, N, N, players: 1);
+        Fix64 Hc(int halves) => Fix64.FromFraction(halves, 2);
+        Fix64 quarter = Fix64.FromFraction(1, 4), size = Fix64.FromInt(N);
+        // The symmetries: 0 the identity, 1 the half turn, 2 the reflection in
+        // x, 3 the reflection in y, 4 the reflection in the diagonal y = x.
+        string[] gName = { "itself", "its half turn", "its reflection in x", "its reflection in y", "its reflection in the diagonal" };
+        (Fix64 X, Fix64 Y) G(int g, Fix64 x, Fix64 y) => g switch
+        {
+            1 => (size - x, size - y),
+            2 => (size - x, y),
+            3 => (x, size - y),
+            4 => (y, x),
+            _ => (x, y),
+        };
+        // Positions in half cells. A tie on the centre line y = 48 is spawned
+        // under the half turn and the diagonal only: the reflection in x maps
+        // it onto its half turn, and the reflection in y onto itself.
+        int[] all = { 0, 1, 2, 3, 4 }, line = { 0, 1, 4 };
+        var stands = new (int X, int Y, int[] Gs)[] { (31, 85, all), (47, 61, all), (49, 77, all), (78, 96, line) };
+        // Kind 0 must sidestep and arrive; kind 1, the head-on pair, must
+        // arrive with at least one tie between them; kind 2 must be left.
+        var paths = new (string Name, int Wx, int Wy, int Tx, int Ty, int Kind, int[] Gs)[]
+        {
+            ("east along a row past a standing unit", 25, 85, 37, 85, 0, all),
+            ("west along a row past a standing unit", 53, 61, 41, 61, 0, all),
+            ("north-east along a diagonal past a standing unit", 45, 81, 53, 73, 0, all),
+            ("east along a row, head on into a walker going west", 17, 69, 33, 69, 1, all),
+            ("west along a row, head on into a walker going east", 33, 69, 17, 69, 1, all),
+            ("east along the centre line past a standing unit", 72, 96, 84, 96, 2, line),
+        };
+        foreach (var (sx, sy, gs) in stands)
+            foreach (int g in gs)
+            {
+                var (x, y) = G(g, Hc(sx), Hc(sy));
+                tw.SpawnUnit(0, x, y, quarter, hp: 100, ArmourClass.Light, weaponId: 0);
+            }
+        var walkers = new List<(string Name, int[] Ids, int[] Gs, Fix64 Tx, Fix64 Ty, int Hx, int Hy, int Kind)>();
+        var orders = new List<Command>();
+        foreach (var p in paths)
+        {
+            var ids = new int[gName.Length];
+            foreach (int g in p.Gs)
+            {
+                var (x, y) = G(g, Hc(p.Wx), Hc(p.Wy));
+                var (tx, ty) = G(g, Hc(p.Tx), Hc(p.Ty));
+                ids[g] = tw.SpawnUnit(0, x, y, quarter, hp: 100, ArmourClass.Light, weaponId: 0);
+                orders.Add(new Command(0, 0, CommandType.Move, ids[g], tx, ty));
+            }
+            walkers.Add((p.Name, ids, p.Gs, Hc(p.Tx), Hc(p.Ty), p.Tx - p.Wx, p.Ty - p.Wy, p.Kind));
+        }
+        var tied = new HashSet<int>();
+        var before = new (Fix64 X, Fix64 Y)[walkers.Count];
+        for (int tick = 0; tick < 200; tick++)
+        {
+            for (int k = 0; k < walkers.Count; k++) before[k] = (tw.Entities[walkers[k].Ids[0]].X, tw.Entities[walkers[k].Ids[0]].Y);
+            tw.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(orders));
+            orders.Clear();
+            for (int k = 0; k < walkers.Count; k++)
+            {
+                var (name, ids, gs, _, _, hx, hy, kind) = walkers[k];
+                var a = tw.Entities[ids[0]];
+                foreach (int g in gs)
+                {
+                    var b = tw.Entities[ids[g]];
+                    var (ix, iy) = G(g, a.X, a.Y);
+                    if (b.X != ix || b.Y != iy)
+                        return Fail($"P8-66 (ADR-078): the walker {name} and {gName[g]} part at t={tw.Tick}: the image stands at "
+                                    + $"({b.X},{b.Y}) where the walker's image is ({ix},{iy}), so the tie-break splits mirrored seats");
+                }
+                // On its first tie the part of its move across its heading
+                // (hx, hy) must point to its right, (-hy, hx) on screen; on the
+                // centre line it must not move across at all.
+                if (tw.ExactTiesThisTick.Contains(ids[0]) && tied.Add(ids[0]))
+                {
+                    Fix64 across = (a.X - before[k].X) * Fix64.FromInt(-hy) + (a.Y - before[k].Y) * Fix64.FromInt(hx);
+                    if (kind == 2 ? across != Fix64.Zero : across <= Fix64.Zero)
+                        return Fail($"P8-66 (ADR-078): the walker {name} was in an exact cancellation at t={tw.Tick} and moved from "
+                                    + $"({before[k].X},{before[k].Y}) to ({a.X},{a.Y}), "
+                                    + (kind == 2 ? "across its line, where the tie must be left" : "not to its own right (y grows downwards)"));
+                }
+            }
+        }
+        foreach (var (name, ids, _, tx, ty, _, _, kind) in walkers)
+        {
+            var a = tw.Entities[ids[0]];
+            if (kind == 2)
+            {
+                if (!a.Moving || a.X == tx || a.Y != ty || !tw.ExactTiesThisTick.Contains(ids[0]))
+                    return Fail($"P8-66 (ADR-078): the walker {name} was not left in its tie: at t={tw.Tick} it stands at ({a.X},{a.Y}) "
+                                + $"{(a.Moving ? "Moving" : "stopped")}, its target ({tx},{ty})");
+                continue;
+            }
+            if (a.Moving || a.X != tx || a.Y != ty)
+                return Fail($"P8-66 (ADR-078): the walker {name}, whose step a separation push exactly undoes, "
+                            + $"never arrived: at t={tw.Tick} it stands at ({a.X},{a.Y}) {(a.Moving ? "still Moving" : "stopped")}, short of ({tx},{ty})");
+            if (kind == 0 && !tied.Contains(ids[0]))
+                return Fail($"P8-66 (ADR-078): the walker {name} arrived without a tie, so this test no longer builds an exact cancellation");
+        }
+        if (!tied.Contains(walkers[3].Ids[0]) && !tied.Contains(walkers[4].Ids[0]))
+            return Fail("P8-66 (ADR-078): the head-on walkers passed without a tie, so this test no longer builds a head-on tie");
+        Console.WriteLine("selftest: P8-66 (ADR-078) an exact cancellation past a standing unit on a row each way and on a diagonal, "
+                          + "and head on, is sidestepped as its sector picks and every walker arrives, the exact image of its twins "
+                          + "under the half turn and the reflections in x, y and the diagonal; on the centre line the tie is left");
+    }
 
     // Map loader (TICKET-P2-DATA-03): the committed skirmish map round-trips.
     string mapFile = Path.GetFullPath(Path.Combine(root, "data/maps/skirmish-01.fmap"));
@@ -17533,7 +17657,7 @@ int PillarProbe()
 
 int FrozenProbe()
 {
-    // P8-66: WALKERS THAT REPORT MOVING AND DO NOT MOVE, over
+    // P8-66 (ADR-078): WALKERS THAT REPORT MOVING AND DO NOT MOVE, over
     // pillargate's sweep (every shipped map, the four faction pairings, both
     // start orientations, Normal against Normal, to 27000 ticks or a result).
     // P8-53's measurement-only counter, promoted: a unit or harvester of seat 0
@@ -17997,7 +18121,7 @@ int MirrorProbe()
     // ADR-076 the breaks measured after each of its stages.
     string root = MeasureRoot();
     var o = MeasureOptions("mirrorprobe", false, "maps", "pairs", "ticks", "show", "seats");
-    // P8-66: seats=4 plays the four-seat maps instead, comparing
+    // P8-66 (ADR-078): seats=4 plays the four-seat maps instead, comparing
     // seat 0 with each other seat under the map symmetry that relates them.
     int seatCount = OptInt(o, "seats", 2);
     if (seatCount == 4) return MirrorProbeFour(root, o);
@@ -18118,12 +18242,13 @@ int MirrorProbe()
 
 int MirrorProbeFour(string root, Dictionary<string, string> o)
 {
-    // P8-66: mirrorprobe on the FOUR-seat maps (seats=4). A mirror2
+    // P8-66 (ADR-078): mirrorprobe on the FOUR-seat maps (seats=4). A mirror2
     // map relates seat 0 to one seat by the half turn and to the other two by
     // a reflection in one axis each, and ADR-075's per-axis placement frames
-    // and ADR-076's per-axis rules are exact under both kinds; P8-66's
-    // tie-break for an exact cancellation must be too, which is what this
-    // probe is for. This plays all four seats (seat 0's side on
+    // and ADR-076's per-axis rules are exact under both kinds. So is
+    // movement's tie-break for an exact cancellation, which picks its side by
+    // the sector the walker stands in, except on a centre line or a diagonal,
+    // where it leaves the tie. This plays all four seats (seat 0's side on
     // even seats and seat 1's on odd ones, so DD and SS are four-way mirrors)
     // and, after every step, compares seat 0 with each other seat under the
     // symmetry relating their starts, exactly as the two-seat probe compares
@@ -18724,10 +18849,13 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-64 landed
-    /// (ADR-076 clause 3, re-landed under decision D38: produced units exit in
-    /// the producer's own frame, which moves every match with a producer past
-    /// the map centre; with P8-53 landed, ADR-077's multiplication truncating
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-66 landed
+    /// (ADR-078: a walker whose step a separation push exactly undoes
+    /// sidesteps to the side its sector picks, which moves every match with
+    /// such a tie; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
+    /// produced units exit in the producer's own frame, which moves every
+    /// match with a producer past the map centre, they read 223650, 54910 and
+    /// 138277; with P8-53 landed, ADR-077's multiplication truncating
     /// toward zero, which moves every match in which a negative product's low
     /// bits are not zero, they read 313102, 54855 and 155297; with ADR-075's
     /// frame flipped to the sheltered one, its amendment
@@ -18760,9 +18888,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 223650),
-        ("skirmish-08", 54910),
-        ("skirmish-09", 138277),
+        ("skirmish-07", 313148),
+        ("skirmish-08", 54894),
+        ("skirmish-09", 87023),
     };
 }
 
