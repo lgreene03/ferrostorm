@@ -6721,6 +6721,8 @@ public partial class VerifyRunner : Node
     /// and holds that thread there long enough for the joiner's connect to land,
     /// which is the widest the window can be. Publishing before the host's seat
     /// is claimed then loses every time, and publishing after it can never lose.
+    /// RunHostLineStage, called last, checks the row's other half: no line names
+    /// the port before the host holds its seat.
     /// </summary>
     private void RunLobbySeatStage()
     {
@@ -6802,7 +6804,83 @@ public partial class VerifyRunner : Node
         {
             Check(false, $"hostseat: the lobby threw: {ex.Message}");
         }
+        RunHostLineStage(hosted);
     }
+
+    /// <summary>
+    /// P8-67, the other half of the row: NOTHING NAMES THE PORT BEFORE THE HOST
+    /// HOLDS SEAT 0, neither the lobby's status line nor the menu's line a player
+    /// reads the port from. The lobby's relayBoundForTest hook holds the host's
+    /// connect thread with the relay bound and the seat not yet claimed, the
+    /// window a joiner could take seat 0 in; the real menu, with HOST GAME's own
+    /// path handed that lobby, is polled there through its own _Process, and both
+    /// lines must name no port. Released, the seat is claimed and the port
+    /// published, and both must then name it, so a blank line cannot pass.
+    /// </summary>
+    private void RunHostLineStage(MatchSetup hosted)
+    {
+        MainMenu? menu = null;
+        LanLobby? host = null;
+        var bound = new System.Threading.ManualResetEventSlim(false);
+        var release = new System.Threading.ManualResetEventSlim(false);
+        int boundPort = 0;
+        try
+        {
+            menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(menu);
+            menu.OpenLanForTest();
+            host = LanLobby.Host(hosted, port: 0, relayBoundForTest: p =>
+            {
+                System.Threading.Volatile.Write(ref boundPort, p);
+                bound.Set();
+                release.Wait(5000);
+            });
+            menu.HostLobbyForTest(host);
+            bool held = bound.Wait(5000);
+            menu._Process(0.0);
+            int port = System.Threading.Volatile.Read(ref boundPort);
+            bool publishedHeld = host.PortPublished;
+            string statusHeld = host.Status, lineHeld = menu.LanStatusForTest;
+            release.Set();
+            Check(held && port > 0,
+                  $"hostseat/lines: precondition: the hook held the host's thread with the relay bound and its seat "
+                  + $"unclaimed (held {held}, port {port})");
+            Check(held && !publishedHeld && !NamesPort(statusHeld, port) && !NamesPort(lineHeld, port),
+                  $"hostseat/lines: with the relay bound on port {port} and the host's seat not yet claimed, nothing names "
+                  + $"a port: the lobby says \"{statusHeld}\" and the menu \"{lineHeld.Replace('\n', ' ')}\" "
+                  + $"(published {publishedHeld})");
+
+            long deadline = System.Environment.TickCount64 + 5000;
+            while (!host.PortPublished && host.State == LanLobby.Phase.Connecting
+                   && System.Environment.TickCount64 < deadline)
+                System.Threading.Thread.Sleep(1);
+            menu._Process(0.0);
+            string statusAfter = host.Status, lineAfter = menu.LanStatusForTest;
+            // The menu names the fixed port a real lobby binds, which is the
+            // one HOST GAME asks for; this lobby is on an ephemeral one.
+            Check(host.PortPublished && host.RelayPortForTest == port && statusAfter.Contains($"port {port}")
+                  && lineAfter.Contains(LanLobby.DefaultPort.ToString()),
+                  $"hostseat/lines: released, the seat is claimed and the port published, and both name it: the lobby "
+                  + $"\"{statusAfter}\" and the menu's host line \"{lineAfter.Replace('\n', ' ')}\" "
+                  + $"(published {host.PortPublished}, port {host.RelayPortForTest})");
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"hostseat/lines: the stage threw: {ex.Message}");
+        }
+        finally
+        {
+            release.Set();
+            host?.Cancel();
+            menu?.QueueFree();
+        }
+    }
+
+    /// <summary>P8-67: whether a line names a port: the word, the port the
+    /// relay bound, or the fixed port the menu's host line names.</summary>
+    private static bool NamesPort(string text, int port) =>
+        text.Contains("port") || (port > 0 && text.Contains(port.ToString()))
+        || text.Contains(LanLobby.DefaultPort.ToString());
 
     /// <summary>P8-67: wait for a host and a joiner to reach a match and read the
     /// seats the relay gave them. False when either end failed or never got there.</summary>

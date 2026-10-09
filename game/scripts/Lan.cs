@@ -301,9 +301,13 @@ public sealed class LanLobby
     /// moment of publication with the published port, before anything else
     /// happens on that thread; the harness uses it to dial a joiner and hold the
     /// host's thread there, which is the widest that window can be made.
+    /// relayBoundForTest, when given, is called on the connect thread once the
+    /// relay has bound and before the host claims its seat, with the bound port:
+    /// the window a joiner could take seat 0 in, held open by the harness while
+    /// it reads what this lobby's status and the menu's line say there.
     /// </summary>
     public static LanLobby Host(MatchSetup setup, int port = DefaultPort,
-        System.Action<int>? portPublishedForTest = null)
+        System.Action<int>? portPublishedForTest = null, System.Action<int>? relayBoundForTest = null)
     {
         var lobby = new LanLobby();
         // The host builds from a ROUND-TRIPPED setup rather than from its own
@@ -340,6 +344,7 @@ public sealed class LanLobby
                 lobby._relay = relay;
                 relay.Start();
                 if (lobby._cancelled) { seat.Close(); relay.Stop(); return; }
+                relayBoundForTest?.Invoke(relay.Port);
                 // Seat 0 is the host's from the moment this returns (HostSeat
                 // says why), and not one instruction earlier.
                 seat.Claim(relay.Port);
