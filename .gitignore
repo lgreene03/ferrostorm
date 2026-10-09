@@ -52,6 +52,5 @@ game/assets/models/*_emit.png.import
 build/
 
 # Agents' persistent memory, which the project's rules forbid committing.
-# Verifiers found it untracked and unignored in shared worktrees nineteen
-# times.
+# Verifiers kept finding it untracked and unignored in shared worktrees.
 .claude/agent-memory/
