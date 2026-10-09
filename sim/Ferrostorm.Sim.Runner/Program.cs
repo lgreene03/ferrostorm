@@ -60,12 +60,13 @@ using Ferrostorm.Sim;
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
-//   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); on demand, not in match
+//   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
 //                        rebaseline=1 prints the proxy budget lines for the matches as they play now
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
-//                        its elapsed time; the gates take --bind for one binding run. None is in golden, match, determinism or CI.
+//                        its elapsed time; the gates take --bind for one binding run. aiairgate and cheesegate run in match (P8-17)
+//                        and pillargate --bind in CI (P8-72); the rest are in none of golden, match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -4507,7 +4508,21 @@ int MapGate()
     // golden scenario loads skirmish-02 or skirmish-04). This walks EVERY
     // committed map, builds the real opening hand on it, and plays both AIs.
     // Additive, never a golden scenario, so the golden list stays 24.
-    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    //
+    // P8-73: the root is FOUND by RepoRoot's walk up from the binary to the
+    // first directory carrying data/units, data/buildings and data/maps, the
+    // rule selftest and the P8-13 harness already use. The fixed
+    // "../../../../.." hop it replaces named whatever sat five levels above the
+    // binary, so a runner copied to another depth read another checkout's
+    // /data (a worktree's binary two levels down reads the main checkout's)
+    // and failed match on maps it was never built against. No landmark
+    // directory anywhere above is a refusal by name, never a guess.
+    string? found = RepoRoot();
+    if (found == null)
+        return Fail($"mapgate: repository root not found walking up from {AppContext.BaseDirectory} "
+            + "(looked for data/units, data/buildings and data/maps), so there are no committed maps to check; "
+            + "refusing rather than reading whatever directory a fixed hop lands on");
+    string root = found;
     string mapDir = Path.Combine(root, "data", "maps");
     var maps = Directory.GetFiles(mapDir, "*.fmap");
     Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
@@ -17585,8 +17600,10 @@ int PillarGate()
     // --bind makes both binding for one run whatever the switches say.
     //
     // NOT in match: the full sweep is 72 whole AI matches played to 27000
-    // ticks or a result, under a minute on ten threads and several on a CI
-    // runner. maps=, pairs=, orient= and jobs= run a subset.
+    // ticks or a result, under a minute on ten threads and an estimated 1.5 to
+    // 2.5 minutes on a CI runner, so --bind runs in tools/ci-local.sh and as
+    // the last step of CI's ubuntu determinism leg instead (P8-72). maps=,
+    // pairs=, orient= and jobs= run a subset.
     string root = MeasureRoot();
     var o = MeasureOptions("pillargate", true, "maps", "pairs", "orient", "jobs");
     bool bindAll = o.ContainsKey("bind");

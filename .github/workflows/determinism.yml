@@ -145,6 +145,20 @@ jobs:
         run: |
           dotnet build tools/Ferrostorm.Balance -c Release
           dotnet run --project tools/Ferrostorm.Balance -c Release --no-build
+      # P8-72: F8's two binding halves, the superweapon's launch rate and its
+      # first launch (ADR-073, D33). P8-64's first landing took the first launch
+      # under its bar with every automated signal green, because this gate ran
+      # only when someone remembered it. It is 72 whole AI matches: 54.6 s on
+      # four threads of the machine that measured it, whose cores run the pure
+      # CPU determinism step about twice as fast as a runner's, so about 1.5 to
+      # 2.5 minutes here against a budget of 4. The verdict reads no clock, so a
+      # slow runner changes its time and never its answer. ONE leg, because F8
+      # is a property of the deterministic sim, which the golden step holds
+      # identical on both platforms; the Windows leg would double the minutes
+      # and add nothing.
+      - name: F8 superweapon pacing, binding (pillargate --bind, P8-72)
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- pillargate --bind
 
   # The headless CLIENT harness. It boots the REAL battle scene, drives it from
   # the joiner's seat and asserts on what it does; it has caught TEN defects
