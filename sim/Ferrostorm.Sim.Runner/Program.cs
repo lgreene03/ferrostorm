@@ -3589,6 +3589,82 @@ int SpawnGate()
         }
     }
 
+    // P8-70 (ADR-076, "What remains asymmetric"; the Architect's condition C5 on
+    // D38's pull request): THE FREE HARVESTER'S CLAMP IS MIRROR-EXACT. A bought
+    // refinery delivers its harvester to the cell beside the corner facing the
+    // map centre (P8-63), and a guard clamps that delivery to the map. The guard
+    // clamped the POINT to [0, width - 1], whose reflection is [1, width], so on
+    // a map small enough to bind it a refinery and its mirror delivered at
+    // points that were not each other's mirror. It binds on an axis at most two
+    // cells longer than the footprint, so each pair below is a world on a map
+    // THREE cells across one axis and its own reflection in that axis, the base
+    // reflected with it, one purchase each. Seat 0's refinery stands at the
+    // near edge, so its harvester goes past the far edge into the last column,
+    // whose centre lies beyond width - 1: that it lands in that column is
+    // asserted first (true under either clamp), so the pair is known to reach
+    // the clamp. The image of a point p on an axis of length n is n - p, and the
+    // geometry comes from the map and the footprints alone.
+    {
+        const int Refinery = 3;
+        (Fix64 X, Fix64 Y, bool Blocked)? Bought(ulong seed, int width, int height, bool mirrorX, bool mirrorY,
+                                                  (int X, int Y) cyAt, (int X, int Y) plantAt, (int X, int Y) refAt)
+        {
+            var w = new World(seed, width, height, 2);
+            int fy = w.FootprintOf(4), fp = w.FootprintOf(World.DirectoratePlantStructType);
+            int fr = w.GetStructureType(Refinery).Footprint;
+            int Mx(int a, int f) => mirrorX ? width - f - a : a;
+            int My(int a, int f) => mirrorY ? height - f - a : a;
+            int cy = w.SpawnConstructionYard(0, Mx(cyAt.X, fy), My(cyAt.Y, fy));
+            w.SpawnPowerPlant(0, Mx(plantAt.X, fp), My(plantAt.Y, fp), supply: 5000);
+            w.GrantCredits(0, 100000);
+            var rd = w.GetStructureType(Refinery);
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.BuildStructure, cy, Fix64.Zero, Fix64.Zero, Refinery) });
+            for (int t = 0; t < rd.BuildTicks * 4 + 400 && w.Entities[cy].ReadyStructure != Refinery; t++) w.Step(default);
+            if (w.Entities[cy].ReadyStructure != Refinery) return null;
+            int first = w.EntityCount;
+            w.Step(new[] { new Command(w.Tick, 0, CommandType.PlaceStructure, cy,
+                                       Map.CellCentre(Mx(refAt.X, fr)), Map.CellCentre(My(refAt.Y, fr)), Refinery) });
+            for (int i = first; i < w.EntityCount; i++)
+            {
+                var h = w.Entities[i];
+                if (h.Alive && h.Kind == EntityKind.Harvester && h.PlayerId == 0)
+                    return (h.X, h.Y, w.Map.IsBlocked(Map.CellOf(h.X), Map.CellOf(h.Y)));
+            }
+            return null;
+        }
+        foreach (bool alongY in new[] { false, true })
+        {
+            // Three cells across the reflected axis and twenty along the other;
+            // the yard, the plant and the refinery in a line down the long axis,
+            // the refinery seven cells from the yard (inside its build radius)
+            // and short of the long axis's centre, so that axis is no tie.
+            int width = alongY ? 20 : 3, height = alongY ? 3 : 20;
+            (int X, int Y) At(int across, int along) => alongY ? (along, across) : (across, along);
+            string axis = alongY ? "y" : "x";
+            var a = Bought(4100, width, height, false, false, At(0, 1), At(0, 4), At(0, 8));
+            var b = Bought(4100, width, height, !alongY, alongY, At(0, 1), At(0, 4), At(0, 8));
+            if (a is not { } ha || b is not { } hb)
+                return Fail($"spawngate: a refinery bought on a map three cells across {axis} delivered no harvester, so the "
+                            + "P8-70 stage cannot ask its question");
+            int n = alongY ? height : width;
+            Fix64 across = alongY ? ha.Y : ha.X;
+            if (Map.CellOf(across) != n - 1)
+                return Fail($"spawngate: seat 0's free harvester on the {width} by {height} map stands at {across} on {axis}, "
+                            + $"outside the last cell ({n - 1}), whose centre lies past {n - 1}, so this pair never reaches "
+                            + "the clamp it is here to test (P8-70)");
+            Fix64 full = Fix64.FromInt(n);
+            bool mirrored = alongY
+                ? hb.X == ha.X && hb.Y == full - ha.Y
+                : hb.X == full - ha.X && hb.Y == ha.Y;
+            if (!mirrored)
+                return Fail($"spawngate: a refinery at the edge of a {width} by {height} map delivered its free harvester at "
+                            + $"({ha.X},{ha.Y}) and its reflection in {axis} delivered at ({hb.X},{hb.Y}), which is not the "
+                            + $"reflection of the first: SpawnFreeHarvester's clamp is not mirror-exact (P8-70, ADR-076)");
+            if (ha.Blocked || hb.Blocked)
+                return Fail($"spawngate: a free harvester on the {width} by {height} map was delivered inside a blocked cell (P8-70)");
+        }
+    }
+
     Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically) and a BARRACKS now accepts it too (ADR-009 clause 5, B2's deferred question answered); " +
                       "3 rallied rifles left the barracks mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
                       "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
@@ -3599,7 +3675,9 @@ int SpawnGate()
                       "and two reflected in one axis only, on a map that is not square, at exactly that reflection (P8-64, ADR-076 clause 3, C6); " +
                       "and walled in but for the one cell beside them facing the centre, in x and then in y, which the fixed ring never reaches, " +
                       "barracks on the half turn and on each single axis released their rifles into it on the tick they finished, as each other's images " +
-                      "(P8-64, ADR-076 clause 3 as amended under D38, C1)");
+                      "(P8-64, ADR-076 clause 3 as amended under D38, C1); " +
+                      "and on maps three cells across x and then y, a refinery bought at the edge and its reflection delivered their free harvesters " +
+                      "past the last column's bound and at exactly each other's reflection, the clamp holding the mirror (P8-70)");
     return 0;
 }
 

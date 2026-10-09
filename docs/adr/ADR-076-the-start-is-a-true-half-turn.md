@@ -310,3 +310,30 @@ The alternatives considered for clause 3 itself are kept for its re-landing. **R
 - C5: `mapgate` fails naming the map and clause 1's reversal on a start that is not an image of start 0, and on an empty hand; both refusals are asserted inside the gate on a synthetic edge-midpoint four-seat map and a hand-less skirmish-01, and shown to bite.
 - C6: `freeharvestergate` stage 4 adds single-axis pairs on a 64 by 48 map and is shown to fail with the y frame read off `Map.Width`, the x frame read off `Map.Height`, and the frames exchanged. spawngate's single-axis check travels with clause 3.
 - C7: clause 2's reversal names `pillarprobe`, which prints the count (0 Idle and 0 stranded of 534 checked at the head); clause 3's reversal goes with clause 3 and is made measurable when it re-lands.
+
+## Amendment, 2026-10-09: the free harvester's clamp is mirror-exact (P8-70)
+
+"What remains asymmetric" listed `SpawnFreeHarvester`'s clamp, which bounded the
+delivery POINT to [0, width - 1], whose reflection is [1, width]. It now bounds
+the delivery CELL to [0, width - 1] and takes that cell's centre, so the point
+lies in [0.5, width - 0.5], which is its own reflection (a cell c reflects to
+width - 1 - c, and clause 2's frame rule already maps the delivery cell that
+way off the centre lines). The same holds on y.
+
+The row offered a second route, showing the clamp unreachable and removing it,
+and it is not open: the old clamp bound on any axis at most two cells longer
+than the refinery's footprint (a 2x2 refinery at the near edge of a map three
+cells wide delivers into the last column, whose centre 2.5 it cut to 2.0 while
+the mirror delivered at 0.5), and the map loader accepts any positive size.
+The new clamp binds only on an axis exactly as long as the footprint, where the
+refinery fills the axis; it stays as the guard for that case.
+
+Measured: goldens 25 of 25 byte-identical, as clause 2's sign-off predicted,
+because no golden buys a refinery on so small a map. `spawngate` (in `match`)
+gains the stage: on maps 3 by 20 and 20 by 3, a base and its own reflection in
+the short axis each buy one refinery at the edge; the first harvester must land
+in the last cell of that axis, and the two must be each other's reflection,
+raw. With the old clamp it fails naming the 3 by 20 pair, (2.0, 10.5) against
+(0.5, 10.5), and with the old clamp on y alone it fails naming the 20 by 3 pair.
+The centre-line tie and `SetExitMove`'s clamp (row P8-69) remain as listed
+above.

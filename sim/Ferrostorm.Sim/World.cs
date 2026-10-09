@@ -655,16 +655,24 @@ public sealed partial class World
         // corner, the convention of every other spawn path, rather than on the
         // corner point: the corner point's exact reflection is the refinery's
         // own top-left corner, which Map.CellOf (a floor) puts inside the
-        // blocked footprint, so a reflected corner point could not route. The
-        // clamp cannot bind on any map more than four cells wide (the cell
-        // beside a centre-facing corner is always in bounds) and is kept as a
-        // guard.
+        // blocked footprint, so a reflected corner point could not route.
+        //
+        // P8-70: the guard clamps the CELL to the map, [0, width - 1], and then
+        // takes its centre, so the point lies in [0.5, width - 0.5], which is
+        // its own reflection (a cell c reflects to width - 1 - c). It clamped
+        // the POINT to [0, width - 1], whose reflection is [1, width], so a
+        // refinery at one edge of a map three cells wide delivered into the last
+        // column at 2.0 while its mirror delivered into the first at 0.5. This
+        // clamp binds only on an axis exactly as long as the footprint; the old
+        // one bound on axes up to two cells longer, which the map loader accepts
+        // (it asks only for a positive size), so neither was unreachable and the
+        // guard is kept, now one that holds the mirror on the day it binds.
         var def = GetStructureType(3);
         int hx = 2 * ax + def.Footprint > Map.Width ? ax - 1 : ax + def.Footprint;
         int hy = 2 * ay + def.Footprint > Map.Height ? ay - 1 : ay + def.Footprint;
-        Fix64 x = Fix64.Clamp(Map.CellCentre(hx), Fix64.Zero, Fix64.FromInt(Map.Width - 1));
-        Fix64 y = Fix64.Clamp(Map.CellCentre(hy), Fix64.Zero, Fix64.FromInt(Map.Height - 1));
-        SpawnHarvester(player, x, y);
+        hx = Math.Clamp(hx, 0, Map.Width - 1);
+        hy = Math.Clamp(hy, 0, Map.Height - 1);
+        SpawnHarvester(player, Map.CellCentre(hx), Map.CellCentre(hy));
     }
 
     public int SpawnRefinery(int player, int ax, int ay)
