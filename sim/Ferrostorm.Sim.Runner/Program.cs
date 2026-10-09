@@ -2045,6 +2045,16 @@ int SelfTest()
     var two = Fix64.FromInt(2);
     if ((two * Fix64.FromInt(3)).ToIntRound() != 6) return Fail("Fix64 mul");
     if ((Fix64.FromInt(7) / two).Raw != Fix64.FromInt(7).Raw / 2) return Fail("Fix64 div");
+    // P8-53 (ADR-077): the product truncates toward zero, so negating either
+    // factor negates the product exactly. The pin is the smallest case that
+    // tells the rules apart: one unit in the last place times a half is -2^31
+    // before the shift, which a floor rounds to -1 and truncation to 0.
+    if ((new Fix64(-1) * Fix64.Half).Raw != 0) return Fail("Fix64 mul: a negative product truncates toward zero (ADR-077)");
+    var mx = Fix64.FromFraction(7, 3); var my = Fix64.FromFraction(-5, 11);
+    if (mx * my != -(mx * -my) || (-mx) * (-my) != mx * my || mx * my != my * mx)
+        return Fail("Fix64 mul: negating a factor negates the product exactly (ADR-077)");
+    if ((mx * -my).Raw != (long)(((System.Int128)mx.Raw * -my.Raw) >> Fix64.FracBits))
+        return Fail("Fix64 mul: a product at or above zero is the plain shift, unchanged by ADR-077");
     if (Fix64.FromFraction(1, 2) != Fix64.Half) return Fail("Fix64 fraction");
     if (Fix64.Sqrt(Fix64.FromInt(144)).ToIntRound() != 12) return Fail("Fix64 sqrt");
     var s2 = Fix64.Sqrt(two);
@@ -3024,12 +3034,18 @@ int SpawnGate()
         w.GrantCredits(0, 20000);
         w.SpawnPowerPlant(0, 6, 6);
         int barracks = w.SpawnBarracks(0, 10, 10);
-        // Wall the whole ring: the producer's centre cell is (11,11); block
-        // every spawn candidate. The map, not units, blocks here - the
-        // walled-in case is the one that can persist forever and must stay
-        // honest.
-        foreach (var (dx, dy) in new[] { (0, 2), (1, 2), (-1, 2), (2, 0), (-2, 0), (0, -2), (2, 2), (-2, 2), (2, -2), (-2, -2), (0, 3) })
-            w.Map.SetBlocked(11 + dx, 11 + dy, true);
+        // Wall the whole search: the producer's centre cell is (11,11), and
+        // every open cell within three of its footprint is blocked. That holds
+        // every cell the exit search tries in any frame, the eleven of the
+        // fixed ring and the cells they miss (ADR-076 clause 3 as amended under
+        // D38, which walled only the eleven before the search was closed under
+        // reflection), without the gate reading the search's order. The map,
+        // not units, blocks here - the walled-in case is the one that can
+        // persist forever and must stay honest.
+        int wallFoot = w.FootprintOf(World.BarracksStructType);
+        for (int x = 10 - 3; x < 10 + wallFoot + 3; x++)
+            for (int y = 10 - 3; y < 10 + wallFoot + 3; y++)
+                if (!w.Map.IsBlocked(x, y)) w.Map.SetBlocked(x, y, true);
         w.InvalidateFlowCache();
         cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
         cmds.Add(new Command(0, 0, CommandType.Produce, barracks, Fix64.Zero, Fix64.Zero, 2));
@@ -3060,8 +3076,14 @@ int SpawnGate()
             if (ev.Type == GameEventType.ProductionComplete)
                 return Fail("spawngate: no completion event may fire across 100 held ticks");
         // Free one cell: the mouth clears and the producer resumes THAT tick.
+        // The cell beyond it, (11,14), is freed with it as the way out: the
+        // wall covers everything within three of the footprint, so without it
+        // the released rifle would stand boxed in on the mouth and the second
+        // could never follow. The mouth, (11,13), is still the search's first
+        // cell, so the release is asserted there exactly as before.
         events.Clear();
         w.Map.SetBlocked(11, 13, false);
+        w.Map.SetBlocked(11, 14, false);
         w.InvalidateFlowCache();
         StepN(2);
         if (w.EntityCount != preCount + 1)
@@ -3146,12 +3168,221 @@ int SpawnGate()
         File.Delete(path);
     }
 
+    // 9. P8-64 (ADR-076 clause 3): THE EXIT TURNS WITH THE PRODUCER. Two barracks
+    // that are each other's half turn about the centre of a 64x64 map each
+    // finish a rifle on the same tick, with no rally. Each unit must be set
+    // down at exactly the half turn of the other's spawn point and walk towards
+    // exactly the half turn of the other's exit target, compared as raw
+    // fixed-point values. The geometry is read off the map size and the
+    // footprint (an anchor a of footprint f turns to 64 - f - a, a point p to
+    // 64 - p), never off the rule. The fixed list used to set both down two
+    // cells SOUTH of the centre cell, an even footprint's bottom-right cell,
+    // which fails this by a cell in x and five in y.
+    {
+        const int Size = 64;
+        var w = new World(19, Size, Size, 2);
+        int fb = w.FootprintOf(World.BarracksStructType), fp = w.FootprintOf(World.DirectoratePlantStructType);
+        int Turn(int anchor, int footprint) => Size - footprint - anchor;
+        w.GrantCredits(0, 20000);
+        w.GrantCredits(1, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        w.SpawnPowerPlant(1, Turn(6, fp), Turn(6, fp));
+        int b0 = w.SpawnBarracks(0, 10, 10);
+        int b1 = w.SpawnBarracks(1, Turn(10, fb), Turn(10, fb));
+        cmds.Add(new Command(0, 0, CommandType.Produce, b0, Fix64.Zero, Fix64.Zero, 2));
+        cmds.Add(new Command(0, 1, CommandType.Produce, b1, Fix64.Zero, Fix64.Zero, 2));
+        int first = w.EntityCount;
+        for (int t = 0; t < 75 + 20 && w.EntityCount < first + 2; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        if (w.EntityCount != first + 2)
+            return Fail($"spawngate: the two half-turned barracks produced {w.EntityCount - first} rifles, not 2 on one tick");
+        var u0 = w.Entities[first];
+        var u1 = w.Entities[first + 1];
+        if (u0.PlayerId != 0 || u1.PlayerId != 1)
+            return Fail("spawngate: the half-turned barracks' rifles came out in an unexpected order");
+        Fix64 full = Fix64.FromInt(Size);
+        if (u1.X != full - u0.X || u1.Y != full - u0.Y)
+            return Fail($"spawngate: seat 0's barracks at (10,10) set its rifle down at ({u0.X},{u0.Y}) and its half turn at "
+                        + $"({Turn(10, fb)},{Turn(10, fb)}) at ({u1.X},{u1.Y}), which is not the half turn ({full - u0.X},{full - u0.Y}) "
+                        + "- the exit order does not turn with the producer (P8-64)");
+        if (u1.TargetX != full - u0.TargetX || u1.TargetY != full - u0.TargetY)
+            return Fail($"spawngate: the two half-turned rifles walk out towards ({u0.TargetX},{u0.TargetY}) and ({u1.TargetX},{u1.TargetY}), "
+                        + "which are not each other's half turn - the exit move does not turn with the producer (P8-64)");
+    }
+
+    //    And on ONE axis at a time (ADR-076's Architect condition C6, which said
+    //    spawngate's single-axis check travels with clause 3). The half-turned
+    //    pair above reflects both axes at once, so a rule that swapped them (the
+    //    y frame read off Map.Width, the x frame read off Map.Height, or the x and
+    //    y frames exchanged) would pass it, and so would every two-seat map, all
+    //    of which are half turns; four-seat maps rely on single-axis reflection
+    //    between neighbouring corners (skirmish-09, test-4seat). So three bases
+    //    on a 64 by 48 map, NOT square, each finish a rifle on one tick: seat 1's
+    //    barracks is seat 0's reflection in x only and seat 2's in y only, and
+    //    the rifles and their exit targets must be the same reflections, raw.
+    //    The anchors are freeharvestergate stage 4's, chosen so that each swap
+    //    moves a rifle: seat 0's barracks at x 25 stands short of 32 but past 24,
+    //    and seat 2's at y 30 past 24 but short of 32.
+    {
+        const int W = 64, H = 48;
+        var w = new World(20, W, H, players: 3);
+        int fb = w.FootprintOf(World.BarracksStructType), fp = w.FootprintOf(World.DirectoratePlantStructType);
+        int InX(int anchor, int footprint) => W - footprint - anchor;
+        int InY(int anchor, int footprint) => H - footprint - anchor;
+        for (int p = 0; p < 3; p++) w.GrantCredits(p, 20000);
+        w.SpawnPowerPlant(0, 6, 6);
+        w.SpawnPowerPlant(1, InX(6, fp), 6);
+        w.SpawnPowerPlant(2, 6, InY(6, fp));
+        var anchors = new[] { (X: 25, Y: 16), (X: InX(25, fb), Y: 16), (X: 25, Y: InY(16, fb)) };
+        var bs = new int[3];
+        for (int p = 0; p < 3; p++)
+        {
+            bs[p] = w.SpawnBarracks(p, anchors[p].X, anchors[p].Y);
+            cmds.Add(new Command(0, p, CommandType.Produce, bs[p], Fix64.Zero, Fix64.Zero, 2));
+        }
+        int first = w.EntityCount;
+        for (int t = 0; t < 75 + 20 && w.EntityCount < first + 3; t++)
+        {
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+            cmds.Clear();
+        }
+        if (w.EntityCount != first + 3)
+            return Fail($"spawngate: the three single-axis barracks produced {w.EntityCount - first} rifles, not 3 on one tick");
+        var a = w.Entities[first];
+        var rx = w.Entities[first + 1];
+        var ry = w.Entities[first + 2];
+        if (a.PlayerId != 0 || rx.PlayerId != 1 || ry.PlayerId != 2)
+            return Fail("spawngate: the single-axis barracks' rifles came out in an unexpected order");
+        Fix64 fullW = Fix64.FromInt(W), fullH = Fix64.FromInt(H);
+        if (rx.X != fullW - a.X || rx.Y != a.Y || rx.TargetX != fullW - a.TargetX || rx.TargetY != a.TargetY)
+            return Fail($"spawngate: seat 0's barracks at (25,16) set its rifle down at ({a.X},{a.Y}) bound for ({a.TargetX},{a.TargetY}) "
+                        + $"and its reflection in x at ({anchors[1].X},16) at ({rx.X},{rx.Y}) bound for ({rx.TargetX},{rx.TargetY}), "
+                        + $"which is not the reflection ({fullW - a.X},{a.Y}) bound for ({fullW - a.TargetX},{a.TargetY}) on a {W} by {H} map "
+                        + "- the exit does not reflect with the producer on one axis (P8-64, C6)");
+        if (ry.X != a.X || ry.Y != fullH - a.Y || ry.TargetX != a.TargetX || ry.TargetY != fullH - a.TargetY)
+            return Fail($"spawngate: seat 0's barracks at (25,16) set its rifle down at ({a.X},{a.Y}) bound for ({a.TargetX},{a.TargetY}) "
+                        + $"and its reflection in y at (25,{anchors[2].Y}) at ({ry.X},{ry.Y}) bound for ({ry.TargetX},{ry.TargetY}), "
+                        + $"which is not the reflection ({a.X},{fullH - a.Y}) bound for ({a.TargetX},{fullH - a.TargetY}) on a {W} by {H} map "
+                        + "- the exit does not reflect with the producer on one axis (P8-64, C6)");
+    }
+
+    // 10. P8-64 (ADR-076 clause 3 as amended under D38, the Architect's
+    //     condition C1): THE EXIT SEARCH HAS NO BLIND SPOT. The skirmish-08 trap,
+    //     built on purpose. Every open cell within three of a barracks' footprint
+    //     is walled except ONE: a cell beside the footprint on the side facing
+    //     the map centre (in x, in the row of the footprint's centre cell; then,
+    //     separately, in y, in its column), which none of the fixed ring's eleven
+    //     offsets reaches in the producer's own frame. Measured on skirmish-08
+    //     (the x case), a commander's barracks held a paid unit
+    //     at 100 per cent from t=8840, on and off for thousands of ticks, with
+    //     exactly that cell open. Here each barracks must release its rifle on
+    //     the tick it finishes, into that cell, and the rifles and their exit
+    //     targets must be each other's images, raw: two barracks that are each
+    //     other's half turn on a 64x64 map, then stage 9's three on a 64 by 48
+    //     map, reflected in x only and in y only. Seat 0's open cell is read off
+    //     its anchor and the footprint, and every other seat's off the map's
+    //     reflections, never off the search's order.
+    {
+        int Trap(ulong seed, int width, int height, (int X, int Y)[] anchors, (int X, int Y)[] open, string what)
+        {
+            var w = new World(seed, width, height, players: anchors.Length);
+            int fb = w.FootprintOf(World.BarracksStructType), fp = w.FootprintOf(World.DirectoratePlantStructType);
+            int total = w.GetUnitType(2).BuildTicks * 100;
+            var bs = new int[anchors.Length];
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                w.GrantCredits(p, 20000);
+                // A plant in the seat's own corner, so the barracks runs at full power.
+                w.SpawnPowerPlant(p, anchors[p].X < width / 2 ? 2 : width - fp - 2, anchors[p].Y < height / 2 ? 2 : height - fp - 2);
+                bs[p] = w.SpawnBarracks(p, anchors[p].X, anchors[p].Y);
+            }
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                for (int x = anchors[p].X - 3; x < anchors[p].X + fb + 3; x++)
+                    for (int y = anchors[p].Y - 3; y < anchors[p].Y + fb + 3; y++)
+                        if ((x, y) != open[p] && !w.Map.IsBlocked(x, y)) w.Map.SetBlocked(x, y, true);
+                if (w.Map.IsBlocked(open[p].X, open[p].Y))
+                    return Fail($"spawngate: {what}: seat {p}'s trap cell ({open[p].X},{open[p].Y}) is blocked before the stage starts");
+                cmds.Add(new Command(0, p, CommandType.Produce, bs[p], Fix64.Zero, Fix64.Zero, 2));
+            }
+            w.InvalidateFlowCache();
+            int first = w.EntityCount;
+            for (int t = 0; t < 75 + 20 && w.EntityCount < first + anchors.Length; t++)
+            {
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                cmds.Clear();
+                for (int p = 0; p < anchors.Length; p++)
+                    if (w.QueueLength(bs[p]) > 0 && w.Entities[bs[p]].BuildProgress >= total)
+                        return Fail($"spawngate: {what}: seat {p}'s barracks at ({anchors[p].X},{anchors[p].Y}) held a finished rifle at "
+                                    + $"100 per cent on tick {w.Tick} with the cell beside it on its centre-facing side, "
+                                    + $"({open[p].X},{open[p].Y}), open - the exit search has a blind spot there "
+                                    + "(P8-64, ADR-076 clause 3 as amended under D38, C1)");
+            }
+            if (w.EntityCount != first + anchors.Length)
+                return Fail($"spawngate: {what}: the trapped barracks produced {w.EntityCount - first} rifles, not {anchors.Length} on one tick");
+            var u0 = w.Entities[first];
+            for (int p = 0; p < anchors.Length; p++)
+            {
+                var u = w.Entities[first + p];
+                if (u.PlayerId != p)
+                    return Fail($"spawngate: {what}: the trapped barracks' rifles came out in an unexpected order");
+                if (Map.CellOf(u.X) != open[p].X || Map.CellOf(u.Y) != open[p].Y)
+                    return Fail($"spawngate: {what}: seat {p}'s rifle came out at ({u.X},{u.Y}), not in the one open cell ({open[p].X},{open[p].Y})");
+                // The image of seat 0's rifle under the reflection relating the
+                // two barracks: in x where the anchors differ in x, in y where
+                // they differ in y, both for the half turn.
+                Fix64 ix = anchors[p].X == anchors[0].X ? u0.X : Fix64.FromInt(width) - u0.X;
+                Fix64 iy = anchors[p].Y == anchors[0].Y ? u0.Y : Fix64.FromInt(height) - u0.Y;
+                Fix64 itx = anchors[p].X == anchors[0].X ? u0.TargetX : Fix64.FromInt(width) - u0.TargetX;
+                Fix64 ity = anchors[p].Y == anchors[0].Y ? u0.TargetY : Fix64.FromInt(height) - u0.TargetY;
+                if (u.X != ix || u.Y != iy || u.TargetX != itx || u.TargetY != ity)
+                    return Fail($"spawngate: {what}: seat {p}'s rifle at ({u.X},{u.Y}) bound for ({u.TargetX},{u.TargetY}) is not the image "
+                                + $"({ix},{iy}) bound for ({itx},{ity}) of seat 0's - the trapped exit does not mirror (P8-64, C1)");
+            }
+            return 0;
+        }
+        const int Size = 64, W = 64, H = 48;
+        int fb10 = new World(23, Size, Size, 2).FootprintOf(World.BarracksStructType);
+        // Run twice, with the open cell on the side facing the centre in x and
+        // then in y, so a search closed under one axis's reflection only fails
+        // one of the two. Seat 0 stands short of the centre on both axes, so its
+        // open cell in x is the column just past its footprint (anchor +
+        // footprint) in the row of its bottom-right centre cell (anchor +
+        // footprint - 1), and in y the row just past it in that cell's column.
+        // The image of a cell c on an axis of length n is n - 1 - c.
+        foreach (bool ySide in new[] { false, true })
+        {
+            string side = ySide ? "open in y" : "open in x";
+            (int X, int Y) Open0(int ax, int ay) => ySide ? (ax + fb10 - 1, ay + fb10) : (ax + fb10, ay + fb10 - 1);
+            var h0 = Open0(10, 10);
+            int halfTurn = Trap(23, Size, Size,
+                new[] { (10, 10), (Size - fb10 - 10, Size - fb10 - 10) },
+                new[] { h0, (Size - 1 - h0.X, Size - 1 - h0.Y) },
+                $"the half-turned trap, {side}");
+            if (halfTurn != 0) return halfTurn;
+            var s0 = Open0(25, 16);
+            int oneAxis = Trap(24, W, H,
+                new[] { (25, 16), (W - fb10 - 25, 16), (25, H - fb10 - 16) },
+                new[] { s0, (W - 1 - s0.X, s0.Y), (s0.X, H - 1 - s0.Y) },
+                $"the single-axis trap, {side}");
+            if (oneAxis != 0) return oneAxis;
+        }
+    }
+
     Console.WriteLine("spawngate: SetRally validates (owner + producer only, Move-exact clamp, -1 clears canonically) and a BARRACKS now accepts it too (ADR-009 clause 5, B2's deferred question answered); " +
                       "3 rallied rifles left the barracks mouth and settled at the rally with C naming the producer; a 2-cell rally moved the unit (SPAWN-D3 dead); " +
                       "a v4 save round-tripped live rally state bit-exact and resumed bit-exact, a v3 downgrade loaded rally-unset, a v2 downgrade loaded unchecked; " +
                       "ten units spread to ten distinct cells; a walled-in factory held its paid unit at 100 per cent spending EXACTLY ZERO over 100 ticks, " +
                       "deleted nothing, stalled the line honestly, and released with C the instant a cell freed at exactly 400 credits for two rifles; " +
-                      "a 2-cell rally under occupancy spawned 4+1 units at distinct positions with one at the rally; SetRally round-trips the replay format");
+                      "a 2-cell rally under occupancy spawned 4+1 units at distinct positions with one at the rally; SetRally round-trips the replay format; " +
+                      "two barracks that are each other's half turn set their rifles down, and walk them out, at exactly each other's half turn, " +
+                      "and two reflected in one axis only, on a map that is not square, at exactly that reflection (P8-64, ADR-076 clause 3, C6); " +
+                      "and walled in but for the one cell beside them facing the centre, in x and then in y, which the fixed ring never reaches, " +
+                      "barracks on the half turn and on each single axis released their rifles into it on the tick they finished, as each other's images " +
+                      "(P8-64, ADR-076 clause 3 as amended under D38, C1)");
     return 0;
 }
 
@@ -15320,7 +15551,13 @@ int LanAiSeatsGate()
     // opening hands are now laid out in each start's own frame, so the yards
     // of the three starts right of or below the centre moved a cell towards it
     // and their forces were mirrored on the second axis.
-    const ulong NoAiPinned = 0x1377C844B399DD6DUL;
+    // RE-PINNED by P8-53 (ADR-077), from 0x1377C844B399DD6D: Fix64
+    // multiplication now truncates toward zero, so the negative products in
+    // these 400 ticks of movement round one unit in the last place nearer
+    // zero than they did, and the world hashes differently. The frame
+    // flip before it (ADR-075's amendment) left this hash alone, because no
+    // commander plays here; P8-64 after it leaves it alone too.
+    const ulong NoAiPinned = 0x8CE212EBF6C1FBFBUL;
     ulong controlHash;
     {
         var run = PlayLan(8101, ControlTicks, None);
@@ -15331,8 +15568,9 @@ int LanAiSeatsGate()
                         + $"and 0x{run.Hashes[1]:X16}");
         if (run.Hashes[0] != NoAiPinned)
             return Fail($"lanaiseats control: {ControlTicks} ticks with no commanders hashes 0x{run.Hashes[0]:X16}, "
-                        + $"but before the AI seats existed the identical scenario hashed "
-                        + $"0x{NoAiPinned:X16} - the empty case is no longer a pass-through");
+                        + $"but its pin is 0x{NoAiPinned:X16} (measured with no commanders before the AI seats existed, and "
+                        + "re-pinned since only for named rule changes) - the empty case is no longer a pass-through, "
+                        + "or a rule change has moved the pin and must re-pin it in its own name");
         controlHash = run.Hashes[0];
         for (int seat = HumanSeats; seat < Seats; seat++)
             if (run.SeatGrowth[0][seat] != 0)
@@ -15374,7 +15612,8 @@ int LanAiSeatsGate()
                       + $"generated locally by each peer, ran {AiTicks} ticks to the same hash 0x{agreedHash:X16} with "
                       + $"no desync; those commanders issued {aiOrders[2]} and {aiOrders[3]} orders and grew their "
                       + $"seats by {aiGrowth[2]} and {aiGrowth[3]} entities. With none attached the same scenario "
-                      + $"still hashes 0x{controlHash:X16}, the figure it produced before commanders existed. A peer "
+                      + $"still hashes 0x{controlHash:X16}, its pin (first measured before commanders existed, and "
+                      + "re-pinned since only for named rule changes, each with a note at the pin). A peer "
                       + "given a commander on a different rung was CAUGHT by the relay's hash comparison rather than "
                       + "played on");
     return 0;
@@ -17123,22 +17362,61 @@ int PillarProbe()
     // refinery's footprint: every one ToField, not moving, carry 0, at its
     // delivery point, and none Idle). Each instance is listed, and clause 2
     // reverses if one on a shipped map is found unable to reach its refinery
-    // or a field from the corner it was delivered at. A delivery within the
-    // deadline of its match's end is not checked, and the observer only reads
-    // the world, so the sweep plays exactly as before.
+    // or a field from the corner it was delivered at. One Idle or stranded
+    // when no field with ferrite is left anywhere on the map is counted apart
+    // and tagged (Architect condition C5 on ADR-077): it idles for want of a
+    // field, not for want of a route, so it is not clause 2's reading. A
+    // delivery within the deadline of its match's end is not checked, and the
+    // observer only reads the world, so the sweep plays exactly as before.
     var freeFlagged = new List<string>[specs.Count];
     var freeIdle = new int[specs.Count];
     var freeStranded = new int[specs.Count];
+    var freeNoField = new int[specs.Count];
     var freeChecked = new int[specs.Count];
     var freeBought = new int[specs.Count];
+    // ADR-076 clause 3's reversal, made measurable (Architect condition C7 on
+    // ADR-076): "a producer measured holding finished units at 100 per cent,
+    // where the unreflected order would have released them, more often than
+    // before it". After every step, each barracks, factory or airfield whose
+    // finished unit is still waiting (progress at its total, the head not held
+    // by a unit cap, the producer not switched off) was held this tick because
+    // its exit search found every cell blocked. Each such producer tick is
+    // counted, and then asked, through the sim's own search
+    // (World.ProductionExitOpen), which order would release it NOW: the
+    // unreflected (authored) order alone, or the own-frame search alone. Read
+    // after the step, so a cell freed during the step's movement counts as
+    // open; both orders are asked at the same instant, so the two readings
+    // compare like with like. The counts read the world only, so the sweep
+    // plays exactly as before. Since clause 3's amendment under D38 (C1) the
+    // own-frame search tries the eleven and then the cells they miss, a set
+    // closed under reflection that holds every cell the authored order tries,
+    // so "the unreflected order alone" reads 0 by construction; the reversal
+    // now compares the held total with the same line from a build whose
+    // ProductionSystem asks the authored order (ADR-076, C2).
+    var exitHeld = new long[specs.Count];
+    var exitUnreflectedOnly = new long[specs.Count];
+    var exitReflectedOnly = new long[specs.Count];
     var results = RunOrdered(specs.Count, jobs, i =>
     {
         var s = specs[i];
         var watch = new List<(int Id, int Seat, int Bought, int Cx, int Cy)>();
         var flagged = new List<string>();
-        int bought = 0, checkedN = 0, idleN = 0, strandedN = 0;
+        int bought = 0, checkedN = 0, idleN = 0, strandedN = 0, noFieldN = 0;
+        long held = 0, unreflectedOnly = 0, reflectedOnly = 0;
         var r = PlayMeasured(root, s, w =>
         {
+            for (int k = 0; k < w.EntityCount; k++)
+            {
+                var pe = w.Entities[k];
+                if (!pe.Alive || pe.Kind is not (EntityKind.Barracks or EntityKind.Factory or EntityKind.Airfield)) continue;
+                var q = w.QueueContents(k);
+                if (q.Count == 0 || w.IsDisabled(k)) continue;
+                if (pe.BuildProgress < w.GetUnitType(q[0]).BuildTicks * 100 || w.AtMaxAlive(pe.PlayerId, q[0])) continue;
+                held++;
+                bool own = w.ProductionExitOpen(k, ownFrame: true), authored = w.ProductionExitOpen(k, ownFrame: false);
+                if (authored && !own) unreflectedOnly++;
+                if (own && !authored) reflectedOnly++;
+            }
             foreach (var ev in w.Events)
             {
                 if (ev.Type != GameEventType.StructurePlaced || ev.A < 0 || ev.A + 1 >= w.EntityCount) continue;
@@ -17158,19 +17436,34 @@ int PillarProbe()
                 bool idle = h.Alive && h.HState == HarvestState.Idle;
                 bool stranded = h.Alive && !h.Moving && h.Carry == 0 && h.HState is HarvestState.Idle or HarvestState.ToField
                                 && Map.CellOf(h.X) == cx && Map.CellOf(h.Y) == cy;
-                if (idle) idleN++;
-                if (stranded) strandedN++;
+                // A harvester bought when no field with ferrite is left anywhere
+                // on the map idles for want of a field, not because it cannot
+                // reach one, so it is counted apart (Architect condition C5 on
+                // ADR-077) and the Idle and stranded readings clause 2 reverses
+                // on count only harvesters that still had a field to reach.
+                bool noField = (idle || stranded) && CountFields(w).Fields == 0;
+                if (noField) noFieldN++;
+                else
+                {
+                    if (idle) idleN++;
+                    if (stranded) strandedN++;
+                }
                 if (idle || stranded)
                     flagged.Add($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} o{(s.Swap ? 1 : 0)} seat {seat} (start {StartOf(s, seat)}): "
-                                + $"bought at t={at}, at t={w.Tick} {h.HState}{(stranded ? ", stranded in its delivery cell" : "")} at ({h.X},{h.Y})");
+                                + $"bought at t={at}, at t={w.Tick} {h.HState}{(stranded ? ", stranded in its delivery cell" : "")} at ({h.X},{h.Y})"
+                                + (noField ? ", with no field left on the map" : ""));
                 watch.RemoveAt(k--);
             }
         });
         freeFlagged[i] = flagged;
         freeIdle[i] = idleN;
         freeStranded[i] = strandedN;
+        freeNoField[i] = noFieldN;
         freeChecked[i] = checkedN;
         freeBought[i] = bought;
+        exitHeld[i] = held;
+        exitUnreflectedOnly[i] = unreflectedOnly;
+        exitReflectedOnly[i] = reflectedOnly;
         return r;
     }, (_, r) => Console.WriteLine(PillarLine(r)));
     sw.Stop();
@@ -17203,9 +17496,20 @@ int PillarProbe()
     // ADR-076 clause 2's reversal reads this line (its "What reverses it" names it).
     Console.WriteLine($"pillarprobe: ADR-076 clause 2, free harvesters at ADR-014's deadline ({World.NoProgressDeadline} ticks) "
         + $"after their purchase: {freeIdle.Sum()} still Idle and {freeStranded.Sum()} stranded (motionless and empty in the cell "
-        + $"they were delivered to), of {freeChecked.Sum()} checked, of {freeBought.Sum()} delivered (one delivered within that "
-        + "deadline of its match's end is not checked)");
+        + $"they were delivered to) with a field left on the map, and {freeNoField.Sum()} Idle or stranded with no field left "
+        + $"anywhere on the map (counted apart), of {freeChecked.Sum()} checked, of {freeBought.Sum()} delivered (one delivered "
+        + "within that deadline of its match's end is not checked)");
     foreach (var line in freeFlagged.SelectMany(x => x)) Console.WriteLine(line);
+    // ADR-076 clause 3's reversal reads this line (its "What reverses it" names
+    // it): the held count against the same line with clause 3 reverted, and of
+    // the holds, those only the other order would have released.
+    Console.WriteLine($"pillarprobe: ADR-076 clause 3, producer ticks holding a finished unit at 100 per cent with every exit cell blocked: "
+        + $"{exitHeld.Sum()}, of which the unreflected (authored) order alone would have released {exitUnreflectedOnly.Sum()} and the "
+        + $"own-frame search (its eleven, then the cells they miss) alone {exitReflectedOnly.Sum()} (both read after the step)");
+    for (int i = 0; i < specs.Count; i++)
+        if (exitUnreflectedOnly[i] > 0 || exitReflectedOnly[i] > 0)
+            Console.WriteLine($"  {specs[i].Map} {FactionLetter(specs[i].F0)}{FactionLetter(specs[i].F1)} o{(specs[i].Swap ? 1 : 0)}: "
+                              + $"held {exitHeld[i]}, unreflected order alone would release {exitUnreflectedOnly[i]}, own-frame search alone {exitReflectedOnly[i]}");
     Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
     return 0;
 }
@@ -18015,9 +18319,16 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-63 landed
-    /// (ADR-076: the free harvester at the corner facing the map centre, which
-    /// moves every match that buys a refinery; with P8-62 alone, the opening
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-64 landed
+    /// (ADR-076 clause 3, re-landed under decision D38: produced units exit in
+    /// the producer's own frame, which moves every match with a producer past
+    /// the map centre; with P8-53 landed, ADR-077's multiplication truncating
+    /// toward zero, which moves every match in which a negative product's low
+    /// bits are not zero, they read 313102, 54855 and 155297; with ADR-075's
+    /// frame flipped to the sheltered one, its amendment
+    /// of 2026-10-08 under decision D38, they read 268174, 43896 and 138439;
+    /// with P8-63 landed, ADR-076's free harvester at the corner facing the
+    /// map centre, they read 313482, 65877 and 155083; with P8-62 alone, the opening
     /// hand a true half turn, they read 268451, 44232 and 120654; on main
     /// after the P8-21 pull request, ADR-075, they read 269005,
     /// 44857 and 155592; at 9dd23cd, main after P8-18, they
@@ -18044,9 +18355,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 313482),
-        ("skirmish-08", 65877),
-        ("skirmish-09", 155083),
+        ("skirmish-07", 223650),
+        ("skirmish-08", 54910),
+        ("skirmish-09", 138277),
     };
 }
 

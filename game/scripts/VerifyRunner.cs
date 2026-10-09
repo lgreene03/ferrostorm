@@ -8614,18 +8614,24 @@ public partial class VerifyRunner : Node
                      $"with none in the field two are ordered; the first walks out and the second, finished and paid, is HELD at the "
                      + $"cap, and the barracks says it waits on the cap, not on a blocked exit, once (first {first}, held {heldAtCap}; {holdSaid})");
 
-            // The control: the held hero cancelled (a full refund), every cell
-            // within three of the barracks door taken, and a rifle squad
-            // ordered. Its hold is the blocked exit, and says so.
+            // The control: the held hero cancelled (a full refund), every open
+            // cell within four of the barracks centre taken, and a rifle squad
+            // ordered. Its hold is the blocked exit, and says so. Four, and the
+            // cells right beside the footprint included, because the exit search
+            // (ADR-076 clause 3 as amended under D38) tries every cell its eleven
+            // miss, out to four from an even footprint's centre cell and as near
+            // as the cell beside it; the footprint's own cells are blocked terrain
+            // and skip themselves. The precondition asks the sim's own search, so
+            // a wider search later fails here by name rather than as a hold that
+            // never came.
             g.CancelUnit(hero);
             g.StepOneTick();
             int bx = Map.CellOf(lw.Entities[barracks].X), by = Map.CellOf(lw.Entities[barracks].Y);
             int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
             int blockers = 0;
-            for (int dy = -3; dy <= 3; dy++)
-                for (int dx = -3; dx <= 3; dx++)
+            for (int dy = -4; dy <= 4; dy++)
+                for (int dx = -4; dx <= 4; dx++)
                 {
-                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) < 2) continue;
                     int x = bx + dx, y = by + dy;
                     if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1 || lw.Map.IsBlocked(x, y)) continue;
                     bool taken = false;
@@ -8635,6 +8641,9 @@ public partial class VerifyRunner : Node
                     SpawnOfType(lw, me, rifle, x, y);
                     blockers++;
                 }
+            bool shut = !lw.ProductionExitOpen(barracks, ownFrame: true);
+            DenyGate(shut, "hold",
+                     $"precondition: the {blockers} squads leave the barracks no exit cell its own search would take (ProductionExitOpen {!shut})");
             bool ordered = sb.PressUnitButton(rifle);
             int rifleTotal = lw.GetUnitType(rifle).BuildTicks * 100;
             for (int t = 0; t < lw.GetUnitType(rifle).BuildTicks * 3

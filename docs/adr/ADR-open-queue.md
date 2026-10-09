@@ -197,7 +197,15 @@ the same commit.
   play back unchanged. Signed off with conditions by the Architect on
   2026-10-05; its before-merge conditions C1 to C11 are met in the pull
   request that lands it, and it is ratified under D5 and D36 (D36: it lands
-  before F5 is met).
+  before F5 is met). Its frame clause was amended on 2026-10-08 under its C7
+  and decision D38: once P8-62, P8-63, P8-53 and P8-64 had landed, the
+  sheltered frame scored 28 against 26 of 32, so the canonical frame is now
+  the sheltered one, judged jointly with ADR-077's multiplication. The
+  amendment is covered by the Architect's sign-off with conditions of
+  2026-10-08 on D38's pull request 169 (branch claude/p8-53-trunc-shelter-on;
+  ADR-077's section "Architect sign-off"), and the comparison was read again at that pull
+  request's final head (condition C3): still 28 against 26 of 32 for the
+  sheltered frame.
 - ADR-076: RATIFIED 2026-10-06 - ADR-076-the-start-is-a-true-half-turn.md
   (rows P8-62 and P8-63, ADR-075's causes 1 and 2; row P8-64, cause 4, held
   back under D37). Number claimed here per the numbering law, in the same
@@ -219,4 +227,42 @@ the same commit.
   Signed off with conditions by the Architect on 2026-10-06 (the ADR's
   "Architect sign-off" section); C1 to C7 are met by route A in pull request 166
   (branch claude/p8-62-63-start, rebased from claude/p8-62-63-half-turn),
-  and it is ratified under D5, D36 and D37.
+  and it is ratified under D5, D36 and D37. Clause 3 re-lands on 2026-10-08
+  as stage 3 of D38's pull request 169 (branch claude/p8-53-trunc-shelter-on),
+  with the Architect's C6 (spawngate's single-axis pair) and C7 (pillarprobe
+  prints its reversal measurement) met there; three goldens move in that
+  stage. Its own reversal read met on that head's sample (one skirmish-08
+  game, traced to SpawnOffsets' blind spots about an even footprint; the
+  ADR's section "Clause 3 re-landed (D38)"). The Architect's sign-off with
+  conditions of 2026-10-08 on that pull request (ADR-077's section
+  "Architect sign-off") took the course that keeps the clause, as its condition C1: clause 3
+  is amended in the same pull request as a fourth staged commit, so that after
+  its eleven probes the exit search tries the cells they miss and the set it
+  searches is closed under reflection through the footprint's centre (no
+  golden moves; pillarprobe's held producer ticks fall from 6144 to 0), and
+  its reversal is restated under C2 (the ADR's section "Clause 3 amended
+  under D38"), reading 0 against 0 at the final head.
+- ADR-077: RATIFIED 2026-10-09 - ADR-077-multiplication-truncates-toward-zero.md
+  (row P8-53, ADR-075's cause 3, decision D38). Number claimed here per the
+  numbering law, in the same commit as the draft; 076 is held by P8-62 and
+  P8-63, so 077 is the next free number. `Fix64` multiplication truncates
+  toward zero (`p >= 0 ? p >> 32 : -((-p) >> 32)` on the Int128 product,
+  integer only), so `(-x)*y == -(x*y)` exactly, as division already rounds.
+  Proposed 2026-10-08. Lands as stage 2 of D38's one pull request, 169 (branch
+  claude/p8-53-trunc-shelter-on), after ADR-075's frame flip and before
+  ADR-076 clause 3, judged jointly with them on P8-53's measured matrix:
+  13 goldens move in this stage, one cause, attributed in the ADR; catalogue
+  checksum unchanged; no save or wire change; `lanaiseatsgate`'s control pin
+  re-pinned with a note. A sim rule, so old replays diverge and a mixed-build
+  LAN game desyncs rather than being refused (Q024). It records that F11
+  gets worse (Directorate 6/6 against Sodality 0/6), that the green
+  `mission` golden depends on the sheltered frame avoiding an exact movement
+  tie (row P8-66 filed), and that the F5 gain is one deterministic sample
+  while `mirrorprobe`'s loss of the multiplication split is the robust
+  result. Signed off with conditions by the Architect on 2026-10-08 (the
+  ADR's section "Architect sign-off", with its addendum of 2026-10-09 on
+  pull request 169); conditions C1 to C5 are met in that pull request,
+  which carries four staged commits (the fourth amends ADR-076 clause 3 and
+  moves no golden) and a goldens-neutral commit, and D38, read again at its
+  final head under condition C3, stands. Ratified under D38; C6 is that pull
+  request's CI and merge hygiene.

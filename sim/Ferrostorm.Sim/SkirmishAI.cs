@@ -1367,10 +1367,11 @@ public sealed class SkirmishAI
     /// legal anchor, OLDEST structure first (P7-8, below). ADR-071 clause 3
     /// filters the candidates through KeepsApron. P8-21 (ADR-075, decision D5)
     /// orients the scan to the MAP CENTRE: each anchor's rings are walked in one
-    /// canonical frame, the side facing the centre first, reflected along every
-    /// axis on which that anchor stands short of the centre, so a base in one
-    /// corner lays itself out as the rotation (or, on a mirrored map, the
-    /// reflection) of a base in the opposite one.</summary>
+    /// canonical frame, the sheltered side first since ADR-075's amendment of
+    /// 2026-10-08 (decision D38), reflected along every axis on which that
+    /// anchor stands past the centre, so a base in one corner lays itself out
+    /// as the rotation (or, on a mirrored map, the reflection) of a base in the
+    /// opposite one.</summary>
     private bool TryFindPlacement(World w, int ready, out int ax, out int ay)
     {
         bool placingRefinery = w.GetStructureType(ready).Kind == EntityKind.Refinery;
@@ -1413,7 +1414,7 @@ public sealed class SkirmishAI
             //
             // So the offsets below are written in ONE canonical frame and
             // reflected along each axis on which THIS anchor's centre stands
-            // short of the map's. A base and its rotated twin then try
+            // past the map's. A base and its rotated twin then try
             // mirrored cells in the same order. The reflection is about the
             // anchor's own centre and carries with it the box ValidPlacement
             // checks, so the reflection itself is exact for any pair of
@@ -1427,19 +1428,23 @@ public sealed class SkirmishAI
             // can refuse a cell whose twin it accepts (a yard's radius of 7
             // covers both). ADR-075 lists it in the residue. A centre exactly
             // on the map's centre line is not reflected, the one tie and a
-            // recorded asymmetry.
+            // recorded asymmetry; it is the tie ADR-076's rules use too (an
+            // axis short of the centre or on it keeps the authored layout).
             //
-            // The canonical frame is the walk a base right of and below the
-            // centre always had, which from there starts on the side FACING
-            // the centre. Measured, not assumed: on seven of the eight two-seat
-            // maps the home ferrite lies towards the centre from the yard on
-            // both axes, and on skirmish-03 it is level in x (-0.6 cells) and
-            // towards the centre in y (+12.4), so this frame builds towards the
-            // base's own economy. The other frame, the sheltered side first,
-            // was measured and refused, because it fails aiairgate: ADR-075
-            // records both.
-            bool flipX = 2 * oax + anchorSize < w.Map.Width;
-            bool flipY = 2 * oay + anchorSize < w.Map.Height;
+            // The canonical frame is the walk a base left of and above the
+            // centre always had, which from there starts on its SHELTERED
+            // side. P8-21 shipped the other frame, the side facing the centre
+            // first, because the home ferrite lies that way on seven of the
+            // eight two-seat maps and because the sheltered frame then failed
+            // aiairgate. ADR-075's C7 clause re-judged the frame once its
+            // residue rows had landed (P8-62, P8-63, P8-53 and P8-64), and
+            // there the sheltered frame passes aiairgate and cheesegate and
+            // scores better on seatfairgate (28 against 26 of 32 matches with
+            // each seat's income within 15 per cent), so it flipped (decision
+            // D38). It was judged jointly with ADR-077's multiplication, not
+            // alone: ADR-075's amendment of 2026-10-08 records both.
+            bool flipX = 2 * oax + anchorSize > w.Map.Width;
+            bool flipY = 2 * oay + anchorSize > w.Map.Height;
             for (int ring = 3; ring <= World.BuildRadius; ring++)
                 for (int dy = -ring; dy <= ring; dy++)
                     for (int dx = -ring; dx <= ring; dx++)
