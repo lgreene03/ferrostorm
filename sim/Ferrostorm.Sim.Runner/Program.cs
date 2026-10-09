@@ -2063,6 +2063,27 @@ int SelfTest()
     var s2 = Fix64.Sqrt(two);
     if (Fix64.Abs(s2 * s2 - two) > Fix64.FromFraction(1, 1_000_000)) return Fail("Fix64 sqrt precision");
     if (Fix64.FromInt(-5) + Fix64.FromInt(5) != Fix64.Zero) return Fail("Fix64 negatives");
+    // P8-78: ToString prints the sign, then the magnitude. The floor-then-
+    // fraction form it replaced printed -0.5 as "-1.500000" and -2.25 as
+    // "-3.750000", which misled a trace in P8-66. The pins below fail by name
+    // under that form; the non-negative ones hold the digits every probe line
+    // already prints, which must not move; and the loop holds the property
+    // itself, that -x prints as "-" followed by x, at both ends of the range.
+    if ((-Fix64.Half).ToString() != "-0.500000")
+        return Fail($"Fix64 ToString: -0.5 printed \"{-Fix64.Half}\", not \"-0.500000\" (P8-78: sign, then magnitude)");
+    if ((Fix64.FromInt(-2) - Fix64.FromFraction(1, 4)).ToString() != "-2.250000")
+        return Fail("Fix64 ToString: -2.25 must print \"-2.250000\" (P8-78: sign, then magnitude)");
+    if (new Fix64(-1093322580L).ToString() != "-0.254559")
+        return Fail("Fix64 ToString: the row's own case, raw -1093322580, must print \"-0.254559\" (P8-78)");
+    if (Fix64.FromInt(-5).ToString() != "-5.000000" || new Fix64(-1).ToString() != "-0.000000"
+        || Fix64.MinValue.ToString() != "-2147483648.000000")
+        return Fail("Fix64 ToString: a whole negative, the smallest negative step and MinValue (P8-78)");
+    if (Fix64.Zero.ToString() != "0.000000" || (Fix64.FromInt(2) + Fix64.FromFraction(1, 4)).ToString() != "2.250000"
+        || Fix64.MaxValue.ToString() != "2147483647.999999")
+        return Fail("Fix64 ToString: a value at or above zero prints as it always did (P8-78)");
+    foreach (long r in new long[] { 1L, 1093322580L, (1L << Fix64.FracBits) - 1, 3L << 31, long.MaxValue })
+        if (new Fix64(-r).ToString() != "-" + new Fix64(r).ToString())
+            return Fail($"Fix64 ToString: raw -{r} does not print as \"-\" followed by raw {r} (P8-78)");
 
     // ADR-005 / TICKET-P5-DEF-03: the variable-footprint refactor is only
     // behaviour-neutral if FromFraction(2, 2) is bit-identical to One, so that
