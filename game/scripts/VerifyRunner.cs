@@ -9268,7 +9268,10 @@ public partial class VerifyRunner : Node
             }
             squad = Fresh(squad);
             clock += 1.0;
-            int dropped0 = audio.BarksDropped;
+            // Both tallies are read here, immediately before the two
+            // selections, so a bark that strays into an earlier stage fails
+            // that stage and never this one.
+            int debouncePlayed0 = audio.BarksPlayed, dropped0 = audio.BarksDropped;
             g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
             string again = audio.LastBark ?? "none";
             g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
@@ -9284,12 +9287,14 @@ public partial class VerifyRunner : Node
                 orderDrops += audio.BarksDropped - droppedBefore;
                 g.StepTicks(1);
             }
-            bool selectDebounced = again == $"bark_{fac}_infantry_select_2" && droppedSelect == 1 && afterTwo == played0 + 1;
+            bool selectDebounced = again == $"bark_{fac}_infantry_select_2" && droppedSelect == 1
+                                   && afterTwo == debouncePlayed0 + 1;
             bool ordersDebounced = orderDrops == 1 && moves.Count == 3
                                    && moves[0] == $"bark_{fac}_infantry_move_2" && moves[1] == $"bark_{fac}_infantry_move_3"
                                    && moves[2] == $"bark_{fac}_infantry_move_1";
             BarkGate(selectDebounced && ordersDebounced, "debounce",
-                     $"a second selection at the same instant is dropped ({droppedSelect} dropped, the first {again}), and of "
+                     $"a second selection at the same instant is dropped ({droppedSelect} dropped and played {afterTwo} "
+                     + $"against {debouncePlayed0} before the two, want one more; the first {again}), and of "
                      + $"four orders 0.3, 0.3, 0.4 and 0.7 s apart against a {AudioDirector.BarkDebounceSeconds} s window the "
                      + $"second is dropped and the rest answer, the variants in turn ({orderDrops} dropped; played "
                      + $"{string.Join(", ", moves)})");
