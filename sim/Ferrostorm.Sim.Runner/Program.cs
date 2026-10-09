@@ -4508,7 +4508,21 @@ int MapGate()
     // golden scenario loads skirmish-02 or skirmish-04). This walks EVERY
     // committed map, builds the real opening hand on it, and plays both AIs.
     // Additive, never a golden scenario, so the golden list stays 24.
-    string root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    //
+    // P8-73: the root is FOUND by RepoRoot's walk up from the binary to the
+    // first directory carrying data/units, data/buildings and data/maps, the
+    // rule selftest and the P8-13 harness already use. The fixed
+    // "../../../../.." hop it replaces named whatever sat five levels above the
+    // binary, so a runner copied to another depth read another checkout's
+    // /data (a worktree's binary two levels down reads the main checkout's)
+    // and failed match on maps it was never built against. No landmark
+    // directory anywhere above is a refusal by name, never a guess.
+    string? found = RepoRoot();
+    if (found == null)
+        return Fail($"mapgate: repository root not found walking up from {AppContext.BaseDirectory} "
+            + "(looked for data/units, data/buildings and data/maps), so there are no committed maps to check; "
+            + "refusing rather than reading whatever directory a fixed hop lands on");
+    string root = found;
     string mapDir = Path.Combine(root, "data", "maps");
     var maps = Directory.GetFiles(mapDir, "*.fmap");
     Array.Sort(maps, StringComparer.Ordinal);   // directory order must not leak into a gate
