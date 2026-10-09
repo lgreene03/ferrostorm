@@ -5760,6 +5760,7 @@ public sealed partial class World
     {
         _buckets.Clear();
         _exactTies.Clear();
+        _exactTieAt.Clear();
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
@@ -5908,6 +5909,7 @@ public sealed partial class World
                     pushX += sideX;
                     pushY += sideY;
                     _exactTies.Add(i);
+                    _exactTieAt.Add((e.X, e.Y));
                 }
                 Fix64 nx = Fix64.Clamp(e.X + pushX, Fix64.Half, Fix64.FromInt(Map.Width) - Fix64.Half);
                 Fix64 ny = Fix64.Clamp(e.Y + pushY, Fix64.Half, Fix64.FromInt(Map.Height) - Fix64.Half);
@@ -6108,8 +6110,9 @@ public sealed partial class World
 
     // P8-66 (ADR-078): the walkers SeparationSystem found in an exact
     // cancellation this tick, sidestepped or left on a line, in entity index
-    // order.
+    // order, and beside each where it stood when the tie was found.
     private readonly List<int> _exactTies = new();
+    private readonly List<(Fix64 X, Fix64 Y)> _exactTieAt = new();
 
     /// <summary>P8-66 (ADR-078): the walkers found in an exact cancellation
     /// during the last tick, each sidestepped by movement's tie-break or, on a
@@ -6119,6 +6122,16 @@ public sealed partial class World
     /// of every SeparationSystem, never read by the sim, never hashed and
     /// never saved, so a world made by Load reads it empty until it steps.</summary>
     public IReadOnlyList<int> ExactTiesThisTick => _exactTies;
+
+    /// <summary>P8-66 (ADR-078, the Architect's condition 2): where each walker
+    /// in ExactTiesThisTick stood when its tie was found, at the same index:
+    /// after this tick's step and before its push, the position the
+    /// tie-break reads its sector at. A walker held by a tie stands a step
+    /// short of it, so the runner's frozenprobe computes the sector sign
+    /// itself from this point to tell a tie sidestepped from one left on a
+    /// line. The same OBSERVATION ONLY terms as ExactTiesThisTick: rebuilt
+    /// with it, never read by the sim, never hashed, never saved.</summary>
+    public IReadOnlyList<(Fix64 X, Fix64 Y)> ExactTiePositionsThisTick => _exactTieAt;
 
     /// <summary>
     /// SPAWN-04's occupancy test: does any standing entity hold this cell?

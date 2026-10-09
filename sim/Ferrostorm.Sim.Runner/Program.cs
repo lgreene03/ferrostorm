@@ -2375,6 +2375,16 @@ int SelfTest()
                         return Fail($"P8-66 (ADR-078): the walker {name} was in an exact cancellation at t={tw.Tick} and moved from "
                                     + $"({before[k].X},{before[k].Y}) to ({a.X},{a.Y}), "
                                     + (kind == 2 ? "across its line, where the tie must be left" : "not to its own right (y grows downwards)"));
+                    // frozenprobe files a tie as left on a line by the runner's own
+                    // sector sign at the point the observation gives; it must agree
+                    // with what the tie-break did.
+                    int at = 0;
+                    while (tw.ExactTiesThisTick[at] != ids[0]) at++;
+                    var (px, py) = tw.ExactTiePositionsThisTick[at];
+                    if ((TieSector(tw, px, py) == 0) != (kind == 2))
+                        return Fail($"P8-66 (ADR-078): the runner's sector sign (TieSector) reads {TieSector(tw, px, py)} for the walker {name} "
+                                    + $"at ({px},{py}), where the tie-break {(kind == 2 ? "left its tie" : "sidestepped it")}, so frozenprobe "
+                                    + "would file its tie on the wrong side of the line rule");
                 }
             }
         }
@@ -17707,6 +17717,20 @@ int PillarProbe()
     return 0;
 }
 
+// P8-66 (ADR-078, the Architect's condition 2): the sector sign movement's
+// tie-break picks its side by, computed by the runner itself from a point and
+// the map's size, so a probe can tell a tie the rule sidestepped from one it
+// left on a line without the sim reporting its own branch. Positive: the
+// walker's right; negative: its left; zero: on a centre line or a diagonal
+// through the centre, where the tie is left. The selftest's P8-66 stage holds
+// it to the sim's choice on every first tie it builds.
+static int TieSector(World w, Fix64 x, Fix64 y)
+{
+    static int Sign(Fix64 v) => v > Fix64.Zero ? 1 : v < Fix64.Zero ? -1 : 0;
+    Fix64 qx = x - Fix64.FromInt(w.Map.Width) * Fix64.Half, qy = y - Fix64.FromInt(w.Map.Height) * Fix64.Half;
+    return Sign(qx) * Sign(qy) * Sign(Fix64.Abs(qx) - Fix64.Abs(qy));
+}
+
 int FrozenProbe()
 {
     // P8-66 (ADR-078): WALKERS THAT REPORT MOVING AND DO NOT MOVE, over
@@ -17718,7 +17742,13 @@ int FrozenProbe()
     // given a cause:
     //   held by an exact cancellation: World.ExactTiesThisTick named it
     //     during the freeze (its step and its push cancelled exactly) and it
-    //     did not move, the case P8-66 exists to end;
+    //     did not move, the case P8-66 exists to end. Split in two, the
+    //     runner computing the sector sign itself (TieSector) at the point
+    //     World.ExactTiePositionsThisTick gives: left on a line, where the
+    //     sign is zero on some tick of the freeze and ADR-078 leaves the tie,
+    //     which its third reversal clause reads; and sidestepped, where the
+    //     sign is never zero, so the tie-break moved it aside and something
+    //     (a blocked cell) undid that, which its first clause reads;
     //   at its target: it stands on its own target, so it takes no step, and
     //     something re-arms Moving every tick;
     //   no route from its cell: the sim's own flow field gives it no next cell
@@ -17750,27 +17780,28 @@ int FrozenProbe()
     var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
     Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), walkers reporting Moving and standing "
         + $"at one position for {FrozenTicks} or more consecutive ticks. A probe: nothing asserts.");
-    string[] causes = { "held by an exact cancellation", "at its target", "no route from its cell", "other" };
+    string[] causes = { "held by an exact cancellation, sidestepped", "held by an exact cancellation left on a line",
+                        "at its target", "no route from its cell", "other" };
 
-    string CauseOf(World w, in Entity e, bool inTie)
+    string CauseOf(World w, in Entity e, bool inTie, bool onLine)
     {
-        if (inTie) return causes[0];
-        if (e.X == e.TargetX && e.Y == e.TargetY) return causes[1];
+        if (inTie) return onLine ? causes[1] : causes[0];
+        if (e.X == e.TargetX && e.Y == e.TargetY) return causes[2];
         int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y), tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
-        if (!e.UseFlow || (cx == tcx && cy == tcy) || !w.Map.InBounds(tcx, tcy)) return causes[3];
+        if (!e.UseFlow || (cx == tcx && cy == tcy) || !w.Map.InBounds(tcx, tcy)) return causes[4];
         if (e.Kind == EntityKind.Harvester && e.HState == HarvestState.ToRefinery && e.RefineryId >= 0 && e.RefineryId < w.EntityCount)
         {
             var r = w.Entities[e.RefineryId];
             if (r.Alive && r.X == e.TargetX && r.Y == e.TargetY && w.Map.IsBlocked(tcx, tcy))
             {
                 var dock = FlowField.BuildToFootprint(w.Map, w.AnchorOf(r.X, r.StructType), w.AnchorOf(r.Y, r.StructType), w.FootprintOf(r.StructType));
-                return !dock.IsGoal(w.Map, cx, cy) && dock.NextCell(w.Map, cx, cy) < 0 ? causes[2] : causes[3];
+                return !dock.IsGoal(w.Map, cx, cy) && dock.NextCell(w.Map, cx, cy) < 0 ? causes[3] : causes[4];
             }
         }
         // A unit with an attack target or a contact act walks routes this probe
         // does not model, so it is left to "other" rather than guessed at.
-        if (e.Kind == EntityKind.Unit && e.ExplicitTarget != -1) return causes[3];
-        return FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, cx, cy) < 0 ? causes[2] : causes[3];
+        if (e.Kind == EntityKind.Unit && e.ExplicitTarget != -1) return causes[4];
+        return FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, cx, cy) < 0 ? causes[3] : causes[4];
     }
 
     var sw = Stopwatch.StartNew();
@@ -17780,6 +17811,7 @@ int FrozenProbe()
     var byCause = new int[specs.Count, causes.Length];
     var tieHeld = new int[specs.Count];
     var ties = new long[specs.Count];
+    var tiesLeft = new long[specs.Count];
     var recurrent = new int[specs.Count];
     var cycling = new int[specs.Count];
     var mostWhat = new string[specs.Count];
@@ -17789,11 +17821,12 @@ int FrozenProbe()
     {
         var s = specs[i];
         var found = new List<string>();
-        var still = new Dictionary<int, (Fix64 X, Fix64 Y, int Since, bool InTie)>();
+        var still = new Dictionary<int, (Fix64 X, Fix64 Y, int Since, bool InTie, bool OnLine)>();
         var counted = new HashSet<int>();
         var run = new Dictionary<int, int>();
         var runCounted = new HashSet<int>();
         var now = new HashSet<int>();
+        var nowOnLine = new HashSet<int>();
         // Per walker: ticks in an exact cancellation in all, the first and
         // last of them, and where it stood on each.
         var fires = new Dictionary<int, (int N, int First, int Last, Fix64 X0, Fix64 Y0, Fix64 X1, Fix64 Y1, string Kind)>();
@@ -17803,13 +17836,21 @@ int FrozenProbe()
         var densest = new Dictionary<int, int>();
         var cycled = new HashSet<int>();
         int h = 0, u = 0, held = 0, top = 0;
-        long fired = 0;
+        long fired = 0, firedOnLine = 0;
         string topWhat = "";
         var r = PlayMeasured(root, s, w =>
         {
             now.Clear();
-            foreach (int k in w.ExactTiesThisTick) now.Add(k);
+            nowOnLine.Clear();
+            for (int n = 0; n < w.ExactTiesThisTick.Count; n++)
+            {
+                int k = w.ExactTiesThisTick[n];
+                now.Add(k);
+                var (tx, ty) = w.ExactTiePositionsThisTick[n];
+                if (TieSector(w, tx, ty) == 0) nowOnLine.Add(k);
+            }
             fired += now.Count;
+            firedOnLine += nowOnLine.Count;
             foreach (int k in run.Keys.Where(k => !now.Contains(k)).ToList()) run.Remove(k);
             foreach (int k in now)
             {
@@ -17835,10 +17876,11 @@ int FrozenProbe()
                 }
                 if (!still.TryGetValue(k, out var st) || st.X != e.X || st.Y != e.Y)
                 {
-                    still[k] = (e.X, e.Y, w.Tick, false);
+                    still[k] = (e.X, e.Y, w.Tick, false, false);
                     continue;
                 }
-                if (now.Contains(k) && !st.InTie) still[k] = st = (st.X, st.Y, st.Since, true);
+                if ((now.Contains(k) && !st.InTie) || (nowOnLine.Contains(k) && !st.OnLine))
+                    still[k] = st = (st.X, st.Y, st.Since, true, st.OnLine || nowOnLine.Contains(k));
                 int dur = w.Tick - st.Since;
                 if (dur > top)
                 {
@@ -17847,7 +17889,7 @@ int FrozenProbe()
                 }
                 if (dur < FrozenTicks || !counted.Add(k)) continue;
                 if (e.Kind == EntityKind.Harvester) h++; else u++;
-                string cause = CauseOf(w, in e, st.InTie);
+                string cause = CauseOf(w, in e, st.InTie, st.OnLine);
                 byCause[i, Array.IndexOf(causes, cause)]++;
                 found.Add($"    seat {e.PlayerId} (start {StartOf(s, e.PlayerId)}) {e.Kind} #{k} at ({e.X},{e.Y}), {e.HState}, target "
                           + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}");
@@ -17858,6 +17900,7 @@ int FrozenProbe()
         units[i] = u;
         tieHeld[i] = held;
         ties[i] = fired;
+        tiesLeft[i] = firedOnLine;
         recurrent[i] = fires.Values.Count(f => f.N >= FrozenTicks);
         cycling[i] = cycled.Count;
         // The walker most often in an exact cancellation, the lowest id on
@@ -17879,7 +17922,7 @@ int FrozenProbe()
         var s = r.Spec;
         Console.WriteLine($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} o{(s.Swap ? 1 : 0)}: frozen {harvesters[i]} harvesters, "
             + $"{units[i]} units; in an exact cancellation on {FrozenTicks}+ consecutive ticks {tieHeld[i]}, in a cycle {cycling[i]}; "
-            + $"exact ties {ties[i]}, walkers in one on {FrozenTicks}+ ticks in all {recurrent[i]}; ended t={r.EndTick}");
+            + $"exact ties {ties[i]} (left on a line {tiesLeft[i]}), walkers in one on {FrozenTicks}+ ticks in all {recurrent[i]}; ended t={r.EndTick}");
         foreach (var line in lines[i]) Console.WriteLine(line);
         if (mostWhat[i] != null) Console.WriteLine($"    most often in an exact cancellation: {mostWhat[i]}");
     });
@@ -17887,15 +17930,18 @@ int FrozenProbe()
     int best = Enumerable.Range(0, specs.Count).OrderByDescending(i => longest[i]).ThenBy(i => i).First();
     Console.WriteLine($"frozenprobe: frozen (Moving, at one position for {FrozenTicks}+ consecutive ticks, each walker once per match): "
         + $"{harvesters.Sum()} harvesters and {units.Sum()} units");
+    var causeSum = new int[causes.Length];
     for (int c = 0; c < causes.Length; c++)
-    {
-        int n = 0;
-        for (int i = 0; i < specs.Count; i++) n += byCause[i, c];
-        Console.WriteLine($"  {causes[c]}: {n}");
-    }
+        for (int i = 0; i < specs.Count; i++) causeSum[c] += byCause[i, c];
+    // ADR-078's first reversal clause reads the two held causes together, its
+    // third the one left on a line alone.
+    Console.WriteLine($"  held by an exact cancellation: {causeSum[0] + causeSum[1]}");
+    for (int c = 0; c < causes.Length; c++)
+        Console.WriteLine($"  {(c < 2 ? "  " : "")}{causes[c]}: {causeSum[c]}");
     Console.WriteLine($"frozenprobe: walkers in an exact cancellation on {FrozenTicks} or more "
         + $"consecutive ticks: {tieHeld.Sum()}; in a cycle (on half the ticks of some {FrozenTicks}-tick window): {cycling.Sum()}; "
-        + $"on {FrozenTicks} or more ticks of one match in all: {recurrent.Sum()}; exact ties in all: {ties.Sum()}");
+        + $"on {FrozenTicks} or more ticks of one match in all: {recurrent.Sum()}; exact ties in all: {ties.Sum()}, "
+        + $"of which left on a line {tiesLeft.Sum()}");
     Console.WriteLine(longest[best] == 0 ? "frozenprobe: no walker stood still while reporting Moving"
         : $"frozenprobe: longest freeze {longest[best]} ticks, {specs[best].Map} {FactionLetter(specs[best].F0)}{FactionLetter(specs[best].F1)} "
           + $"o{(specs[best].Swap ? 1 : 0)}: {longestWhat[best]}");
@@ -18263,7 +18309,20 @@ int MirrorProbe()
                 broke = true;
                 var onlyA = a.Except(b).ToList();
                 var onlyB = b.Except(a).ToList();
-                Console.WriteLine($"{m} {pr.Name}: the mirror breaks at t={w.Tick} (treasuries {w.Credits(0)} and {w.Credits(1)})");
+                // P8-66 (ADR-078, the Architect's condition 2): whether a walker
+                // in an exact cancellation on this tick is among what differs,
+                // in seats=4's words, so the tie-break's symmetry clause reads
+                // here too.
+                var stepped = new List<string>();
+                foreach (int id in w.ExactTiesThisTick)
+                {
+                    var e = w.Entities[id];
+                    if ((e.PlayerId == 0 && onlyA.Contains(Sig(e, false))) || (e.PlayerId == 1 && onlyB.Contains(Sig(e, true))))
+                        stepped.Add($"#{id} of seat {e.PlayerId}");
+                }
+                Console.WriteLine($"{m} {pr.Name}: the mirror breaks at t={w.Tick} (treasuries {w.Credits(0)} and {w.Credits(1)}); "
+                    + (stepped.Count > 0 ? $"{string.Join(", ", stepped)} in an exact cancellation on this tick, among what differs"
+                        : "no walker in an exact cancellation on this tick is among what differs"));
                 if (firstCmdDiff != "") Console.WriteLine(firstCmdDiff);
                 foreach (var s in onlyA.Take(show)) Console.WriteLine($"    seat 0 only: {s}");
                 foreach (var s in onlyB.Take(show)) Console.WriteLine($"    seat 1 only: {s}");
@@ -18344,6 +18403,9 @@ int MirrorProbeFour(string root, Dictionary<string, string> o)
             }
             long W = Fix64.FromInt(map.Width).Raw, H = Fix64.FromInt(map.Height).Raw;
             string P(long raw) => (raw / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+            // The gap between two incomes as a percentage of the smaller, in the
+            // invariant culture as P() is, so it prints alike on every locale.
+            string Pct(long hi, long lo) => (100.0 * (hi - lo) / lo).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
             string Sig(in Entity e, bool fx, bool fy)
             {
                 long x = fx ? W - e.X.Raw : e.X.Raw, y = fy ? H - e.Y.Raw : e.Y.Raw;
@@ -18465,11 +18527,11 @@ int MirrorProbeFour(string root, Dictionary<string, string> o)
             long lo = income.Min(), hi = income.Max();
             Console.WriteLine($"  income to t={Math.Min(w.Tick, MeasurementHarness.IncomeWindowTicks)}: "
                 + string.Join(", ", Enumerable.Range(0, seats).Select(p => $"seat {p} {income[p]}"))
-                + $"; widest gap {(lo == 0 ? (hi == 0 ? "0" : "unbounded") : $"{100.0 * (hi - lo) / lo:F1}")} per cent of the smallest; against seat 0: "
+                + $"; widest gap {(lo == 0 ? (hi == 0 ? "0" : "unbounded") : Pct(hi, lo))} per cent of the smallest; against seat 0: "
                 + string.Join(", ", Enumerable.Range(1, seats - 1).Select(k =>
                 {
                     long l = Math.Min(income[0], income[k]), h = Math.Max(income[0], income[k]);
-                    return $"seat {k} ({rel[k].Name}) {(l == 0 ? (h == 0 ? "0" : "unbounded") : $"{100.0 * (h - l) / l:F1}")}";
+                    return $"seat {k} ({rel[k].Name}) {(l == 0 ? (h == 0 ? "0" : "unbounded") : Pct(h, l))}";
                 })));
         }
     }
