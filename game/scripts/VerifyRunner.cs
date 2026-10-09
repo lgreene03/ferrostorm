@@ -6712,14 +6712,16 @@ public partial class VerifyRunner : Node
     /// its port as soon as the relay bound, before the host's own client had
     /// dialled, so a joiner that dialled the published port inside that window
     /// took seat 0 (seen once in 14 harness runs, by RunLobbyChecks' own seat
-    /// check). Two halves. THE RACE: a joiner dials on this thread the instant
+    /// check). Two halves. THE RACE: this thread calls LanLobby.Join the instant
     /// RelayPortForTest turns nonzero, with nothing between the poll and the
-    /// dial, many times over, and every time the host must hold seat 0 and the
-    /// joiner seat 1. A race only shows a defect when it is lost, so THE HELD
-    /// WINDOW makes it deterministic: the lobby's publication hook dials the
-    /// joiner from the host's own connect thread at the moment of publication
-    /// and holds that thread there long enough for the joiner's connect to land,
-    /// which is the widest the window can be. Publishing before the host's seat
+    /// call; Join returns at once and the joiner dials from a background thread
+    /// Join itself starts. Many times over, and every time the host must hold
+    /// seat 0 and the joiner seat 1. A race only shows a defect when it is lost,
+    /// so THE HELD WINDOW makes it deterministic: the lobby's publication hook
+    /// calls LanLobby.Join on the host's own connect thread at the moment of
+    /// publication, the joiner again dialling from Join's own background thread,
+    /// and holds the host's thread there long enough for the joiner's connect to
+    /// land, which is the widest the window can be. Publishing before the host's seat
     /// is claimed then loses every time, and publishing after it can never lose.
     /// RunHostLineStage, called last, checks the row's other half: no line names
     /// the port before the host holds its seat.
@@ -6746,8 +6748,9 @@ public partial class VerifyRunner : Node
             {
                 var host = LanLobby.Host(hosted, port: 0);
                 long deadline = System.Environment.TickCount64 + 5000;
-                // No sleep, no yield: a volatile read in a tight loop and the dial
-                // on the very next line.
+                // No sleep, no yield: a volatile read in a tight loop and Join on
+                // the very next line, which returns at once and dials from a
+                // background thread of its own.
                 while (host.RelayPortForTest <= 0 && host.State == LanLobby.Phase.Connecting
                        && System.Environment.TickCount64 < deadline) { }
                 LanLobby? join = host.RelayPortForTest > 0 ? LanLobby.Join("127.0.0.1", host.RelayPortForTest) : null;
@@ -6793,8 +6796,8 @@ public partial class VerifyRunner : Node
                 j?.Cancel();
             }
             Check(hooked == Held && heldReady == Held,
-                  $"hostseat/held: precondition: the publication hook dialled all {Held} joiners and every pair "
-                  + $"reached a match ({hooked} dialled, {heldReady} matched)");
+                  $"hostseat/held: precondition: the publication hook started all {Held} joiners and every pair "
+                  + $"reached a match ({hooked} started, {heldReady} matched)");
             Check(heldRight == heldReady && heldReady > 0,
                   $"hostseat/held: a joiner dialled at the moment of publication, with the host's thread held "
                   + $"{HoldMs} ms, is still seat 1 ({heldRight} of {heldReady}"
