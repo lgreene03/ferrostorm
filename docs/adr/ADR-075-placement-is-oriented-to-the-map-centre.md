@@ -170,7 +170,7 @@ Every scenario's own assertions still pass (`match` green), and the catalogue ch
 
 **Easier.** Two commanders on a rotation pair build bases that are rotations of each other about their yards from the first placement, so any remaining start bias is the opening hand's or the sim's, and `mirrorprobe` names the first one. The residue now has measured causes with code locations, each a row of its own or a candidate (the opening hand, P8-62; the free harvester's offset, P8-63; the production exit order, P8-64; P8-53; the flow field's tie-break and boundary-cell ownership; and the build radius between top-left anchors), and the experiment that neutralises the first four is kept as a patch.
 
-**Harder.** The commander's layout depends on which half of the map each structure stands in, so a base that grows across a centre line lays its far buildings out in the other frame. F5 is still not met, and both its clauses read worse on today's starts than before (18 of 32 within 15 per cent, a start split of 21/3); the evidence that the split's movement is chaos rather than the frame is the table above, and it stays a claim until the residue rows land and F5 is re-measured. `endgate` has six more unresolved matches for P8-24 to resolve, and `pillargate`'s launch margin is narrower (44 of 72 launching against a bar of 36), which every commander row re-measures until `pillargate` runs in CI.
+**Harder.** The commander's layout depends on which half of the map each structure stands in, so a base that grows across a centre line lays its far buildings out in the other frame. F5 is still not met, and both its clauses read worse on today's starts than before (18 of 32 within 15 per cent, a start split of 21/3); the evidence that the split's movement is chaos rather than the frame is the table above, and it stays a claim until the residue rows land and F5 is re-measured. `endgate` has six more unresolved matches for P8-24 to resolve, and `pillargate`'s launch margin is narrower (44 of 72 launching against a bar of 36), which every commander row re-measures until `pillargate` runs in CI. (Since P8-72, pull request 170, it does: `pillargate --bind` runs last in tools/ci-local.sh and on CI's ubuntu leg, so that end condition was met on 2026-10-09.)
 
 **Committed to.** The canonical frame is part of the commander's behaviour, so changing it moves the commander goldens (five of them today). A mixed-build LAN game with a commander seat across this ADR desyncs within 30 ticks of the first reflected placement rather than being refused, which is Q024's question.
 
@@ -214,7 +214,7 @@ The change does not move F5 towards passing on today's starts. Both clauses read
 
 - When each row named in condition 7 lands, it re-runs `seatfairgate` with the hunk reverted and judges the frame by the corrected clause.
 - `endgate`'s rise from 4 to 10 unresolved goes to P8-24.
-- `pillargate`'s narrower launch margin (44 of 72 against a bar of 36) is re-measured by each commander row until `pillargate` runs in CI.
+- `pillargate`'s narrower launch margin (44 of 72 against a bar of 36) is re-measured by each commander row until `pillargate` runs in CI. (Met on 2026-10-09 by P8-72, pull request 170.)
 
 **Conditions met.** C1 to C11 are met in the P8-21 pull request (2026-10-05); C12 is that pull request's CI and the orchestrator's.
 

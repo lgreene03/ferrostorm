@@ -231,12 +231,22 @@ public sealed class LanLobby
     public int Seat => Client?.PlayerId ?? -1;
 
     /// <summary>Offscreen verification hook: the port the relay actually bound,
-    /// once it has. Needed because the harness hosts on port 0 (ephemeral) so a
-    /// stale relay from an earlier run cannot make the check fail against
-    /// something it is not testing.</summary>
-    public int RelayPortForTest => _relay?.Port ?? 0;
+    /// once the lobby has PUBLISHED it, and 0 until then. Needed because the
+    /// harness hosts on port 0 (ephemeral) so a stale relay from an earlier run
+    /// cannot make the check fail against something it is not testing.
+    /// P8-67: published only once the host's own seat is claimed (HostSeat), so
+    /// a joiner that dials the instant this turns nonzero is second.</summary>
+    public int RelayPortForTest => _publishedPort;
+
+    /// <summary>P8-67: true once a host lobby has published its port, which is
+    /// only once its own client holds seat 0. The menu's line naming the port
+    /// waits for this rather than going up the moment HOST GAME is pressed.
+    /// Never true for a join lobby.</summary>
+    public bool PortPublished => _publishedPort > 0;
 
     private volatile Ferrostorm.Net.Relay? _relay;
+    private volatile int _publishedPort;
+    private volatile HostSeat? _seat;
     private Thread? _thread;
     private volatile bool _cancelled;
 
@@ -278,8 +288,26 @@ public sealed class LanLobby
     /// Open a lobby on a fixed port and wait for one player. Returns immediately;
     /// State stays Connecting for as long as nobody has joined, which is the
     /// honest state to show, and Ready the moment the handshake completes.
+    ///
+    /// P8-67: THE HOST SEATS ITSELF FIRST. The relay seats peers in the order it
+    /// accepts them, and this used to publish the relay's port (RelayPortForTest
+    /// and the status line) the moment the relay bound, start the relay and only
+    /// then dial its own client, so a joiner that dialled the published port
+    /// inside that window took seat 0 and left the host seat 1. The client
+    /// harness saw it once in 14 runs. Now the host's seat is claimed by a
+    /// connection this lobby makes itself (HostSeat says why it must be), and the
+    /// port is published only once that connect has returned.
+    /// portPublishedForTest, when given, is called on the connect thread at the
+    /// moment of publication with the published port, before anything else
+    /// happens on that thread; the harness uses it to dial a joiner and hold the
+    /// host's thread there, which is the widest that window can be made.
+    /// relayBoundForTest, when given, is called on the connect thread once the
+    /// relay has bound and before the host claims its seat, with the bound port:
+    /// the window a joiner could take seat 0 in, held open by the harness while
+    /// it reads what this lobby's status and the menu's line say there.
     /// </summary>
-    public static LanLobby Host(MatchSetup setup, int port = DefaultPort)
+    public static LanLobby Host(MatchSetup setup, int port = DefaultPort,
+        System.Action<int>? portPublishedForTest = null, System.Action<int>? relayBoundForTest = null)
     {
         var lobby = new LanLobby();
         // The host builds from a ROUND-TRIPPED setup rather than from its own
@@ -298,27 +326,44 @@ public sealed class LanLobby
             return lobby;
         }
 
-        lobby._status = $"waiting for a player on port {port}...";
+        // P8-67: no port is named until the host holds seat 0, the status line
+        // included; a line naming a port before then is an invitation to take it.
+        lobby._status = "opening the lobby...";
         lobby._thread = new Thread(() =>
         {
+            HostSeat? seat = null;
             try
             {
+                // The splice's own loopback listener goes up FIRST, so nothing
+                // slower than one loopback connect stands between the relay
+                // binding below and the host claiming its seat.
+                seat = HostSeat.Open();
+                lobby._seat = seat;
                 var relay = new Ferrostorm.Net.Relay(playerCount: HumanSeats, port: port,
                     bind: IPAddress.Any, setup: blob);
-                relay.Start();
                 lobby._relay = relay;
+                relay.Start();
+                if (lobby._cancelled) { seat.Close(); relay.Stop(); return; }
+                relayBoundForTest?.Invoke(relay.Port);
+                // Seat 0 is the host's from the moment this returns (HostSeat
+                // says why), and not one instruction earlier.
+                seat.Claim(relay.Port);
                 // Restated from the port the relay ACTUALLY bound, not the one
                 // it was asked for. They are the same for a real lobby on the
                 // fixed port, and different whenever 0 was passed to get an
                 // ephemeral one - and a status line that names a port nobody can
                 // dial is worse than no status line.
                 lobby._status = $"waiting for a player on port {relay.Port}...";
+                lobby._publishedPort = relay.Port;
+                portPublishedForTest?.Invoke(relay.Port);
                 new Thread(relay.Run) { IsBackground = true }.Start();
+                seat.Splice();
                 // Loopback, deliberately: the host's own client is on the host's
                 // own machine, and dialling its LAN address would fail on a
-                // machine whose firewall allows inbound but not hairpin.
+                // machine whose firewall allows inbound but not hairpin. It
+                // dials the splice, which carries it onto the seat claimed above.
                 var client = new Ferrostorm.Net.LockstepClient(
-                    relay.Port, _ => BuildFrom(wire), wire.Seed, IPAddress.Loopback);
+                    seat.Port, _ => BuildFrom(wire), wire.Seed, IPAddress.Loopback);
                 if (lobby._cancelled) { client.Dispose(); return; }
                 lobby.Client = client;
                 lobby.Setup = wire;
@@ -326,6 +371,7 @@ public sealed class LanLobby
             }
             catch (System.Exception e)
             {
+                seat?.Close();
                 if (lobby._cancelled) return;
                 lobby._status = Explain(e, hosting: true, port);
                 lobby._state = Phase.Failed;
@@ -415,6 +461,124 @@ public sealed class LanLobby
         _relay?.Stop();
         Client?.Dispose();
         Client = null;
+        _seat?.Close();
+    }
+
+    /// <summary>
+    /// P8-67: THE HOST'S OWN SEAT, claimed by a connection the lobby can see land.
+    ///
+    /// The relay seats peers in the order Relay.Run accepts them, and a listening
+    /// socket hands connections to accept in the order their handshakes completed
+    /// (its accept queue is first in, first out, on every platform this ships on).
+    /// So whoever's connect returns first is seat 0. The host's LockstepClient
+    /// connects inside a constructor that does not return until the joiner has
+    /// arrived, so the moment its connect returns cannot be seen from outside, and
+    /// Ferrostorm.Net is sim code this client may not change. Instead the lobby
+    /// makes the connection itself (Claim): when that connect returns the host is
+    /// first in the relay's queue, and the port can be published. The host's
+    /// LockstepClient then dials this object's loopback listener, and two pump
+    /// threads carry every byte between that connection and the claimed one,
+    /// unchanged, for the rest of the match. Either end closing closes both, so the
+    /// relay sees the host leave exactly when its client does, and the client sees
+    /// the relay go exactly when it does.
+    ///
+    /// The hop is a loopback copy with Nagle off on both of its sockets, so it adds
+    /// no wait to a frame. What it cannot close: a joiner who dials the fixed port
+    /// blind, without reading it off the host's screen, in the microseconds
+    /// between the relay binding and Claim returning, is still first. Only a relay
+    /// that seats a named peer first could close that, and that is sim code.
+    /// </summary>
+    private sealed class HostSeat
+    {
+        private readonly TcpListener _listener;
+        private TcpClient? _up;
+        private TcpClient? _down;
+        private readonly object _gate = new();
+        private bool _closed;
+
+        /// <summary>The loopback port the host's own client dials.</summary>
+        public int Port { get; }
+
+        private HostSeat(TcpListener listener)
+        {
+            _listener = listener;
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        }
+
+        public static HostSeat Open()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            return new HostSeat(listener);
+        }
+
+        /// <summary>Dial the relay. Returns once the handshake has completed,
+        /// which is the moment this connection is first in the relay's accept
+        /// queue. Throws if the relay cannot be reached.</summary>
+        public void Claim(int relayPort)
+        {
+            var up = new TcpClient { NoDelay = true };
+            lock (_gate)
+            {
+                if (_closed) { up.Close(); throw new System.OperationCanceledException("the lobby was closed"); }
+                _up = up;
+            }
+            up.Connect(IPAddress.Loopback, relayPort);
+        }
+
+        /// <summary>Carry the host's client onto the claimed connection: accept
+        /// its one connection and pump both ways until either end closes.</summary>
+        public void Splice() => new Thread(Run) { IsBackground = true }.Start();
+
+        private void Run()
+        {
+            try
+            {
+                var down = _listener.AcceptTcpClient();
+                TcpClient up;
+                lock (_gate)
+                {
+                    if (_closed || _up is null) { down.Close(); return; }
+                    _down = down;
+                    up = _up;
+                }
+                // One connection is all this ever carries; nothing else on the
+                // machine gets to dial into the host's seat.
+                try { _listener.Stop(); } catch (System.Exception) { /* already down */ }
+                down.NoDelay = true;
+                NetworkStream fromHost = down.GetStream(), toRelay = up.GetStream();
+                new Thread(() => Pump(toRelay, fromHost)) { IsBackground = true }.Start();
+                Pump(fromHost, toRelay);
+            }
+            catch (System.Exception)
+            {
+                Close();
+            }
+        }
+
+        private void Pump(NetworkStream from, NetworkStream to)
+        {
+            try { from.CopyTo(to); }
+            catch (System.Exception) { /* either end went; closing both below is the answer */ }
+            Close();
+        }
+
+        /// <summary>Idempotent, and safe from any thread: the lobby's Cancel,
+        /// a failed host thread and both pumps may all call it.</summary>
+        public void Close()
+        {
+            TcpClient? up, down;
+            lock (_gate)
+            {
+                if (_closed) return;
+                _closed = true;
+                up = _up;
+                down = _down;
+            }
+            try { _listener.Stop(); } catch (System.Exception) { /* never started, or already down */ }
+            down?.Close();
+            up?.Close();
+        }
     }
 
     /// <summary>Socket errors say things like "No connection could be made

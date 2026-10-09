@@ -1312,6 +1312,10 @@ public partial class VerifyRunner : Node
         RunControlsStages();
         // P8-42: refusals explain themselves, through one Deny.
         RunDenyStages();
+        // P8-71: a factory opens the door on the face its unit came out of.
+        RunDoorFaceStages();
+        // P8-41: my units answer a selection and an order, debounced.
+        RunBarkStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -1909,6 +1913,9 @@ public partial class VerifyRunner : Node
         EventGate(doorsMine > 0 && doorsTheirs > 0, "doors",
                   $"precondition: both factories' rigs carry doors, so the check can fail ({doorsMine} and {doorsTheirs})");
         int m0 = g.DoorOpeningsForTest(mine), t0 = g.DoorOpeningsForTest(theirs);
+        // P8-71: a completion out of a face with no door opens nothing and is
+        // counted as a doorless exit instead, so each completion is one or the other.
+        int md0 = g.DoorlessExitsForTest(mine), td0 = g.DoorlessExitsForTest(theirs);
         lw.GrantCredits(me, 3000);
         lw.GrantCredits(foe, 3000);
         g.QueueCommandForTest(CommandType.Produce, mine, World.CarrierUnitType);
@@ -1926,9 +1933,12 @@ public partial class VerifyRunner : Node
             }
         }
         int openedMine = g.DoorOpeningsForTest(mine) - m0, openedTheirs = g.DoorOpeningsForTest(theirs) - t0;
-        EventGate(byMine > 0 && byTheirs > 0 && openedMine == byMine && openedTheirs == byTheirs, "doors",
-                  $"a completion opens only its OWN factory's doors: mine opened {openedMine} times for its {byMine} "
-                  + $"completions and the enemy's {openedTheirs} for its {byTheirs}, through {elsewhere} other completions");
+        int doorlessMine = g.DoorlessExitsForTest(mine) - md0, doorlessTheirs = g.DoorlessExitsForTest(theirs) - td0;
+        EventGate(byMine > 0 && byTheirs > 0 && openedMine + doorlessMine == byMine
+                  && openedTheirs + doorlessTheirs == byTheirs, "doors",
+                  $"a completion answers only at its OWN factory: mine opened {openedMine} times and left by a doorless "
+                  + $"face {doorlessMine} for its {byMine} completions and the enemy's {openedTheirs} and {doorlessTheirs} "
+                  + $"for its {byTheirs}, through {elsewhere} other completions");
     }
 
     /// <summary>P8-10 review, item 1, under decision D34: boarding is the sim's
@@ -5648,6 +5658,7 @@ public partial class VerifyRunner : Node
         RunLanSpectatorStage();
         RunLanPreStepStage();
         RunLobbyChecks();
+        RunLobbySeatStage();   // P8-67: the host seats itself first
         RunDifficultyChecks();
         RunTeamChecks();
     }
@@ -6693,6 +6704,202 @@ public partial class VerifyRunner : Node
         {
             Check(false, $"the lobby threw: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// P8-67: THE HOST SEATS ITSELF FIRST, however fast a joiner dials. The relay
+    /// seats peers in the order it accepts them, and the lobby used to publish
+    /// its port as soon as the relay bound, before the host's own client had
+    /// dialled, so a joiner that dialled the published port inside that window
+    /// took seat 0 (seen once in 14 harness runs, by RunLobbyChecks' own seat
+    /// check). Two halves. THE RACE: this thread calls LanLobby.Join the instant
+    /// RelayPortForTest turns nonzero, with nothing between the poll and the
+    /// call; Join returns at once and the joiner dials from a background thread
+    /// Join itself starts. Many times over, and every time the host must hold
+    /// seat 0 and the joiner seat 1. A race only shows a defect when it is lost,
+    /// so THE HELD WINDOW makes it deterministic: the lobby's publication hook
+    /// calls LanLobby.Join on the host's own connect thread at the moment of
+    /// publication, the joiner again dialling from Join's own background thread,
+    /// and holds the host's thread there long enough for the joiner's connect to
+    /// land, which is the widest the window can be. Publishing before the host's seat
+    /// is claimed then loses every time, and publishing after it can never lose.
+    /// RunHostLineStage, called last, checks the row's other half: no line names
+    /// the port before the host holds its seat.
+    /// </summary>
+    private void RunLobbySeatStage()
+    {
+        GD.Print("  --    LAN (P8-67): the host seats itself first, however fast a joiner dials");
+        const int Races = 24, Held = 4, HoldMs = 60;
+        var hosted = new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-01.fmap",
+            AiPreset = 1,
+            StartCredits = 5000,
+            Seed = 6767UL,
+            Faction = 1,
+            OppFaction = 0,
+        };
+        try
+        {
+            // ---- the race: dial the instant the port appears ----
+            int ready = 0, right = 0;
+            var wrong = new List<string>();
+            for (int i = 0; i < Races; i++)
+            {
+                var host = LanLobby.Host(hosted, port: 0);
+                long deadline = System.Environment.TickCount64 + 5000;
+                // No sleep, no yield: a volatile read in a tight loop and Join on
+                // the very next line, which returns at once and dials from a
+                // background thread of its own.
+                while (host.RelayPortForTest <= 0 && host.State == LanLobby.Phase.Connecting
+                       && System.Environment.TickCount64 < deadline) { }
+                LanLobby? join = host.RelayPortForTest > 0 ? LanLobby.Join("127.0.0.1", host.RelayPortForTest) : null;
+                if (SeatPair(host, join, out int hs, out int js))
+                {
+                    ready++;
+                    if (hs == 0 && js == 1) right++;
+                    else wrong.Add($"race {i + 1}: host {hs}, joiner {js}");
+                }
+                host.Cancel();
+                join?.Cancel();
+            }
+            Check(ready == Races,
+                  $"hostseat/race: precondition: all {Races} races reached a match on both ends ({ready} did)");
+            Check(right == ready && ready > 0,
+                  $"hostseat/race: a joiner dialling the instant the port appears is seat 1 and the host seat 0, "
+                  + $"in every race ({right} of {ready}{(wrong.Count > 0 ? "; " + string.Join("; ", wrong) : "")})");
+
+            // ---- the held window: dial from the host's own thread at publication ----
+            int heldReady = 0, heldRight = 0, hooked = 0;
+            var heldWrong = new List<string>();
+            for (int i = 0; i < Held; i++)
+            {
+                LanLobby? join = null;
+                var host = LanLobby.Host(hosted, port: 0, portPublishedForTest: p =>
+                {
+                    join = LanLobby.Join("127.0.0.1", p);
+                    System.Threading.Interlocked.Increment(ref hooked);
+                    System.Threading.Thread.Sleep(HoldMs);
+                });
+                long deadline = System.Environment.TickCount64 + 5000;
+                while (System.Threading.Volatile.Read(ref join) is null && host.State == LanLobby.Phase.Connecting
+                       && System.Environment.TickCount64 < deadline)
+                    System.Threading.Thread.Sleep(1);
+                var j = System.Threading.Volatile.Read(ref join);
+                if (SeatPair(host, j, out int hs, out int js))
+                {
+                    heldReady++;
+                    if (hs == 0 && js == 1) heldRight++;
+                    else heldWrong.Add($"hold {i + 1}: host {hs}, joiner {js}");
+                }
+                host.Cancel();
+                j?.Cancel();
+            }
+            Check(hooked == Held && heldReady == Held,
+                  $"hostseat/held: precondition: the publication hook started all {Held} joiners and every pair "
+                  + $"reached a match ({hooked} started, {heldReady} matched)");
+            Check(heldRight == heldReady && heldReady > 0,
+                  $"hostseat/held: a joiner dialled at the moment of publication, with the host's thread held "
+                  + $"{HoldMs} ms, is still seat 1 ({heldRight} of {heldReady}"
+                  + $"{(heldWrong.Count > 0 ? "; " + string.Join("; ", heldWrong) : "")})");
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"hostseat: the lobby threw: {ex.Message}");
+        }
+        RunHostLineStage(hosted);
+    }
+
+    /// <summary>
+    /// P8-67, the other half of the row: NOTHING NAMES THE PORT BEFORE THE HOST
+    /// HOLDS SEAT 0, neither the lobby's status line nor the menu's line a player
+    /// reads the port from. The lobby's relayBoundForTest hook holds the host's
+    /// connect thread with the relay bound and the seat not yet claimed, the
+    /// window a joiner could take seat 0 in; the real menu, with HOST GAME's own
+    /// path handed that lobby, is polled there through its own _Process, and both
+    /// lines must name no port. Released, the seat is claimed and the port
+    /// published, and both must then name it, so a blank line cannot pass.
+    /// </summary>
+    private void RunHostLineStage(MatchSetup hosted)
+    {
+        MainMenu? menu = null;
+        LanLobby? host = null;
+        var bound = new System.Threading.ManualResetEventSlim(false);
+        var release = new System.Threading.ManualResetEventSlim(false);
+        int boundPort = 0;
+        try
+        {
+            menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(menu);
+            menu.OpenLanForTest();
+            host = LanLobby.Host(hosted, port: 0, relayBoundForTest: p =>
+            {
+                System.Threading.Volatile.Write(ref boundPort, p);
+                bound.Set();
+                release.Wait(5000);
+            });
+            menu.HostLobbyForTest(host);
+            bool held = bound.Wait(5000);
+            menu._Process(0.0);
+            int port = System.Threading.Volatile.Read(ref boundPort);
+            bool publishedHeld = host.PortPublished;
+            string statusHeld = host.Status, lineHeld = menu.LanStatusForTest;
+            release.Set();
+            Check(held && port > 0,
+                  $"hostseat/lines: precondition: the hook held the host's thread with the relay bound and its seat "
+                  + $"unclaimed (held {held}, port {port})");
+            Check(held && !publishedHeld && !NamesPort(statusHeld, port) && !NamesPort(lineHeld, port),
+                  $"hostseat/lines: with the relay bound on port {port} and the host's seat not yet claimed, nothing names "
+                  + $"a port: the lobby says \"{statusHeld}\" and the menu \"{lineHeld.Replace('\n', ' ')}\" "
+                  + $"(published {publishedHeld})");
+
+            long deadline = System.Environment.TickCount64 + 5000;
+            while (!host.PortPublished && host.State == LanLobby.Phase.Connecting
+                   && System.Environment.TickCount64 < deadline)
+                System.Threading.Thread.Sleep(1);
+            menu._Process(0.0);
+            string statusAfter = host.Status, lineAfter = menu.LanStatusForTest;
+            // The menu names the fixed port a real lobby binds, which is the
+            // one HOST GAME asks for; this lobby is on an ephemeral one.
+            Check(host.PortPublished && host.RelayPortForTest == port && statusAfter.Contains($"port {port}")
+                  && lineAfter.Contains(LanLobby.DefaultPort.ToString()),
+                  $"hostseat/lines: released, the seat is claimed and the port published, and both name it: the lobby "
+                  + $"\"{statusAfter}\" and the menu's host line \"{lineAfter.Replace('\n', ' ')}\" "
+                  + $"(published {host.PortPublished}, port {host.RelayPortForTest})");
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"hostseat/lines: the stage threw: {ex.Message}");
+        }
+        finally
+        {
+            release.Set();
+            host?.Cancel();
+            menu?.QueueFree();
+        }
+    }
+
+    /// <summary>P8-67: whether a line names a port: the word, the port the
+    /// relay bound, or the fixed port the menu's host line names.</summary>
+    private static bool NamesPort(string text, int port) =>
+        text.Contains("port") || (port > 0 && text.Contains(port.ToString()))
+        || text.Contains(LanLobby.DefaultPort.ToString());
+
+    /// <summary>P8-67: wait for a host and a joiner to reach a match and read the
+    /// seats the relay gave them. False when either end failed or never got there.</summary>
+    private static bool SeatPair(LanLobby host, LanLobby? join, out int hostSeat, out int joinSeat)
+    {
+        hostSeat = -1;
+        joinSeat = -1;
+        if (join is null) return false;
+        long deadline = System.Environment.TickCount64 + 15000;
+        while ((host.State == LanLobby.Phase.Connecting || join.State == LanLobby.Phase.Connecting)
+               && System.Environment.TickCount64 < deadline)
+            System.Threading.Thread.Sleep(1);
+        if (host.State != LanLobby.Phase.Ready || join.State != LanLobby.Phase.Ready) return false;
+        hostSeat = host.Seat;
+        joinSeat = join.Seat;
+        return true;
     }
 
     // ===================== INPUTGATE: THE FRONT DOOR (P8-40) =====================
@@ -8863,5 +9070,429 @@ public partial class VerifyRunner : Node
             DeleteRecording(g);
             g.QueueFree();
         }
+    }
+
+    // ===================== DOORGATE (P8-71) =====================
+
+    private void DoorGate(bool ok, string stage, string what) => Check(ok, $"doorgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-71: A FACTORY OPENS THE DOOR ON THE FACE ITS UNIT CAME OUT OF. Every
+    /// producer model's door faces first: only the Factory's rig carries doors,
+    /// both on its north face, and the Barracks and the Airfield carry none.
+    /// Then a factory of mine in each quarter of the map builds a Carrier on
+    /// open ground. The sim's exit search takes the first entry of its list,
+    /// (0, 2), in the producer's own frame (ADR-076 clause 3), so a factory short
+    /// of the map's centre on y sets its unit down on its south face, whatever
+    /// its x, and one past the centre on y on its north face; the doors must
+    /// open for the north exits and stay shut for the south ones, where the
+    /// model has none. Last, the south-east factory again with the three cells
+    /// it tries first blocked, so its unit leaves by its west face, which has
+    /// no door either. The doors used to open on every completion, so the
+    /// south and west exits are where this bites.
+    /// </summary>
+    private void RunDoorFaceStages()
+    {
+        GD.Print("  --    doorgate (P8-71): a factory opens the door on the face its unit came out of, in every quarter");
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            int w = lw.Map.Width, h = lw.Map.Height;
+
+            // ---- every producer model's door faces ----
+            if (QuietGround(lw, w / 2, h / 2) is { } mid)
+            {
+                int factory = lw.SpawnFactory(me, mid.X, mid.Y);
+                int barracks = lw.SpawnBarracks(me, mid.X + 3, mid.Y);
+                int airfield = lw.SpawnAirfield(me, mid.X, mid.Y + 3);
+                g.StepTicks(1);
+                g.PumpActorsForTest();
+                var faces = g.DoorFacesForTest(factory);
+                int fDoors = g.DoorCountForTest(factory), bDoors = g.DoorCountForTest(barracks), aDoors = g.DoorCountForTest(airfield);
+                DoorGate(fDoors == 2 && faces == SkirmishLive.Face.North && bDoors == 0 && aDoors == 0, "models",
+                         $"the Factory's rig carries {fDoors} doors, all on its {faces} face, and the Barracks and the Airfield "
+                         + $"carry none ({bDoors} and {aDoors}), so the Factory is the only producer with a door to open");
+                // The barracks stays: it is the Carrier's prerequisite.
+                RemoveFixture(lw, factory);
+                RemoveFixture(lw, airfield);
+            }
+            else DoorGate(false, "models", "quiet ground for three producers (none: a fixture failure)");
+
+            // ---- a factory in each quarter, on open ground ----
+            RunDoorQuarter(g, me, "north-west", 1, 1, blockFirst: false, want: SkirmishLive.Face.South);
+            RunDoorQuarter(g, me, "north-east", 3, 1, blockFirst: false, want: SkirmishLive.Face.South);
+            RunDoorQuarter(g, me, "south-west", 1, 3, blockFirst: false, want: SkirmishLive.Face.North);
+            RunDoorQuarter(g, me, "south-east", 3, 3, blockFirst: false, want: SkirmishLive.Face.North);
+            // ---- past the centre on both axes, its first choices blocked ----
+            RunDoorQuarter(g, me, "south-east/blocked", 3, 3, blockFirst: true, want: SkirmishLive.Face.West);
+        }
+        catch (System.Exception ex) { DoorGate(false, "stage", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>P8-71: one factory of mine in one quarter (qx, qy in quarters of
+    /// the map, 1 or 3) builds a Carrier, and the face its unit came out of
+    /// must be `want`, with the doors open exactly when that face has them.
+    /// blockFirst blocks the three cells its frame tries first, the ones beyond
+    /// its centre-facing side, so the search moves on round the footprint.</summary>
+    private void RunDoorQuarter(SkirmishLive g, int me, string stage, int qx, int qy, bool blockFirst, SkirmishLive.Face want)
+    {
+        var lw = g.LiveWorld;
+        int w = lw.Map.Width, h = lw.Map.Height;
+        if (QuietGround(lw, w * qx / 4, h * qy / 4) is not { } at)
+        {
+            DoorGate(false, stage, "quiet ground for a factory (none: a fixture failure)");
+            return;
+        }
+        int factory = lw.SpawnFactory(me, at.X, at.Y);
+        var fe = lw.Entities[factory];
+        bool pastX = fe.X + fe.X > Fix64.FromInt(w), pastY = fe.Y + fe.Y > Fix64.FromInt(h);
+        if (pastX != (qx > 2) || pastY != (qy > 2))
+        {
+            DoorGate(false, stage, $"precondition: the factory at ({at.X}, {at.Y}) stands in the {stage} quarter "
+                     + $"(past the centre on x {pastX}, on y {pastY})");
+            RemoveFixture(lw, factory);
+            return;
+        }
+        // The cells beyond the centre-facing side that the frame tries first:
+        // (0, 2), (1, 2) and (-1, 2), reflected on each axis the factory stands
+        // past the centre on, from its centre cell (the top-left cell of the
+        // footprint when reflected on both, the bottom-right when on neither).
+        var blocked = new List<(int X, int Y)>();
+        if (blockFirst)
+        {
+            int fy = pastY ? -1 : 1;
+            int scx = pastX ? at.X : at.X + 1, scy = pastY ? at.Y : at.Y + 1;
+            foreach (int dx in new[] { -1, 0, 1 })
+            {
+                var c = (scx + dx, scy + 2 * fy);
+                if (!lw.Map.IsBlocked(c.Item1, c.Item2)) { lw.Map.SetBlocked(c.Item1, c.Item2, true); blocked.Add(c); }
+            }
+        }
+        try
+        {
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            int opened0 = g.DoorOpeningsForTest(factory), doorless0 = g.DoorlessExitsForTest(factory);
+            lw.GrantCredits(me, 5000);
+            g.QueueCommandForTest(CommandType.Produce, factory, World.CarrierUnitType);
+            int unit = -1;
+            for (int t = 0; t < 1500 && unit < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.C == factory) unit = ev.A;
+            }
+            if (unit < 0)
+            {
+                DoorGate(false, stage, $"precondition: the factory built its Carrier (it never completed; its queue "
+                         + $"holds {lw.QueueContents(factory).Count})");
+                return;
+            }
+            var (ux, uy) = (Map.CellOf(lw.Entities[unit].X), Map.CellOf(lw.Entities[unit].Y));
+            var (used, openedFaces) = g.LastDoorExitForTest(factory);
+            int opened = g.DoorOpeningsForTest(factory) - opened0, doorless = g.DoorlessExitsForTest(factory) - doorless0;
+            bool wantOpen = (want & g.DoorFacesForTest(factory)) != 0;
+            DoorGate(used == want
+                     && (wantOpen ? openedFaces == want && opened == 1 && doorless == 0
+                                  : openedFaces == SkirmishLive.Face.None && opened == 0 && doorless == 1),
+                     stage,
+                     $"a factory {(pastX ? "past" : "short of")} the centre on x and {(pastY ? "past" : "short of")} it on y"
+                     + $"{(blockFirst ? $", its first {blocked.Count} exit cells blocked," : "")} sets its Carrier down at "
+                     + $"({ux}, {uy}) against a footprint from ({at.X}, {at.Y}), on its {used} face (want {want}), and "
+                     + (wantOpen ? $"opens the doors on that face (opened {openedFaces}, {opened} openings, {doorless} doorless)"
+                                 : $"opens no door, the model having none there (opened {openedFaces}, {opened} openings, {doorless} doorless)"));
+            RemoveFixture(lw, unit);
+        }
+        finally
+        {
+            foreach (var (x, y) in blocked) lw.Map.SetBlocked(x, y, false);
+            RemoveFixture(lw, factory);
+        }
+    }
+
+    // ===================== BARKGATE (P8-41) =====================
+
+    private void BarkGate(bool ok, string stage, string what) => Check(ok, $"barkgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-41: UNITS ACKNOWLEDGE. A selection and an order went unanswered but
+    /// for a UI click and a blip, so nothing told a player WHICH units took the
+    /// click. Driven through the gestures a player uses (a click and a drag
+    /// through FinishSelect, a right click through the real input path) on the
+    /// battle scene's own AudioDirector with its clock frozen and stepped by
+    /// hand, from seat 1. Every bark in the set and the drag-select sound
+    /// loaded; a click on my squad answers with the selection bark of my
+    /// faction's infantry, and a right click on the ground and on an enemy with
+    /// the move and the attack barks; an enemy unit never answers, whether
+    /// clicked or asked directly; the debounce drops a second selection and a
+    /// second order inside its window and lets an order through right after a
+    /// selection, and the three variants come in turn; a drag that catches
+    /// something has its own sound and answers as the class it caught most
+    /// of, and a drag that catches nothing is silent; each class barks as
+    /// itself; and a unit barks in its owner's faction's timbre.
+    /// </summary>
+    private void RunBarkStages()
+    {
+        GD.Print("  --    barkgate (P8-41): my units answer a selection and an order, an enemy never does, and the answers are debounced");
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        var audio = g.AudioView;
+        double clock = 1000.0;
+        audio.SetClockForTest(() => clock);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            string fac = g.FactionOf(me) == World.FactionSodality ? "sod" : "dir";
+
+            // ---- the set ----
+            var missing = new List<string>();
+            foreach (string f in new[] { "dir", "sod" })
+                foreach (string c in new[] { "infantry", "vehicle", "aircraft" })
+                    foreach (string o in new[] { "select", "move", "attack" })
+                        for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
+                            if (!audio.Has($"bark_{f}_{c}_{o}_{v}")) missing.Add($"bark_{f}_{c}_{o}_{v}");
+            if (!audio.Has(SkirmishLive.BoxSelectCue)) missing.Add(SkirmishLive.BoxSelectCue);
+            BarkGate(missing.Count == 0, "assets",
+                     $"all 54 barks (2 factions, 3 classes, 3 orders, {SkirmishLive.BarkVariants} variants) and the drag-select "
+                     + $"sound are loaded ({(missing.Count == 0 ? "none missing" : "missing " + string.Join(", ", missing))})");
+
+            if (QuietGround(lw, g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me)).X,
+                            g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me)).Y) is not { } s)
+            {
+                BarkGate(false, "select", "quiet ground beside my yard (none: a fixture failure)");
+                return;
+            }
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int squad = SpawnOfType(lw, me, rifle, s.X, s.Y);
+            int enemy = SpawnOfType(lw, foe, rifle, s.X + 4, s.Y);
+            HoldFire(lw, enemy);
+            HoldFire(lw, squad);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            audio.ResetBarksForTest();
+            float sx = Fx(lw.Entities[squad].X), sz = Fx(lw.Entities[squad].Y);
+            float ex = Fx(lw.Entities[enemy].X), ez = Fx(lw.Entities[enemy].Y);
+            g.FocusCameraOn(sx + 2f, sz, 22f);
+
+            // ---- a selection and an order ----
+            g.ClearSelectionForTest();
+            int clickBox0 = audio.PlayRequests(SkirmishLive.BoxSelectCue);
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            bool selected = g.SelectionCount == 1 && g.IsSelected(squad);
+            string selectBark = audio.LastBark ?? "none";
+            int clickBoxCues = audio.PlayRequests(SkirmishLive.BoxSelectCue) - clickBox0;
+            BarkGate(selected && audio.BarksPlayed == 1 && selectBark == $"bark_{fac}_infantry_select_1" && clickBoxCues == 0,
+                     "select",
+                     $"a click on my rifle squad selects it and it answers with my faction's infantry selection bark, "
+                     + $"and a click is not a drag, so no drag-select sound (selected {selected}, {audio.BarksPlayed} played, "
+                     + $"{selectBark}, {clickBoxCues} drag-select sounds)");
+
+            g.PressRightClick(g.ScreenOf(sx, sz + 3f));
+            bool moved = false;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.PathMove && c.EntityId == squad) moved = true;
+            string moveBark = audio.LastBark ?? "none";
+            BarkGate(moved && audio.BarksPlayed == 2 && moveBark == $"bark_{fac}_infantry_move_1", "order",
+                     $"a right click on the ground orders it to move and it answers with the move bark at once, the same "
+                     + $"instant as its selection bark, because an order is never held back by a selection ({moveBark}, "
+                     + $"{audio.BarksPlayed} played, move queued {moved})");
+            g.StepTicks(1);
+
+            clock += 0.7;
+            g.PressRightClick(g.ScreenOf(ex, ez));
+            bool attacked = false;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Attack && c.EntityId == squad && c.AuxId == enemy) attacked = true;
+            string attackBark = audio.LastBark ?? "none";
+            BarkGate(attacked && audio.BarksPlayed == 3 && attackBark == $"bark_{fac}_infantry_attack_1", "attack",
+                     $"a right click on an enemy squad orders the attack and it answers with the attack bark ({attackBark}, "
+                     + $"{audio.BarksPlayed} played, attack queued {attacked})");
+            g.StepTicks(1);
+
+            // ---- an enemy never answers ----
+            clock += 1.0;
+            int played0 = audio.BarksPlayed, requests0 = BarkRequests(audio);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(ex, ez), g.ScreenOf(ex, ez));
+            bool direct = g.BarkFor(enemy, SkirmishLive.BarkOrder.Select) || g.BarkFor(enemy, SkirmishLive.BarkOrder.Move)
+                          || g.BarkFor(enemy, SkirmishLive.BarkOrder.Attack);
+            BarkGate(g.SelectionCount == 0 && !direct && audio.BarksPlayed == played0 && BarkRequests(audio) == requests0,
+                     "enemy",
+                     $"an enemy squad never answers, with the channel free: a click on it selects nothing and barks nothing, "
+                     + $"and BarkFor refuses it for every order without asking the channel ({audio.BarksPlayed - played0} "
+                     + $"played, {BarkRequests(audio) - requests0} asked for, selected {g.SelectionCount}, direct {direct})");
+
+            // ---- the debounce, and the variants in turn ----
+            // A fresh squad where the first stood, so a click finds it however
+            // far the orders above have walked the first.
+            int Fresh(int old)
+            {
+                RemoveFixture(lw, old);
+                int id = SpawnOfType(lw, me, rifle, s.X, s.Y);
+                HoldFire(lw, id);
+                g.StepTicks(1);
+                g.StepOneTick();
+                g.PumpActorsForTest();
+                return id;
+            }
+            squad = Fresh(squad);
+            clock += 1.0;
+            // Both tallies are read here, immediately before the two
+            // selections, so a bark that strays into an earlier stage fails
+            // that stage and never this one.
+            int debouncePlayed0 = audio.BarksPlayed, dropped0 = audio.BarksDropped;
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            string again = audio.LastBark ?? "none";
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            int afterTwo = audio.BarksPlayed, droppedSelect = audio.BarksDropped - dropped0;
+            var moves = new List<string>();
+            int orderDrops = 0;
+            foreach (double step in new[] { 0.3, 0.3, 0.4, 0.7 })
+            {
+                clock += step;
+                int before = audio.BarksPlayed, droppedBefore = audio.BarksDropped;
+                g.PressRightClick(g.ScreenOf(sx + 1f, sz + 3f));
+                if (audio.BarksPlayed > before) moves.Add(audio.LastBark ?? "none");
+                orderDrops += audio.BarksDropped - droppedBefore;
+                g.StepTicks(1);
+            }
+            bool selectDebounced = again == $"bark_{fac}_infantry_select_2" && droppedSelect == 1
+                                   && afterTwo == debouncePlayed0 + 1;
+            bool ordersDebounced = orderDrops == 1 && moves.Count == 3
+                                   && moves[0] == $"bark_{fac}_infantry_move_2" && moves[1] == $"bark_{fac}_infantry_move_3"
+                                   && moves[2] == $"bark_{fac}_infantry_move_1";
+            BarkGate(selectDebounced && ordersDebounced, "debounce",
+                     $"a second selection at the same instant is dropped ({droppedSelect} dropped and played {afterTwo} "
+                     + $"against {debouncePlayed0} before the two, want one more; the first {again}), and of "
+                     + $"four orders 0.3, 0.3, 0.4 and 0.7 s apart against a {AudioDirector.BarkDebounceSeconds} s window the "
+                     + $"second is dropped and the rest answer, the variants in turn ({orderDrops} dropped; played "
+                     + $"{string.Join(", ", moves)})");
+
+            // ---- the drag ----
+            clock += 1.0;
+            int tank = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            int t1 = SpawnOfType(lw, me, tank, s.X, s.Y + 2), t2 = SpawnOfType(lw, me, tank, s.X + 1, s.Y + 2);
+            HoldFire(lw, t1);
+            HoldFire(lw, t2);
+            squad = Fresh(squad);
+            float minX = sx, maxX = sx, minZ = sz, maxZ = sz;
+            foreach (int id in new[] { squad, t1, t2 })
+            {
+                minX = Mathf.Min(minX, Fx(lw.Entities[id].X)); maxX = Mathf.Max(maxX, Fx(lw.Entities[id].X));
+                minZ = Mathf.Min(minZ, Fx(lw.Entities[id].Y)); maxZ = Mathf.Max(maxZ, Fx(lw.Entities[id].Y));
+            }
+            int box0 = audio.PlayRequests(SkirmishLive.BoxSelectCue), dragPlayed0 = audio.BarksPlayed;
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(minX - 0.8f, minZ - 0.8f), g.ScreenOf(maxX + 0.8f, maxZ + 0.8f));
+            bool caught = g.IsSelected(squad) && g.IsSelected(t1) && g.IsSelected(t2);
+            int boxCues = audio.PlayRequests(SkirmishLive.BoxSelectCue) - box0;
+            string dragBark = audio.LastBark ?? "none";
+            bool dragAnswered = audio.BarksPlayed == dragPlayed0 + 1 && dragBark == $"bark_{fac}_vehicle_select_1";
+            clock += 1.0;
+            int emptyBox0 = audio.PlayRequests(SkirmishLive.BoxSelectCue), emptyPlayed0 = audio.BarksPlayed;
+            g.BoxSelect(g.ScreenOf(maxX + 2f, maxZ + 2f), g.ScreenOf(maxX + 4f, maxZ + 4f));
+            bool emptySilent = g.SelectionCount == 0 && audio.PlayRequests(SkirmishLive.BoxSelectCue) == emptyBox0
+                               && audio.BarksPlayed == emptyPlayed0;
+            BarkGate(caught && boxCues == 1 && dragAnswered && emptySilent, "drag",
+                     $"a drag round my squad and two tanks catches all three, plays the drag-select sound once ({boxCues}) and "
+                     + $"answers as the class it caught most of ({dragBark}); a drag over empty ground is silent "
+                     + $"({emptySilent})");
+
+            // ---- each class as itself ----
+            clock += 1.0;
+            int flyer = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_strike_flyer"), s.X + 3, s.Y + 3);
+            int harvester = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_harvester"), s.X + 4, s.Y + 4);
+            g.StepTicks(1);
+            bool flew = g.BarkFor(flyer, SkirmishLive.BarkOrder.Select);
+            string flyerBark = audio.LastBark ?? "none";
+            var classes = $"{g.BarkClassOf(squad)}, {g.BarkClassOf(t1)}, {g.BarkClassOf(harvester)}, {g.BarkClassOf(flyer)}";
+            BarkGate(g.BarkClassOf(squad) == SkirmishLive.BarkClass.Infantry && g.BarkClassOf(t1) == SkirmishLive.BarkClass.Vehicle
+                     && g.BarkClassOf(harvester) == SkirmishLive.BarkClass.Vehicle
+                     && g.BarkClassOf(flyer) == SkirmishLive.BarkClass.Aircraft
+                     && flew && flyerBark == $"bark_{fac}_aircraft_select_1", "classes",
+                     $"a rifle squad barks as infantry, a tank and a harvester as vehicles and a strike flyer as an aircraft "
+                     + $"({classes}; the flyer answered {flyerBark})");
+
+        }
+        catch (System.Exception ex) { BarkGate(false, "stage", $"the stage threw: {ex}"); }
+        finally
+        {
+            audio.SetClockForTest(null);
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+        RunBarkFactionStage();
+    }
+
+    /// <summary>P8-41: a unit answers in its OWNER's faction's timbre. Factions
+    /// are fixed once a match starts (World.SetFaction), so this boots a second
+    /// scene with the two sides swapped, seat 1 now the other faction, and the
+    /// same rifle squad must answer in that faction's voice. Every MatchConfig
+    /// field it writes is put back.</summary>
+    private void RunBarkFactionStage()
+    {
+        int wasFaction = MatchConfig.Faction, wasOpp = MatchConfig.OppositionFaction;
+        SkirmishLive? g = null;
+        try
+        {
+            MatchConfig.Faction = wasOpp;
+            MatchConfig.OppositionFaction = wasFaction;
+            g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            string fac = g.FactionOf(me) == World.FactionSodality ? "sod" : "dir";
+            string was = wasOpp == World.FactionSodality ? "sod" : "dir";
+            var (yx, yy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+            if (QuietGround(lw, yx, yy) is not { } s)
+            {
+                BarkGate(false, "faction", "quiet ground beside my yard (none: a fixture failure)");
+                return;
+            }
+            int squad = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), s.X, s.Y);
+            g.StepTicks(1);
+            g.AudioView.ResetBarksForTest();
+            bool played = g.BarkFor(squad, SkirmishLive.BarkOrder.Select);
+            string bark = g.AudioView.LastBark ?? "none";
+            BarkGate(fac != was && played && bark == $"bark_{fac}_infantry_select_1", "faction",
+                     $"with the sides swapped, seat 1 is {fac} where it was {was}, and the same rifle squad answers in its "
+                     + $"owner's timbre ({bark})");
+        }
+        catch (System.Exception ex) { BarkGate(false, "faction", $"the stage threw: {ex}"); }
+        finally
+        {
+            MatchConfig.Faction = wasFaction;
+            MatchConfig.OppositionFaction = wasOpp;
+            if (g != null)
+            {
+                DeleteRecording(g);
+                g.QueueFree();
+            }
+        }
+    }
+
+    /// <summary>P8-41: every bark asked for so far, played or dropped.</summary>
+    private static int BarkRequests(AudioDirector audio)
+    {
+        int n = 0;
+        foreach (string f in new[] { "dir", "sod" })
+            foreach (string c in new[] { "infantry", "vehicle", "aircraft" })
+                foreach (string o in new[] { "select", "move", "attack" })
+                    for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
+                        n += audio.PlayRequests($"bark_{f}_{c}_{o}_{v}");
+        return n;
     }
 }

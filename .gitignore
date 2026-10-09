@@ -50,3 +50,7 @@ game/assets/models/*_emit.png.import
 
 # Packaged builds (tools/package.sh output)
 build/
+
+# Agents' persistent memory, which the project's rules forbid committing.
+# Verifiers kept finding it untracked and unignored in shared worktrees.
+.claude/agent-memory/
