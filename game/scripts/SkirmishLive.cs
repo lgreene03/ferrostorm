@@ -2145,9 +2145,10 @@ public partial class SkirmishLive : Node3D
             // ProductionComplete at all: every other seat's completions, every
             // yard's building, and (until D34 gave it its own event) every
             // Carrier unload. C names the producer on every completion, and
-            // OpenFactoryDoors opens nothing that is not a Factory.
+            // OpenFactoryDoors opens nothing that is not a Factory. P8-71: A
+            // names the unit, whose cell says which face it came out of.
             if (ev.Type == GameEventType.ProductionComplete && ev.C >= 0)
-                OpenFactoryDoors(ev.C);
+                OpenFactoryDoors(ev.C, ev.A);
             // ADR-007: the sim owns the rally now. The produced unit already
             // left the factory with its sim-side exit move, so the PathMove
             // this block used to issue is gone with the `_rally` dictionary.
@@ -3225,27 +3226,116 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, int> _tickOwner = new();
     private bool _spottingSeeded;
 
-    /// <summary>P8-10 review: open one factory's doors, the producer's own.
-    /// Counted per factory for the harness.</summary>
-    private void OpenFactoryDoors(int factory)
+    /// <summary>P8-71: the four faces of a building, as bits, in the sim's
+    /// frame: north is -Y, which the scene draws as -Z.</summary>
+    [System.Flags]
+    public enum Face { None = 0, North = 1, East = 2, South = 4, West = 8 }
+
+    /// <summary>
+    /// P8-71: the face of a footprint a unit standing in cell (ux, uy) came out
+    /// of. The footprint is size cells square from anchor (ax, ay). The unit is
+    /// past it on the axis it stands further out on, and at a corner exactly as
+    /// far out on both it is beside two faces, so both count. A cell inside the
+    /// footprint is beside none.
+    /// </summary>
+    public static Face ExitFace(int ax, int ay, int size, int ux, int uy)
+    {
+        int ex = ux < ax ? ax - ux : ux > ax + size - 1 ? ux - (ax + size - 1) : 0;
+        int ey = uy < ay ? ay - uy : uy > ay + size - 1 ? uy - (ay + size - 1) : 0;
+        Face fx = ux < ax ? Face.West : ux > ax + size - 1 ? Face.East : Face.None;
+        Face fy = uy < ay ? Face.North : uy > ay + size - 1 ? Face.South : Face.None;
+        if (ex > ey) return fx;
+        if (ey > ex) return fy;
+        return fx | fy;
+    }
+
+    /// <summary>P8-71: the face of its building a door node stands on, read off
+    /// its rest position in the model turned by the actor's yaw. The Factory's
+    /// two leaves stand at local z -0.72 against a hall 0.7 deep, so both are on
+    /// the north face.</summary>
+    private static Face DoorFace(Vector3 home, float yaw)
+    {
+        var w = home.Rotated(Vector3.Up, yaw);
+        if (Mathf.Abs(w.Z) > Mathf.Abs(w.X)) return w.Z < 0 ? Face.North : Face.South;
+        return w.X > 0 ? Face.East : Face.West;
+    }
+
+    /// <summary>
+    /// P8-10 review: open one factory's doors, the producer's own. Counted per
+    /// factory for the harness.
+    ///
+    /// P8-71: AND ONLY THE DOORS ON THE FACE THE UNIT CAME OUT OF. This slid
+    /// every door on every completion, and the Factory's doors are all on its
+    /// north face, while its units have always left south first (World's
+    /// SpawnOffsets) and, since ADR-076 clause 3, leave by the face towards the
+    /// map's centre and may take any cell beside the footprint. So in the
+    /// northern half the shutters opened on the far side from the tank. The face
+    /// is the spawned unit's cell against the producer's footprint (ExitFace),
+    /// read from the sim at the completion, before the unit has moved (movement
+    /// runs before production in a tick). A face with no door opens nothing and
+    /// is counted as a doorless exit; doors left open by an earlier opening that
+    /// this one does not use still close.
+    /// </summary>
+    private void OpenFactoryDoors(int factory, int unit)
     {
         if (!_rigs.TryGetValue(factory, out var rig) || rig.Doors.Count == 0) return;
         if (!_latest.TryGetValue(factory, out var fv) || fv.Kind != EntityKind.Factory) return;
         if (!_actors.TryGetValue(factory, out var node)) return;
+        Face used = Face.None;
+        if ((uint)factory < (uint)_world.EntityCount && (uint)unit < (uint)_world.EntityCount)
+        {
+            var p = _world.Entities[factory];
+            var u = _world.Entities[unit];
+            used = ExitFace(_world.AnchorOf(p.X, p.StructType), _world.AnchorOf(p.Y, p.StructType),
+                _world.FootprintOf(p.StructType), Map.CellOf(u.X), Map.CellOf(u.Y));
+        }
+        float yaw = node.Rotation.Y;
+        Face opened = Face.None;
+        foreach (var (_, home) in rig.Doors)
+            if ((DoorFace(home, yaw) & used) != 0) opened |= DoorFace(home, yaw);
+        _lastDoorExit[factory] = (used, opened);
+        if (opened == Face.None)
+        {
+            _doorlessExits[factory] = _doorlessExits.GetValueOrDefault(factory) + 1;
+            return;
+        }
         _doorOpenings[factory] = _doorOpenings.GetValueOrDefault(factory) + 1;
         rig.DoorTw?.Kill();
         rig.DoorTw = node.CreateTween();
         foreach (var (d, home) in rig.Doors)
-            rig.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
+        {
+            // A leaf slides along its own wall, away from the middle of it:
+            // along x on a north or south face, along z on an east or west one.
+            bool open = (DoorFace(home, yaw) & opened) != 0;
+            var slide = Mathf.Abs(home.Z) > Mathf.Abs(home.X)
+                ? new Vector3(home.X < 0 ? -0.35f : 0.35f, 0, 0)
+                : new Vector3(0, 0, home.Z < 0 ? -0.35f : 0.35f);
+            rig.DoorTw.Parallel().TweenProperty(d, "position", open ? home + slide : home, 0.4f);
+        }
         rig.DoorTw.TweenInterval(1.4);
         foreach (var (d, home) in rig.Doors)
             rig.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
     }
     private readonly Dictionary<int, int> _doorOpenings = new();
+    private readonly Dictionary<int, int> _doorlessExits = new();
+    private readonly Dictionary<int, (Face Used, Face Opened)> _lastDoorExit = new();
     /// <summary>Verification reads: how often a factory's doors opened, and how
     /// many door nodes its rig carries (0 means a door check would be vacuous).</summary>
     public int DoorOpeningsForTest(int factory) => _doorOpenings.GetValueOrDefault(factory);
     public int DoorCountForTest(int factory) => _rigs.TryGetValue(factory, out var r) ? r.Doors.Count : -1;
+    /// <summary>P8-71 verification reads: completions out of a face with no
+    /// door; the face the last completion came out of and the faces whose
+    /// doors it opened; and every face a producer's rig has doors on.</summary>
+    public int DoorlessExitsForTest(int factory) => _doorlessExits.GetValueOrDefault(factory);
+    public (Face Used, Face Opened) LastDoorExitForTest(int factory) =>
+        _lastDoorExit.TryGetValue(factory, out var x) ? x : (Face.None, Face.None);
+    public Face DoorFacesForTest(int id)
+    {
+        if (!_rigs.TryGetValue(id, out var rig) || !_actors.TryGetValue(id, out var node)) return Face.None;
+        Face all = Face.None;
+        foreach (var (_, home) in rig.Doors) all |= DoorFace(home, node.Rotation.Y);
+        return all;
+    }
 
     /// <summary>TICKET-P5-ALERT-02: every alert site calls this with the map
     /// position it pinged (the minimap's own coordinate space, world X and Z),

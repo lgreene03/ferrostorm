@@ -1312,6 +1312,8 @@ public partial class VerifyRunner : Node
         RunControlsStages();
         // P8-42: refusals explain themselves, through one Deny.
         RunDenyStages();
+        // P8-71: a factory opens the door on the face its unit came out of.
+        RunDoorFaceStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -1909,6 +1911,9 @@ public partial class VerifyRunner : Node
         EventGate(doorsMine > 0 && doorsTheirs > 0, "doors",
                   $"precondition: both factories' rigs carry doors, so the check can fail ({doorsMine} and {doorsTheirs})");
         int m0 = g.DoorOpeningsForTest(mine), t0 = g.DoorOpeningsForTest(theirs);
+        // P8-71: a completion out of a face with no door opens nothing and is
+        // counted as a doorless exit instead, so each completion is one or the other.
+        int md0 = g.DoorlessExitsForTest(mine), td0 = g.DoorlessExitsForTest(theirs);
         lw.GrantCredits(me, 3000);
         lw.GrantCredits(foe, 3000);
         g.QueueCommandForTest(CommandType.Produce, mine, World.CarrierUnitType);
@@ -1926,9 +1931,12 @@ public partial class VerifyRunner : Node
             }
         }
         int openedMine = g.DoorOpeningsForTest(mine) - m0, openedTheirs = g.DoorOpeningsForTest(theirs) - t0;
-        EventGate(byMine > 0 && byTheirs > 0 && openedMine == byMine && openedTheirs == byTheirs, "doors",
-                  $"a completion opens only its OWN factory's doors: mine opened {openedMine} times for its {byMine} "
-                  + $"completions and the enemy's {openedTheirs} for its {byTheirs}, through {elsewhere} other completions");
+        int doorlessMine = g.DoorlessExitsForTest(mine) - md0, doorlessTheirs = g.DoorlessExitsForTest(theirs) - td0;
+        EventGate(byMine > 0 && byTheirs > 0 && openedMine + doorlessMine == byMine
+                  && openedTheirs + doorlessTheirs == byTheirs, "doors",
+                  $"a completion answers only at its OWN factory: mine opened {openedMine} times and left by a doorless "
+                  + $"face {doorlessMine} for its {byMine} completions and the enemy's {openedTheirs} and {doorlessTheirs} "
+                  + $"for its {byTheirs}, through {elsewhere} other completions");
     }
 
     /// <summary>P8-10 review, item 1, under decision D34: boarding is the sim's
@@ -8978,6 +8986,154 @@ public partial class VerifyRunner : Node
         {
             DeleteRecording(g);
             g.QueueFree();
+        }
+    }
+
+    // ===================== DOORGATE (P8-71) =====================
+
+    private void DoorGate(bool ok, string stage, string what) => Check(ok, $"doorgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-71: A FACTORY OPENS THE DOOR ON THE FACE ITS UNIT CAME OUT OF. Every
+    /// producer model's door faces first: only the Factory's rig carries doors,
+    /// both on its north face, and the Barracks and the Airfield carry none.
+    /// Then a factory of mine in each quarter of the map builds a Carrier on
+    /// open ground. The sim's exit search takes the first entry of its list,
+    /// (0, 2), in the producer's own frame (ADR-076 clause 3), so a factory short
+    /// of the map's centre on y sets its unit down on its south face, whatever
+    /// its x, and one past the centre on y on its north face; the doors must
+    /// open for the north exits and stay shut for the south ones, where the
+    /// model has none. Last, the south-east factory again with the three cells
+    /// it tries first blocked, so its unit leaves by its west face, which has
+    /// no door either. The doors used to open on every completion, so the
+    /// south and west exits are where this bites.
+    /// </summary>
+    private void RunDoorFaceStages()
+    {
+        GD.Print("  --    doorgate (P8-71): a factory opens the door on the face its unit came out of, in every quarter");
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            int w = lw.Map.Width, h = lw.Map.Height;
+
+            // ---- every producer model's door faces ----
+            if (QuietGround(lw, w / 2, h / 2) is { } mid)
+            {
+                int factory = lw.SpawnFactory(me, mid.X, mid.Y);
+                int barracks = lw.SpawnBarracks(me, mid.X + 3, mid.Y);
+                int airfield = lw.SpawnAirfield(me, mid.X, mid.Y + 3);
+                g.StepTicks(1);
+                g.PumpActorsForTest();
+                var faces = g.DoorFacesForTest(factory);
+                int fDoors = g.DoorCountForTest(factory), bDoors = g.DoorCountForTest(barracks), aDoors = g.DoorCountForTest(airfield);
+                DoorGate(fDoors == 2 && faces == SkirmishLive.Face.North && bDoors == 0 && aDoors == 0, "models",
+                         $"the Factory's rig carries {fDoors} doors, all on its {faces} face, and the Barracks and the Airfield "
+                         + $"carry none ({bDoors} and {aDoors}), so the Factory is the only producer with a door to open");
+                // The barracks stays: it is the Carrier's prerequisite.
+                RemoveFixture(lw, factory);
+                RemoveFixture(lw, airfield);
+            }
+            else DoorGate(false, "models", "quiet ground for three producers (none: a fixture failure)");
+
+            // ---- a factory in each quarter, on open ground ----
+            RunDoorQuarter(g, me, "north-west", 1, 1, blockFirst: false, want: SkirmishLive.Face.South);
+            RunDoorQuarter(g, me, "north-east", 3, 1, blockFirst: false, want: SkirmishLive.Face.South);
+            RunDoorQuarter(g, me, "south-west", 1, 3, blockFirst: false, want: SkirmishLive.Face.North);
+            RunDoorQuarter(g, me, "south-east", 3, 3, blockFirst: false, want: SkirmishLive.Face.North);
+            // ---- past the centre on both axes, its first choices blocked ----
+            RunDoorQuarter(g, me, "south-east/blocked", 3, 3, blockFirst: true, want: SkirmishLive.Face.West);
+        }
+        catch (System.Exception ex) { DoorGate(false, "stage", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>P8-71: one factory of mine in one quarter (qx, qy in quarters of
+    /// the map, 1 or 3) builds a Carrier, and the face its unit came out of
+    /// must be `want`, with the doors open exactly when that face has them.
+    /// blockFirst blocks the three cells its frame tries first, the ones beyond
+    /// its centre-facing side, so the search moves on round the footprint.</summary>
+    private void RunDoorQuarter(SkirmishLive g, int me, string stage, int qx, int qy, bool blockFirst, SkirmishLive.Face want)
+    {
+        var lw = g.LiveWorld;
+        int w = lw.Map.Width, h = lw.Map.Height;
+        if (QuietGround(lw, w * qx / 4, h * qy / 4) is not { } at)
+        {
+            DoorGate(false, stage, "quiet ground for a factory (none: a fixture failure)");
+            return;
+        }
+        int factory = lw.SpawnFactory(me, at.X, at.Y);
+        var fe = lw.Entities[factory];
+        bool pastX = fe.X + fe.X > Fix64.FromInt(w), pastY = fe.Y + fe.Y > Fix64.FromInt(h);
+        if (pastX != (qx > 2) || pastY != (qy > 2))
+        {
+            DoorGate(false, stage, $"precondition: the factory at ({at.X}, {at.Y}) stands in the {stage} quarter "
+                     + $"(past the centre on x {pastX}, on y {pastY})");
+            RemoveFixture(lw, factory);
+            return;
+        }
+        // The cells beyond the centre-facing side that the frame tries first:
+        // (0, 2), (1, 2) and (-1, 2), reflected on each axis the factory stands
+        // past the centre on, from its centre cell (the top-left cell of the
+        // footprint when reflected on both, the bottom-right when on neither).
+        var blocked = new List<(int X, int Y)>();
+        if (blockFirst)
+        {
+            int fy = pastY ? -1 : 1;
+            int scx = pastX ? at.X : at.X + 1, scy = pastY ? at.Y : at.Y + 1;
+            foreach (int dx in new[] { -1, 0, 1 })
+            {
+                var c = (scx + dx, scy + 2 * fy);
+                if (!lw.Map.IsBlocked(c.Item1, c.Item2)) { lw.Map.SetBlocked(c.Item1, c.Item2, true); blocked.Add(c); }
+            }
+        }
+        try
+        {
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            int opened0 = g.DoorOpeningsForTest(factory), doorless0 = g.DoorlessExitsForTest(factory);
+            lw.GrantCredits(me, 5000);
+            g.QueueCommandForTest(CommandType.Produce, factory, World.CarrierUnitType);
+            int unit = -1;
+            for (int t = 0; t < 1500 && unit < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.C == factory) unit = ev.A;
+            }
+            if (unit < 0)
+            {
+                DoorGate(false, stage, $"precondition: the factory built its Carrier (it never completed; its queue "
+                         + $"holds {lw.QueueContents(factory).Count})");
+                return;
+            }
+            var (ux, uy) = (Map.CellOf(lw.Entities[unit].X), Map.CellOf(lw.Entities[unit].Y));
+            var (used, openedFaces) = g.LastDoorExitForTest(factory);
+            int opened = g.DoorOpeningsForTest(factory) - opened0, doorless = g.DoorlessExitsForTest(factory) - doorless0;
+            bool wantOpen = (want & g.DoorFacesForTest(factory)) != 0;
+            DoorGate(used == want
+                     && (wantOpen ? openedFaces == want && opened == 1 && doorless == 0
+                                  : openedFaces == SkirmishLive.Face.None && opened == 0 && doorless == 1),
+                     stage,
+                     $"a factory {(pastX ? "past" : "short of")} the centre on x and {(pastY ? "past" : "short of")} it on y"
+                     + $"{(blockFirst ? $", its first {blocked.Count} exit cells blocked," : "")} sets its Carrier down at "
+                     + $"({ux}, {uy}) against a footprint from ({at.X}, {at.Y}), on its {used} face (want {want}), and "
+                     + (wantOpen ? $"opens the doors on that face (opened {openedFaces}, {opened} openings, {doorless} doorless)"
+                                 : $"opens no door, the model having none there (opened {openedFaces}, {opened} openings, {doorless} doorless)"));
+            RemoveFixture(lw, unit);
+        }
+        finally
+        {
+            foreach (var (x, y) in blocked) lw.Map.SetBlocked(x, y, false);
+            RemoveFixture(lw, factory);
         }
     }
 }
