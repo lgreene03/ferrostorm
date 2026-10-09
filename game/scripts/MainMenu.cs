@@ -452,6 +452,19 @@ public partial class MainMenu : Control
         var setup = LanSetupFromMenu();
         RememberSetup(setup);   // P8-34: a hosted match is the last match too
         _lobby = LanLobby.Host(setup);
+        _hostLineShown = false;
+        // P8-67: the line naming the port waits until the lobby has published
+        // it, which is once this machine holds seat 0 (PollLobby puts it up).
+        SetLanStatus(_lobby.Status);
+    }
+
+    /// <summary>P8-67: whether the host's "lobby open" line, the one naming the
+    /// port, is up yet.</summary>
+    private bool _hostLineShown;
+
+    private void ShowHostLine()
+    {
+        _hostLineShown = true;
         var addresses = LanLobby.LocalAddresses();
         string where = addresses.Count > 0
             ? string.Join(" or ", addresses) + $":{LanLobby.DefaultPort}"
@@ -484,6 +497,7 @@ public partial class MainMenu : Control
             _lobby = null;
             return;
         }
+        if (lobby.PortPublished && !_hostLineShown) ShowHostLine();
         if (lobby.State != LanLobby.Phase.Ready || lobby.Client is null || lobby.Setup is null) return;
         _lobby = null;
         LaunchNetBattle(lobby);

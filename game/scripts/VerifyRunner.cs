@@ -5648,6 +5648,7 @@ public partial class VerifyRunner : Node
         RunLanSpectatorStage();
         RunLanPreStepStage();
         RunLobbyChecks();
+        RunLobbySeatStage();   // P8-67: the host seats itself first
         RunDifficultyChecks();
         RunTeamChecks();
     }
@@ -6693,6 +6694,121 @@ public partial class VerifyRunner : Node
         {
             Check(false, $"the lobby threw: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// P8-67: THE HOST SEATS ITSELF FIRST, however fast a joiner dials. The relay
+    /// seats peers in the order it accepts them, and the lobby used to publish
+    /// its port as soon as the relay bound, before the host's own client had
+    /// dialled, so a joiner that dialled the published port inside that window
+    /// took seat 0 (seen once in 14 harness runs, by RunLobbyChecks' own seat
+    /// check). Two halves. THE RACE: a joiner dials on this thread the instant
+    /// RelayPortForTest turns nonzero, with nothing between the poll and the
+    /// dial, many times over, and every time the host must hold seat 0 and the
+    /// joiner seat 1. A race only shows a defect when it is lost, so THE HELD
+    /// WINDOW makes it deterministic: the lobby's publication hook dials the
+    /// joiner from the host's own connect thread at the moment of publication
+    /// and holds that thread there long enough for the joiner's connect to land,
+    /// which is the widest the window can be. Publishing before the host's seat
+    /// is claimed then loses every time, and publishing after it can never lose.
+    /// </summary>
+    private void RunLobbySeatStage()
+    {
+        GD.Print("  --    LAN (P8-67): the host seats itself first, however fast a joiner dials");
+        const int Races = 24, Held = 4, HoldMs = 60;
+        var hosted = new MatchSetup
+        {
+            MapPath = "data/maps/skirmish-01.fmap",
+            AiPreset = 1,
+            StartCredits = 5000,
+            Seed = 6767UL,
+            Faction = 1,
+            OppFaction = 0,
+        };
+        try
+        {
+            // ---- the race: dial the instant the port appears ----
+            int ready = 0, right = 0;
+            var wrong = new List<string>();
+            for (int i = 0; i < Races; i++)
+            {
+                var host = LanLobby.Host(hosted, port: 0);
+                long deadline = System.Environment.TickCount64 + 5000;
+                // No sleep, no yield: a volatile read in a tight loop and the dial
+                // on the very next line.
+                while (host.RelayPortForTest <= 0 && host.State == LanLobby.Phase.Connecting
+                       && System.Environment.TickCount64 < deadline) { }
+                LanLobby? join = host.RelayPortForTest > 0 ? LanLobby.Join("127.0.0.1", host.RelayPortForTest) : null;
+                if (SeatPair(host, join, out int hs, out int js))
+                {
+                    ready++;
+                    if (hs == 0 && js == 1) right++;
+                    else wrong.Add($"race {i + 1}: host {hs}, joiner {js}");
+                }
+                host.Cancel();
+                join?.Cancel();
+            }
+            Check(ready == Races,
+                  $"hostseat/race: precondition: all {Races} races reached a match on both ends ({ready} did)");
+            Check(right == ready && ready > 0,
+                  $"hostseat/race: a joiner dialling the instant the port appears is seat 1 and the host seat 0, "
+                  + $"in every race ({right} of {ready}{(wrong.Count > 0 ? "; " + string.Join("; ", wrong) : "")})");
+
+            // ---- the held window: dial from the host's own thread at publication ----
+            int heldReady = 0, heldRight = 0, hooked = 0;
+            var heldWrong = new List<string>();
+            for (int i = 0; i < Held; i++)
+            {
+                LanLobby? join = null;
+                var host = LanLobby.Host(hosted, port: 0, portPublishedForTest: p =>
+                {
+                    join = LanLobby.Join("127.0.0.1", p);
+                    System.Threading.Interlocked.Increment(ref hooked);
+                    System.Threading.Thread.Sleep(HoldMs);
+                });
+                long deadline = System.Environment.TickCount64 + 5000;
+                while (System.Threading.Volatile.Read(ref join) is null && host.State == LanLobby.Phase.Connecting
+                       && System.Environment.TickCount64 < deadline)
+                    System.Threading.Thread.Sleep(1);
+                var j = System.Threading.Volatile.Read(ref join);
+                if (SeatPair(host, j, out int hs, out int js))
+                {
+                    heldReady++;
+                    if (hs == 0 && js == 1) heldRight++;
+                    else heldWrong.Add($"hold {i + 1}: host {hs}, joiner {js}");
+                }
+                host.Cancel();
+                j?.Cancel();
+            }
+            Check(hooked == Held && heldReady == Held,
+                  $"hostseat/held: precondition: the publication hook dialled all {Held} joiners and every pair "
+                  + $"reached a match ({hooked} dialled, {heldReady} matched)");
+            Check(heldRight == heldReady && heldReady > 0,
+                  $"hostseat/held: a joiner dialled at the moment of publication, with the host's thread held "
+                  + $"{HoldMs} ms, is still seat 1 ({heldRight} of {heldReady}"
+                  + $"{(heldWrong.Count > 0 ? "; " + string.Join("; ", heldWrong) : "")})");
+        }
+        catch (System.Exception ex)
+        {
+            Check(false, $"hostseat: the lobby threw: {ex.Message}");
+        }
+    }
+
+    /// <summary>P8-67: wait for a host and a joiner to reach a match and read the
+    /// seats the relay gave them. False when either end failed or never got there.</summary>
+    private static bool SeatPair(LanLobby host, LanLobby? join, out int hostSeat, out int joinSeat)
+    {
+        hostSeat = -1;
+        joinSeat = -1;
+        if (join is null) return false;
+        long deadline = System.Environment.TickCount64 + 15000;
+        while ((host.State == LanLobby.Phase.Connecting || join.State == LanLobby.Phase.Connecting)
+               && System.Environment.TickCount64 < deadline)
+            System.Threading.Thread.Sleep(1);
+        if (host.State != LanLobby.Phase.Ready || join.State != LanLobby.Phase.Ready) return false;
+        hostSeat = host.Seat;
+        joinSeat = join.Seat;
+        return true;
     }
 
     // ===================== INPUTGATE: THE FRONT DOOR (P8-40) =====================
