@@ -1314,6 +1314,8 @@ public partial class VerifyRunner : Node
         RunDenyStages();
         // P8-71: a factory opens the door on the face its unit came out of.
         RunDoorFaceStages();
+        // P8-41: my units answer a selection and an order, debounced.
+        RunBarkStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -9135,5 +9137,276 @@ public partial class VerifyRunner : Node
             foreach (var (x, y) in blocked) lw.Map.SetBlocked(x, y, false);
             RemoveFixture(lw, factory);
         }
+    }
+
+    // ===================== BARKGATE (P8-41) =====================
+
+    private void BarkGate(bool ok, string stage, string what) => Check(ok, $"barkgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-41: UNITS ACKNOWLEDGE. A selection and an order went unanswered but
+    /// for a UI click and a blip, so nothing told a player WHICH units took the
+    /// click. Driven through the gestures a player uses (a click and a drag
+    /// through FinishSelect, a right click through the real input path) on the
+    /// battle scene's own AudioDirector with its clock frozen and stepped by
+    /// hand, from seat 1. Every bark in the set and the drag-select sound
+    /// loaded; a click on my squad answers with the selection bark of my
+    /// faction's infantry, and a right click on the ground and on an enemy with
+    /// the move and the attack barks; an enemy unit never answers, whether
+    /// clicked or asked directly; the debounce drops a second selection and a
+    /// second order inside its window and lets an order through right after a
+    /// selection, and the three variants come in turn; a drag that catches
+    /// something has its own sound and answers as the class it caught most
+    /// of, and a drag that catches nothing is silent; each class barks as
+    /// itself; and a unit barks in its owner's faction's timbre.
+    /// </summary>
+    private void RunBarkStages()
+    {
+        GD.Print("  --    barkgate (P8-41): my units answer a selection and an order, an enemy never does, and the answers are debounced");
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        var audio = g.AudioView;
+        double clock = 1000.0;
+        audio.SetClockForTest(() => clock);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            string fac = g.FactionOf(me) == World.FactionSodality ? "sod" : "dir";
+
+            // ---- the set ----
+            var missing = new List<string>();
+            foreach (string f in new[] { "dir", "sod" })
+                foreach (string c in new[] { "infantry", "vehicle", "aircraft" })
+                    foreach (string o in new[] { "select", "move", "attack" })
+                        for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
+                            if (!audio.Has($"bark_{f}_{c}_{o}_{v}")) missing.Add($"bark_{f}_{c}_{o}_{v}");
+            if (!audio.Has(SkirmishLive.BoxSelectCue)) missing.Add(SkirmishLive.BoxSelectCue);
+            BarkGate(missing.Count == 0, "assets",
+                     $"all 54 barks (2 factions, 3 classes, 3 orders, {SkirmishLive.BarkVariants} variants) and the drag-select "
+                     + $"sound are loaded ({(missing.Count == 0 ? "none missing" : "missing " + string.Join(", ", missing))})");
+
+            if (QuietGround(lw, g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me)).X,
+                            g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me)).Y) is not { } s)
+            {
+                BarkGate(false, "select", "quiet ground beside my yard (none: a fixture failure)");
+                return;
+            }
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int squad = SpawnOfType(lw, me, rifle, s.X, s.Y);
+            int enemy = SpawnOfType(lw, foe, rifle, s.X + 4, s.Y);
+            HoldFire(lw, enemy);
+            HoldFire(lw, squad);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            audio.ResetBarksForTest();
+            float sx = Fx(lw.Entities[squad].X), sz = Fx(lw.Entities[squad].Y);
+            float ex = Fx(lw.Entities[enemy].X), ez = Fx(lw.Entities[enemy].Y);
+            g.FocusCameraOn(sx + 2f, sz, 22f);
+
+            // ---- a selection and an order ----
+            g.ClearSelectionForTest();
+            int clickBox0 = audio.PlayRequests(SkirmishLive.BoxSelectCue);
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            bool selected = g.SelectionCount == 1 && g.IsSelected(squad);
+            string selectBark = audio.LastBark ?? "none";
+            int clickBoxCues = audio.PlayRequests(SkirmishLive.BoxSelectCue) - clickBox0;
+            BarkGate(selected && audio.BarksPlayed == 1 && selectBark == $"bark_{fac}_infantry_select_1" && clickBoxCues == 0,
+                     "select",
+                     $"a click on my rifle squad selects it and it answers with my faction's infantry selection bark, "
+                     + $"and a click is not a drag, so no drag-select sound (selected {selected}, {audio.BarksPlayed} played, "
+                     + $"{selectBark}, {clickBoxCues} drag-select sounds)");
+
+            g.PressRightClick(g.ScreenOf(sx, sz + 3f));
+            bool moved = false;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.PathMove && c.EntityId == squad) moved = true;
+            string moveBark = audio.LastBark ?? "none";
+            BarkGate(moved && audio.BarksPlayed == 2 && moveBark == $"bark_{fac}_infantry_move_1", "order",
+                     $"a right click on the ground orders it to move and it answers with the move bark at once, the same "
+                     + $"instant as its selection bark, because an order is never held back by a selection ({moveBark}, "
+                     + $"{audio.BarksPlayed} played, move queued {moved})");
+            g.StepTicks(1);
+
+            clock += 0.7;
+            g.PressRightClick(g.ScreenOf(ex, ez));
+            bool attacked = false;
+            foreach (var c in g.PendingForTest) if (c.Type == CommandType.Attack && c.EntityId == squad && c.AuxId == enemy) attacked = true;
+            string attackBark = audio.LastBark ?? "none";
+            BarkGate(attacked && audio.BarksPlayed == 3 && attackBark == $"bark_{fac}_infantry_attack_1", "attack",
+                     $"a right click on an enemy squad orders the attack and it answers with the attack bark ({attackBark}, "
+                     + $"{audio.BarksPlayed} played, attack queued {attacked})");
+            g.StepTicks(1);
+
+            // ---- an enemy never answers ----
+            clock += 1.0;
+            int played0 = audio.BarksPlayed, requests0 = BarkRequests(audio);
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(ex, ez), g.ScreenOf(ex, ez));
+            bool direct = g.BarkFor(enemy, SkirmishLive.BarkOrder.Select) || g.BarkFor(enemy, SkirmishLive.BarkOrder.Move)
+                          || g.BarkFor(enemy, SkirmishLive.BarkOrder.Attack);
+            BarkGate(g.SelectionCount == 0 && !direct && audio.BarksPlayed == played0 && BarkRequests(audio) == requests0,
+                     "enemy",
+                     $"an enemy squad never answers, with the channel free: a click on it selects nothing and barks nothing, "
+                     + $"and BarkFor refuses it for every order without asking the channel ({audio.BarksPlayed - played0} "
+                     + $"played, {BarkRequests(audio) - requests0} asked for, selected {g.SelectionCount}, direct {direct})");
+
+            // ---- the debounce, and the variants in turn ----
+            // A fresh squad where the first stood, so a click finds it however
+            // far the orders above have walked the first.
+            int Fresh(int old)
+            {
+                RemoveFixture(lw, old);
+                int id = SpawnOfType(lw, me, rifle, s.X, s.Y);
+                HoldFire(lw, id);
+                g.StepTicks(1);
+                g.StepOneTick();
+                g.PumpActorsForTest();
+                return id;
+            }
+            squad = Fresh(squad);
+            clock += 1.0;
+            int dropped0 = audio.BarksDropped;
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            string again = audio.LastBark ?? "none";
+            g.BoxSelect(g.ScreenOf(sx, sz), g.ScreenOf(sx, sz));
+            int afterTwo = audio.BarksPlayed, droppedSelect = audio.BarksDropped - dropped0;
+            var moves = new List<string>();
+            int orderDrops = 0;
+            foreach (double step in new[] { 0.3, 0.3, 0.4, 0.7 })
+            {
+                clock += step;
+                int before = audio.BarksPlayed, droppedBefore = audio.BarksDropped;
+                g.PressRightClick(g.ScreenOf(sx + 1f, sz + 3f));
+                if (audio.BarksPlayed > before) moves.Add(audio.LastBark ?? "none");
+                orderDrops += audio.BarksDropped - droppedBefore;
+                g.StepTicks(1);
+            }
+            bool selectDebounced = again == $"bark_{fac}_infantry_select_2" && droppedSelect == 1 && afterTwo == played0 + 1;
+            bool ordersDebounced = orderDrops == 1 && moves.Count == 3
+                                   && moves[0] == $"bark_{fac}_infantry_move_2" && moves[1] == $"bark_{fac}_infantry_move_3"
+                                   && moves[2] == $"bark_{fac}_infantry_move_1";
+            BarkGate(selectDebounced && ordersDebounced, "debounce",
+                     $"a second selection at the same instant is dropped ({droppedSelect} dropped, the first {again}), and of "
+                     + $"four orders 0.3, 0.3, 0.4 and 0.7 s apart against a {AudioDirector.BarkDebounceSeconds} s window the "
+                     + $"second is dropped and the rest answer, the variants in turn ({orderDrops} dropped; played "
+                     + $"{string.Join(", ", moves)})");
+
+            // ---- the drag ----
+            clock += 1.0;
+            int tank = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            int t1 = SpawnOfType(lw, me, tank, s.X, s.Y + 2), t2 = SpawnOfType(lw, me, tank, s.X + 1, s.Y + 2);
+            HoldFire(lw, t1);
+            HoldFire(lw, t2);
+            squad = Fresh(squad);
+            float minX = sx, maxX = sx, minZ = sz, maxZ = sz;
+            foreach (int id in new[] { squad, t1, t2 })
+            {
+                minX = Mathf.Min(minX, Fx(lw.Entities[id].X)); maxX = Mathf.Max(maxX, Fx(lw.Entities[id].X));
+                minZ = Mathf.Min(minZ, Fx(lw.Entities[id].Y)); maxZ = Mathf.Max(maxZ, Fx(lw.Entities[id].Y));
+            }
+            int box0 = audio.PlayRequests(SkirmishLive.BoxSelectCue), dragPlayed0 = audio.BarksPlayed;
+            g.ClearSelectionForTest();
+            g.BoxSelect(g.ScreenOf(minX - 0.8f, minZ - 0.8f), g.ScreenOf(maxX + 0.8f, maxZ + 0.8f));
+            bool caught = g.IsSelected(squad) && g.IsSelected(t1) && g.IsSelected(t2);
+            int boxCues = audio.PlayRequests(SkirmishLive.BoxSelectCue) - box0;
+            string dragBark = audio.LastBark ?? "none";
+            bool dragAnswered = audio.BarksPlayed == dragPlayed0 + 1 && dragBark == $"bark_{fac}_vehicle_select_1";
+            clock += 1.0;
+            int emptyBox0 = audio.PlayRequests(SkirmishLive.BoxSelectCue), emptyPlayed0 = audio.BarksPlayed;
+            g.BoxSelect(g.ScreenOf(maxX + 2f, maxZ + 2f), g.ScreenOf(maxX + 4f, maxZ + 4f));
+            bool emptySilent = g.SelectionCount == 0 && audio.PlayRequests(SkirmishLive.BoxSelectCue) == emptyBox0
+                               && audio.BarksPlayed == emptyPlayed0;
+            BarkGate(caught && boxCues == 1 && dragAnswered && emptySilent, "drag",
+                     $"a drag round my squad and two tanks catches all three, plays the drag-select sound once ({boxCues}) and "
+                     + $"answers as the class it caught most of ({dragBark}); a drag over empty ground is silent "
+                     + $"({emptySilent})");
+
+            // ---- each class as itself ----
+            clock += 1.0;
+            int flyer = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_strike_flyer"), s.X + 3, s.Y + 3);
+            int harvester = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_harvester"), s.X + 4, s.Y + 4);
+            g.StepTicks(1);
+            bool flew = g.BarkFor(flyer, SkirmishLive.BarkOrder.Select);
+            string flyerBark = audio.LastBark ?? "none";
+            var classes = $"{g.BarkClassOf(squad)}, {g.BarkClassOf(t1)}, {g.BarkClassOf(harvester)}, {g.BarkClassOf(flyer)}";
+            BarkGate(g.BarkClassOf(squad) == SkirmishLive.BarkClass.Infantry && g.BarkClassOf(t1) == SkirmishLive.BarkClass.Vehicle
+                     && g.BarkClassOf(harvester) == SkirmishLive.BarkClass.Vehicle
+                     && g.BarkClassOf(flyer) == SkirmishLive.BarkClass.Aircraft
+                     && flew && flyerBark == $"bark_{fac}_aircraft_select_1", "classes",
+                     $"a rifle squad barks as infantry, a tank and a harvester as vehicles and a strike flyer as an aircraft "
+                     + $"({classes}; the flyer answered {flyerBark})");
+
+        }
+        catch (System.Exception ex) { BarkGate(false, "stage", $"the stage threw: {ex}"); }
+        finally
+        {
+            audio.SetClockForTest(null);
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+        RunBarkFactionStage();
+    }
+
+    /// <summary>P8-41: a unit answers in its OWNER's faction's timbre. Factions
+    /// are fixed once a match starts (World.SetFaction), so this boots a second
+    /// scene with the two sides swapped, seat 1 now the other faction, and the
+    /// same rifle squad must answer in that faction's voice. Every MatchConfig
+    /// field it writes is put back.</summary>
+    private void RunBarkFactionStage()
+    {
+        int wasFaction = MatchConfig.Faction, wasOpp = MatchConfig.OppositionFaction;
+        SkirmishLive? g = null;
+        try
+        {
+            MatchConfig.Faction = wasOpp;
+            MatchConfig.OppositionFaction = wasFaction;
+            g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            string fac = g.FactionOf(me) == World.FactionSodality ? "sod" : "dir";
+            string was = wasOpp == World.FactionSodality ? "sod" : "dir";
+            var (yx, yy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+            if (QuietGround(lw, yx, yy) is not { } s)
+            {
+                BarkGate(false, "faction", "quiet ground beside my yard (none: a fixture failure)");
+                return;
+            }
+            int squad = SpawnOfType(lw, me, UnitCatalogue.TypeIdOf("com_rifle_squad"), s.X, s.Y);
+            g.StepTicks(1);
+            g.AudioView.ResetBarksForTest();
+            bool played = g.BarkFor(squad, SkirmishLive.BarkOrder.Select);
+            string bark = g.AudioView.LastBark ?? "none";
+            BarkGate(fac != was && played && bark == $"bark_{fac}_infantry_select_1", "faction",
+                     $"with the sides swapped, seat 1 is {fac} where it was {was}, and the same rifle squad answers in its "
+                     + $"owner's timbre ({bark})");
+        }
+        catch (System.Exception ex) { BarkGate(false, "faction", $"the stage threw: {ex}"); }
+        finally
+        {
+            MatchConfig.Faction = wasFaction;
+            MatchConfig.OppositionFaction = wasOpp;
+            if (g != null)
+            {
+                DeleteRecording(g);
+                g.QueueFree();
+            }
+        }
+    }
+
+    /// <summary>P8-41: every bark asked for so far, played or dropped.</summary>
+    private static int BarkRequests(AudioDirector audio)
+    {
+        int n = 0;
+        foreach (string f in new[] { "dir", "sod" })
+            foreach (string c in new[] { "infantry", "vehicle", "aircraft" })
+                foreach (string o in new[] { "select", "move", "attack" })
+                    for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
+                        n += audio.PlayRequests($"bark_{f}_{c}_{o}_{v}");
+        return n;
     }
 }

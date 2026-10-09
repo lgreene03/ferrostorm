@@ -3047,6 +3047,105 @@ public partial class SkirmishLive : Node3D
     public int Denials { get; private set; }
     public string LastDenial { get; private set; } = "";
 
+    // ---------------- P8-41: units acknowledge ----------------
+
+    /// <summary>P8-41: the drag-select's own sound (art/audio/synth.py ui_select_box).</summary>
+    public const string BoxSelectCue = "ui_select_box";
+    /// <summary>P8-41: its level, derived from the click's rather than chosen:
+    /// ui_click plays at -14 dB from a file at -19.9 dBFS RMS, so the box's
+    /// file, at -16.4, plays at -18 to land half a decibel under the click.</summary>
+    public const float BoxSelectDb = -18f;
+
+    /// <summary>P8-41: what a bark answers.</summary>
+    public enum BarkOrder { Select, Move, Attack }
+    /// <summary>P8-41: the register a unit answers in.</summary>
+    public enum BarkClass { Infantry, Vehicle, Aircraft }
+    private static readonly string[] BarkOrderNames = { "select", "move", "attack" };
+    private static readonly string[] BarkClassNames = { "infantry", "vehicle", "aircraft" };
+    /// <summary>Variants per order per class per faction, played in turn.</summary>
+    public const int BarkVariants = 3;
+    private readonly Dictionary<string, int> _barkTurn = new();
+
+    /// <summary>P8-41: the class a mobile barks as, from what the sim says it
+    /// is. An aircraft is a unit whose type flies (World.IsAirborne); infantry
+    /// is what the Barracks produces, the sidebar's INFANTRY rule, asked of
+    /// CombatEffects.DeathLookOf itself rather than copied, so a death and a
+    /// bark can never disagree about what a unit is; every other mobile, a
+    /// harvester and the MCV included, is a vehicle. Null for anything that is
+    /// not a live mobile.</summary>
+    public BarkClass? BarkClassOf(int id)
+    {
+        if ((uint)id >= (uint)_world.EntityCount) return null;
+        var e = _world.Entities[id];
+        if (!e.Alive || !Mobile(e.Kind)) return null;
+        if (_world.IsAirborne(in e)) return BarkClass.Aircraft;
+        return CombatEffects.DeathLookOf(_world, id).Kind == CombatEffects.DeathKind.Infantry
+            ? BarkClass.Infantry : BarkClass.Vehicle;
+    }
+
+    /// <summary>
+    /// P8-41: ONE UNIT ANSWERS, AND ONLY ONE OF MINE. Its bark for this order,
+    /// in its class's register and its faction's timbre, the next of the three
+    /// variants in turn, on the bark channel (AudioDirector.Bark, which owns
+    /// the debounce and the channel's one player). A unit of any other seat
+    /// never barks: an enemy answering a click would be a maphack in sound, and
+    /// a LAN peer's units answer on that peer's machine, so the refusal comes
+    /// first, before the channel is asked for anything. True when it played;
+    /// the turn advances only on a bark that was heard.
+    /// </summary>
+    public bool BarkFor(int id, BarkOrder order)
+    {
+        if ((uint)id >= (uint)_world.EntityCount) return false;
+        int owner = _world.Entities[id].PlayerId;
+        if (owner != LocalPlayerId) return false;
+        if (BarkClassOf(id) is not { } cls) return false;
+        string faction = _world.FactionOf(owner) == World.FactionSodality ? "sod" : "dir";
+        string key = $"bark_{faction}_{BarkClassNames[(int)cls]}_{BarkOrderNames[(int)order]}";
+        int turn = _barkTurn.GetValueOrDefault(key);
+        if (!_audio.Bark($"{key}_{turn % BarkVariants + 1}", order != BarkOrder.Select)) return false;
+        _barkTurn[key] = turn + 1;
+        return true;
+    }
+
+    /// <summary>P8-41: which unit of a group answers for it: the lowest
+    /// numbered of the class it holds most of, ties to infantry and then
+    /// vehicles, so ten tanks and a rifle squad answer as tanks. Only my own
+    /// mobiles count; -1 when the group holds none.</summary>
+    private int BarkVoiceOf(IEnumerable<int> ids)
+    {
+        var count = new int[BarkClassNames.Length];
+        var lowest = new int[BarkClassNames.Length];
+        System.Array.Fill(lowest, int.MaxValue);
+        foreach (int id in ids)
+        {
+            if ((uint)id >= (uint)_world.EntityCount || _world.Entities[id].PlayerId != LocalPlayerId) continue;
+            if (BarkClassOf(id) is not { } c) continue;
+            count[(int)c]++;
+            if (id < lowest[(int)c]) lowest[(int)c] = id;
+        }
+        int best = -1;
+        for (int c = 0; c < count.Length; c++)
+            if (count[c] > 0 && (best < 0 || count[c] > count[best])) best = c;
+        return best < 0 ? -1 : lowest[best];
+    }
+
+    /// <summary>P8-41: what a selecting gesture caught answers it: the whole
+    /// selection for a recall or a select-all, only the unit or units the
+    /// gesture itself caught for a click or a drag (so a shift-click adding a
+    /// squad to ten tanks is answered by the squad).</summary>
+    private void BarkSelection(IEnumerable<int> caught)
+    {
+        int voice = BarkVoiceOf(caught);
+        if (voice >= 0) BarkFor(voice, BarkOrder.Select);
+    }
+
+    /// <summary>P8-41: the units an order went to answer it.</summary>
+    private void BarkOrderFor(IEnumerable<int> ids, bool attack)
+    {
+        int voice = BarkVoiceOf(ids);
+        if (voice >= 0) BarkFor(voice, attack ? BarkOrder.Attack : BarkOrder.Move);
+    }
+
     /// <summary>P8-42: what a press on an order the treasury cannot pay for
     /// says. The order still QUEUES, because the sim builds pay-as-you-build
     /// (World.ProductionSystem drains each slice as progress accrues and holds
@@ -5408,6 +5507,7 @@ public partial class SkirmishLive : Node3D
             {
                 _selection.Clear();                                    // recall
                 foreach (int id in g) if (_latest.ContainsKey(id)) _selection.Add(id);
+                BarkSelection(_selection);                             // P8-41
             }
             return true;
         }
@@ -5565,6 +5665,7 @@ public partial class SkirmishLive : Node3D
         }
         _effects.OrderMarker(new Vector3((float)dp.X, 0, (float)dp.Y), 0);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(damaged, attack: false);   // P8-41
         ShowToast(damaged.Count == 1
             ? "1 UNIT TO THE SERVICE DEPOT"
             : $"{damaged.Count} UNITS TO THE SERVICE DEPOT");
@@ -5902,6 +6003,7 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
+        var ordered = new List<int>();   // P8-41: the units that answer
         // ADR-018: an attack-move is a group move too, so it forms up (the verb is
         // preserved: each unit attack-moves to its slot, engaging en route).
         var formation = BuildFormation(new Vector3(p.X, 0, p.Z));
@@ -5910,12 +6012,14 @@ public partial class SkirmishLive : Node3D
             {
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.AttackMove, id, mx, my));
+                ordered.Add(id);
                 n++;
             }
         // W3-17's attack colour: an attack-move is an attack order, and it must
         // not acknowledge in the same gold a plain move does.
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(ordered, attack: true);   // P8-41
         ShowToast($"ATTACK-MOVE ORDERED   ({n} UNITS)");
     }
 
@@ -5999,16 +6103,19 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
+        var ordered = new List<int>();   // P8-41: the units that answer
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
             {
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, cx, cy, (int)Stance.Patrol));
+                ordered.Add(id);
                 n++;
             }
         // A patrol leg is an attack-move, so it acknowledges in the attack colour,
         // not the gold a plain move uses - the CommitAttackMove idiom.
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(ordered, attack: true);   // P8-41: a patrol leg is an attack-move
         ShowToast($"PATROL ORDERED   ({n} UNITS)");
     }
 
@@ -6171,6 +6278,7 @@ public partial class SkirmishLive : Node3D
                 _selection.Add(hit);
                 AddSelRingFor(hit);
                 _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));   // W3-21
+                BarkSelection(new[] { hit });   // P8-41: a unit answers; a building does not
                 return;
             }
             // ADR-021: a click that selected nothing of the player's own may
@@ -6221,6 +6329,15 @@ public partial class SkirmishLive : Node3D
         // Clause 6: rings for box-selected walls too, not just the click path.
         if (mobiles.Count == 0)
             foreach (int id in walls) AddSelRingFor(id);
+        // P8-41: a drag that caught something has its own sound, a box closing
+        // where a click is a tap, and the units in it answer (a run of barrier
+        // has no voice, so it gets the sound alone). A drag that caught
+        // nothing stays silent, as an order that issued nothing does.
+        if (mobiles.Count + walls.Count > 0)
+        {
+            _audio.Play(BoxSelectCue, BoxSelectDb, AudioDirector.Jitter(0.04f));
+            BarkSelection(mobiles);
+        }
     }
 
     private void TryPlace(Vector2 screen)
@@ -7513,6 +7630,7 @@ public partial class SkirmishLive : Node3D
         int forced = force ? PickNeutralBridge(screen) : -1;
         bool deniedHarvest = false, deniedBoard = false;
         int issued = 0, boarded = 0, struck = -1;
+        var answered = new List<int>();   // P8-41: the units an order went to
         // ADR-018: a plain move (not an attack on an enemy) arranges the selected
         // combat units into a formation. Resolved once for the click; harvesters
         // are never members and keep the shared anchor below.
@@ -7576,6 +7694,7 @@ public partial class SkirmishLive : Node3D
                 if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
             }
             else continue;
+            answered.Add(id);
             issued++;
         }
         // P8-42: both through the one refusal path, with its own cue, where
@@ -7598,6 +7717,7 @@ public partial class SkirmishLive : Node3D
             : new Vector3(p.X, 0, p.Z);
         _effects.OrderMarker(mpos, mk);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(answered, attack: enemy >= 0 || struck >= 0);   // P8-41
     }
 
     /// <summary>Programmatic hooks for offscreen verification: select all own
@@ -7620,6 +7740,7 @@ public partial class SkirmishLive : Node3D
         foreach (var v in _view)
             if (IsArmy(in v)) _selection.Add(v.Id);
         if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     /// <summary>Doc 27 DR-06: cycle through idle own harvesters, camera to each.
@@ -7647,6 +7768,7 @@ public partial class SkirmishLive : Node3D
         var e2 = ents[pick];
         _cam.FlyTo(new Vector3((float)(e2.X.Raw / 4294967296.0), 0, (float)(e2.Y.Raw / 4294967296.0)));
         _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     /// <summary>Doc 27 DR-05: select every own unit of the same TYPE currently
@@ -7669,6 +7791,7 @@ public partial class SkirmishLive : Node3D
             if (rect.HasPoint(screen)) _selection.Add(v.Id);
         }
         if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     public int SelectAllOwn()

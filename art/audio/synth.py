@@ -2,7 +2,8 @@
 """Ferrostorm procedural SFX synthesiser and interim score.
 
 Renders the game's SFX set as 16-bit 44.1 kHz mono WAV files into
-game/audio/, and (P8-46, decision D26) the interim score: six tracks of at
+game/audio/, the unit acknowledgements (P8-41) among them into
+game/audio/barks/, and (P8-46, decision D26) the interim score: six tracks of at
 least 180 seconds each into game/audio/music/ as Ogg Vorbis. Synthesis is
 pure standard library (wave, math, array, random); no numpy, no downloaded
 assets. Every sound is an original synthesis recipe and deliberately avoids
@@ -202,8 +203,15 @@ def rms_db(samples):
     return 20.0 * math.log10(r) if r > 0 else float("-inf")
 
 
-def write_wav(name, samples):
+def write_wav(name, samples, rms=None):
     samples = normalise(samples)
+    if rms is not None:
+        # P8-41: matched by loudness rather than by peak, so a set of sounds
+        # with different crest factors (the barks' square-ish Directorate
+        # tone against the Sodality's breathier one) plays at one level. Only
+        # ever turned down from the peak target, never up past it.
+        g = min(1.0, 10.0 ** ((rms - rms_db(samples)) / 20.0))
+        samples = [s * g for s in samples]
     path = os.path.join(OUT_DIR, name)
     data = array.array("h", (int(round(s * 32767)) for s in samples))
     with wave.open(path, "wb") as w:
@@ -596,6 +604,139 @@ def cue_placed():
     tick = _metal(1500.0, 0.10, 0.020)
     out = mix(thud, gain(crunch, 0.6), silence(0.015) + gain(tick, 0.18))
     return edge_fade(out + silence(0.08), fade_out=0.05)
+
+
+def ui_select_box():
+    """Drag-select (~150 ms), P8-41: a box closing round a group. A soft
+    upward brush of band-passed noise, its centre climbing 900 to 2600 Hz,
+    landing on a small dry tick, so a drag reads as a gesture where a click
+    reads as a tap. Quieter and airier than ui_click so a player who drags
+    every few seconds never tires of it."""
+    rng = random.Random(123)
+    dur = 0.12
+    brush = band_pass(white_noise(dur, rng), lambda i: 900.0 + 1700.0 * (i / (SR * dur)), q=2.5)
+    brush = envelope(brush, [(0.0, 0.0), (0.6, 0.8), (1.0, 0.3)])
+    tick = exp_decay(sine_sweep(0.03, 1900.0, 1500.0), tau=0.006, attack=0.0005)
+    return edge_fade(brush + gain(tick, 0.6), fade_out=0.015)
+
+
+# ---------------------------------------------------------------------------
+# P8-41: unit acknowledgements ("barks"). A unit answers when it is selected
+# and when it is given an order, so a player knows the click landed on the
+# thing they meant without looking at the sidebar. WORDLESS ON PURPOSE: no
+# voice, no syllables, nothing that could be heard as a phrase, so nothing
+# here can echo any other game's lines. Each is a short radio-style figure.
+#
+#   order    the contour: select rises (short then long, a question
+#            answered), move falls (going), attack is three quick notes, the
+#            last a step higher and accented (engage).
+#   class    the register and the texture under it: infantry high with a
+#            keying tick, vehicles low over an engine throb, aircraft highest
+#            over a passing rush of air.
+#   faction  the timbre and the interval language: the Directorate a clean
+#            odd-harmonic radio tone framed by squelch clicks, stepping by
+#            fourths, fifths and octaves; the Sodality two detuned partials
+#            beating over a breath of noise, gliding by minor thirds,
+#            tritones and semitones, opened by a muffled tap.
+#   variant  which interval of the faction's three, and a seeded nudge to
+#            pitch and timing, so three in a row never sound the same.
+#
+# 2 factions x 3 classes x 3 orders x 3 variants = 54 files, rendered into
+# game/audio/barks/ as bark_<faction>_<class>_<order>_<variant>.wav. Seeds
+# 300 to 353, one per file, in that nesting order.
+# ---------------------------------------------------------------------------
+
+BARK_DIR = os.path.join(OUT_DIR, "barks")
+BARK_FACTIONS = ("dir", "sod")
+BARK_CLASSES = ("infantry", "vehicle", "aircraft")
+BARK_ORDERS = ("select", "move", "attack")
+BARK_VARIANTS = 3
+BARK_BASE_HZ = {"infantry": 520.0, "vehicle": 220.0, "aircraft": 860.0}
+BARK_STEPS = {"dir": (5, 7, 12), "sod": (3, 6, 1)}   # semitones, one per variant
+# Every bark is written at this RMS (write_wav's rms), so the two factions'
+# timbres, whose crest factors differ by about 4 dB, answer at one level. Four
+# cannot reach it without passing the peak target and stay at the peak, 0.2 to
+# 0.9 dB under (the Sodality's aircraft moves and its first infantry move).
+BARK_RMS_DB = -14.0
+
+
+def _bark_note(faction, freq, dur, rng, glide):
+    """One note of a bark in its faction's timbre, gliding by `glide` over
+    its length (1.0 holds the pitch)."""
+    f1 = freq * glide
+    if faction == "dir":
+        tone = mix(sine_sweep(dur, freq, f1),
+                   gain(sine_sweep(dur, freq * 3.0, f1 * 3.0), 0.22),
+                   gain(sine_sweep(dur, freq * 5.0, f1 * 5.0), 0.08))
+    else:
+        det = 1.012
+        tone = mix(sine_sweep(dur, freq, f1),
+                   gain(sine_sweep(dur, freq * det, f1 * det), 0.7),
+                   gain(sine_sweep(dur, freq * 2.01, f1 * 2.01), 0.15),
+                   gain(band_pass(white_noise(dur, rng), freq * 2.0, q=4.0), 0.25))
+    return envelope(tone, [(0.0, 0.0), (0.08, 1.0), (0.7, 0.75), (1.0, 0.0)])
+
+
+def _bark_texture(cls, dur, rng):
+    """What sits under a bark: the class's own texture, the length of it."""
+    if cls == "vehicle":
+        rumble = low_pass(brown_noise(dur, rng), 180.0)
+        throb = [s * (0.6 + 0.4 * math.sin(2.0 * math.pi * 28.0 * i / SR)) for i, s in enumerate(rumble)]
+        return gain(envelope(throb, [(0.0, 0.0), (0.15, 1.0), (0.8, 0.8), (1.0, 0.0)]), 0.45)
+    if cls == "aircraft":
+        rush = band_pass(white_noise(dur, rng), lambda i: 2600.0 - 1400.0 * (i / (SR * dur)), q=1.4)
+        return gain(envelope(rush, [(0.0, 0.0), (0.4, 1.0), (1.0, 0.0)]), 0.30)
+    key = exp_decay(band_pass(white_noise(0.025, rng), 2500.0, q=2.0), tau=0.006, attack=0.0005)
+    return gain(key, 0.40)
+
+
+def _bark_frame(faction, rng):
+    """The faction's opening: a squelch click for the Directorate's radio, a
+    muffled tap for the Sodality's salvaged set."""
+    if faction == "dir":
+        return gain(exp_decay(band_pass(white_noise(0.03, rng), 3200.0, q=1.5), tau=0.007, attack=0.0005), 0.5)
+    return gain(exp_decay(sine_sweep(0.05, 160.0, 90.0), tau=0.015, attack=0.001), 0.6)
+
+
+def bark(faction, cls, order, variant):
+    """One acknowledgement: `variant` is 1, 2 or 3."""
+    index = ((BARK_FACTIONS.index(faction) * len(BARK_CLASSES) + BARK_CLASSES.index(cls))
+             * len(BARK_ORDERS) + BARK_ORDERS.index(order)) * BARK_VARIANTS + (variant - 1)
+    rng = random.Random(300 + index)
+    base = BARK_BASE_HZ[cls] * (1.0 + rng.uniform(-0.03, 0.03))
+    up = base * 2.0 ** (BARK_STEPS[faction][variant - 1] / 12.0)
+    stretch = 1.0 + rng.uniform(-0.12, 0.12)
+    if order == "select":
+        notes = [(base, 0.07, 0.8), (up, 0.12, 1.0)]
+    elif order == "move":
+        notes = [(up, 0.08, 1.0), (base, 0.10, 0.85)]
+    else:
+        notes = [(base, 0.045, 0.7), (base, 0.045, 0.75), (up * 2.0 ** (2.0 / 12.0), 0.11, 1.0)]
+    body = []
+    for k, (freq, dur, level) in enumerate(notes):
+        # The Sodality slides each note a little towards the next; the
+        # Directorate holds its pitches.
+        glide = 1.0
+        if faction == "sod" and k + 1 < len(notes):
+            glide = 1.0 + 0.5 * (notes[k + 1][0] / freq - 1.0)
+        if body:
+            body += silence(0.012 * stretch)
+        body += gain(_bark_note(faction, freq, dur * stretch, rng, glide), level)
+    lead = _bark_frame(faction, rng)
+    out = mix(lead, silence(0.012) + mix(body, _bark_texture(cls, len(body) / SR, rng)))
+    if faction == "dir":
+        out = out + silence(0.01) + gain(_bark_frame(faction, rng), 0.5)
+    return edge_fade(out + silence(0.03), fade_out=0.02)
+
+
+def barks():
+    """Every bark, in the nesting order its seeds follow."""
+    for faction in BARK_FACTIONS:
+        for cls in BARK_CLASSES:
+            for order in BARK_ORDERS:
+                for variant in range(1, BARK_VARIANTS + 1):
+                    yield ("bark_%s_%s_%s_%d.wav" % (faction, cls, order, variant),
+                           functools.partial(bark, faction, cls, order, variant))
 
 
 def superweapon_charge():
@@ -1668,6 +1809,7 @@ SOUNDS = [
     ("ui_click.wav", ui_click),
     ("ui_confirm.wav", ui_confirm),
     ("ui_deny.wav", ui_deny),                      # P8-42
+    ("ui_select_box.wav", ui_select_box),          # P8-41
     ("order_move.wav", order_move),
     ("shot_rifle.wav", shot_rifle),
     ("shot_cannon.wav", shot_cannon),
@@ -1706,6 +1848,12 @@ def main():
               % (len(SOUNDS), OUT_DIR, SR))
         for name, generator in SOUNDS:
             write_wav(name, generator())
+        # P8-41: the unit acknowledgements, in a directory of their own.
+        os.makedirs(BARK_DIR, exist_ok=True)
+        bark_set = list(barks())
+        print("\nRendering %d barks to %s\n" % (len(bark_set), BARK_DIR))
+        for name, generator in bark_set:
+            write_wav(os.path.join("barks", name), generator(), rms=BARK_RMS_DB)
     if "score" in wanted:
         print("\nRendering %d score tracks to %s (Ogg Vorbis q%s, loudness matched per intensity)\n"
               % (len(SCORE), MUSIC_DIR, VORBIS_QUALITY))
