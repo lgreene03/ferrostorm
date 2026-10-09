@@ -6152,10 +6152,20 @@ public sealed partial class World
     /// exit search find an open cell now, in its own frame (the rule) or in the
     /// authored order (the rule before clause 3)? Observation only, for
     /// pillarprobe's clause 3 line: it reads the world and changes nothing, the
-    /// sim never calls it, and nothing it returns is hashed or saved.
+    /// sim never calls it, and nothing it returns is hashed or saved. An id that
+    /// is not a live producer whose product leaves by an exit (a barracks,
+    /// factory or airfield) answers false rather than throwing or searching
+    /// from a building that has no exit (Architect condition C5 on ADR-077); a
+    /// Construction Yard is a producer, but it places what it builds, so it has
+    /// no exit to search.
     /// </summary>
     public bool ProductionExitOpen(int producerId, bool ownFrame)
-        => FindProductionExit(_entities[producerId], ownFrame, out _, out _, out _, out _);
+    {
+        if ((uint)producerId >= (uint)_entities.Count) return false;
+        var producer = _entities[producerId];
+        if (!producer.Alive || !IsProducer(producer.Kind) || producer.Kind == EntityKind.ConstructionYard) return false;
+        return FindProductionExit(in producer, ownFrame, out _, out _, out _, out _);
+    }
 
     /// <summary>
     /// TICKET-P2-SIM-02/03: power totals and factory queues. Per GDD s5, when

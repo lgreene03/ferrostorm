@@ -15568,8 +15568,9 @@ int LanAiSeatsGate()
                         + $"and 0x{run.Hashes[1]:X16}");
         if (run.Hashes[0] != NoAiPinned)
             return Fail($"lanaiseats control: {ControlTicks} ticks with no commanders hashes 0x{run.Hashes[0]:X16}, "
-                        + $"but before the AI seats existed the identical scenario hashed "
-                        + $"0x{NoAiPinned:X16} - the empty case is no longer a pass-through");
+                        + $"but its pin is 0x{NoAiPinned:X16} (measured with no commanders before the AI seats existed, and "
+                        + "re-pinned since only for named rule changes) - the empty case is no longer a pass-through, "
+                        + "or a rule change has moved the pin and must re-pin it in its own name");
         controlHash = run.Hashes[0];
         for (int seat = HumanSeats; seat < Seats; seat++)
             if (run.SeatGrowth[0][seat] != 0)
@@ -15611,7 +15612,8 @@ int LanAiSeatsGate()
                       + $"generated locally by each peer, ran {AiTicks} ticks to the same hash 0x{agreedHash:X16} with "
                       + $"no desync; those commanders issued {aiOrders[2]} and {aiOrders[3]} orders and grew their "
                       + $"seats by {aiGrowth[2]} and {aiGrowth[3]} entities. With none attached the same scenario "
-                      + $"still hashes 0x{controlHash:X16}, the figure it produced before commanders existed. A peer "
+                      + $"still hashes 0x{controlHash:X16}, its pin (first measured before commanders existed, and "
+                      + "re-pinned since only for named rule changes, each with a note at the pin). A peer "
                       + "given a commander on a different rung was CAUGHT by the relay's hash comparison rather than "
                       + "played on");
     return 0;
@@ -17360,12 +17362,16 @@ int PillarProbe()
     // refinery's footprint: every one ToField, not moving, carry 0, at its
     // delivery point, and none Idle). Each instance is listed, and clause 2
     // reverses if one on a shipped map is found unable to reach its refinery
-    // or a field from the corner it was delivered at. A delivery within the
-    // deadline of its match's end is not checked, and the observer only reads
-    // the world, so the sweep plays exactly as before.
+    // or a field from the corner it was delivered at. One Idle or stranded
+    // when no field with ferrite is left anywhere on the map is counted apart
+    // and tagged (Architect condition C5 on ADR-077): it idles for want of a
+    // field, not for want of a route, so it is not clause 2's reading. A
+    // delivery within the deadline of its match's end is not checked, and the
+    // observer only reads the world, so the sweep plays exactly as before.
     var freeFlagged = new List<string>[specs.Count];
     var freeIdle = new int[specs.Count];
     var freeStranded = new int[specs.Count];
+    var freeNoField = new int[specs.Count];
     var freeChecked = new int[specs.Count];
     var freeBought = new int[specs.Count];
     // ADR-076 clause 3's reversal, made measurable (Architect condition C7 on
@@ -17395,7 +17401,7 @@ int PillarProbe()
         var s = specs[i];
         var watch = new List<(int Id, int Seat, int Bought, int Cx, int Cy)>();
         var flagged = new List<string>();
-        int bought = 0, checkedN = 0, idleN = 0, strandedN = 0;
+        int bought = 0, checkedN = 0, idleN = 0, strandedN = 0, noFieldN = 0;
         long held = 0, unreflectedOnly = 0, reflectedOnly = 0;
         var r = PlayMeasured(root, s, w =>
         {
@@ -17430,17 +17436,29 @@ int PillarProbe()
                 bool idle = h.Alive && h.HState == HarvestState.Idle;
                 bool stranded = h.Alive && !h.Moving && h.Carry == 0 && h.HState is HarvestState.Idle or HarvestState.ToField
                                 && Map.CellOf(h.X) == cx && Map.CellOf(h.Y) == cy;
-                if (idle) idleN++;
-                if (stranded) strandedN++;
+                // A harvester bought when no field with ferrite is left anywhere
+                // on the map idles for want of a field, not because it cannot
+                // reach one, so it is counted apart (Architect condition C5 on
+                // ADR-077) and the Idle and stranded readings clause 2 reverses
+                // on count only harvesters that still had a field to reach.
+                bool noField = (idle || stranded) && CountFields(w).Fields == 0;
+                if (noField) noFieldN++;
+                else
+                {
+                    if (idle) idleN++;
+                    if (stranded) strandedN++;
+                }
                 if (idle || stranded)
                     flagged.Add($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} o{(s.Swap ? 1 : 0)} seat {seat} (start {StartOf(s, seat)}): "
-                                + $"bought at t={at}, at t={w.Tick} {h.HState}{(stranded ? ", stranded in its delivery cell" : "")} at ({h.X},{h.Y})");
+                                + $"bought at t={at}, at t={w.Tick} {h.HState}{(stranded ? ", stranded in its delivery cell" : "")} at ({h.X},{h.Y})"
+                                + (noField ? ", with no field left on the map" : ""));
                 watch.RemoveAt(k--);
             }
         });
         freeFlagged[i] = flagged;
         freeIdle[i] = idleN;
         freeStranded[i] = strandedN;
+        freeNoField[i] = noFieldN;
         freeChecked[i] = checkedN;
         freeBought[i] = bought;
         exitHeld[i] = held;
@@ -17478,8 +17496,9 @@ int PillarProbe()
     // ADR-076 clause 2's reversal reads this line (its "What reverses it" names it).
     Console.WriteLine($"pillarprobe: ADR-076 clause 2, free harvesters at ADR-014's deadline ({World.NoProgressDeadline} ticks) "
         + $"after their purchase: {freeIdle.Sum()} still Idle and {freeStranded.Sum()} stranded (motionless and empty in the cell "
-        + $"they were delivered to), of {freeChecked.Sum()} checked, of {freeBought.Sum()} delivered (one delivered within that "
-        + "deadline of its match's end is not checked)");
+        + $"they were delivered to) with a field left on the map, and {freeNoField.Sum()} Idle or stranded with no field left "
+        + $"anywhere on the map (counted apart), of {freeChecked.Sum()} checked, of {freeBought.Sum()} delivered (one delivered "
+        + "within that deadline of its match's end is not checked)");
     foreach (var line in freeFlagged.SelectMany(x => x)) Console.WriteLine(line);
     // ADR-076 clause 3's reversal reads this line (its "What reverses it" names
     // it): the held count against the same line with clause 3 reverted, and of
