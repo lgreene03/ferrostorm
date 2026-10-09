@@ -187,6 +187,13 @@ public partial class SkirmishLive : Node3D
     /// playing back; empty for a fresh match. Named in a fault report.</summary>
     private string _sourcePath = "";
     private PauseMenu? _pauseMenu;
+    /// <summary>P8-34: this seat's match numbers, folded in after every step
+    /// (PostStepSweep), and the results screen that shows them at the end.</summary>
+    private MatchStats _stats = null!;
+    private ResultsScreen? _results;
+    /// <summary>P8-34: the mission NEXT MISSION opens the briefing of, or 0
+    /// when the results screen offers none.</summary>
+    private int _nextMission;
 
     // P8-11: fault containment round the tick drain. An exception thrown by the
     // sim step or by the client's work for a tick used to escape into Godot,
@@ -825,6 +832,9 @@ public partial class SkirmishLive : Node3D
         // player starts into a playback of the last one they watched.
         MatchConfig.LoadPath = null;
         MatchConfig.ReplayPath = null;
+        // P8-34: the tally starts from the world as assembled, a resumed save's
+        // included (it then counts from the save's tick, and says so).
+        _stats = new MatchStats(_world, LocalPlayerId);
 
         BattlefieldView.BuildEnvironment(this);
         BattlefieldView.BuildTerrain(this, map.Width, map.Height, map.Blocked, map.Visual, map.Decor);
@@ -1140,9 +1150,11 @@ public partial class SkirmishLive : Node3D
         _replayFinalHash = got;
         _replayVerified = got == _replay!.FinalHash;
         _banner.AddThemeFontSizeOverride("font_size", 22);
+        // P8-34: the way out is the LIVE cancel binding, not the word "escape",
+        // which was wrong for every player who had rebound it.
         _banner.Text = _replayVerified
-            ? $"REPLAY COMPLETE\n\n{_world.Tick} TICKS RE-SIMULATED\n0x{got:X16} MATCHES THE RECORDING\n\npress escape for uplink"
-            : $"REPLAY DIVERGED\n\n0x{got:X16}\nvs recorded 0x{_replay.FinalHash:X16}\n\npress escape for uplink";
+            ? $"REPLAY COMPLETE\n\n{_world.Tick} TICKS RE-SIMULATED\n0x{got:X16} MATCHES THE RECORDING\n\npress {CancelKeyName} for the main menu"
+            : $"REPLAY DIVERGED\n\n0x{got:X16}\nvs recorded 0x{_replay.FinalHash:X16}\n\npress {CancelKeyName} for the main menu";
         _banner.AddThemeColorOverride("font_color",
             _replayVerified ? BattlefieldView.DirectorateMark : new Color(0.85f, 0.25f, 0.2f));
         _banner.Visible = true;
@@ -1448,13 +1460,23 @@ public partial class SkirmishLive : Node3D
         if (_yardId >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.BuildStructure, _yardId, Fix64.Zero, Fix64.Zero, structType));
-            _audio.Play("ui_confirm", -6);
+            // P8-42: the yard builds pay-as-you-build like every producer, so
+            // a building the treasury cannot pay for yet still queues, and the
+            // press says it will wait rather than confirming.
+            if (_world.Credits(LocalPlayerId) < _world.GetStructureType(structType).Cost)
+                Deny(FundsReason(ProducerNameOf(structType)));
+            else _audio.Play("ui_confirm", -6);
         }
     }
 
     public void QueueUnit(int unitType)
     {
         if (!UnitAllowed(unitType)) return;
+        // P8-42: at its cap the sim drops the order (World.AtMaxAlive, its
+        // first enforcement point), so it is not sent and the press says why.
+        // The sidebar greys the button at the cap too; this is the hotkey's
+        // path and a press racing the frame that greyed it.
+        if (_world.AtMaxAlive(LocalPlayerId, unitType)) { Deny(UnitCapReason(unitType)); return; }
         // ADR-009 clause 6: route by the unit's OWN produced_at, through the
         // live catalogue the sim gates on. Sending every unit to the factory
         // would now be sending the infantry somewhere that refuses them, and
@@ -1464,17 +1486,20 @@ public partial class SkirmishLive : Node3D
         if (producer >= 0)
         {
             _pending.Add(new Command(0, LocalPlayerId, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
-            _audio.Play("ui_confirm", -6);
+            // P8-42: an order the treasury cannot pay for yet still queues
+            // (pay-as-you-build: the line holds until the credits arrive), so
+            // the press is kept and says it will wait.
+            if (_world.Credits(LocalPlayerId) < _world.GetUnitType(unitType).Cost)
+                Deny(FundsReason(UnitNameOf(unitType)));
+            else _audio.Play("ui_confirm", -6);
         }
         else
         {
             // P8-9: no producer standing is said, never swallowed. The panel
             // hides a unit whose producer is gone, but the producer can fall
             // between the frame that drew the button and the press, and a
-            // press that did nothing in silence is REP-D1's sin. The NO
-            // REFINERY denial's words and sound.
-            ShowToast($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
-            _audio.Play("ui_click", -12);
+            // press that did nothing in silence is REP-D1's sin.
+            Deny($"NO {ProducerNameOf(producedAt)} - BUILD ONE FIRST");
         }
     }
 
@@ -2057,6 +2082,11 @@ public partial class SkirmishLive : Node3D
     /// </summary>
     private void PostStepSweep()
     {
+        // P8-34: the tick is tallied FIRST, before the victory latch below can
+        // raise the results screen, so the blow that ends a match is counted on
+        // the screen it brings up. The owner cache is still the pre-tick one
+        // here (RememberStructureOwners refreshes it at the end of the sweep).
+        _stats.Observe(_world, _structureOwner, IsHostileSeat);
         _mission?.Tick(_world, _missionCmds);
         SnapshotNow();
         _fog.UpdateFrom(_world, LocalPlayerId);
@@ -2670,11 +2700,7 @@ public partial class SkirmishLive : Node3D
                     && _world.Entities[mcv].Alive
                     && _world.Entities[mcv].Kind == EntityKind.Unit
                     && _world.Entities[mcv].UnitType == McvUnitType;
-                if (stillMcv)
-                {
-                    ShowToast("DEPLOY BLOCKED - CLEAR THE AREA");
-                    _audio.Play("ui_click", -12);   // the established denial voice
-                }
+                if (stillMcv) Deny("DEPLOY BLOCKED - CLEAR THE AREA");   // P8-42: the one refusal path
                 (decided ??= new List<int>()).Add(mcv);
             }
             if (decided != null) foreach (int id in decided) _pendingDeploys.Remove(id);
@@ -2991,6 +3017,46 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>P8-10: an alert with everything that goes with it.</summary>
     private void Raise(Alert a) => _alerts.Raise(a);
+
+    /// <summary>
+    /// P8-42: THE refusal path. Every press the game turns down says why
+    /// through here, as a routine line on the one alert stack carrying the
+    /// deny cue. The refusals had grown up site by site: some toasted with the
+    /// old denial voice (ui_click at -12, a click that also meant "accepted"
+    /// elsewhere), some toasted in silence, a refused placement only clicked,
+    /// and a click on a target nothing selected could hit sent orders the sim
+    /// could not carry out. A repeat inside the stack's window refreshes the
+    /// line already showing and replays nothing, so a key pressed five times
+    /// is one line and one cue. Not a new channel: the cue is the alert
+    /// service's own, played through the AudioDirector like every other.
+    /// Public because the sidebar's hotkey path refuses through it as well.
+    /// </summary>
+    public void Deny(string reason)
+    {
+        Denials++;
+        LastDenial = reason;
+        _alerts.Raise(new Alert(reason) { Cue = DenyCue, CueDb = -10f });
+    }
+
+    /// <summary>P8-42: the refusal's own sound (art/audio/synth.py ui_deny).</summary>
+    public const string DenyCue = "ui_deny";
+
+    /// <summary>P8-42 verification reads: refusals counted where they are
+    /// made, and the last one's words.</summary>
+    public int Denials { get; private set; }
+    public string LastDenial { get; private set; } = "";
+
+    /// <summary>P8-42: what a press on an order the treasury cannot pay for
+    /// says. The order still QUEUES, because the sim builds pay-as-you-build
+    /// (World.ProductionSystem drains each slice as progress accrues and holds
+    /// the line while the treasury cannot cover the next), so the press is
+    /// kept and the reason is that it will wait. The game's own words: the
+    /// genre's stock announcer line for this moment is not echoed.</summary>
+    public static string FundsReason(string name) => $"NOT ENOUGH CREDITS: {name} QUEUED, IT BUILDS AS THEY COME IN";
+
+    /// <summary>P8-42: a unit at its per-player cap (the heroes, World.AtMaxAlive).</summary>
+    private string UnitCapReason(int unitType) =>
+        $"{UnitNameOf(unitType)} AT ITS LIMIT: {_world.GetUnitType(unitType).MaxAlive} ALREADY IN THE FIELD";
 
     /// <summary>A sim position as a minimap position (world X, Z), the
     /// rally-marker idiom of raw over 2^32.</summary>
@@ -3356,7 +3422,11 @@ public partial class SkirmishLive : Node3D
         if (force && anyArmed && PickNeutralBridge(screen) >= 0) return GameCursor.Attack;
         int enemy = PickHostile(screen);
         if (contactAt >= 0 && (allContact || enemy < 0)) return GameCursor.Enter;
-        if (enemy >= 0) return GameCursor.Attack;
+        // P8-42: Invalid over a hostile nothing selected can engage (an
+        // aircraft under a selection with no anti-air gun, above all), because
+        // the click refuses it: the same question IssueOrder asks.
+        if (enemy >= 0)
+            return EngageRefusal(enemy, AnySelectedContactCanAct(screen)) != null ? GameCursor.Invalid : GameCursor.Attack;
         // P8-7: an own Carrier, with something selected that can board it, is
         // the boarding verb: the same two questions IssueOrder asks. A full one
         // reads as refused, because the click refuses it.
@@ -3372,6 +3442,43 @@ public partial class SkirmishLive : Node3D
             && PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField) >= 0)
             return GameCursor.Harvest;
         return GameCursor.Move;
+    }
+
+    /// <summary>
+    /// P8-42: why nothing selected can act on this hostile, or null when
+    /// something can. A gun can if its weapon engages the target by the sim's
+    /// own rule (World.WeaponCanEngage: an anti-air gun hits aircraft and only
+    /// aircraft); a contact unit that can walk into it can too. An aircraft
+    /// that nothing selected can reach is refused whatever is selected; a
+    /// ground target is refused only for an armed selection none of whose
+    /// guns can reach it (an anti-air screen ordered at a tank), so an
+    /// unarmed selection's walk at a ground target is left as it was.
+    /// </summary>
+    private string? EngageRefusal(int target, bool contactCan)
+    {
+        if (contactCan || target < 0 || target >= _world.EntityCount) return null;
+        var t = _world.Entities[target];
+        bool anyArmed = false;
+        foreach (int id in _selection)
+        {
+            if (id < 0 || id >= _world.EntityCount) continue;
+            var s = _world.Entities[id];
+            if (!s.Alive || s.PlayerId != LocalPlayerId || !Mobile(s.Kind) || s.WeaponId == 0) continue;
+            anyArmed = true;
+            if (_world.WeaponCanEngage(_world.GetWeaponType(s.WeaponId), in t)) return null;
+        }
+        if (_world.IsAirborne(in t)) return "NOTHING SELECTED CAN HIT AIRCRAFT";
+        return anyArmed ? "NOTHING SELECTED CAN HIT GROUND TARGETS" : null;
+    }
+
+    /// <summary>P8-42: can any selected contact unit walk into what is under
+    /// the cursor? Every one is asked, as IssueOrder sends every one.</summary>
+    private bool AnySelectedContactCanAct(Vector2 screen)
+    {
+        foreach (int id in _selection)
+            if (_latest.TryGetValue(id, out var v) && Mobile(v.Kind) && ContactOf(v.UnitType) != ContactVerb.None
+                && PickContactTarget(screen, v.UnitType) >= 0) return true;
+        return false;
     }
 
     /// <summary>The engineer's catalogue id (com_engineer), named for the same
@@ -3754,13 +3861,22 @@ public partial class SkirmishLive : Node3D
             bool held = false;
             // ADR-009: every unit producer can hold, not just the factory. A
             // walled-in barracks that never says so is the same silent stall
-            // the toast exists to break.
-            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind is EntityKind.Factory or EntityKind.Barracks)
+            // the toast exists to break. P8-42: the Airfield too, the third
+            // unit producer (World.IsProducer is private to the sim).
+            if (e.Alive && e.PlayerId == LocalPlayerId && e.Kind is EntityKind.Factory or EntityKind.Barracks or EntityKind.Airfield)
             {
                 var q = _world.QueueContents(i);
                 held = q.Count > 0 && e.BuildProgress >= _world.GetUnitType(q[0]).BuildTicks * 100;
+                // P8-42: the sim HOLDS a finished unit for two reasons, and
+                // they want opposite answers from the player: a capped unit
+                // waits for the one in the field to fall (World.AtMaxAlive,
+                // its second enforcement point), while a blocked exit wants
+                // the spawn ground cleared. The cap is asked first, because a
+                // capped hero waits whatever stands at the door.
                 if (held && _exitBlockedShown.Add(i))
-                    ShowToast($"EXIT BLOCKED  -  {UnitNameOf(q[0])} WAITING");
+                    Deny(_world.AtMaxAlive(LocalPlayerId, q[0])
+                        ? $"{UnitNameOf(q[0])} WAITING: {_world.GetUnitType(q[0]).MaxAlive} ALREADY IN THE FIELD"
+                        : $"EXIT BLOCKED: {UnitNameOf(q[0])} WAITING FOR A CLEAR CELL");
             }
             if (!held) _exitBlockedShown.Remove(i);
         }
@@ -3874,18 +3990,123 @@ public partial class SkirmishLive : Node3D
         // joiner who had just won was shown DEFEAT in the loser's red and played
         // the failure line, while the host who lost was congratulated. The last
         // thing a match says, and it said the opposite of what happened.
-        _banner.Text = (iWon ? "VICTORY" : "DEFEAT") + "\n\npress escape for uplink";
-        // The winner's banner wears the winner's own team colour through the
+        // The winner's verdict wears the winner's own team colour through the
         // one-place law, which is identical to the old DirectorateMark at seat 0
         // and correct at every seat above it.
-        _banner.AddThemeColorOverride("font_color",
-            iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f));
-        _banner.Visible = true;
-        // TICKET-P6-VO-01: the closing line, beside the banner. One site
+        string verdict = iWon ? "VICTORY" : "DEFEAT";
+        var colour = iWon ? BattlefieldView.MarkFor(LocalPlayerId) : new Color(0.8f, 0.25f, 0.2f);
+        if (_replay != null)
+        {
+            // A RECORDING is not a match being played: it cannot be retried and
+            // has nothing to unlock, and it ends on its own verdict banner
+            // (FinishPlayback, on this same tick when the recording closed at
+            // the verdict). So playback keeps the banner, which now names the
+            // live cancel binding.
+            _banner.Text = $"{verdict}\n\npress {CancelKeyName} for the main menu";
+            _banner.AddThemeColorOverride("font_color", colour);
+            _banner.Visible = true;
+        }
+        else
+        {
+            // P8-34: a campaign win is remembered BEFORE the screen offers the
+            // next mission, so the unlock it promises is already on disk. A
+            // write failure is said on the screen rather than thrown: this runs
+            // inside the tick, and a full disk must not halt a won match.
+            string? progressNote = null;
+            if (iWon && _setup.IsMission && _net == null)
+            {
+                try { CampaignProgress.RecordWin(_setup.MissionIndex); }
+                catch (System.Exception e)
+                {
+                    GD.PushError($"campaign progress could not be saved: {e}");
+                    progressNote = "campaign progress could not be saved, so the next mission stays locked after a restart";
+                }
+            }
+            ShowResults(iWon, verdict, colour, progressNote);
+        }
+        // TICKET-P6-VO-01: the closing line, beside the verdict. One site
         // covers skirmish and campaign both: a mission verdict arrives here
         // through World.Winner exactly as an elimination does.
         PlayVo(iWon ? "vo_mission_accomplished" : "vo_mission_failed", AlertPriority.Critical);
     }
+
+    /// <summary>The cancel key as the player has it bound, for every line that
+    /// tells them how to leave.</summary>
+    private static string CancelKeyName => Settings.KeyName(Settings.BindOf("cancel"));
+
+    /// <summary>P8-34: can THIS client restart this match? Offline, yes: it
+    /// built the world from its setup and can build it again. Not in LAN,
+    /// because a restart is a new lockstep session on both machines and one
+    /// peer cannot start the other's; and not in playback, which is a
+    /// recording rather than a match.</summary>
+    private bool CanRetry => _net == null && _replay == null;
+
+    /// <summary>P8-34: the results screen, in place of the banner a played
+    /// match used to end on.</summary>
+    private void ShowResults(bool iWon, string verdict, Color colour, string? progressNote)
+    {
+        _banner.Visible = false;
+        _results?.QueueFree();
+        _nextMission = iWon && _setup.IsMission && _net == null
+                       && Campaign.ByIndex(_setup.MissionIndex + 1) is not null
+            ? _setup.MissionIndex + 1 : 0;
+        var notes = new List<string>();
+        if (_stats.StartTick > 0) notes.Add($"counted from the loaded save at tick {_stats.StartTick}");
+        if (_net != null)
+            notes.Add("RETRY is not offered in a LAN match: this machine cannot restart the other player's battle. "
+                      + "Host a new one from the LAN screen.");
+        if (progressNote != null) notes.Add(progressNote);
+        _results = new ResultsScreen();
+        _hud.AddChild(_results);
+        _results.Init(new ResultsScreen.Model(
+            verdict, colour, _setup.Describe(),
+            ResultsScreen.RowsOf(_stats, _world.Tick), notes,
+            CanRetry ? RetryMatch : null,
+            _nextMission > 0 ? NextMission : null,
+            _nextMission > 0 ? Campaign.ByIndex(_nextMission)?.Title : null,
+            QuitToMenu, CancelKeyName));
+    }
+
+    /// <summary>
+    /// P8-34: RETRY. The same match from the start: the setup this scene was
+    /// built from goes back into MatchConfig through the one setup-to-config
+    /// copy (ApplyFrom), so the map, sides, opposition, treasury and, for a
+    /// mission, its allow-lists are exactly what the player just played, and
+    /// the scene is assembled afresh by the one place a match is assembled
+    /// (_Ready), the way LOAD GAME does it. The seat is carried as well, which
+    /// in any offline match is seat 0; the harness drives from seat 1 and a
+    /// retry there must be the same match too. A resumed save retries from
+    /// the start of its match, not from the save.
+    /// </summary>
+    public void RetryMatch()
+    {
+        if (!CanRetry) return;
+        FinishRecording();
+        MatchConfig.ApplyFrom(_setup);
+        MatchConfig.LoadPath = null;
+        MatchConfig.ReplayPath = null;
+        LocalSeat = LocalPlayerId;
+        NetSession.Reset();
+        if (RestartSceneForTest is { } restart) { restart(); return; }
+        GetTree().ChangeSceneToFile("res://scenes/Skirmish.tscn");
+    }
+
+    /// <summary>P8-34: NEXT MISSION opens the next mission's BRIEFING on the
+    /// main menu rather than dropping the player straight into it, because the
+    /// briefing is where the mission says what it wants (F13), and the menu's
+    /// briefing path is the one way into a mission.</summary>
+    public void NextMission()
+    {
+        if (_nextMission <= 0) return;
+        MainMenu.PendingBriefing = _nextMission;
+        QuitToMenu();
+    }
+
+    /// <summary>P8-34 verification seam, the LoadSceneForTest idiom for RETRY:
+    /// when set, a retry calls this instead of changing scene, because the
+    /// harness IS the running scene. Null in every played game; nothing in the
+    /// client ever sets it.</summary>
+    public System.Action? RestartSceneForTest;
 
     private bool _paused;
     private Label _objective = null!;
@@ -4088,6 +4309,19 @@ public partial class SkirmishLive : Node3D
     /// different questions over the same rule. CanPlace calls it too rather than
     /// restating it: writing the expression twice here is how the drag and the
     /// click came to disagree in the first place.</summary>
+    /// <summary>P8-42: why CanPlace said no, asked in its own order: the
+    /// sim's geometry first (ValidPlacement: the ground, what stands on it and
+    /// the build radius), then a barrier's upfront price, then the barrier cap.</summary>
+    private string PlacementRefusal(int ax, int ay, int type)
+    {
+        string name = ProducerNameOf(type);
+        if (!_world.ValidPlacement(LocalPlayerId, ax, ay, type))
+            return $"{name} CANNOT GO THERE: BLOCKED, OCCUPIED OR OUT OF BUILD RANGE";
+        if (_world.Credits(LocalPlayerId) < _world.GetStructureType(type).Cost)
+            return $"NOT ENOUGH CREDITS: A {name} COSTS {_world.GetStructureType(type).Cost}";
+        return $"{name} LIMIT REACHED: {World.MaxBarriersPerPlayer} STANDING";
+    }
+
     private bool CanAffordAnotherBarrier(int type, int aheadInRun) =>
         _world.Credits(LocalPlayerId) >= (long)_world.GetStructureType(type).Cost * (aheadInRun + 1)
         // The SIM'S count, not the interpolated view's. The view trails by up to
@@ -5176,9 +5410,8 @@ public partial class SkirmishLive : Node3D
         if (damaged.Count == 0)
         {
             // Nothing issued, nothing acknowledged - but silence reads as a
-            // dead key, so say why (the P5-ECON-06 denial pattern throughout).
-            ShowToast("NO DAMAGE TO REPAIR");
-            _audio.Play("ui_click", -12);
+            // dead key, so say why (P8-42: through the one refusal path).
+            Deny("NO DAMAGE TO REPAIR");
             return;
         }
         float cxs = 0, cys = 0;
@@ -5186,21 +5419,18 @@ public partial class SkirmishLive : Node3D
         int depot = NearestOwnDepotTo(new Vector2(cxs / damaged.Count, cys / damaged.Count));
         if (depot < 0)
         {
-            ShowToast($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(ServiceDepotStructType).Cost} cr)");
-            _audio.Play("ui_click", -12);
+            Deny($"NO SERVICE DEPOT. BUILD ONE ({_world.GetStructureType(ServiceDepotStructType).Cost} cr)");
             return;
         }
         var (supply, draw) = OwnPower();
         if (supply < draw)
         {
-            ShowToast("DEPOT OFFLINE: BROWN-OUT");   // World's depot gate, said out loud
-            _audio.Play("ui_click", -12);
+            Deny("DEPOT OFFLINE: BROWN-OUT");   // World's depot gate, said out loud
             return;
         }
         if (_world.Credits(LocalPlayerId) < 1)
         {
-            ShowToast("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
-            _audio.Play("ui_click", -12);
+            Deny("NO CREDITS TO REPAIR");       // World.cs charges per tick; broke heals nothing
             return;
         }
         var dp = _latest[depot];
@@ -5282,7 +5512,7 @@ public partial class SkirmishLive : Node3D
         int movers = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.Kind == EntityKind.Unit) movers++;
-        if (movers == 0) { ShowToast("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
+        if (movers == 0) { Deny("ATTACK-MOVE NEEDS COMBAT UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();     // the two modes are exclusive
         DisarmAllArmedOrders();                    // ADR-015: the armed orders are exclusive
         _attackMoveArmed = true;
@@ -5299,13 +5529,13 @@ public partial class SkirmishLive : Node3D
     {
         if (_replay != null) return;               // a spectator issues no orders
         int id = FindOwnStructure(EntityKind.Superweapon);
-        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        if (id < 0 || id >= _world.EntityCount) { Deny("NO SUPERWEAPON"); return; }
         var sw = _world.Entities[id];
-        if (sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON ALREADY LAUNCHED"); return; }
+        if (sw.StrikeTicks >= 0) { Deny("SUPERWEAPON ALREADY LAUNCHED"); return; }
         if (sw.ChargeTicks > 0)
         {
             int secs = Mathf.CeilToInt(sw.ChargeTicks / (float)World.TicksPerSecond);
-            ShowToast($"SUPERWEAPON CHARGING   {secs}s");
+            Deny($"SUPERWEAPON CHARGING   {secs}s");
             return;
         }
         DisarmAllArmedOrders();
@@ -5356,9 +5586,9 @@ public partial class SkirmishLive : Node3D
         _superArmed = false;
         if (GroundPoint(screen) is not { } p) return;
         int id = FindOwnStructure(EntityKind.Superweapon);
-        if (id < 0 || id >= _world.EntityCount) { ShowToast("NO SUPERWEAPON"); return; }
+        if (id < 0 || id >= _world.EntityCount) { Deny("NO SUPERWEAPON"); return; }
         var sw = _world.Entities[id];
-        if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { ShowToast("SUPERWEAPON NOT READY"); return; }
+        if (sw.ChargeTicks > 0 || sw.StrikeTicks >= 0) { Deny("SUPERWEAPON NOT READY"); return; }
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         _pending.Add(new Command(0, LocalPlayerId, CommandType.LaunchSuper, id, cx, cy));
@@ -5449,7 +5679,7 @@ public partial class SkirmishLive : Node3D
             DisarmSupportPower($"{SupportPowerBar.NameOf(powerId)} TARGETING CANCELLED");
             return;
         }
-        if (SupportPowerRefusal(structureId, powerId) is { } why) { ShowToast(why); return; }
+        if (SupportPowerRefusal(structureId, powerId) is { } why) { Deny(why); return; }
         if (SupportPowerBar.IsTargeted(powerId)) ArmSupportPower(structureId, powerId);
         else FireSupportPower(structureId, powerId, null);
     }
@@ -5469,7 +5699,7 @@ public partial class SkirmishLive : Node3D
     {
         if (_replay != null) return;               // a spectator issues no orders
         var all = CollectSupportPowers();
-        if (all.Count == 0) { ShowToast("NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE"); return; }
+        if (all.Count == 0) { Deny("NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE"); return; }
         int start = 0;
         if (_powerArmed is { } a)
             for (int i = 0; i < all.Count; i++)
@@ -5484,8 +5714,8 @@ public partial class SkirmishLive : Node3D
         // Nothing ready: name the soonest, so the refusal is an answer.
         var soonest = all[0];
         foreach (var e in all) if (e.ChargeTicks < soonest.ChargeTicks) soonest = e;
-        ShowToast($"NO SUPPORT POWER READY   {SupportPowerBar.NameOf(soonest.PowerId)} IN "
-                  + $"{Mathf.CeilToInt(soonest.ChargeTicks / (float)World.TicksPerSecond)}s");
+        Deny($"NO SUPPORT POWER READY   {SupportPowerBar.NameOf(soonest.PowerId)} IN "
+             + $"{Mathf.CeilToInt(soonest.ChargeTicks / (float)World.TicksPerSecond)}s");
     }
 
     private void ArmSupportPower(int structureId, int powerId)
@@ -5534,7 +5764,7 @@ public partial class SkirmishLive : Node3D
         if (SupportPowerRefusal(armed.Structure, armed.Power) is { } why)
         {
             _powerArmed = null;
-            ShowToast(why);
+            Deny(why);
             return;
         }
         // Clamped inside the map, so the cell asked about below is a real cell
@@ -5543,7 +5773,7 @@ public partial class SkirmishLive : Node3D
         if (armed.Power == World.TunnelDeploymentPowerId
             && !_world.IsVisible(LocalPlayerId, Mathf.FloorToInt(cx), Mathf.FloorToInt(cz)))
         {
-            ShowToast("TUNNEL DEPLOYMENT NEEDS GROUND YOU CAN SEE");
+            Deny("TUNNEL DEPLOYMENT NEEDS GROUND YOU CAN SEE");
             return;
         }
         _powerArmed = null;
@@ -5619,7 +5849,7 @@ public partial class SkirmishLive : Node3D
                 owned++;
                 if (id >= 0 && id < _world.EntityCount && _world.Entities[id].Stance == Stance.HoldFire) held++;
             }
-        if (owned == 0) { ShowToast("HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (owned == 0) { Deny("HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED"); return; }
         bool release = held == owned;              // all already holding: weapons free
         var target = release ? Stance.Aggressive : Stance.HoldFire;
         foreach (int id in _selection)
@@ -5643,7 +5873,7 @@ public partial class SkirmishLive : Node3D
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, Fix64.Zero, Fix64.Zero, (int)Stance.Guard));
                 n++;
             }
-        if (n == 0) { ShowToast("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (n == 0) { Deny("GUARD NEEDS YOUR OWN UNITS SELECTED"); return; }
         _audio.Play("ui_click", -10);
         ShowToast($"GUARD   ({n} UNITS)");
     }
@@ -5657,7 +5887,7 @@ public partial class SkirmishLive : Node3D
         int movers = 0;
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit) movers++;
-        if (movers == 0) { ShowToast("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
+        if (movers == 0) { Deny("PATROL NEEDS YOUR OWN UNITS SELECTED"); return; }
         if (_placingType > 0) ExitPlacement();
         DisarmAllArmedOrders();                    // the armed orders are exclusive
         _patrolArmed = true;
@@ -5812,8 +6042,7 @@ public partial class SkirmishLive : Node3D
         if (carriers == 0) return false;
         if (n == 0)
         {
-            ShowToast("NOTHING ABOARD");
-            _audio.Play("ui_click", -12);
+            Deny("NOTHING ABOARD");
             return true;
         }
         _audio.Play("ui_confirm", -8);
@@ -5916,9 +6145,11 @@ public partial class SkirmishLive : Node3D
     public bool PlaceAtCell(int ax, int ay)
     {
         // TICKET-P5-SPAWN-01: same predicate as the ghost tint, so a red
-        // ghost and a refused click are the same answer given twice.
-        if (_placingType <= 0 || !CanPlace(ax, ay, _placingType))
-        { _audio.Play("ui_click", -12); return false; }
+        // ghost and a refused click are the same answer given twice. P8-42:
+        // and the refused click says which answer it was, where it only
+        // clicked.
+        if (_placingType <= 0) return false;
+        if (!CanPlace(ax, ay, _placingType)) { Deny(PlacementRefusal(ax, ay, _placingType)); return false; }
         _pending.Add(new Command(0, LocalPlayerId, CommandType.PlaceStructure, _yardId,
             Fix64.FromInt(ax), Fix64.FromInt(ay), _placingType));
         // DEF-08 clause 7: a barrier STAYS IN MODE - the classic loop is draw,
@@ -6687,8 +6918,17 @@ public partial class SkirmishLive : Node3D
     /// label's own text rather than recomputing the verdict, because
     /// recomputing it is how a check comes to agree with the bug - and this
     /// banner told a winning joiner they had lost.</summary>
-    public string BannerTextForTest => _banner.Text;
-    public bool BannerVisibleForTest => _banner.Visible;
+    /// <summary>P8-34: a played match's verdict is the results screen's
+    /// heading now, so the read follows what is on screen: the results
+    /// screen's heading and its way-out line while it stands, the banner
+    /// otherwise (a replay's verdict, which keeps the banner).</summary>
+    public string BannerTextForTest => _results is { } r && IsInstanceValid(r) && r.IsInsideTree()
+        ? $"{r.HeadingText}\n\n{r.FooterText}" : _banner.Text;
+    public bool BannerVisibleForTest => (_results is { } r && IsInstanceValid(r) && r.IsInsideTree() && r.Visible) || _banner.Visible;
+    /// <summary>P8-34 verification reads: the results screen as SHOWN, or null
+    /// while there is none, and the live tally behind it.</summary>
+    public ResultsScreen? ResultsView => _results is { } r && IsInstanceValid(r) && r.IsInsideTree() ? r : null;
+    public MatchStats StatsView => _stats;
 
     /// <summary>Verification hook: report this player eliminated, through the
     /// REAL path the sim's PlayerEliminated event drives. P7-8a: this no longer
@@ -6720,7 +6960,22 @@ public partial class SkirmishLive : Node3D
     /// <summary>Verification hook: clear the victory latch so a second verdict
     /// can be driven in one run. Test-only by name and by nature - nothing in a
     /// played match un-wins a match.</summary>
-    public void ResetVictoryForTest() { _winner = -1; _matchOver = false; _banner.Visible = false; }
+    public void ResetVictoryForTest()
+    {
+        _winner = -1;
+        _matchOver = false;
+        _banner.Visible = false;
+        // P8-34: and the results screen goes with the verdict it showed. Taken
+        // out of the tree at once, not only queued, so a read in the same frame
+        // sees it gone.
+        if (_results is { } r && IsInstanceValid(r))
+        {
+            r.GetParent()?.RemoveChild(r);
+            r.QueueFree();
+        }
+        _results = null;
+        _nextMission = 0;
+    }
 
     /// <summary>Verification hook: hand an entity to another player, as a
     /// capture does. Through the sim's own scenario-scripting SetEntity, so the
@@ -7013,6 +7268,8 @@ public partial class SkirmishLive : Node3D
     public ulong ReplayFinalHash => _replayFinalHash;
     public bool Resumed => _resumed;
     public bool PauseOpen => _pauseMenu != null;
+    /// <summary>P8-35 verification read: the pause menu as it stands, or null.</summary>
+    public PauseMenu? PauseMenuView => _pauseMenu;
     public MatchSetup Setup => _setup;
     public int FactionOf(int player) => _world.FactionOf(player);
     // ADR-006 verification surface: the live match's catalogue reads and the
@@ -7144,6 +7401,14 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int enemy = PickHostile(screen);
+        // P8-42: a hostile nothing selected can act on is refused and said,
+        // rather than sent as Attack orders the sim cannot carry out (the
+        // cursor read Invalid over it for the same reason).
+        if (enemy >= 0 && EngageRefusal(enemy, AnySelectedContactCanAct(screen)) is { } cannot)
+        {
+            Deny(cannot);
+            return;
+        }
         int field = PickEntity(screen, 1.1f, v => v.Kind == EntityKind.FerriteField);
         // P8-7: an own Carrier under the cursor is a boarding target, offered
         // only while the selection holds something it can carry (CursorFor
@@ -7223,18 +7488,10 @@ public partial class SkirmishLive : Node3D
             else continue;
             issued++;
         }
-        if (deniedHarvest)
-        {
-            // The established denial pattern: no ui_deny asset exists, and an
-            // invalid structure placement already speaks with ui_click at -12.
-            ShowToast("NO REFINERY - BUILD ONE FIRST");
-            _audio.Play("ui_click", -12);
-        }
-        if (deniedBoard)
-        {
-            ShowToast($"CARRIER FULL   {World.CarrierCapacity}/{World.CarrierCapacity} ABOARD");
-            _audio.Play("ui_click", -12);
-        }
+        // P8-42: both through the one refusal path, with its own cue, where
+        // they borrowed ui_click at -12 because no deny sound existed.
+        if (deniedHarvest) Deny("NO REFINERY - BUILD ONE FIRST");
+        if (deniedBoard) Deny($"CARRIER FULL   {World.CarrierCapacity}/{World.CarrierCapacity} ABOARD");
         // A click that queued nothing gets no acknowledgement. P5-ECON-06 clause
         // 4 only suppresses the gold harvest marker, which would leave a denied
         // harvest drawing the MOVE ring and playing the move sound instead: the

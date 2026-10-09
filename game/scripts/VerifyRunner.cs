@@ -47,6 +47,12 @@ public partial class VerifyRunner : Node
     {
         GD.Print("verify: headless client harness");
         OS.AddLogger(_engineLog);
+        // P8-34: campaign progress and the remembered match are the harness's
+        // own for the whole run, so no menu it builds reads the player's and no
+        // stage writes over them.
+        CampaignProgress.PathOverrideForTest = HarnessProgressPath;
+        LastMatchMemory.PathOverrideForTest = HarnessLastMatchPath;
+        DeleteHarnessFiles();
         // The seat and the step mode must both be set before the scene loads.
         // AutoStep off means the sim only advances when StepTicks says so, which
         // is what lets a check measure state at an exact tick instead of racing
@@ -110,6 +116,7 @@ public partial class VerifyRunner : Node
         if (_frame < 3) return;
         SetProcess(false);
         RunChecks();
+        DeleteHarnessFiles();
 
         GD.Print(_failures.Count == 0
             ? "verify: PASS - the client was driven from the player-1 seat and read player 1 throughout"
@@ -1298,6 +1305,13 @@ public partial class VerifyRunner : Node
         // P8-11: fault containment, atomic saves, the theatre's dead end and a
         // full-length match, in scenes of its own.
         RunFaultContainmentStages();
+        // P8-34: every match ends on a results screen, in scenes of its own.
+        RunResultsStages();
+        // P8-35: the controls page, settings from the pause menu, the new
+        // rebindable keys and the strong and weak lines.
+        RunControlsStages();
+        // P8-42: refusals explain themselves, through one Deny.
+        RunDenyStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -7401,4 +7415,1444 @@ public partial class VerifyRunner : Node
     /// </summary>
     private static int LongMatchTickCap =>
         int.TryParse(OS.GetEnvironment("VERIFY_LONG_MATCH_TICKS"), out int n) && n > 0 ? n : 7500;
+
+    // ---------------- P8-34: resultsgate ----------------
+
+    private void ResultsGate(bool ok, string stage, string what) => Check(ok, $"resultsgate/{stage}: {what}");
+
+    /// <summary>The harness's own campaign progress and remembered match, in
+    /// user:// beside the player's but never the player's, so a run neither
+    /// reads a developer's progress nor writes over it.</summary>
+    private static readonly string HarnessProgressPath =
+        System.IO.Path.Combine(OS.GetUserDataDir(), "harness-campaign-progress.json");
+    private static readonly string HarnessLastMatchPath =
+        System.IO.Path.Combine(OS.GetUserDataDir(), "harness-last-match.json");
+
+    private static void DeleteHarnessFiles()
+    {
+        foreach (string p in new[] { HarnessProgressPath, HarnessLastMatchPath })
+        {
+            System.IO.File.Delete(p);
+            System.IO.File.Delete(p + ".tmp");
+        }
+        CampaignProgress.ForgetForTest();
+    }
+
+    /// <summary>A stage scene's own recording, removed once the stage is done
+    /// with it, so the harness leaves nothing in the player's replay browser.</summary>
+    private static void DeleteRecording(SkirmishLive g)
+    {
+        string p = g.RecordingPath;
+        if (p.Length == 0) return;
+        System.IO.File.Delete(p);
+        System.IO.File.Delete(System.IO.Path.ChangeExtension(p, ".json"));
+    }
+
+    /// <summary>The opposition stands down: no army and no treasury, so nothing
+    /// but the stage itself moves this seat's numbers. Fixtures leave without
+    /// a death event (RemoveFixture), so the tally never sees them go.</summary>
+    private static void StandDownOpposition(World lw, int foe)
+    {
+        lw.GrantCredits(foe, -lw.Credits(foe));
+        for (int i = 0; i < lw.EntityCount; i++)
+            if (lw.Entities[i].Alive && lw.Entities[i].PlayerId == foe && SkirmishLive.Mobile(lw.Entities[i].Kind))
+                RemoveFixture(lw, i);
+    }
+
+    private static int OneHitPoint(World lw, int id)
+    {
+        var e = lw.Entities[id];
+        e.Hp = 1;
+        lw.SetEntityForTest(id, e);
+        return id;
+    }
+
+    /// <summary>An open anchor 1 to 4 cells from a cell: every cell of a
+    /// size-by-size footprint from it unblocked and holding nothing alive,
+    /// nearest first.</summary>
+    private static (int X, int Y)? OpenCellBeside(World lw, int cx, int cy, int minR = 1, int size = 1)
+    {
+        bool Open(int x, int y)
+        {
+            if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1 || lw.Map.IsBlocked(x, y)) return false;
+            for (int i = 0; i < lw.EntityCount; i++)
+                if (lw.Entities[i].Alive && Map.CellOf(lw.Entities[i].X) == x && Map.CellOf(lw.Entities[i].Y) == y) return false;
+            return true;
+        }
+        for (int r = minR; r <= 4; r++)
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != r) continue;
+                    bool all = true;
+                    for (int fy = 0; fy < size && all; fy++)
+                        for (int fx = 0; fx < size && all; fx++)
+                            all = Open(cx + dx + fx, cy + dy + fy);
+                    if (all) return (cx + dx, cy + dy);
+                }
+        return null;
+    }
+
+    /// <summary>The seat's armed units, alive, in id order.</summary>
+    private static List<int> ArmedOwn(World lw, int seat)
+    {
+        var l = new List<int>();
+        for (int i = 0; i < lw.EntityCount; i++)
+        {
+            var e = lw.Entities[i];
+            if (e.Alive && e.PlayerId == seat && e.Kind == EntityKind.Unit && e.WeaponId != 0) l.Add(i);
+        }
+        return l;
+    }
+
+    /// <summary>A stat row as the results screen shows it, read off the screen.</summary>
+    private static string Shown(ResultsScreen r, string label) => r.ValueShown(label) ?? "(no row)";
+
+    /// <summary>The values a results screen shows against the ones wanted,
+    /// listing each difference by label, or "" when all agree.</summary>
+    private static string RowDiff(ResultsScreen r, params (string Label, string Want)[] want)
+    {
+        var bad = new List<string>();
+        foreach (var (label, w) in want)
+            if (Shown(r, label) != w) bad.Add($"{label} shows {Shown(r, label)}, wanted {w}");
+        return string.Join("; ", bad);
+    }
+
+    /// <summary>
+    /// P8-34, one group. A match ended on a banner that said VICTORY or DEFEAT
+    /// and "press escape": no numbers, no way to try again, no way on into the
+    /// campaign, and the word escape whatever the cancel key was. Every stage
+    /// here drives a real scene to its real ending (the sim's victory latch
+    /// for a win, the sim's own elimination for a loss, a LAN pair for the
+    /// match no peer can restart) and reads the results screen as shown, with
+    /// every number checked against one the stage knows independently: what
+    /// it built, killed and lost, the treasury's own rise over a harvest, the
+    /// catalogue's own prices.
+    /// </summary>
+    private void RunResultsStages()
+    {
+        GD.Print("  --    resultsgate (P8-34): every match ends on a results screen with its numbers and its ways on");
+        RunResultsWonStage();
+        RunResultsLostStage();
+        RunReplayBannerStage();
+        RunLanResultsStage();
+        RunCampaignProgressStage();
+        RunMenuMemoryStage();
+    }
+
+    /// <summary>A skirmish WON, from seat 1, every number in it caused by a
+    /// gesture: a squad built at its button, a plant through its button, the
+    /// PLACE prompt and a click, a harvest once a refinery stands, a kill, a
+    /// loss, and the last hostile building taken by a right click.</summary>
+    private void RunResultsWonStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        Key cancelWas = Settings.BindOf("cancel");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        try { ResultsWonChecks(g); }
+        catch (System.Exception ex) { ResultsGate(false, "won", $"the stage threw: {ex}"); }
+        finally
+        {
+            Settings.SaveSuppressedForTest = true;
+            Settings.TryRebind("cancel", cancelWas);
+            Settings.SaveSuppressedForTest = saveWas;
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    private void ResultsWonChecks(SkirmishLive g)
+    {
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+        g.StepOneTick();
+        g.StepOneTick();
+        g.PumpActorsForTest();
+        StandDownOpposition(lw, foe);
+        if (GroundNear(g, me) is not { } bq)
+        {
+            ResultsGate(false, "won", "quiet ground beside my yard for a barracks (none: a fixture failure)");
+            return;
+        }
+        int barracks = lw.SpawnBarracks(me, bq.X, bq.Y);
+        if (GroundNear(g, me) is { } pq) lw.SpawnPowerPlant(me, pq.X, pq.Y, supply: 3000);
+        g.StepTicks(1);
+        g.StepOneTick();
+        g.StepOneTick();
+        var s = g.StatsView;
+        bool quiet = s.UnitsBuilt + s.UnitsLost + s.UnitsKilled + s.StructuresBuilt + s.StructuresLost == 0
+                     && s.CreditsHarvested == 0 && s.CreditsSpent == 0;
+
+        // A squad at its button and a plant through its button, PLACE and a click.
+        var sb = g.SidebarView;
+        int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+        const int plantType = 1;
+        long spentWant = g.UnitCostOf(rifle) + g.StructCostOf(plantType);
+        bool unitPressed = sb.PressUnitButton(rifle);
+        int built = -1;
+        for (int t = 0; t < 1500 && built < 0; t++)
+        {
+            g.StepTicks(1);
+            foreach (var ev in lw.Events) if (ev.Type == GameEventType.ProductionComplete && ev.C == barracks) built = ev.A;
+        }
+        bool plantPressed = sb.PressStructButton(plantType);
+        for (int t = 0; t < 1500 && g.ReadyStructureForTest != plantType; t++) g.StepTicks(1);
+        g.StepOneTick();
+        bool placePressed = sb.PressPlaceButton();
+        bool placed = g.FindPlacementCell(plantType) is { } site && g.PlaceAtCell(site.X, site.Y);
+        g.StepTicks(1);
+        ResultsGate(quiet && unitPressed && built >= 0 && plantPressed && placePressed && placed, "won",
+                    $"precondition: the tally starts at nothing, then a rifle squad is built at its sidebar button and a power plant "
+                    + $"through its button, the PLACE prompt and a click (squad {built}, plant placed {placed})");
+
+        // A harvest: the treasury's own rise is the independent measure, taken
+        // over a window in which nothing else touches it.
+        long before = lw.Credits(me);
+        if (GroundNear(g, me) is not { } rq)
+        {
+            ResultsGate(false, "won", "quiet ground for a refinery (none: a fixture failure)");
+            return;
+        }
+        int refinery = lw.SpawnRefinery(me, rq.X, rq.Y);
+        for (int t = 0; t < 4000 && lw.Credits(me) <= before; t++) g.StepTicks(1);
+        long harvestedWant = lw.Credits(me) - before;
+        RemoveFixture(lw, refinery);   // no more income, so the screen's figure is this window's
+        ResultsGate(harvestedWant > 0, "won",
+                    $"precondition: the opening harvester delivered a load once a refinery stood (+{harvestedWant} credits)");
+
+        // A kill: a hostile squad of one hit point beside my army.
+        var army = ArmedOwn(lw, me);
+        if (army.Count < 2)
+        {
+            ResultsGate(false, "won", $"precondition: an army of two or more ({army.Count})");
+            return;
+        }
+        int a0 = army[0];
+        var c0 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a0].X), Map.CellOf(lw.Entities[a0].Y), 2);
+        int prey = c0 is { } pc ? OneHitPoint(lw, SpawnOfType(lw, foe, rifle, pc.X, pc.Y)) : -1;
+        for (int t = 0; t < 300 && prey >= 0 && lw.Entities[prey].Alive; t++) g.StepTicks(1);
+        // A loss: one of mine, at one hit point, under a hostile cannon.
+        int victim = army[army.Count - 1];
+        OneHitPoint(lw, victim);
+        var c1 = OpenCellBeside(lw, Map.CellOf(lw.Entities[victim].X), Map.CellOf(lw.Entities[victim].Y));
+        int gunner = c1 is { } gc ? SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), gc.X, gc.Y) : -1;
+        if (gunner >= 0)
+            g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, gunner, Fix64.Zero, Fix64.Zero, victim));
+        for (int t = 0; t < 300 && gunner >= 0 && lw.Entities[victim].Alive; t++) g.StepTicks(1);
+        if (gunner >= 0) RemoveFixture(lw, gunner);
+        ResultsGate(prey >= 0 && !lw.Entities[prey].Alive && gunner >= 0 && !lw.Entities[victim].Alive, "won",
+                    $"precondition: my army shot a hostile squad dead and a hostile cannon shot one of mine dead (prey alive "
+                    + $"{prey >= 0 && lw.Entities[prey].Alive}, victim alive {lw.Entities[victim].Alive})");
+
+        // The cancel key rebound, so the screen's way-out line is proved to read
+        // the live binding rather than a word.
+        Settings.SaveSuppressedForTest = true;
+        string? clash = Settings.TryRebind("cancel", Key.Backspace);
+        string liveCancel = Settings.KeyName(Settings.BindOf("cancel"));
+
+        // The win: the opposition's last building, at one hit point beside my
+        // army, taken by a right click; everything else it held stands down.
+        int a1 = ArmedOwn(lw, me)[0];
+        var c2 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a1].X), Map.CellOf(lw.Entities[a1].Y), 2, size: 2);
+        int bait = c2 is { } bc ? OneHitPoint(lw, lw.SpawnPowerPlant(foe, bc.X, bc.Y)) : -1;
+        for (int i = 0; i < lw.EntityCount; i++)
+        {
+            var e = lw.Entities[i];
+            if (i != bait && e.Alive && e.PlayerId == foe
+                && ((World.IsStructure(e.Kind) && !World.IsBarrier(e.Kind)) || e.UnitType == World.McvUnitType))
+                RemoveFixture(lw, i);
+        }
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        float bx = bait >= 0 ? Fx(lw.Entities[bait].X) : 0f, bz = bait >= 0 ? Fx(lw.Entities[bait].Y) : 0f;
+        g.PressKey(Settings.BindOf("select_all_army"));
+        g.FocusCameraOn(bx, bz, 22f);
+        g.PumpActorsForTest();
+        string cursor = g.CursorNameAt(g.ScreenOf(bx, bz));
+        g.PressRightClick(g.ScreenOf(bx, bz));
+        for (int t = 0; t < 600 && g.ResultsView == null; t++) g.StepTicks(1);
+        var r = g.ResultsView;
+        ResultsGate(clash == null && bait >= 0 && cursor == "Attack" && r != null && lw.Winner == me, "won",
+                    $"a right click on the opposition's last building (cursor {cursor}) wins the match and the results screen comes "
+                    + $"up in place of a banner (winner {lw.Winner}, screen {r != null})");
+        if (r == null) return;
+
+        string diff = RowDiff(r,
+            ("UNITS BUILT", "1"), ("UNITS LOST", "1"), ("UNITS KILLED", "1"),
+            ("STRUCTURES BUILT", "1"), ("STRUCTURES LOST", "0"),
+            ("CREDITS HARVESTED", harvestedWant.ToString()), ("CREDITS SPENT", spentWant.ToString()),
+            ("DURATION", ResultsScreen.Duration(g.CurrentTick)));
+        ResultsGate(r.HeadingText == "VICTORY" && diff.Length == 0, "won",
+                    $"it reads VICTORY with the match's own numbers: 1 squad built, 1 lost and 1 killed, 1 plant built and none "
+                    + $"lost, {harvestedWant} credits harvested (the treasury's rise), {spentWant} spent (the squad's and the plant's "
+                    + $"catalogue prices) and the clock at tick {g.CurrentTick}{(diff.Length > 0 ? $"; but {diff}" : "")}");
+        ResultsGate(r.Offers(ResultsScreen.RetryText) && r.Offers(ResultsScreen.MainMenuText) && !r.Offers(ResultsScreen.NextMissionText)
+                    && r.FooterText.Contains(liveCancel) && liveCancel == "Backspace" && g.BannerTextForTest.StartsWith("VICTORY"),
+                    "won", $"a skirmish offers RETRY and MAIN MENU and no NEXT MISSION, and names the cancel key as it is bound now "
+                    + $"(\"{r.FooterText}\", bound to {liveCancel})");
+
+        int left = 0;
+        g.LeaveForMenuForTest = () => left++;
+        bool pressedMenu = r.Press(ResultsScreen.MainMenuText);
+        int byButton = left;
+        g.PressKey(Settings.BindOf("cancel"));
+        g.LeaveForMenuForTest = null;
+        ResultsGate(pressedMenu && byButton == 1 && left == 2, "won",
+                    $"MAIN MENU and the rebound cancel key each lead back to the menu ({byButton} by the button, {left - byButton} by the key)");
+        RunRetryCheck(g, r, "won");
+    }
+
+    /// <summary>RETRY, pressed: the scene asks for the SAME match (MatchConfig
+    /// back to its setup, compared as encoded blobs), and a scene built from
+    /// that config is the match from its start.</summary>
+    private void RunRetryCheck(SkirmishLive g, ResultsScreen r, string stage)
+    {
+        var restore = MatchConfig.CurrentSetup();
+        string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        SkirmishLive? again = null;
+        try
+        {
+            // Something else in MatchConfig first, so a RETRY that left it alone fails.
+            MatchConfig.ApplyFrom(new MatchSetup { MapPath = "data/maps/skirmish-09.fmap", AiDifficulty = 3, StartCredits = 5000 });
+            int restarted = 0;
+            g.RestartSceneForTest = () => restarted++;
+            bool pressed = r.Press(ResultsScreen.RetryText);
+            g.RestartSceneForTest = null;
+            var asked = MatchConfig.CurrentSetup();
+            asked.Seed = g.Setup.Seed;
+            string want = System.Convert.ToBase64String(MatchSetupBlob.Encode(g.Setup));
+            string got = System.Convert.ToBase64String(MatchSetupBlob.Encode(asked));
+            bool seat = SkirmishLive.LocalSeat == g.LocalPlayerId;
+            ResultsGate(pressed && restarted == 1 && got == want && seat && MatchConfig.LoadPath == null && MatchConfig.ReplayPath == null,
+                        stage, $"RETRY asks for the same match: MatchConfig holds this scene's setup again, byte for byte as a blob, "
+                        + $"at the same seat, with no save or recording to resume ({restarted} restart, same setup {got == want}, seat {seat})");
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.PendingNet = null;
+            again = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(again);
+            string rebuilt = System.Convert.ToBase64String(MatchSetupBlob.Encode(again.Setup));
+            int foeYard = again.FindEntity(EntityKind.ConstructionYard, again.EnemyPlayerId);
+            ResultsGate(rebuilt == want && again.CurrentTick == 0 && again.LocalPlayerId == g.LocalPlayerId
+                        && again.ResultsView == null && foeYard >= 0 && again.StatsView.UnitsBuilt == 0, stage,
+                        $"...and the scene built from it is that match from tick 0: the same setup, the same seat, the opposition's "
+                        + $"yard standing again and no results screen (tick {again.CurrentTick}, seat {again.LocalPlayerId}, yard {foeYard})");
+        }
+        finally
+        {
+            if (again != null) { DeleteRecording(again); again.QueueFree(); }
+            SkirmishLive.LocalSeat = 0;
+            MatchConfig.ApplyFrom(restore);
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+        }
+    }
+
+    /// <summary>A skirmish LOST, from seat 1: the seat's last building, at one
+    /// hit point, under a hostile cannon. The sim eliminates the seat and the
+    /// screen says DEFEAT with the one structure lost and nothing else.</summary>
+    private void RunResultsLostStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            StandDownOpposition(lw, foe);
+            int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+            int hope = 0;
+            for (int i = 0; i < lw.EntityCount; i++)
+            {
+                var e = lw.Entities[i];
+                if (e.Alive && e.PlayerId == me && ((World.IsStructure(e.Kind) && !World.IsBarrier(e.Kind)) || e.UnitType == World.McvUnitType))
+                    hope++;
+            }
+            var (yx, yy) = yard >= 0 ? g.CellOfForTest(yard) : (0, 0);
+            var gc = yard >= 0 ? OpenCellBeside(lw, yx, yy, 2) : null;
+            int gunner = gc is { } c ? SpawnOfType(lw, foe, UnitCatalogue.TypeIdOf("dir_cannon_tank"), c.X, c.Y) : -1;
+            if (yard >= 0 && gunner >= 0)
+            {
+                OneHitPoint(lw, yard);
+                g.ScriptCommandForTest(new Command(0, foe, CommandType.Attack, gunner, Fix64.Zero, Fix64.Zero, yard));
+            }
+            for (int t = 0; t < 300 && gunner >= 0 && g.ResultsView == null; t++) g.StepTicks(1);
+            var r = g.ResultsView;
+            ResultsGate(hope == 1 && gunner >= 0 && r != null && !lw.Entities[yard].Alive, "lost",
+                        $"my only building shot down ends the match, and the results screen comes up in place of a banner (buildings "
+                        + $"that count {hope}, yard alive {yard >= 0 && lw.Entities[yard].Alive}, screen {r != null})");
+            if (r == null) return;
+            string diff = RowDiff(r,
+                ("UNITS BUILT", "0"), ("UNITS LOST", "0"), ("UNITS KILLED", "0"),
+                ("STRUCTURES BUILT", "0"), ("STRUCTURES LOST", "1"),
+                ("CREDITS HARVESTED", "0"), ("CREDITS SPENT", "0"),
+                ("DURATION", ResultsScreen.Duration(g.CurrentTick)));
+            string cancel = Settings.KeyName(Settings.BindOf("cancel"));
+            ResultsGate(r.HeadingText == "DEFEAT" && diff.Length == 0 && r.Offers(ResultsScreen.RetryText)
+                        && r.Offers(ResultsScreen.MainMenuText) && !r.Offers(ResultsScreen.NextMissionText) && r.FooterText.Contains(cancel),
+                        "lost", $"it reads DEFEAT with one structure lost and nothing else, offers RETRY and MAIN MENU, and names the "
+                        + $"cancel key ({cancel}){(diff.Length > 0 ? $"; but {diff}" : "")}");
+            int left = 0;
+            g.LeaveForMenuForTest = () => left++;
+            bool pressed = r.Press(ResultsScreen.MainMenuText);
+            g.LeaveForMenuForTest = null;
+            ResultsGate(pressed && left == 1, "lost", $"MAIN MENU leads back to the menu ({left})");
+            RunRetryCheck(g, r, "lost");
+        }
+        catch (System.Exception ex) { ResultsGate(false, "lost", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>A RECORDING keeps its banner: playback is not a match being
+    /// played, so it has nothing to retry and nothing to unlock. Its closing
+    /// line names the cancel key as it is bound now, where it used to say
+    /// "press escape" whatever the binding was. A short match is recorded
+    /// through the real recorder, left through the menu path that closes the
+    /// file, and played back to its end.</summary>
+    private void RunReplayBannerStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        string frep = g.RecordingPath;
+        string side = frep.Length > 0 ? System.IO.Path.ChangeExtension(frep, ".json") : "";
+        SkirmishLive? p = null;
+        Key cancelWas = Settings.BindOf("cancel");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        try
+        {
+            g.StepTicks(GameFiles.MinRecordedTicks + 15);
+            g.LeaveForMenuForTest = () => { };
+            g.QuitToMenuForTest();
+            g.LeaveForMenuForTest = null;
+            var meta = side.Length > 0 ? MatchMeta.Read(side) : null;
+            ResultsGate(meta != null && System.IO.File.Exists(frep), "replay",
+                        $"precondition: a short match is recorded and closed ({frep}, sidecar {meta != null})");
+            if (meta == null) return;
+
+            Settings.SaveSuppressedForTest = true;
+            string? clash = Settings.TryRebind("cancel", Key.Backspace);
+            var restore = MatchConfig.CurrentSetup();
+            string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+            var wasStructs = MatchConfig.AllowedStructures;
+            var wasUnits = MatchConfig.AllowedUnits;
+            try
+            {
+                MatchConfig.ApplyFrom(meta);
+                MatchConfig.ReplayPath = frep;
+                MatchConfig.ReplayTicks = meta.Tick;
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.PendingNet = null;
+                SkirmishLive.LocalSeat = 1;
+                p = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(p);
+            }
+            finally
+            {
+                MatchConfig.ApplyFrom(restore);
+                MatchConfig.MissionPath = wasMission;
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.AllowedStructures = wasStructs;
+                MatchConfig.AllowedUnits = wasUnits;
+                MatchConfig.ReplayPath = null;
+            }
+            p.StepTicks(meta.Tick + 1);
+            string banner = p.BannerTextForTest;
+            bool live = banner.Contains("press Backspace for the main menu") && !banner.Contains("escape");
+            ResultsGate(clash == null && p.IsReplay && p.ResultsView == null && p.BannerVisibleForTest
+                        && banner.StartsWith("REPLAY COMPLETE") && live, "replay",
+                        $"a recording played to its end keeps its banner, offers no results screen, and names the cancel key as "
+                        + $"it is bound now (\"{banner.Replace('\n', ' ')}\")");
+            int left = 0;
+            p.LeaveForMenuForTest = () => left++;
+            p.PressKey(Settings.BindOf("cancel"));
+            p.LeaveForMenuForTest = null;
+            ResultsGate(left == 1, "replay", $"...and that key leads back to the menu ({left})");
+        }
+        catch (System.Exception ex) { ResultsGate(false, "replay", $"the stage threw: {ex}"); }
+        finally
+        {
+            Settings.SaveSuppressedForTest = true;
+            Settings.TryRebind("cancel", cancelWas);
+            Settings.SaveSuppressedForTest = saveWas;
+            p?.QueueFree();
+            g.QueueFree();
+            if (frep.Length > 0) System.IO.File.Delete(frep);
+            if (side.Length > 0) System.IO.File.Delete(side);
+        }
+    }
+
+    /// <summary>A LAN match's ending, on both peers. RETRY is NOT offered on
+    /// either, by decision: a restart is a new lockstep session on both
+    /// machines, and one peer cannot start the other's, so a RETRY here would
+    /// restart one machine into a single-player match against nobody. The
+    /// screen says so, and both peers keep MAIN MENU.</summary>
+    private void RunLanResultsStage()
+    {
+        string? wasMap = MatchConfig.MapPath;
+        Ferrostorm.Net.Relay? relay = null;
+        Ferrostorm.Net.LockstepClient? hostClient = null, joinClient = null;
+        SkirmishLive? host = null, join = null;
+        try
+        {
+            (relay, hostClient, joinClient, host, join) = ConnectLanPair(3434UL);
+            var hw = host.LiveWorld;
+            var jw = join.LiveWorld;
+            int js = join.LocalPlayerId;
+            hostClient.Prime();
+            joinClient.Prime();
+            bool warm = true;
+            for (int t = 0; t < 5 && warm; t++) warm = LanStepBoth(host, join);
+            for (int i = 0; i < hw.EntityCount; i++)
+                if (hw.Entities[i].Alive && hw.Entities[i].PlayerId == js)
+                {
+                    RemoveFixture(hw, i);
+                    RemoveFixture(jw, i);
+                }
+            bool ended = warm && LanStepBoth(host, join);
+            var hr = host.ResultsView;
+            var jr = join.ResultsView;
+            ResultsGate(ended && hr != null && jr != null && hr.HeadingText == "VICTORY" && jr.HeadingText == "DEFEAT", "lan",
+                        $"a LAN match ends on a results screen on BOTH peers, VICTORY for the host and DEFEAT for the stripped joiner "
+                        + $"(\"{hr?.HeadingText}\" and \"{jr?.HeadingText}\")");
+            if (hr == null || jr == null) return;
+            bool noRetry = !hr.Offers(ResultsScreen.RetryText) && !jr.Offers(ResultsScreen.RetryText)
+                           && hr.Offers(ResultsScreen.MainMenuText) && jr.Offers(ResultsScreen.MainMenuText);
+            bool said = hr.AllText().Contains("RETRY is not offered in a LAN match") && jr.AllText().Contains("RETRY is not offered in a LAN match");
+            ResultsGate(noRetry && said, "lan",
+                        $"neither peer is offered RETRY, which one machine cannot do for both, and each screen says why and keeps MAIN "
+                        + $"MENU (no retry {noRetry}, said {said})");
+            int left = 0;
+            join.LeaveForMenuForTest = () => left++;
+            bool pressed = jr.Press(ResultsScreen.MainMenuText);
+            join.LeaveForMenuForTest = null;
+            ResultsGate(pressed && left == 1, "lan", $"...and MAIN MENU leads back to the menu ({left})");
+        }
+        catch (System.Exception ex) { ResultsGate(false, "lan", $"the LAN match threw: {ex.Message}"); }
+        finally
+        {
+            MatchConfig.MapPath = wasMap;
+            host?.QueueFree();
+            join?.QueueFree();
+            hostClient?.Dispose();
+            joinClient?.Dispose();
+            relay?.Stop();
+        }
+    }
+
+    /// <summary>
+    /// The campaign's progress, through a real mission win and a "restart":
+    /// the in-memory progress is forgotten and read back from the file, and a
+    /// fresh main menu is built, which is everything a relaunch does to it.
+    /// The write is atomic (P8-11's way), proved by a crash simulated between
+    /// the tmp and the move, after which the previous progress stands whole.
+    /// </summary>
+    private void RunCampaignProgressStage()
+    {
+        DeleteHarnessFiles();
+        var before = OpenMenuCampaign();
+        bool lockedBefore = before.Count >= 3 && before[0].Enabled && !before[1].Enabled && before[1].Text.Contains("LOCKED");
+        ResultsGate(lockedBefore, "campaign",
+                    $"with no progress on file the campaign opens mission 1 and locks mission 2 ({DescribeRows(before)})");
+        if (Campaign.ByIndex(1) is not { } first || Campaign.ByIndex(2) is not { } second) return;
+
+        var restore = MatchConfig.CurrentSetup();
+        string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        SkirmishLive g;
+        try
+        {
+            MatchConfig.ApplyFrom(new MatchSetup { MapPath = GameFiles.Rel(first.Path), MissionIndex = 1 });
+            SkirmishLive.AutoStep = false;
+            SkirmishLive.PendingNet = null;
+            SkirmishLive.LocalSeat = 0;
+            g = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+            AddChild(g);
+        }
+        finally
+        {
+            MatchConfig.ApplyFrom(restore);
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+        }
+        MainMenu? menu = null;
+        try
+        {
+            g.StepOneTick();
+            g.DeclareWinnerForTest(g.LocalPlayerId);   // the victory latch's own path
+            var r = g.ResultsView;
+            bool onDisk = System.IO.File.Exists(HarnessProgressPath) && !System.IO.File.Exists(HarnessProgressPath + ".tmp");
+            string text = onDisk ? System.IO.File.ReadAllText(HarnessProgressPath) : "";
+            ResultsGate(r != null && r.HeadingText == "VICTORY" && r.Offers(ResultsScreen.NextMissionText) && r.Offers(ResultsScreen.RetryText)
+                        && r.Offers(ResultsScreen.MainMenuText) && onDisk && text.Contains("\"won\""), "campaign",
+                        $"winning mission 1 ends on a results screen offering NEXT MISSION, RETRY and MAIN MENU, and the win is already "
+                        + $"on disk, whole, with no tmp left beside it (screen {r != null}, on disk {onDisk})");
+            if (r == null) return;
+
+            // A restart, as far as progress is concerned.
+            CampaignProgress.ForgetForTest();
+            bool reloaded = CampaignProgress.HasWon(1) && CampaignProgress.IsUnlocked(2) && !CampaignProgress.IsUnlocked(3);
+            var after = OpenMenuCampaign();
+            bool listed = after.Count >= 3 && after[0].Enabled && after[0].Text.Contains("WON")
+                          && after[1].Enabled && !after[1].Text.Contains("LOCKED") && !after[2].Enabled && after[2].Text.Contains("LOCKED");
+            ResultsGate(reloaded && listed, "campaign",
+                        $"read back from the file after a restart, mission 1 is won, mission 2 is open and mission 3 still locked, and "
+                        + $"a fresh menu lists them so ({DescribeRows(after)})");
+
+            // Atomic: a crash between the tmp and the move leaves the old file whole.
+            GameFiles.InterruptBeforeMoveForTest = System.IO.Path.GetFileName(HarnessProgressPath);
+            bool crashed = false;
+            try { CampaignProgress.RecordWin(2); }
+            catch (GameFiles.SimulatedCrashForTest) { crashed = true; }
+            GameFiles.InterruptBeforeMoveForTest = null;
+            CampaignProgress.ForgetForTest();
+            var won = CampaignProgress.WonMissions();
+            ResultsGate(crashed && won.Count == 1 && won[0] == 1, "campaign",
+                        $"a crash simulated after the progress tmp is written and before it moves leaves the previous progress whole "
+                        + $"(crashed {crashed}, won {string.Join(",", won)})");
+            System.IO.File.Delete(HarnessProgressPath + ".tmp");
+
+            // NEXT MISSION: back to the menu, on mission 2's briefing.
+            int left = 0;
+            g.LeaveForMenuForTest = () => left++;
+            bool pressed = r.Press(ResultsScreen.NextMissionText);
+            g.LeaveForMenuForTest = null;
+            int pending = MainMenu.PendingBriefing;
+            menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(menu);
+            var labels = new List<Label>();
+            CollectNodes(menu, labels);
+            bool titled = labels.Exists(l => l.Text == second.Title.ToUpperInvariant());
+            ResultsGate(pressed && left == 1 && pending == 2 && menu.BriefingShownForTest == 2 && MainMenu.PendingBriefing == 0 && titled,
+                        "campaign", $"NEXT MISSION returns to the menu and opens mission 2's briefing there (\"{second.Title.ToUpperInvariant()}\" "
+                        + $"shown {titled}, briefing {menu.BriefingShownForTest})");
+        }
+        catch (System.Exception ex) { ResultsGate(false, "campaign", $"the stage threw: {ex}"); }
+        finally
+        {
+            GameFiles.InterruptBeforeMoveForTest = null;
+            MainMenu.PendingBriefing = 0;
+            menu?.QueueFree();
+            DeleteRecording(g);
+            g.QueueFree();
+            DeleteHarnessFiles();
+        }
+    }
+
+    /// <summary>The campaign list a fresh main menu shows: each mission row's
+    /// text and whether it can be pressed.</summary>
+    private List<(string Text, bool Enabled)> OpenMenuCampaign()
+    {
+        var menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+        AddChild(menu);
+        try { return menu.OpenCampaignForTest(); }
+        finally { menu.QueueFree(); }
+    }
+
+    private static string DescribeRows(List<(string Text, bool Enabled)> rows)
+    {
+        var parts = new List<string>();
+        foreach (var (t, e) in rows) parts.Add($"\"{t}\"{(e ? "" : " disabled")}");
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>The main menu remembers the last match it started: every row
+    /// set away from its default and COMMENCE OPERATION pressed, then a fresh
+    /// menu (a relaunch, to the menu) opens on the same choices.</summary>
+    private void RunMenuMemoryStage()
+    {
+        DeleteHarnessFiles();
+        var restore = MatchConfig.CurrentSetup();
+        string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+        var wasStructs = MatchConfig.AllowedStructures;
+        var wasUnits = MatchConfig.AllowedUnits;
+        MainMenu? first = null, second = null;
+        try
+        {
+            first = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(first);
+            var defaults = first.RowsSelectedForTest;
+            int four = -1;
+            for (int i = 0; i < first.TheatreCountForTest; i++)
+                if (first.TheatreCardForTest(i).Stem == "skirmish-09") four = i;
+            first.ChooseFactionForTest(1);
+            first.ChooseTheatreForTest(four);
+            first.ChooseOpponentsForTest(1);
+            first.ChooseTeamsForTest(MatchSetup.TeamsEvenSides);
+            first.ChooseAiForTest(2);
+            first.ChooseDifficultyForTest(3);
+            first.ChooseTreasuryForTest(2);
+            var chosen = first.RowsSelectedForTest;
+            int launched = 0;
+            first.LaunchBattleForTest = () => launched++;
+            bool pressed = first.PressMenuButtonForTest("COMMENCE OPERATION");
+            bool written = System.IO.File.Exists(HarnessLastMatchPath);
+            first.QueueFree();
+            first = null;
+            second = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(second);
+            var reopened = second.RowsSelectedForTest;
+            ResultsGate(four >= 0 && chosen != defaults && pressed && launched == 1 && written && reopened == chosen, "menu-memory",
+                        $"COMMENCE OPERATION remembers the match it started, and a fresh menu opens on it: {reopened} where the "
+                        + $"defaults were {defaults} and the choice was {chosen}");
+        }
+        catch (System.Exception ex) { ResultsGate(false, "menu-memory", $"the stage threw: {ex}"); }
+        finally
+        {
+            first?.QueueFree();
+            second?.QueueFree();
+            MatchConfig.ApplyFrom(restore);
+            MatchConfig.MissionPath = wasMission;
+            MatchConfig.MapPath = wasMap;
+            MatchConfig.AllowedStructures = wasStructs;
+            MatchConfig.AllowedUnits = wasUnits;
+            DeleteHarnessFiles();
+        }
+    }
+
+    // ---------------- P8-35: controlsgate ----------------
+
+    private void ControlsGate(bool ok, string stage, string what) => Check(ok, $"controlsgate/{stage}: {what}");
+
+    /// <summary>What a controls page must show, computed from the table it is
+    /// generated from: every Bindable entry in table order, with its key now.</summary>
+    private static List<(string Label, string Key)> BindableNow()
+    {
+        var l = new List<(string, string)>();
+        foreach (var (action, label) in Settings.Bindable) l.Add((label, Settings.KeyName(Settings.BindOf(action))));
+        return l;
+    }
+
+    /// <summary>The first difference between the rows a page shows and the
+    /// rows wanted, or "" when they agree row for row.</summary>
+    private static string RowsDiff(List<(string Label, string Key)> shown, List<(string Label, string Key)> want)
+    {
+        if (shown.Count != want.Count) return $"{shown.Count} rows shown for {want.Count} entries";
+        for (int i = 0; i < want.Count; i++)
+            if (shown[i] != want[i]) return $"row {i} shows {shown[i].Label} {shown[i].Key}, wanted {want[i].Label} {want[i].Key}";
+        return "";
+    }
+
+    /// <summary>The key a controls page shows beside a label.</summary>
+    private static string RowKey(ControlsPage? p, string label)
+    {
+        if (p == null) return "(no page)";
+        foreach (var (l, k) in p.RowsShown()) if (l == label) return k;
+        return "(no row)";
+    }
+
+    /// <summary>
+    /// P8-35, one group. The keys were listed nowhere a player could read
+    /// them; the settings page could not be reached from a battle; group 0
+    /// and the four camera bookmarks answered in the battle but could not be
+    /// rebound and were invisible to the conflict check; and a unit's tooltip
+    /// said how to build it and nothing about what it was for. Every binding
+    /// the stages move is put back at the end, and nothing they do is saved.
+    /// </summary>
+    private void RunControlsStages()
+    {
+        GD.Print("  --    controlsgate (P8-35): the controls page, settings in a battle, the new rebindable keys, strong and weak lines");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        var keysWas = new Dictionary<string, Key>();
+        foreach (var (a, _) in Settings.Bindable) keysWas[a] = Settings.BindOf(a);
+        Settings.SaveSuppressedForTest = true;
+        try
+        {
+            RunControlsTableStage();
+            RunControlsMenuStage();
+            RunControlsPauseStage();
+            RunMatchupTooltipStage();
+        }
+        finally
+        {
+            // Two passes, so a key one stage moved between two actions is not
+            // refused as a conflict on its way back.
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, Key.None);
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, k);
+            Settings.SaveSuppressedForTest = saveWas;
+        }
+    }
+
+    /// <summary>The table the page is generated from and the project's input
+    /// map agree in both directions, so nothing the battle answers to is left
+    /// off the page or out of the conflict check.</summary>
+    private void RunControlsTableStage()
+    {
+        var declared = new SortedSet<string>();
+        foreach (var a in InputMap.GetActions())
+        {
+            string s = a.ToString();
+            if (!s.StartsWith("ui_")) declared.Add(s);
+        }
+        var table = new SortedSet<string>();
+        foreach (var (a, _) in Settings.Bindable) table.Add(a);
+        var missing = new SortedSet<string>(declared);
+        missing.ExceptWith(table);
+        var undeclared = new SortedSet<string>(table);
+        undeclared.ExceptWith(declared);
+        ControlsGate(missing.Count == 0 && undeclared.Count == 0 && table.Contains("group_0") && table.Contains("bookmark_4"), "table",
+                     $"every action project.godot declares is in Settings.Bindable and every Bindable action is declared, group 0 and "
+                     + $"the four camera bookmarks included ({declared.Count} declared; missing from the table: "
+                     + $"{(missing.Count == 0 ? "none" : string.Join(", ", missing))}; not declared: "
+                     + $"{(undeclared.Count == 0 ? "none" : string.Join(", ", undeclared))})");
+    }
+
+    /// <summary>The main menu's CONTROLS page lists the table, and follows a
+    /// rebind made while it is open.</summary>
+    private void RunControlsMenuStage()
+    {
+        var menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+        AddChild(menu);
+        try
+        {
+            var page = menu.OpenControlsForTest();
+            string diff = page == null ? "no page opened" : RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(page != null && diff.Length == 0, "menu",
+                         $"the main menu's CONTROLS button opens a page listing all {Settings.Bindable.Length} Bindable entries in table "
+                         + $"order, each with the key it is bound to now{(diff.Length > 0 ? $"; but {diff}" : "")}");
+            if (page == null) return;
+            string? clash = Settings.TryRebind("group_0", Key.K);
+            string shown = RowKey(page, "GROUP 0");
+            string after = RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(clash == null && shown == Settings.KeyName(Key.K) && after.Length == 0, "menu",
+                         $"...and a binding changed while it is open shows on it at once (GROUP 0 reads {shown})");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "menu", $"the stage threw: {ex}"); }
+        finally { menu.QueueFree(); }
+    }
+
+    /// <summary>Inside a battle: the pause key, CONTROLS, SETTINGS with a real
+    /// key capture for group 0 and bookmark 1, the conflict check both ways,
+    /// BACK to the operations menu, and the rebound keys working in the
+    /// battle while the old ones do nothing.</summary>
+    private void RunControlsPauseStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            g.PressKey(Settings.BindOf("pause_menu"));
+            var pm = g.PauseMenuView;
+            ControlsGate(pm != null && g.PauseOpen, "pause", "precondition: the pause key opens the operations menu");
+            if (pm == null) return;
+
+            bool opened = pm.PressForTest("CONTROLS");
+            var page = pm.ControlsShown;
+            string diff = page == null ? "no page opened" : RowsDiff(page.RowsShown(), BindableNow());
+            ControlsGate(opened && page != null && diff.Length == 0, "pause",
+                         $"CONTROLS in the pause menu opens the same generated page, every Bindable entry with its live key"
+                         + $"{(diff.Length > 0 ? $"; but {diff}" : "")}");
+            bool back = pm.PressForTest("BACK");
+            ControlsGate(back && pm.ControlsShown == null && g.PauseOpen, "pause", "...and its BACK returns to the operations menu");
+
+            bool openedSettings = pm.PressForTest("SETTINGS");
+            var sp = pm.SettingsShown;
+            if (sp == null)
+            {
+                ControlsGate(false, "pause", $"SETTINGS in the pause menu opened no settings page (pressed {openedSettings})");
+                return;
+            }
+            Key mark2Was = Settings.BindOf("bookmark_2"), stopWas = Settings.BindOf("stop");
+            bool drove = sp.DriveRebind("group_0", Key.K);
+            string n1 = sp.NoticeText;
+            drove &= sp.DriveRebind("bookmark_1", Key.F9);
+            string n2 = sp.NoticeText;
+            ControlsGate(drove && Settings.BindOf("group_0") == Key.K && Settings.BindOf("bookmark_1") == Key.F9
+                         && sp.BindTextOf("group_0") == Settings.KeyName(Key.K), "pause",
+                         $"SETTINGS in the pause menu opens the settings page over the battle, where GROUP 0 and CAMERA BOOKMARK 1 "
+                         + $"rebind through its own key capture (\"{n1}\", \"{n2}\")");
+            sp.DriveRebind("bookmark_2", Key.A);
+            string n3 = sp.NoticeText;
+            sp.DriveRebind("stop", Key.K);
+            string n4 = sp.NoticeText;
+            ControlsGate(Settings.BindOf("bookmark_2") == mark2Was && Settings.BindOf("stop") == stopWas
+                         && n3.Contains(Settings.LabelOf("attack_move")) && n4.Contains("GROUP 0"), "pause",
+                         $"the conflict check covers the new keys both ways: a bookmark onto ATTACK-MOVE's key and STOP onto GROUP 0's "
+                         + $"are refused, each naming the holder (\"{n3}\", \"{n4}\")");
+            bool backed = sp.PressBackForTest();
+            bool reopened = pm.PressForTest("CONTROLS");
+            string g0 = RowKey(pm.ControlsShown, "GROUP 0"), b1 = RowKey(pm.ControlsShown, "CAMERA BOOKMARK 1");
+            ControlsGate(backed && g.PauseOpen && reopened && g0 == Settings.KeyName(Key.K) && b1 == Settings.KeyName(Key.F9), "pause",
+                         $"BACK from the settings page returns to the operations menu, not the main menu, and its CONTROLS page now "
+                         + $"reads GROUP 0 {g0} and CAMERA BOOKMARK 1 {b1}");
+
+            g.PressKey(Settings.BindOf("cancel"));
+            g.PressKey(Settings.BindOf("select_all_army"));
+            int army = g.SelectionCount;
+            g.PressKeyWithCtrl(Key.K);
+            g.ClearSelectionForTest();
+            g.PressKey(Key.Key0);
+            int byOld = g.SelectionCount;
+            g.PressKey(Key.K);
+            int byNew = g.SelectionCount;
+            ControlsGate(!g.PauseOpen && army > 0 && byOld == 0 && byNew == army, "group",
+                         $"rebound to K, group 0 assigns on CTRL+K and recalls on K in the battle, and 0 recalls nothing now ({byNew} of "
+                         + $"{army} by K, {byOld} by 0)");
+            g.ClearSelectionForTest();
+
+            g.FocusCameraOn(20f, 30f, 22f);
+            g.PressKeyWithCtrl(Key.F9);
+            g.FocusCameraOn(70f, 10f, 22f);
+            g.PressKey(Key.F1);
+            var stayed = g.CameraGroundTargetForTest;
+            g.PressKey(Key.F9);
+            var flown = g.CameraGroundTargetForTest;
+            bool stood = Mathf.Abs(stayed.X - 70f) < 0.5f && Mathf.Abs(stayed.Z - 10f) < 0.5f;
+            bool recalled = Mathf.Abs(flown.X - 20f) < 0.5f && Mathf.Abs(flown.Z - 30f) < 0.5f;
+            ControlsGate(stood && recalled, "bookmark",
+                         $"rebound to F9, camera bookmark 1 stores on CTRL+F9 and recalls on F9, and F1 does nothing now (after F1 "
+                         + $"{stayed.X:0.0},{stayed.Z:0.0}; after F9 {flown.X:0.0},{flown.Z:0.0})");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "pause", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The strong and weak lines in the sidebar's unit tooltips, read
+    /// as the tooltip shows them: first against the shipped matrix, then after
+    /// the live matrix is changed before tick 0, the way /data changes it.</summary>
+    private void RunMatchupTooltipStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            var sb = g.SidebarView;
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad"), tank = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            int flak = UnitCatalogue.TypeIdOf("com_flak_track"), flyer = UnitCatalogue.TypeIdOf("com_strike_flyer");
+            int howitzer = UnitCatalogue.TypeIdOf("dir_howitzer"), engineer = UnitCatalogue.TypeIdOf("com_engineer");
+            var live = lw.DamageMatrixSnapshot();
+            var compiled = DamageMatrix.ToArray();
+            bool shipped = live.Length == compiled.Length;
+            for (int i = 0; shipped && i < live.Length; i++) shipped = live[i] == compiled[i];
+            string Mismatch((int Type, string Strong, string Weak)[] want)
+            {
+                var bad = new List<string>();
+                foreach (var (t, s, w) in want)
+                {
+                    string tip = sb.UnitTooltipForTest(t) ?? "(no button)";
+                    if (!tip.Contains(s) || !tip.Contains(w)) bad.Add($"{UnitCatalogue.DisplayNameOf(t)} reads \"{tip.Replace("\n", " / ")}\"");
+                }
+                return string.Join("; ", bad);
+            }
+            string first = Mismatch(new[]
+            {
+                (rifle, "STRONG AGAINST: UNARMOURED (100%)", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+                (tank, "STRONG AGAINST: HEAVY ARMOUR (100%)", "WEAK AGAINST: ANTI-ARMOUR FIRE (100%)"),
+                (flak, "STRONG AGAINST: AIRCRAFT (75%), AND IT CANNOT FIRE ON THE GROUND", "WEAK AGAINST: ANTI-ARMOUR FIRE (75%)"),
+                (flyer, "STRONG AGAINST: HEAVY ARMOUR (100%)", "WEAK AGAINST: ANTI-AIR FIRE (75%)"),
+                (howitzer, "STRONG AGAINST: STRUCTURES (100%)", "WEAK AGAINST: ANTI-ARMOUR FIRE (75%)"),
+                (engineer, "STRONG AGAINST: NOTHING, IT CARRIES NO WEAPON", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+            });
+            ControlsGate(lw.Tick == 0 && shipped && first.Length == 0, "tooltips",
+                         $"against the shipped matrix the unit tooltips carry strong and weak lines derived from it: the rifle squad strong "
+                         + $"against the unarmoured, the cannon tank against heavy armour, the flak track against aircraft and nothing on the "
+                         + $"ground, the strike flyer hurt only by anti-air fire, the howitzer against structures, the engineer unarmed "
+                         + $"(tick {lw.Tick}, shipped matrix {shipped}){(first.Length > 0 ? $"; but {first}" : "")}");
+
+            // Three cells moved, before tick 0 as only /data may move them: the
+            // anti-armour warhead now hits light armour hardest, the
+            // anti-building warhead hurts heavy armour most, and the
+            // anti-infantry warhead ties across unarmoured and light.
+            int a = DamageMatrix.ArmourClasses;
+            live[(int)Warhead.AntiArmour * a + (int)ArmourClass.Light] = 120;
+            live[(int)Warhead.AntiBuilding * a + (int)ArmourClass.Heavy] = 150;
+            live[(int)Warhead.AntiInfantry * a + (int)ArmourClass.Light] = 100;
+            lw.RegisterDamageMatrix(live);
+            g.StepOneTick();
+            string second = Mismatch(new[]
+            {
+                (rifle, "STRONG AGAINST: UNARMOURED AND LIGHT ARMOUR (100%)", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+                (tank, "STRONG AGAINST: LIGHT ARMOUR (120%)", "WEAK AGAINST: ANTI-BUILDING FIRE (150%)"),
+                (flak, "STRONG AGAINST: AIRCRAFT (120%), AND IT CANNOT FIRE ON THE GROUND", "WEAK AGAINST: ANTI-ARMOUR FIRE (120%)"),
+                (engineer, "STRONG AGAINST: NOTHING, IT CARRIES NO WEAPON", "WEAK AGAINST: ANTI-INFANTRY FIRE (100%)"),
+            });
+            ControlsGate(second.Length == 0, "tooltips",
+                         $"...and with three cells of the live matrix changed the lines follow it, a tie named as a tie, while the "
+                         + $"engineer's, which no changed cell touches, stay as they were{(second.Length > 0 ? $"; but {second}" : "")}");
+        }
+        catch (System.Exception ex) { ControlsGate(false, "tooltips", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    // ---------------- P8-42: denygate ----------------
+
+    private void DenyGate(bool ok, string stage, string what) => Check(ok, $"denygate/{stage}: {what}");
+
+    /// <summary>The counts a refusal moves, taken before a gesture, on a quiet
+    /// stack, so an earlier line's repeat window cannot swallow this one.</summary>
+    private readonly record struct DenyMark(int Denials, int Raised, int Cues, int Confirms, int Pending);
+
+    private static DenyMark MarkDenials(SkirmishLive g)
+    {
+        g.AlertsView.ResetForTest();
+        return new DenyMark(g.Denials, g.AlertsView.RaisedCount, g.AudioRequests(SkirmishLive.DenyCue),
+                            g.AudioRequests("ui_confirm"), g.PendingCommands.Count);
+    }
+
+    /// <summary>Did the gesture since the mark say exactly this reason exactly
+    /// once, through Deny, with one deny cue and no other line raised?</summary>
+    private static bool SaidOnce(SkirmishLive g, DenyMark m, string reason, out string measured)
+    {
+        int d = g.Denials - m.Denials, r = g.AlertsView.RaisedCount - m.Raised;
+        int c = g.AudioRequests(SkirmishLive.DenyCue) - m.Cues;
+        int lines = 0;
+        foreach (string t in g.AlertsView.StackTexts()) if (t == reason) lines++;
+        measured = $"{d} denial, {r} line raised, {c} deny cue, {lines} such line on the stack, last \"{g.LastDenial}\"";
+        return d == 1 && r == 1 && c == 1 && lines == 1 && g.LastDenial == reason;
+    }
+
+    /// <summary>
+    /// P8-42, one group. Refusals had grown up site by site: some toasted with
+    /// a borrowed click, some in silence, a refused placement only clicked, an
+    /// order the treasury could not pay for was greyed out although the sim
+    /// would have queued it, a hero at its cap and a factory with a blocked
+    /// exit said the same thing, and a right click on an aircraft nothing
+    /// selected could hit sent orders that could never be carried out. Every
+    /// refusal now goes through ONE Deny with its own cue, and each stage
+    /// reads that it said its reason exactly once.
+    /// </summary>
+    private void RunDenyStages()
+    {
+        GD.Print("  --    denygate (P8-42): every refusal says its reason once, through one Deny with its own cue");
+        RunDenyFundsStage();
+        RunDenyCapStage();
+        RunDenyAirStage();
+        RunDenySweepStage();
+    }
+
+    /// <summary>An empty treasury: the unit and building buttons stay lit,
+    /// and a press still queues (the sim builds pay-as-you-build) and says it
+    /// will wait; the line holds at nothing until the credits come.</summary>
+    private void RunDenyFundsStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } bq)
+            {
+                DenyGate(false, "funds", "quiet ground beside my yard for a barracks (none: a fixture failure)");
+                return;
+            }
+            int barracks = lw.SpawnBarracks(me, bq.X, bq.Y);
+            int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+            lw.GrantCredits(me, -lw.Credits(me));
+            // Three ticks, the frame half on the last two: the panel reads the
+            // interpolated view, which takes a fixture in a tick behind the sim.
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            const int plant = 1;
+            string rifleName = UnitCatalogue.DisplayNameOf(rifle), plantName = StructureCatalogue.DisplayNameOf(plant);
+            bool lit = !sb.UnitButtonDisabledForTest(rifle) && sb.StructButtonVisible(plant);
+
+            var m = MarkDenials(g);
+            bool pressed = sb.PressUnitButton(rifle);
+            string want = $"NOT ENOUGH CREDITS: {rifleName} QUEUED, IT BUILDS AS THEY COME IN";
+            bool once = SaidOnce(g, m, want, out string said);
+            int confirms = g.AudioRequests("ui_confirm") - m.Confirms;
+            g.StepTicks(1);
+            var q = lw.QueueContents(barracks);
+            bool queued = q.Count == 1 && q[0] == rifle;
+            DenyGate(lit && pressed && queued && once && confirms == 0 && g.AudioView.Has(SkirmishLive.DenyCue), "funds",
+                     $"with the treasury at 0 the {rifleName} button stays lit, and a press still QUEUES the squad (the sim builds "
+                     + $"pay-as-you-build) and says why exactly once through Deny with its own cue and no confirmation ({said}; "
+                     + $"queued {queued}, {confirms} confirmations)");
+
+            var m2 = MarkDenials(g);
+            bool pressedPlant = sb.PressStructButton(plant);
+            string wantPlant = $"NOT ENOUGH CREDITS: {plantName} QUEUED, IT BUILDS AS THEY COME IN";
+            bool plantOnce = SaidOnce(g, m2, wantPlant, out string plantSaid);
+            g.StepTicks(1);
+            bool plantQueued = lw.QueueContents(yard).Count == 1;
+            DenyGate(pressedPlant && plantOnce && plantQueued, "funds",
+                     $"...and so does a building at the yard, which builds the same way ({plantSaid}; queued {plantQueued})");
+
+            g.StepTicks(200);
+            int progress = lw.Entities[barracks].BuildProgress;
+            bool waiting = progress == 0 && lw.QueueContents(barracks).Count == 1;
+            // The plant is taken off the yard by its own right click first:
+            // both lines draw on one treasury, so with it still queued the
+            // squad's price would be shared between them.
+            bool cancelled = sb.RightClickStructButton(plant);
+            g.StepTicks(1);
+            lw.GrantCredits(me, lw.GetUnitType(rifle).Cost);
+            int built = -1;
+            for (int t = 0; t < 1500 && built < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events) if (ev.Type == GameEventType.ProductionComplete && ev.C == barracks) built = ev.A;
+            }
+            DenyGate(waiting && cancelled && lw.QueueContents(yard).Count == 0 && built >= 0, "funds",
+                     $"...the line holds at nothing while the treasury is empty (progress {progress} after 200 ticks), and once it "
+                     + $"holds the price, the plant cancelled, the squad is built, paid as it goes (squad {built})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "funds", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The hero cap: the button greys at the cap with a tooltip, the
+    /// key on the greyed slot is refused once, and a second hero queued while
+    /// none stood is held at the cap and SAYS it is the cap, where a factory
+    /// whose exit is blocked says that instead.</summary>
+    private void RunDenyCapStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            int hero = -1;
+            foreach (int id in lw.UnitTypeIds())
+            {
+                var d = lw.GetUnitType(id);
+                if (d.MaxAlive > 0 && (d.Faction == lw.FactionOf(me) || d.Faction == World.FactionCommon)) { hero = id; break; }
+            }
+            if (hero < 0 || GroundNear(g, me) is not { } bq)
+            {
+                DenyGate(false, "cap", $"precondition: a capped unit of my side ({hero}) and ground for a barracks");
+                return;
+            }
+            int barracks = lw.SpawnBarracks(me, bq.X, bq.Y);
+            if (GroundNear(g, me) is not { } rq)
+            {
+                DenyGate(false, "cap", "quiet ground for the radar uplink the hero is built behind (none: a fixture failure)");
+                return;
+            }
+            lw.SpawnRadarUplink(me, rq.X, rq.Y);
+            lw.GrantCredits(me, 20000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            for (int i = 0; i < Sidebar.TabTitleCount && sb.CurrentTabForTest != Sidebar.TabInfantry; i++)
+                g.PressKey(Settings.BindOf("sidebar_tab"));
+            string name = UnitCatalogue.DisplayNameOf(hero);
+            int cap = lw.GetUnitType(hero).MaxAlive;
+            bool lit = sb.UnitButtonVisible(hero) && !sb.UnitButtonDisabledForTest(hero);
+
+            var near = OpenCellBeside(lw, bq.X, bq.Y, 3);
+            int standing = near is { } c ? SpawnOfType(lw, me, hero, c.X, c.Y) : -1;
+            g.StepOneTick();
+            bool grey = sb.UnitButtonVisible(hero) && sb.UnitButtonDisabledForTest(hero);
+            string tip = sb.UnitTooltipForTest(hero) ?? "";
+            string capTip = $"AT ITS LIMIT: {cap} ALREADY IN THE FIELD; ANOTHER CAN BE ORDERED WHEN IT FALLS";
+            bool unpressable = !sb.PressUnitButton(hero);
+            DenyGate(lit && standing >= 0 && grey && tip.Contains(capTip) && unpressable, "cap",
+                     $"the {name} button is lit with none in the field and GREYS once {cap} stands, its tooltip saying why "
+                     + $"(\"{tip.Replace("\n", " / ")}\"), and a greyed button cannot be pressed");
+
+            int slot = sb.VisibleSlotOfUnitForTest(hero);
+            var m = MarkDenials(g);
+            if (slot >= 0 && slot < 9) g.PressKeyWithAlt((Key)((int)Key.Key1 + slot));
+            string capWant = $"{name} AT ITS LIMIT: {cap} ALREADY IN THE FIELD";
+            bool once = SaidOnce(g, m, capWant, out string said);
+            bool nothingSent = g.PendingCommands.Count == m.Pending;
+            g.StepTicks(1);
+            DenyGate(slot >= 0 && once && nothingSent && lw.QueueContents(barracks).Count == 0, "cap",
+                     $"ALT+{slot + 1} on the greyed slot is refused and says why exactly once through Deny, sending nothing ({said})");
+
+            // The hold: none in the field, two ordered; the first walks out and
+            // the second, finished and paid, waits on the cap.
+            RemoveFixture(lw, standing);
+            g.StepOneTick();
+            bool relit = !sb.UnitButtonDisabledForTest(hero);
+            bool p1 = sb.PressUnitButton(hero), p2 = sb.PressUnitButton(hero);
+            g.StepTicks(1);
+            bool both = lw.QueueContents(barracks).Count == 2;
+            int total = lw.GetUnitType(hero).BuildTicks * 100;
+            int first = -1;
+            for (int t = 0; t < lw.GetUnitType(hero).BuildTicks * 3 && first < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events) if (ev.Type == GameEventType.ProductionComplete && ev.C == barracks) first = ev.A;
+            }
+            for (int t = 0; t < lw.GetUnitType(hero).BuildTicks * 3
+                            && !(lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= total); t++)
+                g.StepTicks(1);
+            bool heldAtCap = first >= 0 && lw.QueueContents(barracks).Count == 1
+                             && lw.Entities[barracks].BuildProgress >= total && lw.AtMaxAlive(me, hero);
+            var m2 = MarkDenials(g);
+            g.StepOneTick();
+            string holdWant = $"{name} WAITING: {cap} ALREADY IN THE FIELD";
+            bool holdOnce = SaidOnce(g, m2, holdWant, out string holdSaid);
+            bool noExit = !g.AlertsView.StackTexts().Exists(t => t.StartsWith("EXIT BLOCKED"));
+            DenyGate(relit && p1 && p2 && both && heldAtCap && holdOnce && noExit, "hold",
+                     $"with none in the field two are ordered; the first walks out and the second, finished and paid, is HELD at the "
+                     + $"cap, and the barracks says it waits on the cap, not on a blocked exit, once (first {first}, held {heldAtCap}; {holdSaid})");
+
+            // The control: the held hero cancelled (a full refund), every cell
+            // within three of the barracks door taken, and a rifle squad
+            // ordered. Its hold is the blocked exit, and says so.
+            g.CancelUnit(hero);
+            g.StepOneTick();
+            int bx = Map.CellOf(lw.Entities[barracks].X), by = Map.CellOf(lw.Entities[barracks].Y);
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int blockers = 0;
+            for (int dy = -3; dy <= 3; dy++)
+                for (int dx = -3; dx <= 3; dx++)
+                {
+                    if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) < 2) continue;
+                    int x = bx + dx, y = by + dy;
+                    if (x < 1 || y < 1 || x >= lw.Map.Width - 1 || y >= lw.Map.Height - 1 || lw.Map.IsBlocked(x, y)) continue;
+                    bool taken = false;
+                    for (int i = 0; i < lw.EntityCount && !taken; i++)
+                        taken = lw.Entities[i].Alive && Map.CellOf(lw.Entities[i].X) == x && Map.CellOf(lw.Entities[i].Y) == y;
+                    if (taken) continue;
+                    SpawnOfType(lw, me, rifle, x, y);
+                    blockers++;
+                }
+            bool ordered = sb.PressUnitButton(rifle);
+            int rifleTotal = lw.GetUnitType(rifle).BuildTicks * 100;
+            for (int t = 0; t < lw.GetUnitType(rifle).BuildTicks * 3
+                            && !(lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= rifleTotal); t++)
+                g.StepTicks(1);
+            bool exitHeld = lw.QueueContents(barracks).Count == 1 && lw.Entities[barracks].BuildProgress >= rifleTotal;
+            var m3 = MarkDenials(g);
+            g.StepOneTick();
+            string exitWant = $"EXIT BLOCKED: {UnitCatalogue.DisplayNameOf(rifle)} WAITING FOR A CLEAR CELL";
+            bool exitOnce = SaidOnce(g, m3, exitWant, out string exitSaid);
+            DenyGate(ordered && exitHeld && exitOnce, "hold",
+                     $"...where a rifle squad held behind {blockers} squads at the door says EXIT BLOCKED instead, once ({exitSaid})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "cap", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>An aircraft nothing selected can reach: the cursor reads
+    /// Invalid and the click is refused once, sending nothing; with an
+    /// anti-air gun in the selection the same pointer is an Attack. And the
+    /// sim's rule read both ways: an anti-air gun alone over a tank is
+    /// refused too.</summary>
+    private void RunDenyAirStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            var army = ArmedOwn(lw, me);
+            if (army.Count == 0)
+            {
+                DenyGate(false, "air", "precondition: an army of my own (none)");
+                return;
+            }
+            int a0 = army[0];
+            int flyerType = UnitCatalogue.TypeIdOf("com_strike_flyer"), flakType = UnitCatalogue.TypeIdOf("com_flak_track");
+            int tankType = UnitCatalogue.TypeIdOf("dir_cannon_tank");
+            var c0 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a0].X), Map.CellOf(lw.Entities[a0].Y), 2);
+            int flyer = c0 is { } fc ? SpawnOfType(lw, foe, flyerType, fc.X, fc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            if (flyer < 0)
+            {
+                DenyGate(false, "air", "precondition: an enemy aircraft beside my army (no open cell)");
+                return;
+            }
+            Vector2 FlyerOnScreen()
+            {
+                float x = Fx(lw.Entities[flyer].X), z = Fx(lw.Entities[flyer].Y);
+                g.FocusCameraOn(x, z, 22f);
+                g.PumpActorsForTest();
+                return g.ScreenOf(x, z);
+            }
+            g.PressKey(Settings.BindOf("select_all_army"));
+            bool noAa = true;
+            for (int i = 0; i < lw.EntityCount; i++)
+                if (g.IsSelected(i) && lw.Entities[i].WeaponId != 0 && lw.GetWeaponType(lw.Entities[i].WeaponId).AntiAir) noAa = false;
+            var at = FlyerOnScreen();
+            string cursor = g.CursorNameAt(at);
+            var m = MarkDenials(g);
+            g.PressRightClick(at);
+            bool none = g.PendingCommands.Count == m.Pending;
+            bool once = SaidOnce(g, m, "NOTHING SELECTED CAN HIT AIRCRAFT", out string said);
+            DenyGate(g.DrawnForLocalSeatForTest(flyer) && g.SelectionCount > 0 && noAa && cursor == "Invalid" && none && once, "air",
+                     $"over an enemy aircraft in sight, with a selection of {g.SelectionCount} and no anti-air gun among them, the cursor "
+                     + $"reads {cursor} and the right click is refused once, sending nothing ({said})");
+
+            var c1 = OpenCellBeside(lw, Map.CellOf(lw.Entities[a0].X), Map.CellOf(lw.Entities[a0].Y), 1);
+            int flak = c1 is { } kc ? SpawnOfType(lw, me, flakType, kc.X, kc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            g.PressKey(Settings.BindOf("select_all_army"));
+            var at2 = FlyerOnScreen();
+            string cursor2 = g.CursorNameAt(at2);
+            var m2 = MarkDenials(g);
+            g.PressRightClick(at2);
+            int attacks = 0;
+            for (int i = m2.Pending; i < g.PendingCommands.Count; i++)
+                if (g.PendingCommands[i].Type == CommandType.Attack && g.PendingCommands[i].AuxId == flyer) attacks++;
+            DenyGate(flak >= 0 && g.IsSelected(flak) && cursor2 == "Attack" && attacks > 0 && g.Denials == m2.Denials, "air",
+                     $"...and with a flak track in the selection the same pointer reads {cursor2} and the click is an order "
+                     + $"({attacks} attack orders on the aircraft, {g.Denials - m2.Denials} denials)");
+
+            g.StepTicks(1);
+            var c2 = OpenCellBeside(lw, Map.CellOf(lw.Entities[flak].X), Map.CellOf(lw.Entities[flak].Y), 2);
+            int tank = c2 is { } tc ? SpawnOfType(lw, foe, tankType, tc.X, tc.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            g.SelectOnlyForTest(flak);
+            float tx = tank >= 0 ? Fx(lw.Entities[tank].X) : 0f, tz = tank >= 0 ? Fx(lw.Entities[tank].Y) : 0f;
+            g.FocusCameraOn(tx, tz, 22f);
+            g.PumpActorsForTest();
+            var at3 = g.ScreenOf(tx, tz);
+            string cursor3 = g.CursorNameAt(at3);
+            var m3 = MarkDenials(g);
+            g.PressRightClick(at3);
+            bool none3 = g.PendingCommands.Count == m3.Pending;
+            bool once3 = SaidOnce(g, m3, "NOTHING SELECTED CAN HIT GROUND TARGETS", out string said3);
+            DenyGate(tank >= 0 && cursor3 == "Invalid" && none3 && once3, "air",
+                     $"the same rule read the other way: the flak track alone over an enemy tank reads {cursor3} and the click is "
+                     + $"refused once, sending nothing ({said3})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "air", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The refusals that were already toasts, each driven by its own
+    /// gesture: every one now says its reason exactly once through Deny, with
+    /// the deny cue and no second line beside it.</summary>
+    private void RunDenySweepStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            StandDownOpposition(lw, foe);
+            void Refused(string what, string reason, System.Action gesture)
+            {
+                var m = MarkDenials(g);
+                gesture();
+                bool once = SaidOnce(g, m, reason, out string said);
+                DenyGate(once, "sweep", $"{what} says \"{reason}\" exactly once through Deny ({said})");
+            }
+            g.ClearSelectionForTest();
+            Refused("the attack-move key with nothing selected", "ATTACK-MOVE NEEDS COMBAT UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("attack_move")));
+            Refused("the guard key with nothing selected", "GUARD NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("guard")));
+            Refused("the hold-fire key with nothing selected", "HOLD-FIRE NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("hold_fire")));
+            Refused("the patrol key with nothing selected", "PATROL NEEDS YOUR OWN UNITS SELECTED",
+                    () => g.PressKey(Settings.BindOf("patrol")));
+            Refused("the superweapon key with none standing", "NO SUPERWEAPON",
+                    () => g.PressKey(Settings.BindOf("launch_super")));
+            Refused("the support power key with no building granting one", "NO SUPPORT POWERS: NONE OF YOUR BUILDINGS GRANTS ONE",
+                    () => g.PressKey(Settings.BindOf("support_power")));
+
+            g.PressKey(Settings.BindOf("select_all_army"));
+            Refused("the repair key over an undamaged army", "NO DAMAGE TO REPAIR",
+                    () => g.PressKey(Settings.BindOf("repair")));
+
+            int harvester = g.FindEntity(EntityKind.Harvester, me);
+            int field = -1;
+            float best = float.MaxValue;
+            for (int i = 0; i < lw.EntityCount && harvester >= 0; i++)
+            {
+                var e = lw.Entities[i];
+                if (!e.Alive || e.Kind != EntityKind.FerriteField) continue;
+                float d = (Fx(e.X) - Fx(lw.Entities[harvester].X)) * (Fx(e.X) - Fx(lw.Entities[harvester].X))
+                          + (Fx(e.Y) - Fx(lw.Entities[harvester].Y)) * (Fx(e.Y) - Fx(lw.Entities[harvester].Y));
+                if (d < best) { best = d; field = i; }
+            }
+            bool noRefinery = g.FindEntity(EntityKind.Refinery, me) < 0;
+            if (harvester >= 0 && field >= 0 && noRefinery)
+            {
+                g.SelectOnlyForTest(harvester);
+                float fx = Fx(lw.Entities[field].X), fz = Fx(lw.Entities[field].Y);
+                g.FocusCameraOn(fx, fz, 22f);
+                g.PumpActorsForTest();
+                Refused("a harvester sent to ferrite with no refinery standing", "NO REFINERY - BUILD ONE FIRST",
+                        () => g.PressRightClick(g.ScreenOf(fx, fz)));
+            }
+            else DenyGate(false, "sweep", $"precondition: a harvester ({harvester}), a field ({field}) and no refinery ({noRefinery})");
+
+            int carrierType = UnitCatalogue.TypeIdOf("com_carrier");
+            var (yx, yy) = g.CellOfForTest(g.FindEntity(EntityKind.ConstructionYard, me));
+            var cc = OpenCellBeside(lw, yx, yy, 3);
+            int carrier = cc is { } k ? SpawnOfType(lw, me, carrierType, k.X, k.Y) : -1;
+            g.StepTicks(1);
+            g.PumpActorsForTest();
+            if (carrier >= 0)
+            {
+                g.SelectOnlyForTest(carrier);
+                Refused("the unload key on an empty Carrier", "NOTHING ABOARD", () => g.PressKey(Settings.BindOf("unload")));
+            }
+            else DenyGate(false, "sweep", "precondition: an empty Carrier of my own (no open cell)");
+
+            // A placement on ground the sim refuses: a power plant made ready
+            // through its button, PLACE pressed, and the click put on the yard.
+            const int plant = 1;
+            lw.GrantCredits(me, 5000);
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            bool pressed = sb.PressStructButton(plant);
+            for (int t = 0; t < 1500 && g.ReadyStructureForTest != plant; t++) g.StepTicks(1);
+            g.StepOneTick();
+            bool placing = sb.PressPlaceButton();
+            float ax = Fx(lw.Entities[g.FindEntity(EntityKind.ConstructionYard, me)].X);
+            float az = Fx(lw.Entities[g.FindEntity(EntityKind.ConstructionYard, me)].Y);
+            g.FocusCameraOn(ax, az, 22f);
+            g.PumpActorsForTest();
+            if (pressed && placing)
+                Refused("a placement click on the yard itself",
+                        $"{StructureCatalogue.DisplayNameOf(plant)} CANNOT GO THERE: BLOCKED, OCCUPIED OR OUT OF BUILD RANGE",
+                        () => g.PressLeftClick(g.ScreenOf(ax, az)));
+            else DenyGate(false, "sweep", $"precondition: a power plant made ready and PLACE pressed (pressed {pressed}, placing {placing})");
+        }
+        catch (System.Exception ex) { DenyGate(false, "sweep", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
 }
