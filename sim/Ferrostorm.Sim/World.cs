@@ -6084,13 +6084,19 @@ public sealed partial class World
         sideY = Fix64.Zero;
         if (e.Speed == Fix64.Zero) return false;
         Fix64 stepX = e.X - e.PrevX, stepY = e.Y - e.PrevY;
-        if (stepX == Fix64.Zero && stepY == Fix64.Zero) return false;
+        // A step whose squared length truncates to zero, both parts under
+        // 2^-16 of a cell, is too short for this rule to measure: its length
+        // below would be zero and the division by it would throw inside
+        // World.Step on every peer alike. So it is not a tie (ADR-078,
+        // "Division by zero closed").
+        Fix64 stepSq = Fix64.DistSq(stepX, stepY);
+        if (stepSq == Fix64.Zero) return false;
         if (stepX * pushY != stepY * pushX) return false;                              // off the step's line
-        if (stepX * pushX + stepY * pushY > -Fix64.DistSq(stepX, stepY)) return false; // not against it, or shorter
+        if (stepX * pushX + stepY * pushY > -stepSq) return false;                     // not against it, or shorter
         Fix64 qx = e.X - Fix64.FromInt(Map.Width) * Fix64.Half, qy = e.Y - Fix64.FromInt(Map.Height) * Fix64.Half;
         int sector = SignOf(qx) * SignOf(qy) * SignOf(Fix64.Abs(qx) - Fix64.Abs(qy));
         if (sector == 0) return true;                                                  // on a centre line or a diagonal: left
-        Fix64 stepLen = Fix64.Sqrt(Fix64.DistSq(stepX, stepY));
+        Fix64 stepLen = Fix64.Sqrt(stepSq);
         Fix64 pushLen = Fix64.Sqrt(Fix64.DistSq(pushX, pushY));
         Fix64 side = sector > 0 ? pushLen : -pushLen;
         sideX = -stepY * side / stepLen;

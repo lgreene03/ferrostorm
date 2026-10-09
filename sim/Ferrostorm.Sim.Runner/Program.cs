@@ -2401,6 +2401,58 @@ int SelfTest()
                           + "under the half turn and the reflections in x, y and the diagonal; on the centre line the tie is left");
     }
 
+    // P8-66 (ADR-078, the Architect's condition 1): a step too short for the
+    // tie-break to measure. Under 2^-16 of a cell on each axis, a step's
+    // squared length truncates to zero, so its length is zero, and the
+    // tie-break used to divide by that length when a push on the step's line
+    // undid it: DivideByZeroException inside World.Step, on every peer alike.
+    // In play the snap onto a building's clamped face is the path that can
+    // make such a step; here it is built through the public surface, with a
+    // walker as slow as that walking straight into a standing unit on its row,
+    // off every centre line and diagonal, so the old rule would have picked a
+    // side and divided. The step is not a tie: the tick completes, the walker
+    // is never in ExactTiesThisTick and never leaves its row.
+    {
+        const int N = 96;
+        var tw = new World(1, N, N, players: 1);
+        Fix64 Hc(int halves) => Fix64.FromFraction(halves, 2);
+        long[] raws = { 1000, 65535 };
+        var ids = new int[raws.Length];
+        var orders = new List<Command>();
+        for (int k = 0; k < raws.Length; k++)
+        {
+            // Rows 30.5 and 36.5 from x = 20.5: off both centre lines and
+            // both diagonals of a 96-cell map.
+            Fix64 row = Hc(61 + 12 * k);
+            tw.SpawnUnit(0, Hc(41) + Fix64.FromFraction(1, 4), row, Fix64.FromFraction(1, 4), hp: 100, ArmourClass.Light, weaponId: 0);
+            ids[k] = tw.SpawnUnit(0, Hc(41), row, new Fix64(raws[k]), hp: 100, ArmourClass.Light, weaponId: 0);
+            orders.Add(new Command(0, 0, CommandType.Move, ids[k], Hc(81), row));
+        }
+        for (int tick = 0; tick < 4; tick++)
+        {
+            try { tw.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(orders)); }
+            catch (DivideByZeroException ex)
+            {
+                return Fail($"P8-66 (ADR-078): a walker stepping {raws[0]} or {raws[1]} raw units (under 2^-16 of a cell) into a standing unit "
+                            + $"on its row threw {ex.GetType().Name} (\"{ex.Message}\") in tick {tw.Tick + 1}, so a step too short to "
+                            + "measure was taken for a tie and divided by its zero length");
+            }
+            orders.Clear();
+            for (int k = 0; k < raws.Length; k++)
+            {
+                var a = tw.Entities[ids[k]];
+                if (tw.ExactTiesThisTick.Contains(ids[k]))
+                    return Fail($"P8-66 (ADR-078): a walker stepping {raws[k]} raw units (under 2^-16 of a cell) was counted in an exact "
+                                + $"cancellation at t={tw.Tick}, so a step too short to measure is taken for a tie");
+                if (a.Y != Hc(61 + 12 * k) || !a.Moving)
+                    return Fail($"P8-66 (ADR-078): a walker stepping {raws[k]} raw units (under 2^-16 of a cell) stands at ({a.X},{a.Y}) "
+                                + $"{(a.Moving ? "Moving" : "stopped")} at t={tw.Tick}, off its row or halted, so the short step was acted on");
+            }
+        }
+        Console.WriteLine("selftest: P8-66 (ADR-078) a step under 2^-16 of a cell against a push on its line is not a tie: "
+                          + "no division by its zero length, no sidestep");
+    }
+
     // Map loader (TICKET-P2-DATA-03): the committed skirmish map round-trips.
     string mapFile = Path.GetFullPath(Path.Combine(root, "data/maps/skirmish-01.fmap"));
     if (File.Exists(mapFile))
