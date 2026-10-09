@@ -80,6 +80,7 @@ public partial class SettingsScene : Control
 
         BuildAudio(body);
         BuildVideo(body);
+        BuildInterface(body);
         BuildBinds(body);
 
         outer.AddChild(new HSeparator());
@@ -233,6 +234,26 @@ public partial class SettingsScene : Control
             Settings.Save();
         };
     }
+
+    // ---------------- P8-45: interface ----------------
+
+    /// <summary>The battle HUD's switches. Today one: the match clock on the
+    /// status panel, a developer's reading kept off by default because a
+    /// player has no use for a tick count, and switched on here rather than
+    /// behind a launch flag so a playtester can turn it on mid-battle from the
+    /// pause menu's SETTINGS.</summary>
+    private void BuildInterface(VBoxContainer v)
+    {
+        v.AddChild(Section("INTERFACE"));
+        var tick = Options(v, TickCounterLabel, new[] { "OFF", "ON" }, () => Settings.ShowTickCounter ? 1 : 0);
+        tick.ItemSelected += idx =>
+        {
+            Settings.ShowTickCounter = idx == 1;
+            Settings.Save();
+        };
+    }
+
+    public const string TickCounterLabel = "TICK COUNTER (DEVELOPER)";
 
     // ---------------- key rebinding ----------------
 
@@ -414,6 +435,30 @@ public partial class SettingsScene : Control
     public HSlider? SliderNamed(string label)
     {
         foreach (var (s, _) in _sliders) if (s.Name == $"Slider{label}") return s;
+        return null;
+    }
+
+    /// <summary>P8-45: choose an item in the option row with this label the
+    /// way a click does, through the popup's index_pressed, which is the
+    /// signal OptionButton listens to (MainMenu's picker hooks, the same
+    /// reason). Returns the item text now selected, or null for no such row.</summary>
+    public string? ChooseOptionForTest(string label, int index)
+    {
+        foreach (var (o, _) in _options)
+            if (o.GetParent() is HBoxContainer h && h.GetChild(0) is Label l && l.Text == label)
+            {
+                o.GetPopup().EmitSignal(PopupMenu.SignalName.IndexPressed, index);
+                return o.GetItemText(o.Selected);
+            }
+        return null;
+    }
+
+    /// <summary>The item text an option row shows now, or null.</summary>
+    public string? OptionShownForTest(string label)
+    {
+        foreach (var (o, _) in _options)
+            if (o.GetParent() is HBoxContainer h && h.GetChild(0) is Label l && l.Text == label)
+                return o.GetItemText(o.Selected);
         return null;
     }
 

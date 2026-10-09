@@ -1115,24 +1115,31 @@ public partial class VerifyRunner : Node
         // the walk is in ascending type id (so both seats and both machines see
         // one order), where the arrays were in rough tech order. Label, tab and
         // icon are what a player reads, and all three are unchanged.
+        //
+        // P8-45 moved the icon column ON PURPOSE, and only that column: the
+        // four buildings that had no icon (barracks, radar uplink, wall, mine)
+        // have one of their own now, rendered from the mesh (art/3d/icons.py),
+        // and the four that wore another building's have their own too, which
+        // hudgate/icons asserts by path. Labels and tabs are still the
+        // transcript's.
         {
             var wasListed = new (int Type, string Label, int Tab, bool Icon)[]
             {
                 (1,  "POWER PLANT",    Sidebar.TabBuildings, true),
                 (3,  "REFINERY",       Sidebar.TabBuildings, true),
-                (11, "BARRACKS",       Sidebar.TabBuildings, false),  // no sprite cut yet
+                (11, "BARRACKS",       Sidebar.TabBuildings, true),   // P8-45: its own (was none)
                 (2,  "FACTORY",        Sidebar.TabBuildings, true),
                 (8,  "SERVICE DEPOT",  Sidebar.TabBuildings, true),
-                (12, "RADAR UPLINK",   Sidebar.TabBuildings, false),  // no sprite cut yet
+                (12, "RADAR UPLINK",   Sidebar.TabBuildings, true),   // P8-45: its own (was none)
                 (5,  "TURRET",         Sidebar.TabDefence,   true),
-                (15, "EMPLACEMENT",    Sidebar.TabDefence,   true),   // wears the turret's
-                (16, "AIRFIELD",       Sidebar.TabDefence,   true),   // wears the factory's
-                (17, "BASTION",        Sidebar.TabDefence,   true),   // wears the turret's
-                (18, "SHROUD NEST",    Sidebar.TabDefence,   true),   // wears the veil's
-                (9,  "WALL",           Sidebar.TabDefence,   false),  // com_wall_straight is not cut
+                (15, "EMPLACEMENT",    Sidebar.TabDefence,   true),   // P8-45: its own (wore the turret's)
+                (16, "AIRFIELD",       Sidebar.TabDefence,   true),   // P8-45: its own (wore the factory's)
+                (17, "BASTION",        Sidebar.TabDefence,   true),   // P8-45: its own (wore the turret's)
+                (18, "SHROUD NEST",    Sidebar.TabDefence,   true),   // P8-45: its own (wore the veil's)
+                (9,  "WALL",           Sidebar.TabDefence,   true),   // P8-45: its own (was none)
                 (7,  "VEIL PROJECTOR", Sidebar.TabDefence,   true),
                 (6,  "SUPERWEAPON",    Sidebar.TabDefence,   true),
-                (19, "MINE",           Sidebar.TabDefence,   false),  // wears the wall's, also not cut
+                (19, "MINE",           Sidebar.TabDefence,   true),   // P8-45: its own (was none)
             };
             string drift = "";
             foreach (var (type, label, tab, icon) in wasListed)
@@ -1316,6 +1323,8 @@ public partial class VerifyRunner : Node
         RunDoorFaceStages();
         // P8-41: my units answer a selection and an order, debounced.
         RunBarkStages();
+        // P8-45: the HUD, the help overlay, the icons and the toast names.
+        RunHudStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -9494,5 +9503,408 @@ public partial class VerifyRunner : Node
                     for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
                         n += audio.PlayRequests($"bark_{f}_{c}_{o}_{v}");
         return n;
+    }
+
+    // ---------------- P8-45: hudgate ----------------
+
+    private void HudGate(bool ok, string stage, string what) => Check(ok, $"hudgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-45, one group, each stage in a fresh battle from seat 1. The status
+    /// line was a bare label with the match clock always on it; a key strip
+    /// along the bottom named about a dozen keys by hand and had fallen behind
+    /// every key added since; twenty-two sidebar buttons had no icon of their
+    /// own; a building numbered above 12 was READY as "STRUCTURE"; and a
+    /// completion must open its own factory's doors and no other. Every
+    /// binding and switch a stage moves is put back, and nothing is saved.
+    /// </summary>
+    private void RunHudStages()
+    {
+        GD.Print("  --    hudgate (P8-45): the themed panel, the tick behind its switch, the help overlay, icons, toast names, the producing factory");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        bool tickWas = Settings.ShowTickCounter;
+        var keysWas = new Dictionary<string, Key>();
+        foreach (var (a, _) in Settings.Bindable) keysWas[a] = Settings.BindOf(a);
+        Settings.SaveSuppressedForTest = true;
+        try
+        {
+            RunHudPanelStage();
+            RunHudTickStage();
+            RunHudHelpStage();
+            RunHudIconStage();
+            RunHudToastStage();
+            RunHudDoorsStage();
+        }
+        finally
+        {
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, Key.None);
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, k);
+            Settings.ShowTickCounter = tickWas;
+            Settings.SaveSuppressedForTest = saveWas;
+        }
+    }
+
+    /// <summary>The status readout stands in the uplink panel, at the head of
+    /// the top-left column, and reads the joiner's own seat.</summary>
+    private void RunHudPanelStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            lw.GrantCredits(me, 4321 - lw.Credits(me));
+            lw.GrantCredits(foe, 1234 - lw.Credits(foe));
+            g.StepOneTick();
+            var panel = g.HudPanelForTest;
+            var style = panel.GetThemeStylebox("panel") as StyleBoxFlat;
+            bool themed = style != null
+                          && Mathf.IsEqualApprox(style.BgColor.R, UplinkUi.Panel.R) && Mathf.IsEqualApprox(style.BgColor.G, UplinkUi.Panel.G)
+                          && Mathf.IsEqualApprox(style.BgColor.B, UplinkUi.Panel.B) && style.BorderColor == UplinkUi.Seam
+                          && style.BorderWidthTop == 1 && style.BorderWidthLeft == 1;
+            bool heads = panel.GetParent() is VBoxContainer col && col.Name == "PowersColumn" && col.GetChild(0) == panel;
+            string status = g.StatusTextForTest;
+            long mine = lw.Credits(me), theirs = lw.Credits(foe);
+            bool reads = mine != theirs && status.StartsWith($"CREDITS {mine} ") && !status.Contains($"CREDITS {theirs} ");
+            string hint = g.HelpHintForTest;
+            HudGate(themed && heads && g.StatusInPanelForTest && reads && hint == $"{Settings.KeyName(Settings.BindOf("help"))}  HELP", "panel",
+                    $"the status readout stands in the uplink panel (cinder fill, seam border; themed {themed}) at the head of the "
+                    + $"top-left column (first child {heads}), with the help key beside it (\"{hint}\"), and it reads seat {me}'s "
+                    + $"treasury ({mine}) and not seat {foe}'s ({theirs}): \"{status}\"");
+        }
+        catch (System.Exception ex) { HudGate(false, "panel", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The match clock is off as shipped, and the settings page's
+    /// switch, reached from the pause menu, turns it on and off again.</summary>
+    private void RunHudTickStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            Settings.ResetDefaults();   // the shipped defaults (nothing is saved)
+            g.StepOneTick();
+            g.StepOneTick();
+            bool offAsShipped = !Settings.ShowTickCounter && !g.StatusTextForTest.Contains("TICK");
+            string before = g.StatusTextForTest;
+
+            g.PressKey(Settings.BindOf("pause_menu"));
+            var pm = g.PauseMenuView;
+            bool openedSettings = pm != null && pm.PressForTest("SETTINGS");
+            var sp = pm?.SettingsShown;
+            string shownOff = sp?.OptionShownForTest(SettingsScene.TickCounterLabel) ?? "(no row)";
+            string? on = sp?.ChooseOptionForTest(SettingsScene.TickCounterLabel, 1);
+            bool backed = sp != null && sp.PressBackForTest();
+            g.PressKey(Settings.BindOf("cancel"));
+            g.StepOneTick();
+            string withTick = g.StatusTextForTest;
+            bool shows = !g.PauseOpen && Settings.ShowTickCounter && withTick.Contains($"TICK {lw.Tick}");
+            HudGate(offAsShipped && openedSettings && shownOff == "OFF" && on == "ON" && backed && shows, "tick",
+                    $"the tick counter is OFF as shipped (\"{before}\"), and its switch on the settings page, reached through the pause "
+                    + $"menu's SETTINGS, turns it ON, after which the panel reads the match clock (\"{withTick}\", tick {lw.Tick})");
+
+            g.PressKey(Settings.BindOf("pause_menu"));
+            pm = g.PauseMenuView;
+            pm?.PressForTest("SETTINGS");
+            string? off = pm?.SettingsShown?.ChooseOptionForTest(SettingsScene.TickCounterLabel, 0);
+            pm?.SettingsShown?.PressBackForTest();
+            g.PressKey(Settings.BindOf("cancel"));
+            g.StepOneTick();
+            HudGate(off == "OFF" && !Settings.ShowTickCounter && !g.StatusTextForTest.Contains("TICK"), "tick",
+                    $"...and OFF again takes it away (\"{g.StatusTextForTest}\")");
+        }
+        catch (System.Exception ex) { HudGate(false, "tick", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The key strip is gone and the help key opens the overlay in
+    /// its place: the generated CONTROLS page with the mouse above it, live
+    /// to a rebind, shut by its own key and by cancel, and covered by the
+    /// conflict check both ways.</summary>
+    private void RunHudHelpStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            g.StepOneTick();
+            var strip = g.BottomEdgeLabelsForTest();
+            Key def = Settings.DefaultBindOf("help");
+            bool clear = def != Key.None;
+            for (int b = 1; b <= 4; b++) clear &= Settings.DefaultBindOf($"bookmark_{b}") != def;
+            HudGate(strip.Count == 0 && def == Key.F10 && clear && g.HelpPageShown == null, "help",
+                    $"the key strip along the bottom of the battle is gone ({strip.Count} labels there"
+                    + $"{(strip.Count > 0 ? $": \"{string.Join("\", \"", strip)}\"" : "")}), and the help key that replaces it ships on "
+                    + $"{Settings.KeyName(def)}, clear of the four camera bookmarks, with nothing open yet");
+
+            Key help = Settings.BindOf("help");
+            g.PressKey(help);
+            var page = g.HelpPageShown;
+            string diff = page == null ? "no overlay opened" : RowsDiff(page.RowsShown(), BindableNow());
+            var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
+            var wantMouse = ControlsPage.MouseGestures();
+            bool mouseSame = mouse.Count == wantMouse.Count;
+            for (int i = 0; mouseSame && i < mouse.Count; i++) mouseSame = mouse[i] == wantMouse[i];
+            bool force = mouse.Exists(r => r.Gesture == "CTRL + RIGHT CLICK" && r.Does.Contains("BRIDGE"));
+            HudGate(page != null && diff.Length == 0 && mouseSame && force, "help",
+                    $"{Settings.KeyName(help)} opens the help overlay, which is the generated CONTROLS page: all {Settings.Bindable.Length} "
+                    + $"Bindable entries in table order with their live keys, and the {mouse.Count} mouse rows above them, the "
+                    + $"force-attack gesture among them (force {force}){(diff.Length > 0 ? $"; but {diff}" : "")}");
+
+            string? clash = Settings.TryRebind("help", Key.F11);
+            string shown = RowKey(page, "HELP");
+            string after = page == null ? "no page" : RowsDiff(page.RowsShown(), BindableNow());
+            g.StepOneTick();
+            string hint = g.HelpHintForTest;
+            HudGate(clash == null && shown == Settings.KeyName(Key.F11) && after.Length == 0 && hint == $"{Settings.KeyName(Key.F11)}  HELP", "help",
+                    $"...a rebind made while it is open shows on it at once (HELP reads {shown}) and on the status panel (\"{hint}\")");
+
+            g.PressKey(Key.F10);
+            bool stillOpen = g.HelpPageShown != null;
+            g.PressKey(Key.F11);
+            bool shut = g.HelpPageShown == null;
+            g.PressKey(Key.F11);
+            bool reopened = g.HelpPageShown != null;
+            g.PressKey(Settings.BindOf("cancel"));
+            bool cancelled = g.HelpPageShown == null && !g.PauseOpen;
+            HudGate(stillOpen && shut && reopened && cancelled, "help",
+                    $"...the old key does nothing (open {stillOpen}), the new one shuts it ({shut}) and opens it again ({reopened}), and the "
+                    + $"cancel key shuts it without opening the operations menu ({cancelled})");
+
+            string? onBookmark = Settings.TryRebind("help", Key.F1);
+            string? stopOnHelp = Settings.TryRebind("stop", Settings.BindOf("help"));
+            HudGate(onBookmark == "bookmark_1" && stopOnHelp == "help" && Settings.BindOf("help") == Key.F11, "help",
+                    $"the conflict check covers the help key both ways: HELP onto F1 is refused for {Settings.LabelOf(onBookmark ?? "")} "
+                    + $"(the reason it does not ship there), and STOP onto HELP's key is refused for {Settings.LabelOf(stopOnHelp ?? "")}");
+        }
+        catch (System.Exception ex) { HudGate(false, "help", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>Every button the sidebar builds wears the icon named by its
+    /// own /data id, where seven buildings wore another's and fifteen buttons
+    /// had none.</summary>
+    private void RunHudIconStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            var icons = g.SidebarView.ButtonIconsForTest();
+            var wrong = new List<string>();
+            int structs = 0, units = 0;
+            foreach (var (t, unit, path) in icons)
+            {
+                if (unit) units++; else structs++;
+                string id = unit ? UnitCatalogue.IdOf(t) : StructureCatalogue.IdOf(t);
+                if (path != $"res://ui/icons/{id}.png") wrong.Add($"{id} wears {(path.Length == 0 ? "nothing" : path)}");
+            }
+            HudGate(icons.Count > 0 && wrong.Count == 0, "icons",
+                    $"every one of the {icons.Count} buttons the sidebar builds ({structs} buildings, {units} units) wears the icon named "
+                    + $"by its own /data id{(wrong.Count > 0 ? $"; but {string.Join("; ", wrong)}" : "")}");
+        }
+        catch (System.Exception ex) { HudGate(false, "icons", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>A building pressed on the sidebar is READY under its catalogue
+    /// name, the Airfield being one the old table called "STRUCTURE", and a
+    /// unit is DEPLOYED under its own.</summary>
+    private void RunHudToastStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } rq)
+            {
+                HudGate(false, "toast", "quiet ground for a radar uplink (none: a fixture failure)");
+                return;
+            }
+            lw.SpawnRadarUplink(me, rq.X, rq.Y);
+            lw.GrantCredits(me, 30000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+            int airfield = World.AirfieldStructType;
+            bool pressed = sb.PressStructButton(airfield);
+            g.AlertsView.ResetForTest();
+            bool done = false, said = false;
+            string want = $"{StructureCatalogue.DisplayNameOf(airfield)} READY  -  PLACE >>";
+            for (int t = 0; t < 3000 && !done; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.A == yard && ev.B == airfield) done = true;
+                if (done) said = g.AlertsView.StackTexts().Contains(want);
+            }
+            HudGate(pressed && done && said && want.StartsWith("AIRFIELD "), "toast",
+                    $"the AIRFIELD pressed on the sidebar is READY under its catalogue name (\"{want}\" on the stack {said}; the old "
+                    + $"table stopped at type 12 and called type {airfield} \"STRUCTURE\"; pressed {pressed}, built {done})");
+
+            if (GroundNear(g, me) is not { } fq)
+            {
+                HudGate(false, "toast", "quiet ground for a factory (none: a fixture failure)");
+                return;
+            }
+            int factory = lw.SpawnFactory(me, fq.X, fq.Y);
+            g.StepTicks(1);
+            g.StepOneTick();
+            int flak = UnitCatalogue.TypeIdOf("com_flak_track");
+            bool pressedUnit = sb.PressUnitButton(flak);
+            g.AlertsView.ResetForTest();
+            int built = -1;
+            bool saidUnit = false;
+            string wantUnit = $"{UnitCatalogue.DisplayNameOf(flak)} DEPLOYED";
+            for (int t = 0; t < 3000 && built < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.C == factory) built = ev.A;
+                if (built >= 0) saidUnit = g.AlertsView.StackTexts().Contains(wantUnit);
+            }
+            HudGate(pressedUnit && built >= 0 && saidUnit, "toast",
+                    $"...and a FLAK TRACK pressed on the sidebar is DEPLOYED under its own (\"{wantUnit}\" on the stack {saidUnit}; unit {built})");
+        }
+        catch (System.Exception ex) { HudGate(false, "toast", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>Two factories of my own, and orders pressed on the sidebar's
+    /// button: each completion is answered by its own factory's doors and the
+    /// other one's are never asked. eventgate/doors holds mine against an
+    /// enemy's through a scripted order; this is the gesture, between two of
+    /// my own.
+    ///
+    /// Since P8-71 a completion opens only the doors on the face its unit came
+    /// out of, and a face with no door opens nothing (a doorless exit). So the
+    /// OPENINGS alone cannot tell a wrong factory from a right one: a stray
+    /// call for the idle factory finds the new unit off one of its doorless
+    /// faces and opens nothing, which is how this stage stopped biting when
+    /// P8-71 landed beneath it. What it counts is every door REACTION, an
+    /// opening or a doorless exit: the producer answers each of its
+    /// completions once, the idle factory never, and the producer opened if
+    /// and only if its unit came out of a face with doors (doorgate holds
+    /// which faces those are).</summary>
+    private void RunHudDoorsStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } a)
+            {
+                HudGate(false, "doors", "quiet ground for a first factory (none: a fixture failure)");
+                return;
+            }
+            int first = lw.SpawnFactory(me, a.X, a.Y);
+            if (GroundNear(g, me) is not { } b)
+            {
+                HudGate(false, "doors", "quiet ground for a second factory (none: a fixture failure)");
+                return;
+            }
+            int second = lw.SpawnFactory(me, b.X, b.Y);
+            lw.GrantCredits(me, 20000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            int vehicle = -1;
+            foreach (int id in lw.UnitTypeIds())
+            {
+                var d = lw.GetUnitType(id);
+                if (d.ProducedAt == World.FactoryStructType && (d.Prereqs == null || d.Prereqs.Length == 0) && d.MaxAlive == 0
+                    && (d.Faction == World.FactionCommon || d.Faction == lw.FactionOf(me))) { vehicle = id; break; }
+            }
+            int doorsA = g.DoorCountForTest(first), doorsB = g.DoorCountForTest(second);
+            HudGate(vehicle >= 0 && doorsA > 0 && doorsB > 0 && first < second, "doors",
+                    $"precondition: two factories of my own whose rigs carry doors ({doorsA} and {doorsB}), and a vehicle of my side "
+                    + $"with no prerequisite ({(vehicle >= 0 ? UnitCatalogue.DisplayNameOf(vehicle) : "none")})");
+            if (vehicle < 0) return;
+            var sb = g.SidebarView;
+            // Every door reaction a factory has had: an opening, or a doorless
+            // exit. And did its last completion come out of a face with doors?
+            int Reactions(int f) => g.DoorOpeningsForTest(f) + g.DoorlessExitsForTest(f);
+            bool OutOfDoorFace(int f) => (g.LastDoorExitForTest(f).Used & g.DoorFacesForTest(f)) != SkirmishLive.Face.None;
+            int a0 = g.DoorOpeningsForTest(first), b0 = g.DoorOpeningsForTest(second);
+            int ra0 = Reactions(first), rb0 = Reactions(second);
+
+            // One order: the sidebar sends it to the factory with the shorter
+            // queue, ties to the lower id, so the first factory builds it.
+            bool p1 = sb.PressUnitButton(vehicle);
+            int doneA = 0, doneB = 0;
+            for (int t = 0; t < 3000 && doneA == 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete) { if (ev.C == first) doneA++; else if (ev.C == second) doneB++; }
+            }
+            int openA = g.DoorOpeningsForTest(first) - a0, openB = g.DoorOpeningsForTest(second) - b0;
+            int reactA = Reactions(first) - ra0, reactB = Reactions(second) - rb0;
+            bool doorA = OutOfDoorFace(first);
+            HudGate(p1 && doneA == 1 && doneB == 0 && reactA == 1 && reactB == 0 && openA == (doorA ? 1 : 0) && openB == 0, "doors",
+                    $"one {UnitCatalogue.DisplayNameOf(vehicle)} pressed on the sidebar is built at the first factory, whose doors answer "
+                    + $"it ({reactA} reaction for {doneA}, {openA} opening, out of a face {(doorA ? "with" : "without")} doors) while the "
+                    + $"second's are never asked ({reactB} reactions, {openB} openings)");
+
+            // Two orders, a tick apart, so the second goes to the idle line.
+            bool p2 = sb.PressUnitButton(vehicle);
+            g.StepOneTick();
+            bool p3 = sb.PressUnitButton(vehicle);
+            int doneA2 = 0, doneB2 = 0;
+            for (int t = 0; t < 3000 && (doneA2 == 0 || doneB2 == 0); t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete) { if (ev.C == first) doneA2++; else if (ev.C == second) doneB2++; }
+            }
+            int openA2 = g.DoorOpeningsForTest(first) - a0 - openA, openB2 = g.DoorOpeningsForTest(second) - b0 - openB;
+            int reactA2 = Reactions(first) - ra0 - reactA, reactB2 = Reactions(second) - rb0 - reactB;
+            bool doorA2 = OutOfDoorFace(first), doorB2 = OutOfDoorFace(second);
+            HudGate(p2 && p3 && doneA2 == 1 && doneB2 == 1 && reactA2 == 1 && reactB2 == 1
+                    && openA2 == (doorA2 ? 1 : 0) && openB2 == (doorB2 ? 1 : 0), "doors",
+                    $"...and two pressed a tick apart are built one at each, each answered by its own doors alone (first {reactA2} "
+                    + $"reaction and {openA2} opening for {doneA2}, second {reactB2} and {openB2} for {doneB2}; out of a door face: "
+                    + $"{doorA2} and {doorB2})");
+        }
+        catch (System.Exception ex) { HudGate(false, "doors", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
     }
 }

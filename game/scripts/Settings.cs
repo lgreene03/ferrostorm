@@ -93,6 +93,12 @@ public static class Settings
         ("50%", 0.5f), ("75%", 0.75f), ("100%", 1.0f),
     };
 
+    // ---- interface ----
+    /// <summary>P8-45: the match clock on the battle's status panel, a
+    /// developer's reading rather than a player's, so OFF by default and
+    /// switched on from the settings page. It was always on.</summary>
+    public static bool ShowTickCounter;
+
     /// <summary>The rebindable surface, in the order the settings scene lists
     /// it. Every literal keycode SkirmishLive and RtsCamera used to match is
     /// here and nowhere else.</summary>
@@ -132,6 +138,13 @@ public static class Settings
         // (GDD s7 line 85's "jump-to-event key"). Space, which the [input]
         // block had free.
         ("jump_to_event", "JUMP TO EVENT"),
+        // P8-45: the help overlay, which replaced the key strip along the
+        // bottom of the battle. Default F10, NOT the F1 the row named: F1 to
+        // F4 are the camera bookmarks (GDD s10, doc 11's shared bindings,
+        // both above the tracker), and a key holds one action. F10 is clear
+        // of the four bookmark keys, so a slip off a bookmark recall cannot
+        // open it. Reverses if the GDD moves the bookmarks off F1.
+        ("help", "HELP"),
         ("pause_menu", "OPERATIONS MENU"),
         ("cancel", "CANCEL / BACK"),
         ("camera_left", "CAMERA LEFT"),
@@ -228,6 +241,7 @@ public static class Settings
         MsaaIndex = Mathf.Clamp((int)cfg.GetValue("video", "msaa", MsaaIndex), 0, MsaaOptions.Length - 1);
         RenderScaleIndex = Mathf.Clamp((int)cfg.GetValue("video", "render_scale", RenderScaleIndex),
             0, RenderScaleOptions.Length - 1);
+        ShowTickCounter = (bool)cfg.GetValue("interface", "tick_counter", ShowTickCounter);
 
         foreach (var (action, _) in Bindable)
         {
@@ -256,6 +270,7 @@ public static class Settings
         cfg.SetValue("video", "vsync", VSync);
         cfg.SetValue("video", "msaa", MsaaIndex);
         cfg.SetValue("video", "render_scale", RenderScaleIndex);
+        cfg.SetValue("interface", "tick_counter", ShowTickCounter);
         // Only rebound actions are written. A settings file that restates every
         // default is a settings file that silently pins them: change a default
         // in project.godot and every existing player keeps the old one forever.
@@ -370,6 +385,7 @@ public static class Settings
         MsaaIndex = System.Array.FindIndex(MsaaOptions, o => o.Value == _defaultMsaa);
         if (MsaaIndex < 0) MsaaIndex = 2;
         RenderScaleIndex = System.Array.FindIndex(RenderScaleOptions, o => o.Value == 1.0f);
+        ShowTickCounter = false;
         _binds.Clear();
         foreach (var kv in _defaultBinds) _binds[kv.Key] = kv.Value;
         ApplyAll();

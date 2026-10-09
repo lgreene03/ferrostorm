@@ -17,11 +17,34 @@ namespace Ferrostorm.Client;
 /// modifier is read off the key event rather than bound.
 ///
 /// Reachable from the main menu and from the pause menu, the same page in
-/// both. Presentation only: it reads Settings and changes nothing.
+/// both, and (P8-45) from the battle's help key, where the help overlay is
+/// this page. Presentation only: it reads Settings and changes nothing.
+///
+/// P8-45 put the MOUSE above the keys. The key strip along the bottom of the
+/// battle named the mouse verbs and the overlay replaced the strip, so the
+/// page has to name them or the replacement loses them. A gesture is not
+/// bindable, so it cannot come from Settings.Bindable; the gestures are one
+/// table here (MouseGestures), read by every copy of the page.
 /// </summary>
 public partial class ControlsPage : VBoxContainer
 {
     private readonly List<(string Action, Label Label, Label Key)> _rows = new();
+    private readonly List<(Label Gesture, Label Does)> _mouseRows = new();
+
+    /// <summary>What each mouse gesture does in a battle. The one list of
+    /// them: the strip's verbs, and the force-attack gesture (D23) that
+    /// nothing on screen advertised (P8-8's finding).</summary>
+    public static IReadOnlyList<(string Gesture, string Does)> MouseGestures() => Mouse;
+
+    private static readonly (string Gesture, string Does)[] Mouse =
+    {
+        ("LEFT CLICK", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION"),
+        ("DOUBLE-CLICK OR CTRL + CLICK", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS"),
+        ("RIGHT CLICK", "MOVE, ATTACK, HARVEST, ENTER OR BOARD; SETS A FACTORY'S RALLY POINT"),
+        ("SHIFT + RIGHT CLICK", "QUEUES THE ORDER BEHIND THE LAST"),
+        ("CTRL + RIGHT CLICK", "FORCE-ATTACK: FELLS A NEUTRAL BRIDGE"),
+        ("WHEEL, SCREEN EDGE, MINIMAP", "MOVE THE CAMERA"),
+    };
 
     public override void _Ready()
     {
@@ -42,10 +65,39 @@ public partial class ControlsPage : VBoxContainer
         var pad = new MarginContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
         pad.AddThemeConstantOverride("margin_right", 18);
         scroll.AddChild(pad);
+        var body = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        body.AddThemeConstantOverride("separation", 6);
+        pad.AddChild(body);
+
+        body.AddChild(Heading("MOUSE"));
+        var mouse = new GridContainer { Columns = 2, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+        mouse.AddThemeConstantOverride("h_separation", 24);
+        mouse.AddThemeConstantOverride("v_separation", 3);
+        body.AddChild(mouse);
+        foreach (var (gesture, does) in MouseGestures())
+        {
+            var gl = new Label { Text = gesture };
+            gl.AddThemeFontSizeOverride("font_size", 12);
+            gl.AddThemeColorOverride("font_color", UplinkUi.FerriteGold);
+            mouse.AddChild(gl);
+            var dl = new Label
+            {
+                Text = does,
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                CustomMinimumSize = new Vector2(260, 0),
+            };
+            dl.AddThemeFontSizeOverride("font_size", 12);
+            dl.AddThemeColorOverride("font_color", UplinkUi.Bone);
+            mouse.AddChild(dl);
+            _mouseRows.Add((gl, dl));
+        }
+
+        body.AddChild(Heading("KEYS"));
         var grid = new GridContainer { Columns = 2, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         grid.AddThemeConstantOverride("h_separation", 24);
         grid.AddThemeConstantOverride("v_separation", 3);
-        pad.AddChild(grid);
+        body.AddChild(grid);
         foreach (var (action, label) in Settings.Bindable)
         {
             var l = new Label { Text = label, SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -82,5 +134,21 @@ public partial class ControlsPage : VBoxContainer
         var l = new List<(string, string)>(_rows.Count);
         foreach (var (_, label, key) in _rows) l.Add((label.Text, key.Text));
         return l;
+    }
+
+    /// <summary>P8-45 verification read: each mouse row as SHOWN.</summary>
+    public List<(string Gesture, string Does)> MouseRowsShown()
+    {
+        var l = new List<(string, string)>(_mouseRows.Count);
+        foreach (var (g, d) in _mouseRows) l.Add((g.Text, d.Text));
+        return l;
+    }
+
+    private static Label Heading(string text)
+    {
+        var h = new Label { Text = text };
+        h.AddThemeFontSizeOverride("font_size", 13);
+        h.AddThemeColorOverride("font_color", UplinkUi.Dim);
+        return h;
     }
 }

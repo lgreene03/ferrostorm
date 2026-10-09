@@ -215,6 +215,12 @@ public partial class SkirmishLive : Node3D
     // HUD
     private CanvasLayer _hud = null!;
     private Label _status = null!;
+    // P8-45: the themed status panel, the help key beside the readout, and
+    // the help overlay while it is open (null when shut).
+    private PanelContainer _hudPanel = null!;
+    private Label _helpHint = null!;
+    private Control? _helpOverlay;
+    private ControlsPage? _helpPage;
     private Label _banner = null!;
     private Panel _dragRect = null!;
     private Vector2 _dragStart;
@@ -1309,6 +1315,63 @@ public partial class SkirmishLive : Node3D
         _paused = false;
     }
 
+    /// <summary>
+    /// P8-45: the help overlay, which replaced the key strip along the bottom
+    /// of the battle. The strip was a hand-written line of about a dozen keys
+    /// out of thirty-odd, which fell behind every key added after it (no
+    /// group 0, no bookmarks, no support powers, no unload, no force-attack).
+    /// The overlay IS the CONTROLS page, generated from Settings.Bindable with
+    /// the mouse above it, so it lists every key the battle answers to with
+    /// the key it is bound to now, and follows a rebind made while it is open.
+    ///
+    /// It does not pause: a LAN match cannot (TogglePause's reason), and a
+    /// reminder of a key is not a reason to stop a battle. The scrim stops the
+    /// mouse, as the pause menu's does, so a click meant for CLOSE cannot
+    /// order the army underneath it.
+    /// </summary>
+    private void ToggleHelp()
+    {
+        if (_helpOverlay != null) { CloseHelp(); return; }
+        if (_faulted) return;
+        var overlay = UplinkUi.FullOverlay(_hud, 0.78f);
+        overlay.Name = "HelpOverlay";
+        var v = UplinkUi.OverlayBox(overlay, "CONTROLS", 330, 330);
+        var page = new ControlsPage();
+        v.AddChild(page);
+        v.AddChild(UplinkUi.Note(
+            $"{Settings.KeyName(Settings.BindOf("help"))} or {Settings.KeyName(Settings.BindOf("cancel"))} closes this; "
+            + "the battle carries on behind it", 11));
+        v.AddChild(UplinkUi.MenuButton("CLOSE", CloseHelp));
+        _helpOverlay = overlay;
+        _helpPage = page;
+        _audio.Play("ui_click", -12);
+    }
+
+    private void CloseHelp()
+    {
+        if (_helpOverlay is null) return;
+        _helpOverlay.QueueFree();
+        _helpOverlay = null;
+        _helpPage = null;
+    }
+
+    /// <summary>P8-45 verification reads: the overlay's page while it is open
+    /// (null when shut), the status panel and its two labels as shown, and
+    /// every label left standing along the bottom edge of the HUD (where the
+    /// key strip was).</summary>
+    public ControlsPage? HelpPageShown => _helpOverlay != null ? _helpPage : null;
+    public PanelContainer HudPanelForTest => _hudPanel;
+    public bool StatusInPanelForTest => _hudPanel.IsAncestorOf(_status) && _hudPanel.IsAncestorOf(_helpHint);
+    public string StatusTextForTest => _status.Text;
+    public string HelpHintForTest => _helpHint.Text;
+    public List<string> BottomEdgeLabelsForTest()
+    {
+        var l = new List<string>();
+        foreach (var n in _hud.GetChildren())
+            if (n is Label lab && lab.AnchorTop >= 1f && lab.AnchorBottom >= 1f && lab.OffsetTop > -60) l.Add(lab.Text);
+        return l;
+    }
+
     // ---------------- sidebar command surface ----------------
 
     private int FindOwnStructure(EntityKind kind)
@@ -1658,37 +1721,30 @@ public partial class SkirmishLive : Node3D
     {
         var hud = _hud = new CanvasLayer { Name = "Hud" };
         AddChild(hud);
-        _status = new Label
-        {
-            Position = new Vector2(16, 12),
-            Theme = ThemeDB.GetProjectTheme(),
-        };
-        _status.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
-        hud.AddChild(_status);
-
-        // TICKET-P5-SET-01: the hint reads the live bindings rather than
-        // restating the defaults. A hint that says "R repair" to a player who
-        // rebound repair to F is worse than no hint.
-        string K(string action) => Settings.KeyName(Settings.BindOf(action));
-        var hint = new Label
-        {
-            // TICKET-P5-SAVE-01: a replay takes no orders, so it must not advertise
-            // orders. Telling a spectator to right-click to attack, and then
-            // swallowing the click, is the exact "silently ignores orders" read
-            // that makes a working replay look like a broken game.
-            Text = _replay != null
-                ? $"REPLAY PLAYBACK   the recorded stream issues every order   click: select   arrows/edge/wheel camera   {K("cancel")}: uplink"
-                : $"click: select   right click: move / attack / harvest / rally   {K("attack_move")} attack-move  {K("stop")} stop  "
-                  // TICKET-P5-REP-09: "repair bldgs", because R repairs
-                  // structures and the old hint promised more than R could do.
-                  // TICKET-P5-ALERT-02: "last alert" advertises the jump key,
-                  // read from the live binding like every other key here.
-                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("select_all_army")} army  {K("idle_harvester")} idle harv  {K("jump_to_event")} last alert  {K("pause_menu")} menu   ctrl+0-9 groups   arrows/edge/wheel camera",
-            AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
-            OffsetTop = -30, OffsetLeft = 16,
-        };
-        hint.AddThemeColorOverride("font_color", new Color(0.5f, 0.5f, 0.48f));
-        hud.AddChild(hint);
+        // P8-45: the status readout wears the uplink panel (UplinkUi's cinder
+        // fill and seam border, the sidebar's and the menus' clothes), where it
+        // was a bare line of text floating on the battlefield. Beside the
+        // readout, the help key read from its live binding, because the key
+        // strip that listed every key along the bottom of the screen is gone:
+        // the help overlay lists them now, generated from Settings.Bindable,
+        // and this is how a player learns the overlay is there. The panel is
+        // the first item of the top-left column, so the superweapon gauge and
+        // the powers strip stack beneath it and cannot overlap it.
+        _hudPanel = new PanelContainer { Name = "HudPanel", MouseFilter = Control.MouseFilterEnum.Ignore };
+        var hudStyle = new StyleBoxFlat { BgColor = UplinkUi.Panel with { A = 0.92f }, BorderColor = UplinkUi.Seam };
+        hudStyle.SetBorderWidthAll(1);
+        hudStyle.ContentMarginLeft = 12; hudStyle.ContentMarginRight = 12;
+        hudStyle.ContentMarginTop = 5; hudStyle.ContentMarginBottom = 5;
+        _hudPanel.AddThemeStyleboxOverride("panel", hudStyle);
+        var hudRow = new HBoxContainer { MouseFilter = Control.MouseFilterEnum.Ignore };
+        hudRow.AddThemeConstantOverride("separation", 22);
+        _hudPanel.AddChild(hudRow);
+        _status = new Label { Theme = ThemeDB.GetProjectTheme() };
+        _status.AddThemeColorOverride("font_color", UplinkUi.Bone);
+        hudRow.AddChild(_status);
+        _helpHint = new Label();
+        _helpHint.AddThemeColorOverride("font_color", UplinkUi.FerriteGold);
+        hudRow.AddChild(_helpHint);
 
         // TICKET-P5-SET-01: the desync notice. Latched and unmissable, in the
         // one colour this HUD reserves for a thing that has gone wrong, because
@@ -1831,14 +1887,17 @@ public partial class SkirmishLive : Node3D
         // one column so the two can never overlap: the gauge above (the weapon
         // that ends matches), the minor powers below. The column sits where
         // the strip alone used to.
+        // P8-45: the status panel heads the column, so the column starts at
+        // the corner where the bare status line used to sit.
         var topLeft = new VBoxContainer
         {
             Name = "PowersColumn",
-            Position = new Vector2(16, 40),
+            Position = new Vector2(12, 8),
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
         topLeft.AddThemeConstantOverride("separation", 8);
         hud.AddChild(topLeft);
+        topLeft.AddChild(_hudPanel);
         _swGauge = new SuperweaponGauge();
         topLeft.AddChild(_swGauge);
         _swGauge.Init();
@@ -2187,7 +2246,7 @@ public partial class SkirmishLive : Node3D
                     // to whoever recorded the match. The readout stays (it is
                     // real information); the prompt goes.
                     string msg = pe.Kind == EntityKind.ConstructionYard
-                        ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY"
+                        ? $"{StructNameOf(ev.B)} READY"
                             + (_replay is null ? "  -  PLACE >>" : "")
                         : $"{UnitNameOf(pe.UnitType)} DEPLOYED";
                     // TICKET-P6-VO-01: the battlefield voice, ALONGSIDE the
@@ -2848,7 +2907,13 @@ public partial class SkirmishLive : Node3D
         // silently ignores orders reads as a broken game.
         string mode = _replay != null ? $"    REPLAY {_world.Tick}/{_replayTicks}"
             : _resumed ? "    RESUMED (not recording)" : "";
-        _status.Text = $"CREDITS {_world.Credits(LocalPlayerId)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}{mode}";
+        // P8-45: the tick is a developer's reading, shown only while the
+        // settings page's TICK COUNTER is on. The replay's own position above
+        // stays: it is where in the recording the spectator is, not a debug
+        // figure.
+        string tick = Settings.ShowTickCounter ? $"    TICK {_world.Tick}" : "";
+        _status.Text = $"CREDITS {_world.Credits(LocalPlayerId)}    {pwr}    UNITS {CountOwn()}{tick}{mode}";
+        _helpHint.Text = $"{Settings.KeyName(Settings.BindOf("help"))}  HELP";
 
         var dots = new List<(float, float, Color)>();
         foreach (var v in _view)
@@ -2999,15 +3064,25 @@ public partial class SkirmishLive : Node3D
         return CursorFor(screen) == GameCursor.Harvest;
     }
 
-    // W3-19: structure names by type id (Sidebar's table is private).
-    // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
-    // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
-    // the entry exists for completeness rather than for a live code path.
-    // TICKET-P5-PROD-01 named type 7: the Veil Projector has a button now, so
-    // its ready toast must name it. ADR-008 extended the table to type 12:
-    // index 10 is ADR-005's reserved gate (no def, never toasted), 11 the
-    // barracks (catalogued, unbuildable until ADR-009's wave), 12 the radar.
-    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL", "", "BARRACKS", "RADAR UPLINK" };
+    /// <summary>
+    /// P8-45: the name a READY toast gives a building, derived from the
+    /// catalogue by the one derivation the sidebar's buttons and UnitNameOf
+    /// use (StructureCatalogue.DisplayNameOf), so the toast names what the
+    /// button the player pressed names.
+    ///
+    /// This was a hand-kept table indexed by struct type, the fourth copy of a
+    /// list the catalogue already holds. It stopped at type 12, so every
+    /// building numbered from 13 up (the emplacement, the airfield, the
+    /// Bastion, the Shroud Nest, the mine, the Sodality generator, the Watch
+    /// Post and the seismic charge) was READY as "STRUCTURE", and its slot 10
+    /// still read as the reserved gate after P7-10 filled it. Throws on a type
+    /// the catalogue does not name, UnitNameOf's rule: that is a bug, not a
+    /// thing to call "STRUCTURE".
+    /// </summary>
+    private static string StructNameOf(int type) => StructureCatalogue.DisplayNameOf(type);
+
+    /// <summary>Verification read: what a READY toast calls a building.</summary>
+    public string StructNameForTest(int type) => StructNameOf(type);
 
     /// <summary>W3-19's toast, as a ROUTINE line through the one alert service
     /// (P8-10). Every acknowledgement and refusal the scene speaks comes
@@ -5368,6 +5443,9 @@ public partial class SkirmishLive : Node3D
             // it is tested first - a player who opened it wants out of it, not
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
+            // P8-45: then the help overlay, for the same reason: it is the
+            // thing on top, and a player looking at it wants it gone.
+            if (_helpOverlay != null) { CloseHelp(); return true; }
             // An armed order is cancelled through the family funnel, so cancel
             // clears all four by construction. The toast names whichever order
             // was armed; the funnel guarantees there is only ever one.
@@ -5382,6 +5460,9 @@ public partial class SkirmishLive : Node3D
             if (_matchOver || _replayDone || _spectating) { QuitToMenu(); return true; }
             return false;
         }
+        // P8-45: the help key opens and shuts the help overlay. A spectator
+        // and a commander alike: the camera keys are for both.
+        if (ev.IsActionPressed("help")) { ToggleHelp(); return true; }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
         if (ev.IsActionPressed("launch_super")) { ArmSuperweapon(); return true; }
         // The support powers' key: arms the first READY power, and cycles to
