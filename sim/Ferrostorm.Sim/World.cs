@@ -2141,6 +2141,12 @@ public sealed partial class World
         if (def.BeatDenominator < 1)
             throw new FormatException(
                 $"AI tuning id {tuningId} has a beat denominator of {def.BeatDenominator}; the commander divides by it");
+        // P8-22 (ADR-079): a rung's producer cap counts the ladder's own first
+        // barracks and factory, so a rung row below 1 would describe a
+        // commander forbidden the producers its ladder builds.
+        if (def.Kind == AiTuningKind.Rung && def.ProducerCap < 1)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a producer cap of {def.ProducerCap}; the ladder's own barracks and factory are the first of each");
         _aiTuning[tuningId] = def;
     }
 
@@ -2316,6 +2322,12 @@ public sealed partial class World
                 // two LAN peers holding different files would fight the same air
                 // raid with different armies while every def matched.
                 h.Add(d.AntiAirCap); h.Add(d.AntiAirGarrison);
+                // P8-22 (ADR-079): what the commander spends, on the same
+                // argument. The producer cap, the surplus reserve and window
+                // and the faction defence cap decide which BuildStructure and
+                // Produce orders a commander issues from its bank, so two
+                // peers holding different files would build different bases.
+                h.Add(d.ProducerCap); h.Add(d.SurplusReserve); h.Add(d.SurplusWindowTicks); h.Add(d.FactionDefenceCap);
             }
             return h.Value;
         }

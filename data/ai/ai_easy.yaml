@@ -25,3 +25,20 @@ beat_numerator: 2
 beat_denominator: 1
 harvesters_per_refinery: 1
 starting_credit_handicap: 0
+# P8-22 (ADR-079, decision D7): what this rung SPENDS. A commander used to bank
+# for the whole match (spendprobe at the base: a Normal Directorate seat held a
+# mean of 29725 credits and sat at or above 4500 for 93 per cent of its
+# seconds) because one barracks and one factory cannot spend its income.
+# producer_cap 1 is D7's Easy cap: the ladder's own one barracks and one
+# factory, and no more, however much it banks. It still routes each order to
+# the shorter queue and places several a beat when it can afford them.
+# surplus_reserve 4500 is the superweapon rung's own credit test, the dearest
+# in the ladder, so nothing it buys out of surplus can starve a rung.
+# surplus_window_ticks 1800 is two minutes, MEASURED rather than chosen: at the
+# base, of the stretches a treasury spent at or above 4500 that ended short of
+# 300 seconds, all but one ended inside 120, so a bank that has stood for two
+# minutes is income, not a single delivery. The same at every rung today;
+# P8-26 judges whether a rung should differ.
+producer_cap: 1
+surplus_reserve: 4500
+surplus_window_ticks: 1800

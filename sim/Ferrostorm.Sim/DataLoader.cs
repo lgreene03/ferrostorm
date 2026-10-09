@@ -357,17 +357,22 @@ public static class DataLoader
         int ActEvery, int WaveSize,
         int BeatNumerator, int BeatDenominator,
         int HarvestersPerRefinery, int StartingCreditHandicap, string Notes,
-        int AntiAirCap = 0, int AntiAirGarrison = 0);
+        int AntiAirCap = 0, int AntiAirGarrison = 0,
+        int ProducerCap = 0, int SurplusReserve = 0, int SurplusWindowTicks = 0, int FactionDefenceCap = 0);
 
     /// <summary>The keys each family OWNS. Stated as data rather than as a run
     /// of ContainsKey tests so that a key added to one family is automatically
     /// forbidden in the other: a rule that named the keys one at a time would be
     /// missed by whoever adds the next one, which is this codebase's recurring
     /// defect shape. P8-17 (ADR-072) added the two anti-air keys here, and that
-    /// one edit is what refuses them in a rung file.</summary>
-    private static readonly string[] PersonalityKeys = { "act_every_ticks", "wave_size", "anti_air_cap", "anti_air_garrison" };
+    /// one edit is what refuses them in a rung file. P8-22 (ADR-079) added the
+    /// faction defence cap to the personality and the producer cap, the surplus
+    /// reserve and the surplus window to the rung, the same way.</summary>
+    private static readonly string[] PersonalityKeys =
+        { "act_every_ticks", "wave_size", "anti_air_cap", "anti_air_garrison", "faction_defence_cap" };
     private static readonly string[] RungKeys =
-        { "beat_numerator", "beat_denominator", "harvesters_per_refinery", "starting_credit_handicap" };
+        { "beat_numerator", "beat_denominator", "harvesters_per_refinery", "starting_credit_handicap",
+          "producer_cap", "surplus_reserve", "surplus_window_ticks" };
 
     /// <summary>
     /// The same flat-YAML and integer-only primitives as ParseUnit and
@@ -404,6 +409,7 @@ public static class DataLoader
 
         int actEvery = 0, waveSize = 0, numerator = 1, denominator = 1, harvesters = 1, handicap = 0;
         int antiAirCap = 0, antiAirGarrison = 0;
+        int producerCap = 0, surplusReserve = 0, surplusWindow = 0, factionDefenceCap = 0;
         if (isPersonality)
         {
             actEvery = ReqInt(m, "act_every_ticks");
@@ -418,6 +424,11 @@ public static class DataLoader
             if (antiAirCap < 0) throw new FormatException("anti_air_cap must not be negative; 0 means the commander never builds anti-air");
             antiAirGarrison = ReqInt(m, "anti_air_garrison");
             if (antiAirGarrison < 0) throw new FormatException("anti_air_garrison must not be negative");
+            // P8-22 (ADR-079): required for the same reason as the air answer's
+            // two keys. 0 is allowed and means the commander keeps only the one
+            // faction defence its ladder buys and none from surplus.
+            factionDefenceCap = ReqInt(m, "faction_defence_cap");
+            if (factionDefenceCap < 0) throw new FormatException("faction_defence_cap must not be negative");
         }
         else
         {
@@ -428,6 +439,15 @@ public static class DataLoader
             harvesters = ReqInt(m, "harvesters_per_refinery");
             if (harvesters < 1) throw new FormatException("harvesters_per_refinery must be at least 1");
             handicap = ReqInt(m, "starting_credit_handicap");
+            // P8-22 (ADR-079): what the commander spends, required like every
+            // rung key. A cap of 1 is the ladder's own one barracks and one
+            // factory and nothing more; below 1 would forbid the first.
+            producerCap = ReqInt(m, "producer_cap");
+            if (producerCap < 1) throw new FormatException("producer_cap must be at least 1; the ladder's own barracks and factory are the first of each");
+            surplusReserve = ReqInt(m, "surplus_reserve");
+            if (surplusReserve < 0) throw new FormatException("surplus_reserve must not be negative");
+            surplusWindow = ReqInt(m, "surplus_window_ticks");
+            if (surplusWindow < 0) throw new FormatException("surplus_window_ticks must not be negative");
         }
 
         return new AiTuningData(
@@ -442,7 +462,11 @@ public static class DataLoader
             StartingCreditHandicap: handicap,
             Notes: m.TryGetValue("notes", out var n) ? n : "",
             AntiAirCap: antiAirCap,
-            AntiAirGarrison: antiAirGarrison);
+            AntiAirGarrison: antiAirGarrison,
+            ProducerCap: producerCap,
+            SurplusReserve: surplusReserve,
+            SurplusWindowTicks: surplusWindow,
+            FactionDefenceCap: factionDefenceCap);
     }
 
     public static AiTuningData LoadAiTuningFile(string path) => ParseAiTuning(File.ReadAllText(path));
@@ -906,7 +930,8 @@ public static class AiCatalogue
     /// a commander that plays the compiled numbers regardless.</summary>
     public static AiTuningDef ToTuningDef(DataLoader.AiTuningData a)
         => new(a.Kind, a.ActEvery, a.WaveSize, a.BeatNumerator, a.BeatDenominator,
-               a.HarvestersPerRefinery, a.StartingCreditHandicap, a.AntiAirCap, a.AntiAirGarrison);
+               a.HarvestersPerRefinery, a.StartingCreditHandicap, a.AntiAirCap, a.AntiAirGarrison,
+               a.ProducerCap, a.SurplusReserve, a.SurplusWindowTicks, a.FactionDefenceCap);
 }
 
 /// <summary>

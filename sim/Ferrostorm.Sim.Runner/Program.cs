@@ -6630,6 +6630,14 @@ int AiTuningGate()
         if (got.AntiAirCap != want.AntiAirCap) return Fail(Drift("anti_air_cap", got.AntiAirCap, want.AntiAirCap));
         if (got.AntiAirGarrison != want.AntiAirGarrison)
             return Fail(Drift("anti_air_garrison", got.AntiAirGarrison, want.AntiAirGarrison));
+        // P8-22 (ADR-079): what the commander spends, three rung numbers and
+        // one personality number.
+        if (got.ProducerCap != want.ProducerCap) return Fail(Drift("producer_cap", got.ProducerCap, want.ProducerCap));
+        if (got.SurplusReserve != want.SurplusReserve) return Fail(Drift("surplus_reserve", got.SurplusReserve, want.SurplusReserve));
+        if (got.SurplusWindowTicks != want.SurplusWindowTicks)
+            return Fail(Drift("surplus_window_ticks", got.SurplusWindowTicks, want.SurplusWindowTicks));
+        if (got.FactionDefenceCap != want.FactionDefenceCap)
+            return Fail(Drift("faction_defence_cap", got.FactionDefenceCap, want.FactionDefenceCap));
     }
 
     // --- 2. The runtime reads the REGISTERED table, not the compiled one.
@@ -6813,6 +6821,22 @@ int AiTuningGate()
     if (bumpedCap.CatalogueChecksum == stock1 || bumpedGarrison.CatalogueChecksum == stock1)
         return Fail("aituning: a one-unit change to a personality's anti_air_cap or anti_air_garrison must change the "
                     + "catalogue checksum, or two peers can answer the same air raid with different armies");
+    // P8-22 (ADR-079): and what the commander spends, each by one.
+    var spendBumps = new (string Key, AiTuningDef Def, int Id)[]
+    {
+        ("producer_cap", AiTuning.Normal with { ProducerCap = AiTuning.Normal.ProducerCap + 1 }, AiTuning.NormalId),
+        ("surplus_reserve", AiTuning.Normal with { SurplusReserve = AiTuning.Normal.SurplusReserve + 1 }, AiTuning.NormalId),
+        ("surplus_window_ticks", AiTuning.Normal with { SurplusWindowTicks = AiTuning.Normal.SurplusWindowTicks + 1 }, AiTuning.NormalId),
+        ("faction_defence_cap", AiTuning.Standard with { FactionDefenceCap = AiTuning.Standard.FactionDefenceCap + 1 }, AiTuning.StandardId),
+    };
+    foreach (var (key, def, id) in spendBumps)
+    {
+        var bumped = new World(4316);
+        bumped.RegisterAiTuning(id, def);
+        if (bumped.CatalogueChecksum == stock1)
+            return Fail($"aituning: a one-unit change to {key} must change the catalogue checksum, or two peers can spend "
+                        + "the same bank on different bases and call it agreement");
+    }
 
     // --- 4. Registration after tick 0 is refused, matching units, structures
     //        and weapons. A commander re-tuned mid-match is a silent replay
@@ -6879,8 +6903,9 @@ int AiTuningGate()
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
-                      + "handicap or one unit of either anti-air number, which is what stops two LAN peers playing "
-                      + "different commanders and calling it agreement");
+                      + "handicap, one unit of either anti-air number or one unit of any of the four spending numbers "
+                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap), which is what stops "
+                      + "two LAN peers playing different commanders and calling it agreement");
     return 0;
 }
 

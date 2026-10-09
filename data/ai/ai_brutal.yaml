@@ -28,3 +28,10 @@ beat_numerator: 2
 beat_denominator: 3
 harvesters_per_refinery: 2
 starting_credit_handicap: 5000
+# P8-22 (ADR-079, decision D7): producer_cap 3 is D7's Brutal cap, Hard's,
+# inherited for the reason the mining is: each rung adds one thing, and
+# Brutal's is the declared handicap above. surplus_reserve and
+# surplus_window_ticks are Easy's, with the same derivation.
+producer_cap: 3
+surplus_reserve: 4500
+surplus_window_ticks: 1800
