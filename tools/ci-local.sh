@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run every gate CI runs, locally, in CI's own form.
 #
-# WHY THIS EXISTS. A bare `dotnet run` is ONE of CI's eleven sim steps, and
+# WHY THIS EXISTS. A bare `dotnet run` is ONE of the sim steps CI runs, and
 # three merges went to main red because "the battery is green" was read as "CI
 # will pass". They are not the same claim and never were:
 #
@@ -95,6 +95,13 @@ step "balance gate"
 if dotnet build tools/Ferrostorm.Balance -c Release >$L/bb.txt 2>&1 \
    && dotnet run --project tools/Ferrostorm.Balance -c Release --no-build >$L/balance.txt 2>&1; then ok
 else bad; tail -6 $L/balance.txt; fi
+
+# P8-72: F8's two binding halves, the superweapon's launch rate and its first
+# launch (ADR-073, D33). P8-64's first landing took the first launch under its
+# bar with every automated signal green, because this gate ran only when
+# someone remembered it. 72 whole AI matches, about 35 s on ten threads, so it
+# runs last; CI runs it as the last step of its ubuntu determinism leg.
+run_mode pillargate    "pillargate --bind"
 
 echo
 if [ "$fail" -eq 0 ]; then
