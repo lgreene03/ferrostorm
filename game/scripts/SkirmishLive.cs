@@ -3096,10 +3096,12 @@ public partial class SkirmishLive : Node3D
     public bool BarkFor(int id, BarkOrder order)
     {
         if ((uint)id >= (uint)_world.EntityCount) return false;
-        int owner = _world.Entities[id].PlayerId;
-        if (owner != LocalPlayerId) return false;
+        // The entity's own PlayerId against LocalPlayerId, never through a
+        // local copy: CI's hardcoded-seat guard reads the shape
+        // `PlayerId != <literal>`, and a copy hides a literal seat from it.
+        if (_world.Entities[id].PlayerId != LocalPlayerId) return false;
         if (BarkClassOf(id) is not { } cls) return false;
-        string faction = _world.FactionOf(owner) == World.FactionSodality ? "sod" : "dir";
+        string faction = _world.FactionOf(_world.Entities[id].PlayerId) == World.FactionSodality ? "sod" : "dir";
         string key = $"bark_{faction}_{BarkClassNames[(int)cls]}_{BarkOrderNames[(int)order]}";
         int turn = _barkTurn.GetValueOrDefault(key);
         if (!_audio.Bark($"{key}_{turn % BarkVariants + 1}", order != BarkOrder.Select)) return false;
