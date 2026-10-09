@@ -55,12 +55,14 @@ using Ferrostorm.Sim;
 //   laddergate         - P8-13, F4: each rung beats the rung below in at least 70 per cent of decided games from both seats (registered non-binding until P8-26)
 //   aiairgate          - P8-13, F3: three Strike Flyers raiding harvesters from t=4500 on skirmish-01 die and an AI harvester survives them, Normal and Hard, both factions, each beside a printed no-raid control (binding since P8-17)
 //   seatfairgate       - P8-13, F5: Normal mirrors on every two-seat map with starts swapped keep each seat's income within 15 per cent and the win split within 60/40 by seat and by start (non-binding until F5 is met: P8-21 oriented the placement scan and left both clauses unmet, ADR-075)
-//   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts)
+//   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts);
+//                        seats=4 (P8-66) plays the four-seat maps with every seat, seat 0 against each other seat under the reflection or half turn relating their starts, then each seat's income to t=9000
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
+//   frozenprobe        - P8-66: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
 //                        rebaseline=1 prints the proxy budget lines for the matches as they play now
@@ -17529,6 +17531,202 @@ int PillarProbe()
     return 0;
 }
 
+int FrozenProbe()
+{
+    // P8-66: WALKERS THAT REPORT MOVING AND DO NOT MOVE, over
+    // pillargate's sweep (every shipped map, the four faction pairings, both
+    // start orientations, Normal against Normal, to 27000 ticks or a result).
+    // P8-53's measurement-only counter, promoted: a unit or harvester of seat 0
+    // or 1 that reports Moving and stands at one position, to the last unit,
+    // for FrozenTicks consecutive ticks is counted once per match. Each is
+    // given a cause:
+    //   held by an exact cancellation: World.ExactTiesThisTick named it
+    //     during the freeze (its step and its push cancelled exactly) and it
+    //     did not move, the case P8-66 exists to end;
+    //   at its target: it stands on its own target, so it takes no step, and
+    //     something re-arms Moving every tick;
+    //   no route from its cell: the sim's own flow field gives it no next cell
+    //     (the footprint field when a harvester walks onto its refinery), so
+    //     it takes no step and is re-armed every tick;
+    //   other: anything else, listed in full.
+    // Freezing is not the whole of the tie class: a walker held in an exact
+    // tie can drift a unit in the last place a tick along the line it is held
+    // on and never count as frozen. So the probe also counts walkers in an
+    // exact cancellation on FrozenTicks or more consecutive ticks, and the
+    // exact ties in all. A walker can also be caught in a cycle, sidestepped,
+    // walked back onto the line and sidestepped again, which neither count
+    // sees because it moves and its ties are not consecutive; so the probe
+    // counts walkers in an exact cancellation on at least half the ticks of
+    // some window of FrozenTicks ticks (in a cycle), and walkers in one on
+    // FrozenTicks or more ticks of one match in all (which a harvester
+    // meeting the same tie on every trip can reach without any cycle), and
+    // names the walker of each match most often in one, with its densest
+    // window. It reads the world only (World.ExactTiesThisTick is an
+    // observation), so the sweep plays exactly as pillargate's does. A probe
+    // by ADR-061's rule: it prints and asserts nothing.
+    const int FrozenTicks = 450;
+    string root = MeasureRoot();
+    var o = MeasureOptions("frozenprobe", false, "maps", "pairs", "orient", "jobs");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
+    Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), walkers reporting Moving and standing "
+        + $"at one position for {FrozenTicks} or more consecutive ticks. A probe: nothing asserts.");
+    string[] causes = { "held by an exact cancellation", "at its target", "no route from its cell", "other" };
+
+    string CauseOf(World w, in Entity e, bool inTie)
+    {
+        if (inTie) return causes[0];
+        if (e.X == e.TargetX && e.Y == e.TargetY) return causes[1];
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y), tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
+        if (!e.UseFlow || (cx == tcx && cy == tcy) || !w.Map.InBounds(tcx, tcy)) return causes[3];
+        if (e.Kind == EntityKind.Harvester && e.HState == HarvestState.ToRefinery && e.RefineryId >= 0 && e.RefineryId < w.EntityCount)
+        {
+            var r = w.Entities[e.RefineryId];
+            if (r.Alive && r.X == e.TargetX && r.Y == e.TargetY && w.Map.IsBlocked(tcx, tcy))
+            {
+                var dock = FlowField.BuildToFootprint(w.Map, w.AnchorOf(r.X, r.StructType), w.AnchorOf(r.Y, r.StructType), w.FootprintOf(r.StructType));
+                return !dock.IsGoal(w.Map, cx, cy) && dock.NextCell(w.Map, cx, cy) < 0 ? causes[2] : causes[3];
+            }
+        }
+        // A unit with an attack target or a contact act walks routes this probe
+        // does not model, so it is left to "other" rather than guessed at.
+        if (e.Kind == EntityKind.Unit && e.ExplicitTarget != -1) return causes[3];
+        return FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, cx, cy) < 0 ? causes[2] : causes[3];
+    }
+
+    var sw = Stopwatch.StartNew();
+    var lines = new List<string>[specs.Count];
+    var harvesters = new int[specs.Count];
+    var units = new int[specs.Count];
+    var byCause = new int[specs.Count, causes.Length];
+    var tieHeld = new int[specs.Count];
+    var ties = new long[specs.Count];
+    var recurrent = new int[specs.Count];
+    var cycling = new int[specs.Count];
+    var mostWhat = new string[specs.Count];
+    var longest = new int[specs.Count];
+    var longestWhat = new string[specs.Count];
+    RunOrdered(specs.Count, jobs, i =>
+    {
+        var s = specs[i];
+        var found = new List<string>();
+        var still = new Dictionary<int, (Fix64 X, Fix64 Y, int Since, bool InTie)>();
+        var counted = new HashSet<int>();
+        var run = new Dictionary<int, int>();
+        var runCounted = new HashSet<int>();
+        var now = new HashSet<int>();
+        // Per walker: ticks in an exact cancellation in all, the first and
+        // last of them, and where it stood on each.
+        var fires = new Dictionary<int, (int N, int First, int Last, Fix64 X0, Fix64 Y0, Fix64 X1, Fix64 Y1, string Kind)>();
+        // Per walker: its ticks in one in the last FrozenTicks ticks, and the
+        // most there have ever been.
+        var window = new Dictionary<int, Queue<int>>();
+        var densest = new Dictionary<int, int>();
+        var cycled = new HashSet<int>();
+        int h = 0, u = 0, held = 0, top = 0;
+        long fired = 0;
+        string topWhat = "";
+        var r = PlayMeasured(root, s, w =>
+        {
+            now.Clear();
+            foreach (int k in w.ExactTiesThisTick) now.Add(k);
+            fired += now.Count;
+            foreach (int k in run.Keys.Where(k => !now.Contains(k)).ToList()) run.Remove(k);
+            foreach (int k in now)
+            {
+                int n = run[k] = run.GetValueOrDefault(k) + 1;
+                if (n >= FrozenTicks && runCounted.Add(k)) held++;
+                var e = w.Entities[k];
+                fires[k] = fires.TryGetValue(k, out var f)
+                    ? (f.N + 1, f.First, w.Tick, f.X0, f.Y0, e.X, e.Y, f.Kind)
+                    : (1, w.Tick, w.Tick, e.X, e.Y, e.X, e.Y, $"{e.Kind} of seat {e.PlayerId}");
+                if (!window.TryGetValue(k, out var q)) window[k] = q = new Queue<int>();
+                q.Enqueue(w.Tick);
+                while (q.Peek() <= w.Tick - FrozenTicks) q.Dequeue();
+                if (q.Count > densest.GetValueOrDefault(k)) densest[k] = q.Count;
+                if (2 * q.Count >= FrozenTicks) cycled.Add(k);
+            }
+            for (int k = 0; k < w.EntityCount; k++)
+            {
+                var e = w.Entities[k];
+                if (!(e.Alive && e.Moving && e.PlayerId is 0 or 1 && e.Kind is EntityKind.Unit or EntityKind.Harvester))
+                {
+                    still.Remove(k);
+                    continue;
+                }
+                if (!still.TryGetValue(k, out var st) || st.X != e.X || st.Y != e.Y)
+                {
+                    still[k] = (e.X, e.Y, w.Tick, false);
+                    continue;
+                }
+                if (now.Contains(k) && !st.InTie) still[k] = st = (st.X, st.Y, st.Since, true);
+                int dur = w.Tick - st.Since;
+                if (dur > top)
+                {
+                    top = dur;
+                    topWhat = $"{e.Kind} of seat {e.PlayerId} at ({e.X},{e.Y}) from t={st.Since}";
+                }
+                if (dur < FrozenTicks || !counted.Add(k)) continue;
+                if (e.Kind == EntityKind.Harvester) h++; else u++;
+                string cause = CauseOf(w, in e, st.InTie);
+                byCause[i, Array.IndexOf(causes, cause)]++;
+                found.Add($"    seat {e.PlayerId} (start {StartOf(s, e.PlayerId)}) {e.Kind} #{k} at ({e.X},{e.Y}), {e.HState}, target "
+                          + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}");
+            }
+        });
+        lines[i] = found;
+        harvesters[i] = h;
+        units[i] = u;
+        tieHeld[i] = held;
+        ties[i] = fired;
+        recurrent[i] = fires.Values.Count(f => f.N >= FrozenTicks);
+        cycling[i] = cycled.Count;
+        // The walker most often in an exact cancellation, the lowest id on
+        // equal counts, so the line does not depend on the dictionary's order.
+        int most = -1;
+        foreach (var (k, f) in fires)
+            if (most < 0 || f.N > fires[most].N || (f.N == fires[most].N && k < most)) most = k;
+        if (most >= 0)
+        {
+            var f = fires[most];
+            mostWhat[i] = $"#{most} {f.Kind}, in one on {f.N} ticks from t={f.First} at ({f.X0},{f.Y0}) to t={f.Last} at ({f.X1},{f.Y1}), "
+                        + $"at most {densest[most]} in any {FrozenTicks} ticks";
+        }
+        longest[i] = top;
+        longestWhat[i] = topWhat;
+        return r;
+    }, (i, r) =>
+    {
+        var s = r.Spec;
+        Console.WriteLine($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} o{(s.Swap ? 1 : 0)}: frozen {harvesters[i]} harvesters, "
+            + $"{units[i]} units; in an exact cancellation on {FrozenTicks}+ consecutive ticks {tieHeld[i]}, in a cycle {cycling[i]}; "
+            + $"exact ties {ties[i]}, walkers in one on {FrozenTicks}+ ticks in all {recurrent[i]}; ended t={r.EndTick}");
+        foreach (var line in lines[i]) Console.WriteLine(line);
+        if (mostWhat[i] != null) Console.WriteLine($"    most often in an exact cancellation: {mostWhat[i]}");
+    });
+    sw.Stop();
+    int best = Enumerable.Range(0, specs.Count).OrderByDescending(i => longest[i]).ThenBy(i => i).First();
+    Console.WriteLine($"frozenprobe: frozen (Moving, at one position for {FrozenTicks}+ consecutive ticks, each walker once per match): "
+        + $"{harvesters.Sum()} harvesters and {units.Sum()} units");
+    for (int c = 0; c < causes.Length; c++)
+    {
+        int n = 0;
+        for (int i = 0; i < specs.Count; i++) n += byCause[i, c];
+        Console.WriteLine($"  {causes[c]}: {n}");
+    }
+    Console.WriteLine($"frozenprobe: walkers in an exact cancellation on {FrozenTicks} or more "
+        + $"consecutive ticks: {tieHeld.Sum()}; in a cycle (on half the ticks of some {FrozenTicks}-tick window): {cycling.Sum()}; "
+        + $"on {FrozenTicks} or more ticks of one match in all: {recurrent.Sum()}; exact ties in all: {ties.Sum()}");
+    Console.WriteLine(longest[best] == 0 ? "frozenprobe: no walker stood still while reporting Moving"
+        : $"frozenprobe: longest freeze {longest[best]} ticks, {specs[best].Map} {FactionLetter(specs[best].F0)}{FactionLetter(specs[best].F1)} "
+          + $"o{(specs[best].Swap ? 1 : 0)}: {longestWhat[best]}");
+    Console.WriteLine($"frozenprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
 // P8-18 (ADR-073): F8's figures, computed ONCE for the probe that prints them
 // and the gate that binds them, so the gate's figure is the probe's figure by
 // construction. The first launch of a match is the earlier of its two seats'
@@ -17798,7 +17996,12 @@ int MirrorProbe()
     // of breaks found by neutralising each in turn in an uncommitted build, and
     // ADR-076 the breaks measured after each of its stages.
     string root = MeasureRoot();
-    var o = MeasureOptions("mirrorprobe", false, "maps", "pairs", "ticks", "show");
+    var o = MeasureOptions("mirrorprobe", false, "maps", "pairs", "ticks", "show", "seats");
+    // P8-66: seats=4 plays the four-seat maps instead, comparing
+    // seat 0 with each other seat under the map symmetry that relates them.
+    int seatCount = OptInt(o, "seats", 2);
+    if (seatCount == 4) return MirrorProbeFour(root, o);
+    if (seatCount != 2) throw new FormatException($"seats={seatCount}: expected 2 (the two-seat maps, the default) or 4 (the four-seat maps)");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps")).Where(m => LoadMeasureMap(root, m, false).Starts.Count == 2).ToArray();
     var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,SS");
     int ticks = OptInt(o, "ticks", MeasurementHarness.IncomeWindowTicks);
@@ -17907,6 +18110,190 @@ int MirrorProbe()
                 break;
             }
             if (!broke) Console.WriteLine($"{m} {pr.Name}: the mirror held to t={w.Tick}");
+        }
+    }
+    Console.WriteLine($"mirrorprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s");
+    return 0;
+}
+
+int MirrorProbeFour(string root, Dictionary<string, string> o)
+{
+    // P8-66: mirrorprobe on the FOUR-seat maps (seats=4). A mirror2
+    // map relates seat 0 to one seat by the half turn and to the other two by
+    // a reflection in one axis each, and ADR-075's per-axis placement frames
+    // and ADR-076's per-axis rules are exact under both kinds; P8-66's
+    // tie-break for an exact cancellation must be too, which is what this
+    // probe is for. This plays all four seats (seat 0's side on
+    // even seats and seat 1's on odd ones, so DD and SS are four-way mirrors)
+    // and, after every step, compares seat 0 with each other seat under the
+    // symmetry relating their starts, exactly as the two-seat probe compares
+    // seat 0 with seat 1, printing each relation's first break once and
+    // whether a walker in an exact cancellation on that tick is among what
+    // differs. It then plays
+    // on to the end of the window and prints each seat's income, F5's
+    // definition (harvest deliveries and the outpost trickle), so a cost the
+    // first break cannot show is read as the income gap between the seats.
+    // A probe by ADR-061's rule: it prints and asserts nothing.
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps")).Where(m => LoadMeasureMap(root, m, false).Starts.Count == 4).ToArray();
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,SS");
+    int ticks = OptInt(o, "ticks", MeasurementHarness.IncomeWindowTicks);
+    int show = OptInt(o, "show", 4);
+    var sw = Stopwatch.StartNew();
+    foreach (var m in maps)
+    {
+        var map = LoadMeasureMap(root, m, false);
+        const int seats = 4;
+        var s0 = map.Starts[0];
+        var rel = new (bool Fx, bool Fy, string Name)[seats];
+        for (int k = 1; k < seats; k++)
+        {
+            var sk = map.Starts[k];
+            bool fx = sk.Cx == map.Width - 1 - s0.Cx, fy = sk.Cy == map.Height - 1 - s0.Cy;
+            if (!(fx || fy) || sk != (fx ? map.Width - 1 - s0.Cx : s0.Cx, fy ? map.Height - 1 - s0.Cy : s0.Cy))
+                throw new FormatException($"mirrorprobe: {m}'s start {k} {sk} is not an image of start 0 {s0} under a reflection or the half turn");
+            rel[k] = (fx, fy, fx && fy ? "the half turn" : fx ? "the reflection in x" : "the reflection in y");
+        }
+        foreach (var pr in pairs)
+        {
+            var w = map.BuildWorld(2026, players: seats, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
+            for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? pr.F0 : pr.F1);
+            map.PlaceSkirmishStart(w, 8000);
+            var ais = new SkirmishAI[seats];
+            for (int p = 0; p < seats; p++) ais[p] = MeasureCommander(p, AiDifficulty.Normal, 0, w);
+            for (int p = 0; p < seats; p++)
+            {
+                long handicap = SkirmishAI.StartingCreditHandicap(AiDifficulty.Normal, w);
+                if (handicap > 0) w.GrantCredits(p, handicap);
+            }
+            long W = Fix64.FromInt(map.Width).Raw, H = Fix64.FromInt(map.Height).Raw;
+            string P(long raw) => (raw / 4294967296.0).ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+            string Sig(in Entity e, bool fx, bool fy)
+            {
+                long x = fx ? W - e.X.Raw : e.X.Raw, y = fy ? H - e.Y.Raw : e.Y.Raw;
+                long tx = fx ? W - e.TargetX.Raw : e.TargetX.Raw, ty = fy ? H - e.TargetY.Raw : e.TargetY.Raw;
+                return $"{e.Kind}/{e.StructType}/{e.UnitType} ({P(x)},{P(y)}) hp {e.Hp} {e.HState} carry {e.Carry} "
+                     + $"moving {(e.Moving ? 1 : 0)} cooldown {e.Cooldown} state {e.StateTicks} build {e.BuildProgress} "
+                     + $"ready {e.ReadyStructure} target ({P(tx)},{P(ty)}) flow {(e.UseFlow ? 1 : 0)}";
+            }
+            var broken = new bool[seats];
+            var firstCmdDiff = new string[seats];
+            int firstTie = -1;
+            var income = new long[seats];
+            var cmds = new List<Command>();
+            var unloading = new List<(int Id, int Carry)>();
+            Console.WriteLine($"{m} {pr.Name}: four seats, seat 0 against seat 1 under {rel[1].Name}, seat 2 under {rel[2].Name}, seat 3 under {rel[3].Name}");
+            while (w.Tick < ticks && !MatchOver(w))
+            {
+                cmds.Clear();
+                for (int p = 0; p < seats; p++) ais[p].Act(w, cmds);
+                // Each seat's commands written in seat 0's frame.
+                var said = new List<string>[seats];
+                for (int p = 0; p < seats; p++) said[p] = new List<string>();
+                foreach (var c in cmds)
+                {
+                    if (c.PlayerId is < 0 or >= seats) continue;
+                    var (fx, fy, _) = c.PlayerId == 0 ? (false, false, "") : rel[c.PlayerId];
+                    bool hasPos = c.X.Raw != 0 || c.Y.Raw != 0;
+                    long fp = c.Type == CommandType.PlaceStructure ? Fix64.FromInt(w.FootprintOf(c.AuxId)).Raw : 0;
+                    long x = hasPos && fx ? W - fp - c.X.Raw : c.X.Raw, y = hasPos && fy ? H - fp - c.Y.Raw : c.Y.Raw;
+                    string ent = c.EntityId >= 0 && c.EntityId < w.EntityCount ? Sig(w.Entities[c.EntityId], fx, fy) : "-";
+                    string aux = c.Type is CommandType.Attack or CommandType.Harvest && c.AuxId >= 0 && c.AuxId < w.EntityCount
+                        ? Sig(w.Entities[c.AuxId], fx, fy) : c.AuxId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    said[c.PlayerId].Add($"{c.Type} on [{ent}] at ({P(x)},{P(y)}) aux [{aux}]");
+                }
+                for (int k = 1; k < seats; k++)
+                    if (!broken[k] && firstCmdDiff[k] == null && !said[0].SequenceEqual(said[k]))
+                        firstCmdDiff[k] = $"  first command difference at t={w.Tick}:\n      seat 0: " + string.Join("\n              ", said[0])
+                            + $"\n      seat {k}: " + string.Join("\n              ", said[k]);
+                bool economy = w.Tick < MeasurementHarness.IncomeWindowTicks;
+                if (economy)
+                {
+                    unloading.Clear();
+                    for (int i = 0; i < w.EntityCount; i++)
+                    {
+                        var e = w.Entities[i];
+                        if (e.Alive && e.Kind == EntityKind.Harvester && e.PlayerId is >= 0 and < seats
+                            && e.HState == HarvestState.Unloading && e.Carry > 0)
+                            unloading.Add((i, e.Carry));
+                    }
+                }
+                w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+                if (firstTie < 0 && w.ExactTiesThisTick.Count > 0) firstTie = w.Tick;
+                if (economy)
+                {
+                    foreach (var (id, carry) in unloading)
+                    {
+                        var e = w.Entities[id];
+                        if (e.Alive && e.Carry == 0 && e.HState != HarvestState.Unloading) income[e.PlayerId] += carry;
+                    }
+                    int began = w.Tick - 1;
+                    if (began > 0 && began % World.TicksPerSecond == 0)
+                        for (int i = 0; i < w.EntityCount; i++)
+                        {
+                            var e = w.Entities[i];
+                            if (e.Alive && e.Kind == EntityKind.Outpost && e.PlayerId is >= 0 and < seats)
+                                income[e.PlayerId] += World.OutpostIncomePerSecond;
+                        }
+                }
+                for (int k = 1; k < seats; k++)
+                {
+                    if (broken[k]) continue;
+                    var (fx, fy, name) = rel[k];
+                    var a = new List<string>();
+                    var b = new List<string>();
+                    var fields = new Dictionary<(long, long), int>();
+                    for (int i = 0; i < w.EntityCount; i++)
+                    {
+                        var e = w.Entities[i];
+                        if (!e.Alive) continue;
+                        if (e.PlayerId == 0) a.Add(Sig(e, false, false));
+                        else if (e.PlayerId == k) b.Add(Sig(e, fx, fy));
+                        else if (e.PlayerId < 0 && e.Kind == EntityKind.FerriteField) fields[(e.X.Raw, e.Y.Raw)] = e.FerriteAmount;
+                    }
+                    // Walked in entity order, never in the dictionary's own order.
+                    var fieldDiff = new List<string>();
+                    for (int i = 0; i < w.EntityCount; i++)
+                    {
+                        var e = w.Entities[i];
+                        if (!e.Alive || e.Kind != EntityKind.FerriteField || e.PlayerId >= 0) continue;
+                        int partner = fields.TryGetValue((fx ? W - e.X.Raw : e.X.Raw, fy ? H - e.Y.Raw : e.Y.Raw), out int v) ? v : -1;
+                        if (partner != e.FerriteAmount)
+                            fieldDiff.Add($"field ({P(e.X.Raw)},{P(e.Y.Raw)}) holds {e.FerriteAmount}, its partner under {name} {partner}");
+                    }
+                    a.Sort(StringComparer.Ordinal);
+                    b.Sort(StringComparer.Ordinal);
+                    if (a.SequenceEqual(b) && fieldDiff.Count == 0 && w.Credits(0) == w.Credits(k)) continue;
+                    broken[k] = true;
+                    var onlyA = a.Except(b).ToList();
+                    var onlyB = b.Except(a).ToList();
+                    var stepped = new List<string>();
+                    foreach (int id in w.ExactTiesThisTick)
+                    {
+                        var e = w.Entities[id];
+                        if ((e.PlayerId == 0 && onlyA.Contains(Sig(e, false, false))) || (e.PlayerId == k && onlyB.Contains(Sig(e, fx, fy))))
+                            stepped.Add($"#{id} of seat {e.PlayerId}");
+                    }
+                    Console.WriteLine($"  seat 0 against seat {k} under {name}: the mirror breaks at t={w.Tick} (treasuries {w.Credits(0)} and {w.Credits(k)}); "
+                        + (stepped.Count > 0 ? $"{string.Join(", ", stepped)} in an exact cancellation on this tick, among what differs"
+                            : "no walker in an exact cancellation on this tick is among what differs"));
+                    if (firstCmdDiff[k] != null) Console.WriteLine(firstCmdDiff[k]);
+                    foreach (var s in onlyA.Take(show)) Console.WriteLine($"    seat 0 only: {s}");
+                    foreach (var s in onlyB.Take(show)) Console.WriteLine($"    seat {k} only: {s}");
+                    foreach (var s in fieldDiff.Take(show)) Console.WriteLine($"    {s}");
+                }
+            }
+            for (int k = 1; k < seats; k++)
+                if (!broken[k]) Console.WriteLine($"  seat 0 against seat {k} under {rel[k].Name}: the mirror held to t={w.Tick}");
+            Console.WriteLine($"  first exact tie anywhere: {(firstTie < 0 ? "none" : $"t={firstTie}")}; winner {(w.Winner >= 0 ? $"seat {w.Winner} at t={w.Tick}" : $"none by t={w.Tick}")}");
+            long lo = income.Min(), hi = income.Max();
+            Console.WriteLine($"  income to t={Math.Min(w.Tick, MeasurementHarness.IncomeWindowTicks)}: "
+                + string.Join(", ", Enumerable.Range(0, seats).Select(p => $"seat {p} {income[p]}"))
+                + $"; widest gap {(lo == 0 ? (hi == 0 ? "0" : "unbounded") : $"{100.0 * (hi - lo) / lo:F1}")} per cent of the smallest; against seat 0: "
+                + string.Join(", ", Enumerable.Range(1, seats - 1).Select(k =>
+                {
+                    long l = Math.Min(income[0], income[k]), h = Math.Max(income[0], income[k]);
+                    return $"seat {k} ({rel[k].Name}) {(l == 0 ? (h == 0 ? "0" : "unbounded") : $"{100.0 * (h - l) / l:F1}")}";
+                })));
         }
     }
     Console.WriteLine($"mirrorprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s");
@@ -18265,6 +18652,7 @@ return args.Length == 0
         "cheesegate" => Measured(CheeseGate),
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
+        "frozenprobe" => Measured(FrozenProbe),
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         // P8-30: F12's large-map perf run, the same conventions.
         "longmatchperf" => Measured(LongMatchPerfGate),
