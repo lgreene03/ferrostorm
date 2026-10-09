@@ -2285,7 +2285,12 @@ int SelfTest()
     // along the line through both centres, is pushed back as far as it steps:
     // east and west along a row and north-east on a diagonal (mission-01's
     // harvester was the diagonal). Two walkers meeting head on along a row
-    // push each other back the same way. A straight Move has no stall
+    // each push the other back along it. Standing in one sector they take the
+    // same hand, each its own right, so they go opposite ways in world terms;
+    // and as each push is applied at once in entity order, here only the
+    // first visited is in a tie: it is sidestepped, and the push it then
+    // gives the other is off that walker's line and carries it to its own
+    // right, the other way (ADR-078, "Harder"). A straight Move has no stall
     // backstop, so without the tie-break each stands there for good. With it,
     // a walker sidesteps to the side its sector picks (every walker here
     // stands where that is its own right), goes round and arrives, and every
@@ -2293,7 +2298,9 @@ int SelfTest()
     // keyed on the walker's heading alone, on a world axis or on entity ids
     // would break. One more tie stands on the centre line, where a reflection
     // maps the walker onto itself: the tie-break must leave it, and its
-    // images, exactly as they are.
+    // images, exactly as they are. Every image is spawned in its walker's
+    // order, so this holds the claim per walker and cannot see twins whose
+    // ids are inverted (ADR-078).
     {
         const int N = 96;
         var tw = new World(1, N, N, players: 1);

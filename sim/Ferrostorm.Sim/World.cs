@@ -6035,11 +6035,14 @@ public sealed partial class World
     /// <summary>
     /// P8-66 (ADR-078): movement's tie-break for an exact cancellation.
     /// MovementSystem steps a walker towards its aim, and SeparationSystem then
-    /// pushes it away from whatever it overlaps. When that push lies exactly
-    /// along the step's line (their cross product is zero to the last unit),
-    /// points against it and is at least as long as it, the push undoes the
-    /// whole step and has no sideways part to steer the walker round by, and
-    /// since ADR-077 made the arithmetic symmetric nothing else supplies one,
+    /// pushes it away from whatever it overlaps. When that push lies along
+    /// the step's line as the truncated products see it (the two halves of
+    /// their cross product, each truncated toward zero, are equal, so a push
+    /// a few units in the last place off the line counts as on it; that is
+    /// deterministic, and odd, so a twin's test agrees), points against it
+    /// and is at least as long as it, the push undoes the whole step and has
+    /// no sideways part to steer the walker round by, and since ADR-077 made
+    /// the arithmetic symmetric nothing else supplies one,
     /// so the walker stays on that line for good. A harvester steps a second
     /// time in HarvestSystem, so it is held by a push twice its first step,
     /// its second step returning it exactly to where it began, as mission-01's
@@ -6059,10 +6062,15 @@ public sealed partial class World
     /// map's starts (ADR-076) keeps the sector's sign and turns the step
     /// round; the reflections relating skirmish-09's seats, and the diagonal
     /// reflection of the balance tool's mirror arena, flip the sign exactly as
-    /// they turn a walker's right into its left. So a walker and any twin
-    /// sidestep as each other's image (truncating multiplication and division
-    /// are odd since ADR-077, and the lengths are square roots of sums of
-    /// squares). On one of those four lines the sign is zero and the tie is
+    /// they turn a walker's right into its left. So a walker and any twin,
+    /// given mirrored inputs, sidestep as each other's image (truncating
+    /// multiplication and division are odd since ADR-077, and the lengths are
+    /// square roots of sums of squares). That holds per walker; across a tick
+    /// it also needs SeparationSystem, which applies each push at once in
+    /// entity order, to visit twins in mirrored order, and twins whose ids are
+    /// inverted can part through a tie between them (the id-order class of
+    /// ADR-075 and P8-54). It holds only for symmetries that fix the map
+    /// centre. On one of those four lines the sign is zero and the tie is
     /// left as it is: there a reflection can map the walker onto itself, and
     /// no rule could pick a side exactly. The walker's own heading alone would
     /// not do, since a reflection turns right into left (it failed the balance
