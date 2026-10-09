@@ -1,5 +1,5 @@
 # ADR-077: Fix64 multiplication truncates toward zero, so a negative product is the exact negation of its positive twin
-- Status: **Ratified under D38** of docs/tickets/P8-formidable-tracker.md (row P8-53), 2026-10-09, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with conditions of 2026-10-08 (section "Architect sign-off" below), in D38's pull request from branch `claude/p8-53-trunc-shelter-on`, whose number is recorded there when it opens. Proposed on 2026-10-08 on the measured matrix and its independent check. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md). It lands as stage 2 of the four staged commits D38 takes in that one pull request: stage 1 flips ADR-075's frame (its amendment of 2026-10-08), this stage changes the multiplication, stage 3 re-lands ADR-076 clause 3 (P8-64), and stage 4 amends that clause so the exit search has no blind spot (the Architect's condition C1). Conditions C1 to C5 are met in that pull request and D38 is read again at its final head (section "At the final head: D38 read again"); C6 is its CI and merge hygiene. Drafted by the implementer agent.
+- Status: **Ratified under D38** of docs/tickets/P8-formidable-tracker.md (row P8-53), 2026-10-09, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with conditions of 2026-10-08 (section "Architect sign-off" below), in D38's pull request 169 (branch `claude/p8-53-trunc-shelter-on`). Proposed on 2026-10-08 on the measured matrix and its independent check. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md). It lands as stage 2 of the four staged commits D38 takes in that one pull request: stage 1 flips ADR-075's frame (its amendment of 2026-10-08), this stage changes the multiplication, stage 3 re-lands ADR-076 clause 3 (P8-64), and stage 4 amends that clause so the exit search has no blind spot (the Architect's condition C1). Conditions C1 to C5 are met in that pull request and D38 is read again at its final head (section "At the final head: D38 read again"); C6 is its CI and merge hygiene. Drafted by the implementer agent.
 - Date: 2026-10-08
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: TDD s1 ("determinism is the product") and s9's replay compatibility promise; ADR-002 (the fixed-point library, whose multiply this is); doc 26 section 2 ("rotational symmetry for fairness"); criterion F5 and decisions D5, D36, D37 and D38 of the P8 tracker; ADR-075's cause 3 and its C7 frame clause
@@ -173,7 +173,7 @@ This is a rule of the sim, not a commander's choice, and it moves no catalogue v
 
 - Date: 2026-10-08
 - Reviewer: Systems Architect (A3).
-- Pull request: the D38 pull request from branch `claude/p8-53-trunc-shelter-on` into main. It carries three staged commits: ADR-075's amendment of 2026-10-08, ADR-077, and ADR-076 clause 3. The pull request is not open yet; its number goes here when it is. A determinism audit and an adversarial verifier each reviewed it independently.
+- Pull request: the D38 pull request from branch `claude/p8-53-trunc-shelter-on` into main. It carries three staged commits: ADR-075's amendment of 2026-10-08, ADR-077, and ADR-076 clause 3. It opened as pull request 169. A determinism audit and an adversarial verifier each reviewed it independently.
 - Verdict: **signed off with conditions.** ADR-077's multiplication is approved, and so are the golden moves of all three stages as attributed. The pull request does not merge while ADR-076 clause 3's own reversal reads met, and conditions 1 to 6 below must be met in it first.
 
 **Reproduced, on macOS only.** Each stage reproduces its committed 25 lines. The frame flip moves 5 goldens, the multiplication 13 and the exit 3, which is 13 against main in all, with one cause per stage. Undoing a stage restores the previous stage's 25: for stages 1 and 2 by restoring the stage's one sim file, for stage 3 by switching the exit back to the authored order. With stage 1's `Fix64.cs`, `selftest` fails by name. `tools/ci-local.sh` is green on 19 steps and `tools/verify-client.sh` passes. The catalogue checksum, the save format and the wire format do not move. Every gate figure quoted for the three stages reproduces. Windows and Linux are left to CI.
@@ -230,7 +230,7 @@ The trace puts the fault in the list, not the frame. `SpawnOffsets` probes two s
 - F11 goes to P8-33.
 - Q024 is settled before the first published build.
 
-**The pull request this section signs off.** The review above was of the branch's three staged commits at 84a64ce. What merges is D38's pull request from `claude/p8-53-trunc-shelter-on`, those three commits cherry-picked unchanged onto main at 9316aec, then two more: the fourth staged commit (condition C1, which also restates clause 3's reversal under C2) and a goldens-neutral commit meeting conditions C3 to C5 and recording this ratification. Its number goes here when it opens.
+**The pull request this section signs off.** The review above was of the branch's three staged commits at 84a64ce. What merges is D38's pull request from `claude/p8-53-trunc-shelter-on`, those three commits cherry-picked unchanged onto main at 9316aec, then two more: the fourth staged commit (condition C1, which also restates clause 3's reversal under C2) and a goldens-neutral commit meeting conditions C3 to C5 and recording this ratification. It is pull request 169.
 
 **Conditions C1 to C5 are met in that pull request (2026-10-09); C6 is its CI and merge hygiene.**
 
@@ -239,4 +239,32 @@ The trace puts the fault in the list, not the frame. `SpawnOffsets` probes two s
 - C3: D38 is read again at the final head and all five readings hold (section "At the final head: D38 read again"). The final figures equal stage 3's except `pillarprobe`'s, which replace stage 3's in ADR-076, this ADR, D38 and rows P8-53 and P8-64; ADR-075 quotes no `pillarprobe` figure, and its amendment of 2026-10-08 records its comparison read again at the final head.
 - C4: the final head's own frozen-walker figure, 6 harvesters and 14 units over `pillargate`'s sweep, stands beside stage 2's (12 and 51), flooring's in stage 2's frame (stage 1: 10 and 26) and flooring alone at the head (12 and 10).
 - C5: `lanaiseatsgate`'s printed sentence, and its failure message, call the pin what it is: first measured before commanders existed and re-pinned since only for named rule changes. `pillarprobe`'s clause 2 line counts a harvester Idle or stranded when no field with ferrite is left anywhere on the map apart from the Idle and stranded readings (at the head 0 and 0, with 6 counted apart). `World.ProductionExitOpen` returns false for an id out of range, a dead entity, a non-producer, or a Construction Yard, which places what it builds and so has no exit. Rows P8-68 (the unload, the decoy army and the tunnel deployment), P8-69 (`SetExitMove`'s clamp), P8-70 (`SpawnFreeHarvester`'s clamp) and P8-71 (the factory door faces) are filed with owners, and P8-72 (`pillargate --bind` in tools/ci-local.sh) for the item this section carries.
-- C6: open until the pull request's CI. `tools/ci-local.sh` and `tools/verify-client.sh` are re-run at the final head ("Verification"), nothing under `.claude/agent-memory` is committed, this ADR's status reads Ratified under D38, and the open-queue entries for ADR-075, ADR-076 and ADR-077 cite this section. All three CI jobs green on the pull request, with the determinism job reproducing the final head's 25 goldens on Windows and Linux, is still owed, and the pull request's number goes above when it opens.
+- C6: open until the pull request's CI. `tools/ci-local.sh` and `tools/verify-client.sh` are re-run at the final head ("Verification"), nothing under `.claude/agent-memory` is committed, this ADR's status reads Ratified under D38, and the open-queue entries for ADR-075, ADR-076 and ADR-077 cite this section. All three CI jobs green on the pull request, with the determinism job reproducing the final head's 25 goldens on Windows and Linux, is still owed; the pull request is 169.
+
+### Addendum, 2026-10-09: the pull request confirmed
+
+- Date: 2026-10-09
+- Reviewer: Systems Architect (A3).
+- Pull request: 169, D38's pull request from `claude/p8-53-trunc-shelter-on` into main. It carries four staged commits and one goldens-neutral commit, then the ADR-076 correction below (b0952a5) and a merge of main that resolves only the tracker. This confirmation covers that pull request, not any single commit on it.
+- Verdict: **conditions C1 to C5 are met, and D38 stands at the final head.** The pull request merges once C6 is met and the ADR-076 correction below is in it.
+
+I read the fourth staged commit and the goldens-neutral commit against the conditions as I worded them. An independent verifier measured every figure again in builds of its own.
+
+**C1 is met.** `FindProductionExit` keeps its eleven probes, then tries the cells they miss. That list is derived from `SpawnOffsets` when the type initialises, so the set searched is the eleven closed under both reflections through the footprint's centre. I recomputed the even-footprint list myself. It is the 25 offsets ADR-076 lists, and it covers every cell beside a 2x2 footprint and none inside it. `SpawnOffsets` is untouched.
+
+`spawngate` stage 10 builds the trap on the half turn and on each single axis, once with the open cell in x and once in y. It fails by name against the eleven-cell search and against either one-axis closure. Stage 6's wall now covers more cells, not fewer, and it still asserts the release at the mouth. `pillarprobe` reads 0 held, and 0 for the authored order alone. No golden moved, and restoring the eleven-cell search alone gives stage 3's 25.
+
+**C2, C4 and C5 are met.** C2's wording is in ADR-076 and reads 0 against 0. C4 gives the head's own figure (6 harvesters and 14 units) beside stage 2's and flooring's, in the same frame. C5's three fixes and its rows are in.
+
+**C3 justifies D38 at the final head.** All five readings hold:
+- every binding gate is green, with `mission` won;
+- the start split is 12/10;
+- the sheltered frame scores 28 of 32 at 9.06 per cent, against the centre-facing frame's 26 at 10.78;
+- flooring alone scores 26 of 32 with the start split at 6/15, so ADR-077's first reversal is not met;
+- `mirrorprobe` finds neither a production exit nor a multiplication split as a first break.
+
+Every figure except `pillarprobe`'s equals stage 3's. The margin is still one pair in one deterministic sample, and the firm ground is still the arithmetic.
+
+**One correction before merge (documentation only, goldens neutral).** ADR-076's "Clause 2's measurement, read again at the head" still quotes stage 3's 6 Idle and 6 stranded. It also still says the counter does not ask whether any field remains, which C5 has made false. It must give the final reading: 0 Idle and 0 stranded with a field left, and 6 counted apart with no field left, all on skirmish-03's Directorate mirror. Clause 2's reversal must say that it reads the first two figures, not the third. No re-measurement is needed.
+
+**Still owed (C6).** Nothing has run on Windows or Linux yet. All three CI jobs must go green, and the determinism job must reproduce the 25 goldens on both platforms. Write the pull request's number into this addendum, into ADR-077's status, and into the open-queue entries for ADR-075, ADR-076 and ADR-077. A golden mismatch in CI stops the merge under ADR-077's third reversal. Any commit beyond the correction above and those number edits comes back to me.
