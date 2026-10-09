@@ -245,6 +245,26 @@ def ui_confirm():
     return edge_fade(out)
 
 
+def ui_deny():
+    """Refusal (~180 ms), P8-42: the order was not taken. Two short low
+    blips falling a semitone, the inverse of ui_confirm's rising fourth, each
+    a sine with a little third and fifth harmonic for a soft reed buzz, the
+    first with a breath of band-passed noise on its onset. Aiming for a plain
+    'no' that reads on laptop speakers without the edge of an alarm, so a
+    refused click never sounds like an attack on the base."""
+    rng = random.Random(122)
+
+    def blip(freq, dur):
+        tone = mix(sine_sweep(dur, freq, freq * 0.98),
+                   gain(sine_sweep(dur, freq * 3.0, freq * 2.94), 0.22),
+                   gain(sine_sweep(dur, freq * 5.0, freq * 4.90), 0.08))
+        return exp_decay(tone, tau=0.035, attack=0.003)
+    breath = exp_decay(band_pass(white_noise(0.05, rng), 900.0, q=3.0), tau=0.012, attack=0.001)
+    first = mix(blip(330.0, 0.075), gain(breath, 0.15))
+    second = blip(311.0, 0.090)
+    return edge_fade(first + silence(0.012) + second, fade_out=0.02)
+
+
 def order_move():
     """Quick low blip (~100 ms): a single round sine around 300 Hz with a
     slight downward settle. Aiming for a neutral, unobtrusive 'order
@@ -1647,6 +1667,7 @@ def write_score(name, intensity, track):
 SOUNDS = [
     ("ui_click.wav", ui_click),
     ("ui_confirm.wav", ui_confirm),
+    ("ui_deny.wav", ui_deny),                      # P8-42
     ("order_move.wav", order_move),
     ("shot_rifle.wav", shot_rifle),
     ("shot_cannon.wav", shot_cannon),
