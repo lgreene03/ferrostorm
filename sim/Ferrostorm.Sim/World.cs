@@ -2147,6 +2147,18 @@ public sealed partial class World
         if (def.Kind == AiTuningKind.Rung && def.ProducerCap < 1)
             throw new FormatException(
                 $"AI tuning id {tuningId} has a producer cap of {def.ProducerCap}; the ladder's own barracks and factory are the first of each");
+        // P8-22 (ADR-079, condition 1): the loader's other three spending
+        // refusals, in its words, so a row registered in code is held to what
+        // a file is. 0 stays allowed for each, as it is in the loader.
+        if (def.Kind == AiTuningKind.Rung && def.SurplusReserve < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a surplus reserve of {def.SurplusReserve}; surplus_reserve must not be negative");
+        if (def.Kind == AiTuningKind.Rung && def.SurplusWindowTicks < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a surplus window of {def.SurplusWindowTicks}; surplus_window_ticks must not be negative");
+        if (def.Kind == AiTuningKind.Personality && def.FactionDefenceCap < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a faction defence cap of {def.FactionDefenceCap}; faction_defence_cap must not be negative");
         _aiTuning[tuningId] = def;
     }
 

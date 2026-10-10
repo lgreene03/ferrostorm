@@ -746,7 +746,10 @@ public sealed class SkirmishAI
             // army below cannot promise the same credits again.
             int extra = SurplusStructure(w, factories, barracksLine, factionDefence, factionDefences);
             int extraCost = extra != 0 ? w.GetStructureType(extra).Cost : 0;
-            if (extra != 0 && w.Credits(_player) >= _surplusReserve + extraCost)
+            // In long, as the treasury is: a reserve near the top of int plus
+            // a building's price would otherwise wrap negative and buy while
+            // ignoring the reserve (ADR-079, condition 1).
+            if (extra != 0 && w.Credits(_player) >= (long)_surplusReserve + extraCost)
             {
                 output.Add(new Command(w.Tick, _player, CommandType.BuildStructure, cy,
                     Fix64.Zero, Fix64.Zero, extra));

@@ -6906,6 +6906,36 @@ int AiTuningGate()
                     + $"3000 credits, filling the barracks' line of two, and it placed {resZero.Army} - the commander is "
                     + "reading the compiled reserve rather than the registered one");
 
+    //        2d, and the wrap (ADR-079, condition 1). The surplus building's
+    //        reserve test adds a reserve and a price; in int, a reserve at the
+    //        top of int plus the Bastion's price wraps negative and the test
+    //        passes on any treasury. The treasury here stands half a Bastion
+    //        above int.MaxValue: a reserve of int.MaxValue leaves less than the
+    //        price, so no Bastion, and the control's reserve of int.MaxValue less
+    //        the price leaves exactly the price, so one Bastion. The window is 0
+    //        in both, so the surplus counts at once.
+    long bastionCost;
+    {
+        var cw = new World(4317, 96, 64, players: 2);
+        bastionCost = cw.GetStructureType(cw.BuildableFactionDefence(0)).Cost;
+    }
+    long wrapCredits = int.MaxValue + bastionCost / 2;
+    (int Factories, int Defences, int Army) wrapAtTop, wrapControl;
+    try
+    {
+        wrapAtTop = SpendOrders(d => NoWindow(d) with { SurplusReserve = int.MaxValue }, Authored, wrapCredits, factoryBusy: false);
+        wrapControl = SpendOrders(d => NoWindow(d) with { SurplusReserve = int.MaxValue - (int)bastionCost }, Authored,
+                                  wrapCredits, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    if (wrapControl.Defences != 1)
+        return Fail($"aituning control: a treasury of {wrapCredits} against a reserve of int.MaxValue less the Bastion's price "
+                    + $"must buy the second Bastion, and it ordered {wrapControl.Defences}, so the wrap check below proves nothing");
+    if (wrapAtTop.Defences != 0)
+        return Fail($"aituning: a reserve of int.MaxValue must keep a treasury of {wrapCredits} off the Bastion, which costs "
+                    + $"{bastionCost}, and it ordered {wrapAtTop.Defences} - the surplus building's reserve test is adding in "
+                    + "int and wrapping");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -6965,6 +6995,38 @@ int AiTuningGate()
         if (!refused)
             return Fail("aituning: registering AI tuning after tick 0 must be refused, as it is for units, structures and weapons");
     }
+    //        And P8-22's three spending numbers that the loader refuses below
+    //        zero are refused by registration too (ADR-079, condition 1), so a
+    //        row offered in code is held to what a file is. Each beside its
+    //        control: the same row at 0, which the loader also accepts,
+    //        registers, so the guard is not refusing the key outright.
+    var spendRefusals = new (string Key, int Id, AiTuningDef Negative, AiTuningDef Zero)[]
+    {
+        ("surplus_reserve", AiTuning.NormalId, AiTuning.Normal with { SurplusReserve = -1 }, AiTuning.Normal with { SurplusReserve = 0 }),
+        ("surplus_window_ticks", AiTuning.NormalId, AiTuning.Normal with { SurplusWindowTicks = -1 },
+            AiTuning.Normal with { SurplusWindowTicks = 0 }),
+        ("faction_defence_cap", AiTuning.StandardId, AiTuning.Standard with { FactionDefenceCap = -1 },
+            AiTuning.Standard with { FactionDefenceCap = 0 }),
+    };
+    foreach (var (key, id, negative, zero) in spendRefusals)
+    {
+        var w = new World(4318);
+        string? refusal = null;
+        try { w.RegisterAiTuning(id, negative); }
+        catch (FormatException e) { refusal = e.Message; }
+        if (refusal is null)
+            return Fail($"aituning: registering a row with a {key} of -1 must be refused, as data/ai's loader refuses it, "
+                        + "or a def registered in code passes what a file cannot");
+        if (!refusal.Contains($"{key} must not be negative"))
+            return Fail($"aituning: the refusal of a negative {key} must say so in the loader's words, and it said: {refusal}");
+        try { w.RegisterAiTuning(id, zero); }
+        catch (FormatException e)
+        {
+            return Fail($"aituning control: a {key} of 0 is allowed, as the loader allows it, and registration refused it: {e.Message}");
+        }
+        if (w.GetAiTuning(id) != zero)
+            return Fail($"aituning control: the row with a {key} of 0 did not register");
+    }
 
     // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
     //        thirds is the value that could not be written as a whole
@@ -7018,9 +7080,12 @@ int AiTuningGate()
                       + $"{capOne.Factories} at 1, {defAuthored.Defences} second Bastion at the authored faction_defence_cap and "
                       + $"{defOne.Defences} at 1, {winAuthored.Defences} Bastion 30 ticks into the authored surplus window and "
                       + $"{winThirty.Defences} with a window of 30, and {resAuthored.Army} army order on 3000 credits under the "
-                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; Brutal's 2/3 still "
+                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; a reserve of int.MaxValue "
+                      + $"orders {wrapAtTop.Defences} Bastion from a treasury half a Bastion above it, where int.MaxValue less "
+                      + $"the price orders {wrapControl.Defences}, so the reserve test does not wrap; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
-                      + "registration after tick 0 is refused; and the catalogue checksum sits at "
+                      + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
+                      + "faction_defence_cap, in the loader's words, while 0 registers; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
                       + "handicap, one unit of either anti-air number or one unit of any of the four spending numbers "
                       + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap), which is what stops "
