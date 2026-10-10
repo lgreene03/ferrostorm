@@ -1184,15 +1184,16 @@ public partial class VerifyRunner : Node
             {
                 "com_gate",        // P7-10: struct type 10, ADR-005's reservation filled
                 // P7-5 (DR-02): struct type 20, the Sodality's own power grid.
-                // It carries no icon of its own and wears the plant's, exactly
-                // as the Bastion wears the turret's - art is owed, and the
-                // button is real either way. Note this button is faction-gated,
-                // so a Directorate player never sees it; the count here is of
+                // It has its own model (P7-31's mesh, drawn since P7-32) and,
+                // since P8-45, its own icon rendered from that mesh, as the
+                // Bastion has too. Note this button is faction-gated, so a
+                // Directorate player never sees it; the count here is of
                 // buttons BUILT, before FixedGatesAllow hides any.
                 "sod_generator",
                 // P7-5b (DR-03): struct type 21, the Sodality's Watch Post and
                 // the first detector that side has ever had. Faction-gated the
-                // same way, and it wears the veil projector's model and icon.
+                // same way. Its own model came with P7-31 and its own icon,
+                // rendered from that model, with P8-45.
                 "sod_watch_post",
                 // P7-5c (DR-04): struct type 22, the Sodality's seismic charge.
                 // It SHARES EntityKind.Superweapon with the orbital cannon, so

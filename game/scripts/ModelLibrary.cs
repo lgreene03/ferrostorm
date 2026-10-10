@@ -88,6 +88,9 @@ public partial class ModelLibrary : Node
         // (TICKET-P6-ART-02).
         // P7-31: bespoke barracks. The depot interim was both too large and
         // flat-roofed, so it read as the factory it must not be confused with.
+        // P8-45: its sidebar icon is rendered from that model (art/3d/icons.py,
+        // ui/icons/com_barracks.png), so neither the model nor the icon is
+        // still owed.
         { 12, "com_barracks" },
         // 13 = RadarUplink (ADR-008 clause 4). No com_radar_uplink.glb exists
         // yet; doc 23 s4.2 prescribes the veil projector as the interim stand-in
@@ -103,10 +106,12 @@ public partial class ModelLibrary : Node
         // above rather than for want of imagination: its `dish` child already
         // spins under ScanRig, which is exactly what a sensor post should look
         // like. It is a 1x1 building wearing a 2x2 model until art lands, which
-        // is visible and wrong rather than invisibly wrong. Bespoke model and
-        // sidebar icon owed to art-pipeline.
+        // is visible and wrong rather than invisibly wrong.
         // P7-31: bespoke Watch Post, and UNARMED by design (GDD line 56) - the
         // absence of a weapon on the silhouette is the read.
+        // P8-45: its sidebar icon is rendered from that model (art/3d/icons.py,
+        // ui/icons/sod_watch_post.png). Both are delivered, a 1x1 model on a
+        // 1x1 building, and nothing for the Watch Post is still owed.
         { 21, "sod_watch_post" },
         // 17 = Outpost (ADR-021, P6 Wave C4). No com_outpost.glb exists yet; it
         // takes the refinery as its interim, an industrial silhouette that reads
