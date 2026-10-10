@@ -591,7 +591,8 @@ numbers they were derived from. CLAUDE.md's "Support powers" paragraph was
 reworded to match on integration.
 
 **What is not done.** The support-power charge and the jam are still compiled
-absolutes (tracker row P8-61, the Architect's carried condition C6). The
+absolutes (tracker row P8-61, the Architect's carried condition C6; met on
+2026-10-09, see "Amendment, 2026-10-09" below). The
 seismic charge's damage is still compiled; P8-19's row now names moving
 `SeismicDamage` (350) into its `strike_damage` (also C6), by changing the strike
 rule in the single read predicate `World.PacingColumnsRead`, which the loader

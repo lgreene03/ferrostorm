@@ -83,8 +83,10 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
   structure, kill it") fall out of the data model rather than needing arranging:
   the permission IS the building. **Powers on one building SHARE its charge**, so
   a Bastion holds a scan or a strike ready and never both. A power's charge is
-  an absolute 500 ticks (`World.SupportPowerChargeTicks`), pinned at the value it
-  was once derived as, because P8-18 (ADR-073) moved the superweapon's charge to
+  an absolute 500 ticks, authored since P8-61 as `charge_ticks` on each power
+  building's yaml (`World.SupportPowerChargeTicks` is now the compiled reference
+  the files must reproduce, and `powerdatagate` holds all four equal), pinned at
+  the value it was once derived as, because P8-18 (ADR-073) moved the superweapon's charge to
   5400 in /data and a derived charge would have tripled with it; "shorter
   timers" is now held by `supportpowergate` measuring both charges side by side,
   not by construction. Each effect gets its OWN function - never widen `ApplyAreaDamage`,
@@ -93,7 +95,8 @@ Internal codename: Project FERROSTORM. Provisional public title: **Ferrostorm** 
   DERIVE EVERY NUMBER FROM ONE ALREADY IN THE GAME.** The scan's radius is its
   building's own sight; the strike's damage was a third of the orbital cannon's
   and the jam a third of its own charge, both pinned since P8-18 at the values
-  that gave (300 as the Bastion's `strike_damage`, 166 compiled); the tunnel
+  that gave (300 as the Bastion's `strike_damage`, 166 as the Watch Post's
+  `jam_ticks` since P8-61); the tunnel
   moves one transport's worth onto the producers' spawn ring; the decoy army is
   one wave's worth at one hit point. A derived number needs no defence, only a
   reader - and it cannot drift, because there is nothing separate to keep in
