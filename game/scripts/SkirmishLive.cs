@@ -2145,9 +2145,10 @@ public partial class SkirmishLive : Node3D
             // ProductionComplete at all: every other seat's completions, every
             // yard's building, and (until D34 gave it its own event) every
             // Carrier unload. C names the producer on every completion, and
-            // OpenFactoryDoors opens nothing that is not a Factory.
+            // OpenFactoryDoors opens nothing that is not a Factory. P8-71: A
+            // names the unit, whose cell says which face it came out of.
             if (ev.Type == GameEventType.ProductionComplete && ev.C >= 0)
-                OpenFactoryDoors(ev.C);
+                OpenFactoryDoors(ev.C, ev.A);
             // ADR-007: the sim owns the rally now. The produced unit already
             // left the factory with its sim-side exit move, so the PathMove
             // this block used to issue is gone with the `_rally` dictionary.
@@ -3046,6 +3047,107 @@ public partial class SkirmishLive : Node3D
     public int Denials { get; private set; }
     public string LastDenial { get; private set; } = "";
 
+    // ---------------- P8-41: units acknowledge ----------------
+
+    /// <summary>P8-41: the drag-select's own sound (art/audio/synth.py ui_select_box).</summary>
+    public const string BoxSelectCue = "ui_select_box";
+    /// <summary>P8-41: its level, derived from the click's rather than chosen:
+    /// ui_click plays at -14 dB from a file at -19.9 dBFS RMS, so the box's
+    /// file, at -16.4, plays at -18 to land half a decibel under the click.</summary>
+    public const float BoxSelectDb = -18f;
+
+    /// <summary>P8-41: what a bark answers.</summary>
+    public enum BarkOrder { Select, Move, Attack }
+    /// <summary>P8-41: the register a unit answers in.</summary>
+    public enum BarkClass { Infantry, Vehicle, Aircraft }
+    private static readonly string[] BarkOrderNames = { "select", "move", "attack" };
+    private static readonly string[] BarkClassNames = { "infantry", "vehicle", "aircraft" };
+    /// <summary>Variants per order per class per faction, played in turn.</summary>
+    public const int BarkVariants = 3;
+    private readonly Dictionary<string, int> _barkTurn = new();
+
+    /// <summary>P8-41: the class a mobile barks as, from what the sim says it
+    /// is. An aircraft is a unit whose type flies (World.IsAirborne); infantry
+    /// is what the Barracks produces, the sidebar's INFANTRY rule, asked of
+    /// CombatEffects.DeathLookOf itself rather than copied, so a death and a
+    /// bark can never disagree about what a unit is; every other mobile, a
+    /// harvester and the MCV included, is a vehicle. Null for anything that is
+    /// not a live mobile.</summary>
+    public BarkClass? BarkClassOf(int id)
+    {
+        if ((uint)id >= (uint)_world.EntityCount) return null;
+        var e = _world.Entities[id];
+        if (!e.Alive || !Mobile(e.Kind)) return null;
+        if (_world.IsAirborne(in e)) return BarkClass.Aircraft;
+        return CombatEffects.DeathLookOf(_world, id).Kind == CombatEffects.DeathKind.Infantry
+            ? BarkClass.Infantry : BarkClass.Vehicle;
+    }
+
+    /// <summary>
+    /// P8-41: ONE UNIT ANSWERS, AND ONLY ONE OF MINE. Its bark for this order,
+    /// in its class's register and its faction's timbre, the next of the three
+    /// variants in turn, on the bark channel (AudioDirector.Bark, which owns
+    /// the debounce and the channel's one player). A unit of any other seat
+    /// never barks: an enemy answering a click would be a maphack in sound, and
+    /// a LAN peer's units answer on that peer's machine, so the refusal comes
+    /// first, before the channel is asked for anything. True when it played;
+    /// the turn advances only on a bark that was heard.
+    /// </summary>
+    public bool BarkFor(int id, BarkOrder order)
+    {
+        if ((uint)id >= (uint)_world.EntityCount) return false;
+        // The entity's own PlayerId against LocalPlayerId, never through a
+        // local copy: CI's hardcoded-seat guard reads the shape
+        // `PlayerId != <literal>`, and a copy hides a literal seat from it.
+        if (_world.Entities[id].PlayerId != LocalPlayerId) return false;
+        if (BarkClassOf(id) is not { } cls) return false;
+        string faction = _world.FactionOf(_world.Entities[id].PlayerId) == World.FactionSodality ? "sod" : "dir";
+        string key = $"bark_{faction}_{BarkClassNames[(int)cls]}_{BarkOrderNames[(int)order]}";
+        int turn = _barkTurn.GetValueOrDefault(key);
+        if (!_audio.Bark($"{key}_{turn % BarkVariants + 1}", order != BarkOrder.Select)) return false;
+        _barkTurn[key] = turn + 1;
+        return true;
+    }
+
+    /// <summary>P8-41: which unit of a group answers for it: the lowest
+    /// numbered of the class it holds most of, ties to infantry and then
+    /// vehicles, so ten tanks and a rifle squad answer as tanks. Only my own
+    /// mobiles count; -1 when the group holds none.</summary>
+    private int BarkVoiceOf(IEnumerable<int> ids)
+    {
+        var count = new int[BarkClassNames.Length];
+        var lowest = new int[BarkClassNames.Length];
+        System.Array.Fill(lowest, int.MaxValue);
+        foreach (int id in ids)
+        {
+            if ((uint)id >= (uint)_world.EntityCount || _world.Entities[id].PlayerId != LocalPlayerId) continue;
+            if (BarkClassOf(id) is not { } c) continue;
+            count[(int)c]++;
+            if (id < lowest[(int)c]) lowest[(int)c] = id;
+        }
+        int best = -1;
+        for (int c = 0; c < count.Length; c++)
+            if (count[c] > 0 && (best < 0 || count[c] > count[best])) best = c;
+        return best < 0 ? -1 : lowest[best];
+    }
+
+    /// <summary>P8-41: what a selecting gesture caught answers it: the whole
+    /// selection for a recall or a select-all, only the unit or units the
+    /// gesture itself caught for a click or a drag (so a shift-click adding a
+    /// squad to ten tanks is answered by the squad).</summary>
+    private void BarkSelection(IEnumerable<int> caught)
+    {
+        int voice = BarkVoiceOf(caught);
+        if (voice >= 0) BarkFor(voice, BarkOrder.Select);
+    }
+
+    /// <summary>P8-41: the units an order went to answer it.</summary>
+    private void BarkOrderFor(IEnumerable<int> ids, bool attack)
+    {
+        int voice = BarkVoiceOf(ids);
+        if (voice >= 0) BarkFor(voice, attack ? BarkOrder.Attack : BarkOrder.Move);
+    }
+
     /// <summary>P8-42: what a press on an order the treasury cannot pay for
     /// says. The order still QUEUES, because the sim builds pay-as-you-build
     /// (World.ProductionSystem drains each slice as progress accrues and holds
@@ -3225,27 +3327,116 @@ public partial class SkirmishLive : Node3D
     private readonly Dictionary<int, int> _tickOwner = new();
     private bool _spottingSeeded;
 
-    /// <summary>P8-10 review: open one factory's doors, the producer's own.
-    /// Counted per factory for the harness.</summary>
-    private void OpenFactoryDoors(int factory)
+    /// <summary>P8-71: the four faces of a building, as bits, in the sim's
+    /// frame: north is -Y, which the scene draws as -Z.</summary>
+    [System.Flags]
+    public enum Face { None = 0, North = 1, East = 2, South = 4, West = 8 }
+
+    /// <summary>
+    /// P8-71: the face of a footprint a unit standing in cell (ux, uy) came out
+    /// of. The footprint is size cells square from anchor (ax, ay). The unit is
+    /// past it on the axis it stands further out on, and at a corner exactly as
+    /// far out on both it is beside two faces, so both count. A cell inside the
+    /// footprint is beside none.
+    /// </summary>
+    public static Face ExitFace(int ax, int ay, int size, int ux, int uy)
+    {
+        int ex = ux < ax ? ax - ux : ux > ax + size - 1 ? ux - (ax + size - 1) : 0;
+        int ey = uy < ay ? ay - uy : uy > ay + size - 1 ? uy - (ay + size - 1) : 0;
+        Face fx = ux < ax ? Face.West : ux > ax + size - 1 ? Face.East : Face.None;
+        Face fy = uy < ay ? Face.North : uy > ay + size - 1 ? Face.South : Face.None;
+        if (ex > ey) return fx;
+        if (ey > ex) return fy;
+        return fx | fy;
+    }
+
+    /// <summary>P8-71: the face of its building a door node stands on, read off
+    /// its rest position in the model turned by the actor's yaw. The Factory's
+    /// two leaves stand at local z -0.72 against a hall 0.7 deep, so both are on
+    /// the north face.</summary>
+    private static Face DoorFace(Vector3 home, float yaw)
+    {
+        var w = home.Rotated(Vector3.Up, yaw);
+        if (Mathf.Abs(w.Z) > Mathf.Abs(w.X)) return w.Z < 0 ? Face.North : Face.South;
+        return w.X > 0 ? Face.East : Face.West;
+    }
+
+    /// <summary>
+    /// P8-10 review: open one factory's doors, the producer's own. Counted per
+    /// factory for the harness.
+    ///
+    /// P8-71: AND ONLY THE DOORS ON THE FACE THE UNIT CAME OUT OF. This slid
+    /// every door on every completion, and the Factory's doors are all on its
+    /// north face, while its units have always left south first (World's
+    /// SpawnOffsets) and, since ADR-076 clause 3, leave by the face towards the
+    /// map's centre and may take any cell beside the footprint. So in the
+    /// northern half the shutters opened on the far side from the tank. The face
+    /// is the spawned unit's cell against the producer's footprint (ExitFace),
+    /// read from the sim at the completion, before the unit has moved (movement
+    /// runs before production in a tick). A face with no door opens nothing and
+    /// is counted as a doorless exit; doors left open by an earlier opening that
+    /// this one does not use still close.
+    /// </summary>
+    private void OpenFactoryDoors(int factory, int unit)
     {
         if (!_rigs.TryGetValue(factory, out var rig) || rig.Doors.Count == 0) return;
         if (!_latest.TryGetValue(factory, out var fv) || fv.Kind != EntityKind.Factory) return;
         if (!_actors.TryGetValue(factory, out var node)) return;
+        Face used = Face.None;
+        if ((uint)factory < (uint)_world.EntityCount && (uint)unit < (uint)_world.EntityCount)
+        {
+            var p = _world.Entities[factory];
+            var u = _world.Entities[unit];
+            used = ExitFace(_world.AnchorOf(p.X, p.StructType), _world.AnchorOf(p.Y, p.StructType),
+                _world.FootprintOf(p.StructType), Map.CellOf(u.X), Map.CellOf(u.Y));
+        }
+        float yaw = node.Rotation.Y;
+        Face opened = Face.None;
+        foreach (var (_, home) in rig.Doors)
+            if ((DoorFace(home, yaw) & used) != 0) opened |= DoorFace(home, yaw);
+        _lastDoorExit[factory] = (used, opened);
+        if (opened == Face.None)
+        {
+            _doorlessExits[factory] = _doorlessExits.GetValueOrDefault(factory) + 1;
+            return;
+        }
         _doorOpenings[factory] = _doorOpenings.GetValueOrDefault(factory) + 1;
         rig.DoorTw?.Kill();
         rig.DoorTw = node.CreateTween();
         foreach (var (d, home) in rig.Doors)
-            rig.DoorTw.Parallel().TweenProperty(d, "position", home + new Vector3(d.Position.X < 0 ? -0.35f : 0.35f, 0, 0), 0.4f);
+        {
+            // A leaf slides along its own wall, away from the middle of it:
+            // along x on a north or south face, along z on an east or west one.
+            bool open = (DoorFace(home, yaw) & opened) != 0;
+            var slide = Mathf.Abs(home.Z) > Mathf.Abs(home.X)
+                ? new Vector3(home.X < 0 ? -0.35f : 0.35f, 0, 0)
+                : new Vector3(0, 0, home.Z < 0 ? -0.35f : 0.35f);
+            rig.DoorTw.Parallel().TweenProperty(d, "position", open ? home + slide : home, 0.4f);
+        }
         rig.DoorTw.TweenInterval(1.4);
         foreach (var (d, home) in rig.Doors)
             rig.DoorTw.Parallel().TweenProperty(d, "position", home, 0.5f);
     }
     private readonly Dictionary<int, int> _doorOpenings = new();
+    private readonly Dictionary<int, int> _doorlessExits = new();
+    private readonly Dictionary<int, (Face Used, Face Opened)> _lastDoorExit = new();
     /// <summary>Verification reads: how often a factory's doors opened, and how
     /// many door nodes its rig carries (0 means a door check would be vacuous).</summary>
     public int DoorOpeningsForTest(int factory) => _doorOpenings.GetValueOrDefault(factory);
     public int DoorCountForTest(int factory) => _rigs.TryGetValue(factory, out var r) ? r.Doors.Count : -1;
+    /// <summary>P8-71 verification reads: completions out of a face with no
+    /// door; the face the last completion came out of and the faces whose
+    /// doors it opened; and every face a producer's rig has doors on.</summary>
+    public int DoorlessExitsForTest(int factory) => _doorlessExits.GetValueOrDefault(factory);
+    public (Face Used, Face Opened) LastDoorExitForTest(int factory) =>
+        _lastDoorExit.TryGetValue(factory, out var x) ? x : (Face.None, Face.None);
+    public Face DoorFacesForTest(int id)
+    {
+        if (!_rigs.TryGetValue(id, out var rig) || !_actors.TryGetValue(id, out var node)) return Face.None;
+        Face all = Face.None;
+        foreach (var (_, home) in rig.Doors) all |= DoorFace(home, node.Rotation.Y);
+        return all;
+    }
 
     /// <summary>TICKET-P5-ALERT-02: every alert site calls this with the map
     /// position it pinged (the minimap's own coordinate space, world X and Z),
@@ -5318,6 +5509,7 @@ public partial class SkirmishLive : Node3D
             {
                 _selection.Clear();                                    // recall
                 foreach (int id in g) if (_latest.ContainsKey(id)) _selection.Add(id);
+                BarkSelection(_selection);                             // P8-41
             }
             return true;
         }
@@ -5475,6 +5667,7 @@ public partial class SkirmishLive : Node3D
         }
         _effects.OrderMarker(new Vector3((float)dp.X, 0, (float)dp.Y), 0);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(damaged, attack: false);   // P8-41
         ShowToast(damaged.Count == 1
             ? "1 UNIT TO THE SERVICE DEPOT"
             : $"{damaged.Count} UNITS TO THE SERVICE DEPOT");
@@ -5812,6 +6005,7 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
+        var ordered = new List<int>();   // P8-41: the units that answer
         // ADR-018: an attack-move is a group move too, so it forms up (the verb is
         // preserved: each unit attack-moves to its slot, engaging en route).
         var formation = BuildFormation(new Vector3(p.X, 0, p.Z));
@@ -5820,12 +6014,14 @@ public partial class SkirmishLive : Node3D
             {
                 var (mx, my) = formation != null && formation.TryGetValue(id, out var s) ? s : (cx, cy);
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.AttackMove, id, mx, my));
+                ordered.Add(id);
                 n++;
             }
         // W3-17's attack colour: an attack-move is an attack order, and it must
         // not acknowledge in the same gold a plain move does.
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(ordered, attack: true);   // P8-41
         ShowToast($"ATTACK-MOVE ORDERED   ({n} UNITS)");
     }
 
@@ -5909,16 +6105,19 @@ public partial class SkirmishLive : Node3D
         var cx = Fix64.FromFraction((int)(p.X * 100), 100);
         var cy = Fix64.FromFraction((int)(p.Z * 100), 100);
         int n = 0;
+        var ordered = new List<int>();   // P8-41: the units that answer
         foreach (int id in _selection)
             if (_latest.TryGetValue(id, out var v) && v.PlayerId == LocalPlayerId && v.Kind == EntityKind.Unit)
             {
                 _pending.Add(new Command(0, LocalPlayerId, CommandType.SetStance, id, cx, cy, (int)Stance.Patrol));
+                ordered.Add(id);
                 n++;
             }
         // A patrol leg is an attack-move, so it acknowledges in the attack colour,
         // not the gold a plain move uses - the CommitAttackMove idiom.
         _effects.OrderMarker(new Vector3(p.X, 0, p.Z), 1);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(ordered, attack: true);   // P8-41: a patrol leg is an attack-move
         ShowToast($"PATROL ORDERED   ({n} UNITS)");
     }
 
@@ -6081,6 +6280,7 @@ public partial class SkirmishLive : Node3D
                 _selection.Add(hit);
                 AddSelRingFor(hit);
                 _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));   // W3-21
+                BarkSelection(new[] { hit });   // P8-41: a unit answers; a building does not
                 return;
             }
             // ADR-021: a click that selected nothing of the player's own may
@@ -6131,6 +6331,15 @@ public partial class SkirmishLive : Node3D
         // Clause 6: rings for box-selected walls too, not just the click path.
         if (mobiles.Count == 0)
             foreach (int id in walls) AddSelRingFor(id);
+        // P8-41: a drag that caught something has its own sound, a box closing
+        // where a click is a tap, and the units in it answer (a run of barrier
+        // has no voice, so it gets the sound alone). A drag that caught
+        // nothing stays silent, as an order that issued nothing does.
+        if (mobiles.Count + walls.Count > 0)
+        {
+            _audio.Play(BoxSelectCue, BoxSelectDb, AudioDirector.Jitter(0.04f));
+            BarkSelection(mobiles);
+        }
     }
 
     private void TryPlace(Vector2 screen)
@@ -7423,6 +7632,7 @@ public partial class SkirmishLive : Node3D
         int forced = force ? PickNeutralBridge(screen) : -1;
         bool deniedHarvest = false, deniedBoard = false;
         int issued = 0, boarded = 0, struck = -1;
+        var answered = new List<int>();   // P8-41: the units an order went to
         // ADR-018: a plain move (not an attack on an enemy) arranges the selected
         // combat units into a formation. Resolved once for the click; harvesters
         // are never members and keep the shared anchor below.
@@ -7486,6 +7696,7 @@ public partial class SkirmishLive : Node3D
                 if (me.Kind == EntityKind.Harvester) _manuallyStopped.Add(id);
             }
             else continue;
+            answered.Add(id);
             issued++;
         }
         // P8-42: both through the one refusal path, with its own cue, where
@@ -7508,6 +7719,7 @@ public partial class SkirmishLive : Node3D
             : new Vector3(p.X, 0, p.Z);
         _effects.OrderMarker(mpos, mk);
         _audio.Play("order_move", -8, AudioDirector.Jitter(0.07f));
+        BarkOrderFor(answered, attack: enemy >= 0 || struck >= 0);   // P8-41
     }
 
     /// <summary>Programmatic hooks for offscreen verification: select all own
@@ -7530,6 +7742,7 @@ public partial class SkirmishLive : Node3D
         foreach (var v in _view)
             if (IsArmy(in v)) _selection.Add(v.Id);
         if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     /// <summary>Doc 27 DR-06: cycle through idle own harvesters, camera to each.
@@ -7557,6 +7770,7 @@ public partial class SkirmishLive : Node3D
         var e2 = ents[pick];
         _cam.FlyTo(new Vector3((float)(e2.X.Raw / 4294967296.0), 0, (float)(e2.Y.Raw / 4294967296.0)));
         _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     /// <summary>Doc 27 DR-05: select every own unit of the same TYPE currently
@@ -7579,6 +7793,7 @@ public partial class SkirmishLive : Node3D
             if (rect.HasPoint(screen)) _selection.Add(v.Id);
         }
         if (_selection.Count > 0) _audio.Play("ui_click", -14, AudioDirector.Jitter(0.05f));
+        BarkSelection(_selection);   // P8-41
     }
 
     public int SelectAllOwn()

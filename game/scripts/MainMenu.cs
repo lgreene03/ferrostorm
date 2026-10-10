@@ -451,7 +451,27 @@ public partial class MainMenu : Control
         if (_lobby is { State: LanLobby.Phase.Connecting }) return;   // one at a time
         var setup = LanSetupFromMenu();
         RememberSetup(setup);   // P8-34: a hosted match is the last match too
-        _lobby = LanLobby.Host(setup);
+        BeginHost(LanLobby.Host(setup));
+    }
+
+    /// <summary>The host's lobby is open: show what it says now, which names
+    /// no port yet.</summary>
+    private void BeginHost(LanLobby lobby)
+    {
+        _lobby = lobby;
+        _hostLineShown = false;
+        // P8-67: the line naming the port waits until the lobby has published
+        // it, which is once this machine holds seat 0 (PollLobby puts it up).
+        SetLanStatus(_lobby.Status);
+    }
+
+    /// <summary>P8-67: whether the host's "lobby open" line, the one naming the
+    /// port, is up yet.</summary>
+    private bool _hostLineShown;
+
+    private void ShowHostLine()
+    {
+        _hostLineShown = true;
         var addresses = LanLobby.LocalAddresses();
         string where = addresses.Count > 0
             ? string.Join(" or ", addresses) + $":{LanLobby.DefaultPort}"
@@ -484,6 +504,7 @@ public partial class MainMenu : Control
             _lobby = null;
             return;
         }
+        if (lobby.PortPublished && !_hostLineShown) ShowHostLine();
         if (lobby.State != LanLobby.Phase.Ready || lobby.Client is null || lobby.Setup is null) return;
         _lobby = null;
         LaunchNetBattle(lobby);
@@ -907,6 +928,12 @@ public partial class MainMenu : Control
         ShowLan();
         return GetChild(GetChildCount() - 1);
     }
+    /// <summary>P8-67: HOST GAME's own path from the moment its lobby exists,
+    /// handed a lobby the harness opened on an ephemeral port, so a stale
+    /// relay on the fixed port cannot fail a check about something else.</summary>
+    public void HostLobbyForTest(LanLobby lobby) => BeginHost(lobby);
+    /// <summary>P8-67: what the LAN screen's status line reads right now.</summary>
+    public string LanStatusForTest => _lanStatus?.Text ?? "";
 }
 
 /// <summary>Match options carried from the menu into the battle scene.</summary>
