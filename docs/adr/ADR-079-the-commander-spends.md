@@ -147,6 +147,41 @@ one of the four from the compiled reference instead of the registered row
 fails the stage, each on its own check (the window's on the producer cap's
 control, which needs the window moved to 0).
 
+**`aituninggate` stage 2e guards the four conditions the spending rests on**
+(the Architect's condition 2). The verifier had removed each in a scratch build
+and found every golden identical and `match` green, so each was a decision in
+this ADR that nothing held. Stage 2e runs on stage 2d's fixture, with the
+authored Normal reserve read from the registered files, and puts each check
+beside a control that differs from it only in what the condition reads:
+
+- (a) **No surplus building while nothing is mining.** With the window at 0
+  and both producers idle, the base with its two harvesters orders the second
+  Bastion and the same base with none orders no building at all.
+- (b) **The surplus building's own reserve test.** With the factory busy and
+  the window at 0, a treasury of the reserve plus a factory's price orders the
+  second factory, and one credit less orders none. The busy factory draws its
+  tank's price as it builds, so the treasury at the beat is measured and the
+  check asserts it is exactly those two sums.
+- (c) **The surplus building's price joins the beat's commitments.** On a beat
+  that buys the Bastion, a treasury of the reserve plus the Bastion, a rifle
+  squad and a rocket squad places both squads, and one credit less places only
+  the rifle.
+- (d) **The first order's price counts against the later ones.** With the
+  authored window, so no surplus building on the beat, the reserve plus the
+  rifle and the rocket places both, and the reserve plus the rocket alone
+  places only the rifle.
+
+Each was bitten by removing its condition from `SkirmishAI.cs` and running the
+gate, and each fails on its own named check: dropping `harvesters > 0` from the
+surplus branch fails 2e(a) (one building ordered with no harvester alive);
+dropping the building's `Credits >= reserve + price` test fails 2e(b) (one
+factory ordered one credit short); dropping `committed += extraCost` fails
+2e(c) (two orders one credit short); dropping `committed` from the later-order
+test fails 2e(d) (two orders). (d) is checked before (c), because (c)'s later
+order reads the same commitments and would also catch (d)'s removal under the
+wrong name. All four are reachable through the public surface, so none is
+left unguarded. Unbitten, the gate passes and `golden 2026` is byte-identical.
+
 ### 8. Mirror-exact by construction
 
 Every new choice reads only this commander's own state: queue lengths,

@@ -6814,8 +6814,11 @@ int AiTuningGate()
     //          surplus_reserve: 3000 credits, below the authored reserve, the
     //            authored rung places one army order on the beat and a reserve
     //            of 0 places two.
-    (int Factories, int Defences, int Army) SpendOrders(Func<AiTuningDef, AiTuningDef> rung,
-        Func<AiTuningDef, AiTuningDef> shape, long credits, bool factoryBusy, int secondBeatAfter = 0)
+    //        Stage 2e reuses this fixture, and for it the fixture also takes
+    //        how many harvesters stand (2d always has two) and reports every
+    //        building ordered and the treasury the beat read.
+    (int Factories, int Defences, int Army, int Built, long Treasury) SpendOrders(Func<AiTuningDef, AiTuningDef> rung,
+        Func<AiTuningDef, AiTuningDef> shape, long credits, bool factoryBusy, int secondBeatAfter = 0, int harvesters = 2)
     {
         var w = new World(4317, 96, 64, players: 2);
         CatalogueFiles.RegisterAiTuning(w, aiDir);
@@ -6833,8 +6836,8 @@ int AiTuningGate()
         int bastion = w.BuildableFactionDefence(0);
         w.SpawnFactionDefence(0, bastion, 18, 36);
         w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);    // home is not thin, so no expansion
-        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
-        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));            // one per refinery: no harvester order
+        if (harvesters > 0) w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        if (harvesters > 1) w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));   // one per refinery: no harvester order
         w.GrantCredits(0, credits);
         var opening = new List<Command>();
         if (factoryBusy)   // a cannon tank on the factory's line, so the factory is the bottleneck
@@ -6845,6 +6848,7 @@ int AiTuningGate()
             throw new InvalidOperationException($"the factory's line holds {w.QueueLength(factory)} at tick 15");
         var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
         var cmds = new List<Command>();
+        long treasury = w.Credits(0);
         ai.Act(w, cmds);
         if (secondBeatAfter > 0)
         {
@@ -6853,20 +6857,23 @@ int AiTuningGate()
             // treasury has stood above the reserve.
             for (int t = 0; t < secondBeatAfter; t++) w.Step(default);
             cmds.Clear();
+            treasury = w.Credits(0);
             ai.Act(w, cmds);
         }
-        int factories = 0, defences = 0, army = 0;
+        int factories = 0, defences = 0, army = 0, built = 0;
         foreach (var c in cmds)
         {
             if (c.Type == CommandType.BuildStructure && c.AuxId == World.FactoryStructType) factories++;
             if (c.Type == CommandType.BuildStructure && c.AuxId == bastion) defences++;
+            if (c.Type == CommandType.BuildStructure) built++;
             if (c.Type == CommandType.Produce) army++;
         }
-        return (factories, defences, army);
+        return (factories, defences, army, built, treasury);
     }
     AiTuningDef Authored(AiTuningDef d) => d;
     AiTuningDef NoWindow(AiTuningDef d) => d with { SurplusWindowTicks = 0 };
-    (int Factories, int Defences, int Army) capAuthored, capOne, defAuthored, defOne, winAuthored, winThirty, resAuthored, resZero;
+    (int Factories, int Defences, int Army, int Built, long Treasury) capAuthored, capOne, defAuthored, defOne, winAuthored,
+        winThirty, resAuthored, resZero;
     try
     {
         capAuthored = SpendOrders(NoWindow, Authored, 20000, factoryBusy: true);
@@ -6906,21 +6913,112 @@ int AiTuningGate()
                     + $"3000 credits, filling the barracks' line of two, and it placed {resZero.Army} - the commander is "
                     + "reading the compiled reserve rather than the registered one");
 
-    //        2d, and the wrap (ADR-079, condition 1). The surplus building's
-    //        reserve test adds a reserve and a price; in int, a reserve at the
-    //        top of int plus the Bastion's price wraps negative and the test
-    //        passes on any treasury. The treasury here stands half a Bastion
-    //        above int.MaxValue: a reserve of int.MaxValue leaves less than the
-    //        price, so no Bastion, and the control's reserve of int.MaxValue less
-    //        the price leaves exactly the price, so one Bastion. The window is 0
-    //        in both, so the surplus counts at once.
-    long bastionCost;
+    //        2e, the four conditions the commander's spending rests on that 2d
+    //        does not reach (ADR-079, condition 2), each on 2d's fixture and
+    //        each beside a control that differs from it only in what the
+    //        condition reads, so a check that passes for the wrong reason
+    //        fails its control instead. The reserve is the authored Normal
+    //        one, read from the registered files. No wave stands, so the
+    //        Directorate cycle alternates a rifle squad and a rocket squad,
+    //        both at the one barracks: a beat's first order is a rifle and
+    //        its second a rocket.
+    //          (a) no surplus building while nothing is mining. Window 0 and
+    //              both producers idle: the base with its two harvesters
+    //              orders the second Bastion, and with none it orders no
+    //              building at all;
+    //          (b) the surplus building's own reserve test. The factory busy
+    //              and the window 0: a treasury of the reserve plus a
+    //              factory's price orders the factory, one credit less none;
+    //          (d) the first order's price counts. The authored window, so no
+    //              surplus building on the beat: the reserve plus the rifle
+    //              and the rocket places both, and the reserve plus the rocket
+    //              alone places only the rifle;
+    //          (c) the surplus building's price counts. Window 0 and a beat
+    //              that buys the Bastion: the reserve plus the Bastion, the
+    //              rifle and the rocket places both squads, one credit less
+    //              only the rifle.
+    //        (d) is checked before (c) on purpose: (c)'s later order reads the
+    //        same commitments (d) does, so it would also catch (d)'s removal,
+    //        and in this order each removal fails on its own check first.
+    int reserve = beatWorld.GetAiTuning(AiTuning.NormalId).SurplusReserve;
+    long rifleCost, rocketCost, factoryCost, bastionCost;
     {
         var cw = new World(4317, 96, 64, players: 2);
+        rifleCost = cw.GetUnitType(2).Cost;
+        rocketCost = cw.GetUnitType(3).Cost;
+        factoryCost = cw.GetStructureType(World.FactoryStructType).Cost;
         bastionCost = cw.GetStructureType(cw.BuildableFactionDefence(0)).Cost;
     }
+    (int Factories, int Defences, int Army, int Built, long Treasury) mined, dry, factoryAt, factoryUnder,
+        firstBoth, firstOne, buildingBoth, buildingOne;
+    try
+    {
+        mined = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false);
+        dry = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false, harvesters: 0);
+        // The busy factory draws its cannon tank's price as it builds, so the
+        // treasury at the beat is measured once and the grant set from it.
+        long drain = reserve + factoryCost - SpendOrders(NoWindow, Authored, reserve + factoryCost, factoryBusy: true).Treasury;
+        factoryAt = SpendOrders(NoWindow, Authored, reserve + factoryCost + drain, factoryBusy: true);
+        factoryUnder = SpendOrders(NoWindow, Authored, reserve + factoryCost + drain - 1, factoryBusy: true);
+        firstBoth = SpendOrders(Authored, Authored, reserve + rifleCost + rocketCost, factoryBusy: false);
+        firstOne = SpendOrders(Authored, Authored, reserve + rocketCost, factoryBusy: false);
+        buildingBoth = SpendOrders(NoWindow, Authored, reserve + bastionCost + rifleCost + rocketCost, factoryBusy: false);
+        buildingOne = SpendOrders(NoWindow, Authored, reserve + bastionCost + rifleCost + rocketCost - 1, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    // (a)
+    if (mined.Defences != 1)
+        return Fail($"aituning 2e(a) control: a finished base with two harvesters, idle producers and the window at 0 must "
+                    + $"order the second Bastion, and it ordered {mined.Defences}");
+    if (dry.Built != 0)
+        return Fail($"aituning 2e(a): no surplus building while no harvester is alive - the same base with none ordered "
+                    + $"{dry.Built} building(s), so the surplus branch has lost its harvesters test, and the ladder's "
+                    + "silence that means 'save for a harvester' is being spent");
+    // (b)
+    if (factoryAt.Treasury != reserve + factoryCost || factoryUnder.Treasury != reserve + factoryCost - 1)
+        return Fail($"aituning 2e(b): the treasuries at the beat were {factoryAt.Treasury} and {factoryUnder.Treasury}, not "
+                    + $"the reserve plus a factory's price ({reserve + factoryCost}) and one credit less, so the check proves nothing");
+    if (factoryAt.Factories != 1)
+        return Fail($"aituning 2e(b) control: with the factory busy, the window at 0 and a treasury of the reserve plus a "
+                    + $"factory's price, the commander must order the second factory, and it ordered {factoryAt.Factories}");
+    if (factoryUnder.Factories != 0)
+        return Fail($"aituning 2e(b): no factory when the treasury exceeds the reserve by less than a factory's price - one "
+                    + $"credit short it ordered {factoryUnder.Factories}, so the surplus building's own reserve test is gone");
+    // (d)
+    if (firstBoth.Built != 0 || firstOne.Built != 0)
+        return Fail("aituning 2e(d): the authored window must keep a surplus building off these beats, and one was ordered, "
+                    + "so the check would read the building's price rather than the first order's");
+    if (firstBoth.Army != 2)
+        return Fail($"aituning 2e(d) control: a treasury of the reserve plus a rifle squad and a rocket squad must place both "
+                    + $"on the beat, and it placed {firstBoth.Army}");
+    if (firstOne.Army != 1)
+        return Fail($"aituning 2e(d): at credits of the reserve plus the second unit's price the second order must be refused "
+                    + $"because the first order's price is counted, and the beat placed {firstOne.Army} - the later-order "
+                    + "test has stopped counting what the beat already committed");
+    // (c)
+    if (buildingBoth.Defences != 1 || buildingOne.Defences != 1)
+        return Fail($"aituning 2e(c): both beats must buy the second Bastion ({buildingBoth.Defences} and {buildingOne.Defences} "
+                    + "did), or the check reads no building's price at all");
+    if (buildingBoth.Army != 2)
+        return Fail($"aituning 2e(c) control: on a beat that buys the Bastion, a treasury of the reserve plus the Bastion, "
+                    + $"the rifle squad and the rocket squad must place both squads, and it placed {buildingBoth.Army}");
+    if (buildingOne.Army != 1)
+        return Fail($"aituning 2e(c): after a surplus building, no later army order once the reserve would be breached - one "
+                    + $"credit short the beat placed {buildingOne.Army}, so the building's price no longer joins the beat's "
+                    + "commitments");
+
+    //        And the wrap (ADR-079, condition 1), on the same fixture. The
+    //        surplus building's reserve test adds a reserve and a price; in
+    //        int, a reserve at the top of int plus the Bastion's price wraps
+    //        negative and the test passes on any treasury. The treasury here
+    //        stands half a Bastion above int.MaxValue: a reserve of int.MaxValue
+    //        leaves less than the price, so no Bastion, and the control's
+    //        reserve of int.MaxValue less the price leaves exactly the price,
+    //        so one Bastion. The window is 0 in both, so the surplus counts at
+    //        once. After 2e(b) on purpose: removing the whole reserve test
+    //        fails this too, and (b) is the check that names that removal.
     long wrapCredits = int.MaxValue + bastionCost / 2;
-    (int Factories, int Defences, int Army) wrapAtTop, wrapControl;
+    (int Factories, int Defences, int Army, int Built, long Treasury) wrapAtTop, wrapControl;
     try
     {
         wrapAtTop = SpendOrders(d => NoWindow(d) with { SurplusReserve = int.MaxValue }, Authored, wrapCredits, factoryBusy: false);
@@ -7080,9 +7178,15 @@ int AiTuningGate()
                       + $"{capOne.Factories} at 1, {defAuthored.Defences} second Bastion at the authored faction_defence_cap and "
                       + $"{defOne.Defences} at 1, {winAuthored.Defences} Bastion 30 ticks into the authored surplus window and "
                       + $"{winThirty.Defences} with a window of 30, and {resAuthored.Army} army order on 3000 credits under the "
-                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; a reserve of int.MaxValue "
-                      + $"orders {wrapAtTop.Defences} Bastion from a treasury half a Bastion above it, where int.MaxValue less "
-                      + $"the price orders {wrapControl.Defences}, so the reserve test does not wrap; Brutal's 2/3 still "
+                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; with no harvester "
+                      + $"alive the base orders {dry.Built} surplus building where two harvesters order {mined.Defences}, a "
+                      + $"treasury one credit short of the reserve plus a factory orders {factoryUnder.Factories} factory where "
+                      + $"the full price orders {factoryAt.Factories}, the reserve plus the second unit's price places "
+                      + $"{firstOne.Army} order where the reserve plus both places {firstBoth.Army}, and on a beat that buys a "
+                      + $"Bastion one credit short places {buildingOne.Army} order where the full sum places "
+                      + $"{buildingBoth.Army}; a reserve of int.MaxValue orders {wrapAtTop.Defences} Bastion from a treasury "
+                      + $"half a Bastion above it, where int.MaxValue less the price orders {wrapControl.Defences}, so the "
+                      + $"reserve test does not wrap; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
                       + "faction_defence_cap, in the loader's words, while 0 registers; and the catalogue checksum sits at "
