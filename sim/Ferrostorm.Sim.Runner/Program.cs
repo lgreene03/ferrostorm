@@ -6791,6 +6791,121 @@ int AiTuningGate()
                     + $"escorts, guarding the refinery with no harvester alive ({escortAir.ToRefinery} did, "
                     + $"{escortAir.AtFlyer} went for the flyer) - the commander is reading the compiled garrison");
 
+    //        2d, P8-22's four spending numbers (ADR-079), each moved away from
+    //        its AUTHORED value and measured as orders. Every run registers
+    //        data/ai from the files first, so the authored side of each pair is
+    //        the file's own number rather than the compiled reference's, and the
+    //        other side changes that one number on the row the files
+    //        registered: the data wins, and what the data says is what the
+    //        commander does. The base is a Directorate one the ladder has
+    //        finished (a plant, two refineries, a barracks, a factory, the
+    //        turret, the radar and one Bastion, with a harvester per refinery
+    //        on a rich field beside home), so at tick 15 the yard wants nothing
+    //        and anything it orders is the surplus's.
+    //          producer_cap: the factory busy and the window moved to 0, the
+    //            authored Normal cap of 2 orders a second factory and a cap of
+    //            1 orders none;
+    //          faction_defence_cap: both producers idle and the window at 0,
+    //            the authored Standard cap of 3 orders a second Bastion and a
+    //            cap of 1 orders none;
+    //          surplus_window_ticks: the same idle base acting at tick 15 and
+    //            again at tick 45, the authored window orders nothing on the
+    //            second beat and a window of 30 orders the Bastion there;
+    //          surplus_reserve: 3000 credits, below the authored reserve, the
+    //            authored rung places one army order on the beat and a reserve
+    //            of 0 places two.
+    (int Factories, int Defences, int Army) SpendOrders(Func<AiTuningDef, AiTuningDef> rung,
+        Func<AiTuningDef, AiTuningDef> shape, long credits, bool factoryBusy, int secondBeatAfter = 0)
+    {
+        var w = new World(4317, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(AiTuning.NormalId, rung(w.GetAiTuning(AiTuning.NormalId)));
+        w.RegisterAiTuning(AiTuning.StandardId, shape(w.GetAiTuning(AiTuning.StandardId)));
+        w.SpawnConstructionYard(1, 86, 30);                  // a distant foe: never the fire-sale branch
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 13, 30, supply: 2000);
+        w.SpawnRefinery(0, 8, 24);
+        w.SpawnRefinery(0, 13, 24);
+        w.SpawnBarracks(0, 18, 30);
+        int factory = w.SpawnFactory(0, 8, 36);
+        w.SpawnTurret(0, 18, 24);
+        w.SpawnRadarUplink(0, 13, 36);
+        int bastion = w.BuildableFactionDefence(0);
+        w.SpawnFactionDefence(0, bastion, 18, 36);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);    // home is not thin, so no expansion
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));            // one per refinery: no harvester order
+        w.GrantCredits(0, credits);
+        var opening = new List<Command>();
+        if (factoryBusy)   // a cannon tank on the factory's line, so the factory is the bottleneck
+            opening.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 1));
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(opening));
+        for (int t = 1; t < 15; t++) w.Step(default);
+        if (w.QueueLength(factory) != (factoryBusy ? 1 : 0))
+            throw new InvalidOperationException($"the factory's line holds {w.QueueLength(factory)} at tick 15");
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        if (secondBeatAfter > 0)
+        {
+            // The first beat's orders are dropped on purpose, so the second
+            // beat reads the same base and differs only in how long the
+            // treasury has stood above the reserve.
+            for (int t = 0; t < secondBeatAfter; t++) w.Step(default);
+            cmds.Clear();
+            ai.Act(w, cmds);
+        }
+        int factories = 0, defences = 0, army = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type == CommandType.BuildStructure && c.AuxId == World.FactoryStructType) factories++;
+            if (c.Type == CommandType.BuildStructure && c.AuxId == bastion) defences++;
+            if (c.Type == CommandType.Produce) army++;
+        }
+        return (factories, defences, army);
+    }
+    AiTuningDef Authored(AiTuningDef d) => d;
+    AiTuningDef NoWindow(AiTuningDef d) => d with { SurplusWindowTicks = 0 };
+    (int Factories, int Defences, int Army) capAuthored, capOne, defAuthored, defOne, winAuthored, winThirty, resAuthored, resZero;
+    try
+    {
+        capAuthored = SpendOrders(NoWindow, Authored, 20000, factoryBusy: true);
+        capOne = SpendOrders(d => NoWindow(d) with { ProducerCap = 1 }, Authored, 20000, factoryBusy: true);
+        defAuthored = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false);
+        defOne = SpendOrders(NoWindow, d => d with { FactionDefenceCap = 1 }, 20000, factoryBusy: false);
+        winAuthored = SpendOrders(Authored, Authored, 20000, factoryBusy: false, secondBeatAfter: 30);
+        winThirty = SpendOrders(d => d with { SurplusWindowTicks = 30 }, Authored, 20000, factoryBusy: false, secondBeatAfter: 30);
+        resAuthored = SpendOrders(Authored, Authored, 3000, factoryBusy: false);
+        resZero = SpendOrders(d => d with { SurplusReserve = 0 }, Authored, 3000, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    if (capAuthored.Factories != 1)
+        return Fail($"aituning control: at the authored producer_cap of 2, a finished base whose one factory is busy "
+                    + $"and whose surplus counts at once must order a second factory, and it ordered {capAuthored.Factories}");
+    if (capOne.Factories != 0)
+        return Fail($"aituning: a Normal rung at producer_cap 1 must order no second factory, and it ordered "
+                    + $"{capOne.Factories} - the commander is reading the compiled cap rather than the registered one");
+    if (defAuthored.Defences != 1)
+        return Fail($"aituning control: at the authored faction_defence_cap of 3, a finished base with one Bastion, idle "
+                    + $"producers and a surplus that counts at once must order a second Bastion, and it ordered {defAuthored.Defences}");
+    if (defOne.Defences != 0)
+        return Fail($"aituning: a Standard personality at faction_defence_cap 1 must order no second Bastion, and it "
+                    + $"ordered {defOne.Defences} - the commander is reading the compiled cap rather than the registered one");
+    if (winThirty.Defences != 1)
+        return Fail($"aituning control: at a surplus_window_ticks of 30, a finished base whose treasury has stood above "
+                    + $"the reserve from tick 15 to tick 45 must order a Bastion at tick 45, and it ordered {winThirty.Defences}");
+    if (winAuthored.Defences != 0)
+        return Fail($"aituning: at the authored surplus_window_ticks the same base must order nothing at tick 45, 30 ticks "
+                    + $"into its window, and it ordered {winAuthored.Defences} Bastion(s) - the commander is reading the "
+                    + "compiled window, or none at all");
+    if (resAuthored.Army != 1)
+        return Fail($"aituning control: with 3000 credits, below the authored surplus_reserve, the commander must place "
+                    + $"exactly one army order on the beat (the first, on its own price), and it placed {resAuthored.Army}");
+    if (resZero.Army != 2)
+        return Fail($"aituning: a Normal rung at surplus_reserve 0 must place a second army order on the same beat with "
+                    + $"3000 credits, filling the barracks' line of two, and it placed {resZero.Army} - the commander is "
+                    + "reading the compiled reserve rather than the registered one");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -6899,7 +7014,11 @@ int AiTuningGate()
                       + $"a flyer orders {authoredAir.Flak} Flak Track at the authored anti_air_cap and {cappedAir.Flak} "
                       + $"at a registered 0, and its two idle Flak Tracks go for the flyer ({garrisonAir.AtFlyer}) at the "
                       + $"authored anti_air_garrison of 2 and guard the refinery ({escortAir.ToRefinery}) at a registered "
-                      + "0; Brutal's 2/3 still "
+                      + $"0; a finished base orders {capAuthored.Factories} second factory at the authored producer_cap and "
+                      + $"{capOne.Factories} at 1, {defAuthored.Defences} second Bastion at the authored faction_defence_cap and "
+                      + $"{defOne.Defences} at 1, {winAuthored.Defences} Bastion 30 ticks into the authored surplus window and "
+                      + $"{winThirty.Defences} with a window of 30, and {resAuthored.Army} army order on 3000 credits under the "
+                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
