@@ -30,15 +30,21 @@ starting_credit_handicap: 0
 # mean of 29725 credits and sat at or above 4500 for 93 per cent of its
 # seconds) because one barracks and one factory cannot spend its income.
 # producer_cap 1 is D7's Easy cap: the ladder's own one barracks and one
-# factory, and no more, however much it banks. It still routes each order to
-# the shorter queue and places several a beat when it can afford them.
+# factory, and no more, however much it banks. It still places several orders
+# a beat when it can afford them, and still buys its personality's further
+# faction defences from a sustained surplus.
 # surplus_reserve 4500 is the superweapon rung's own credit test, the dearest
 # in the ladder, so nothing it buys out of surplus can starve a rung.
-# surplus_window_ticks 1800 is two minutes, MEASURED rather than chosen: at the
-# base, of the stretches a treasury spent at or above 4500 that ended short of
-# 300 seconds, all but one ended inside 120, so a bank that has stood for two
-# minutes is income, not a single delivery. The same at every rung today;
-# P8-26 judges whether a rung should differ.
+# surplus_window_ticks 4500 is five minutes, MEASURED rather than chosen. At
+# the base, of the 423 stretches a Normal or Hard treasury spent at or above
+# 4500 and then lost before its match ended (spendprobe), 357 lasted under
+# two minutes, one between two and three, none between three and five, and
+# 65 five minutes or more: a bank that has stood for five minutes is income,
+# not a single delivery. Two minutes, the near edge of that gap, was built
+# and measured too and failed two of P8-22's bars: the commander ended matches
+# so early that only 20 of pillargate's 72 launched a superweapon (F8 asks
+# for half), and seatfairgate's split by start went to 21/7 (the bar is
+# 60/40). The same at every rung today; P8-26 judges whether one should differ.
 producer_cap: 1
 surplus_reserve: 4500
-surplus_window_ticks: 1800
+surplus_window_ticks: 4500

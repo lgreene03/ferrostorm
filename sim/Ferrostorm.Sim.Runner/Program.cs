@@ -18404,7 +18404,8 @@ int SpendProbe()
     // tells a surplus that lasts from one a single delivery made.
     const int SampleTicks = 15, WindowTicks = 4500;
     int[] levels = { 1500, 4500, 6500 };
-    int[] bins = { 30, 60, 120, 300 };   // seconds; a run shorter than the first, ..., at least the last
+    int[] FieldedByTicks = { 4500, MeasurementHarness.IncomeWindowTicks };   // units fielded by 5 and 10 minutes
+    int[] bins = { 30, 60, 120, 180, 240, 300, 600 };   // seconds; a run shorter than the first, ..., at least the last
     string root = MeasureRoot();
     var o = MeasureOptions("spendprobe", false, "maps", "pairs", "rungs", "orient", "ticks", "seed", "jobs");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
@@ -18436,13 +18437,14 @@ int SpendProbe()
                    + (d.Longest[k] > 0 ? $" from t={d.LongestFrom[k]})" : ")"));
         return $"      seat {p} ({FactionName(p == 0 ? s.F0 : s.F1)} {(p == 0 ? s.D0 : s.D1)}): mean banked {(d.Samples == 0 ? 0 : d.Sum / d.Samples)}, "
              + $"by 5-minute window {string.Join("/", win)}, peak {d.Peak} at t={d.PeakTick}; {string.Join(", ", at)}; "
-             + $"most barracks {d.MaxBarracks}, most factories {d.MaxFactories}, units {d.Units} and harvesters {d.Harvesters} "
-             + $"delivered worth {d.Delivered}";
+             + $"most barracks {d.MaxBarracks} (second at t={d.SecondBarracks}), most factories {d.MaxFactories} (second at t={d.SecondFactory}), "
+             + $"units fielded by t={FieldedByTicks[0]} {d.UnitsBy[0]} and by t={FieldedByTicks[1]} {d.UnitsBy[1]}, "
+             + $"units {d.Units} and harvesters {d.Harvesters} delivered worth {d.Delivered}";
     }
     string Pct(long n, long of) => of == 0 ? "0" : $"{n * 100 / of}";
     var results = RunOrdered(specs.Count, jobs, i =>
     {
-        var d = new[] { new SpendSeat(windows, levels.Length, bins.Length + 1), new SpendSeat(windows, levels.Length, bins.Length + 1) };
+        var d = new[] { new SpendSeat(windows, levels.Length, bins.Length + 1, FieldedByTicks.Length), new SpendSeat(windows, levels.Length, bins.Length + 1, FieldedByTicks.Length) };
         var r = PlayMeasured(root, specs[i], w =>
         {
             foreach (var ev in w.Events)
@@ -18454,6 +18456,11 @@ int SpendProbe()
                 else if (made.Kind == EntityKind.Harvester) d[made.PlayerId].Harvesters++;
                 else continue;
                 d[made.PlayerId].Delivered += w.GetUnitType(ev.B).Cost;
+                // What a seat FIELDS by a fixed time, which a match that ends
+                // sooner cannot flatter the way a whole-match total does.
+                if (made.Kind == EntityKind.Unit && w.Tick <= FieldedByTicks[^1])
+                    for (int k = 0; k < FieldedByTicks.Length; k++)
+                        if (w.Tick <= FieldedByTicks[k]) d[made.PlayerId].UnitsBy[k]++;
             }
             if (w.Tick % SampleTicks != 0) return;
             for (int p = 0; p < 2; p++)
@@ -18482,8 +18489,12 @@ int SpendProbe()
                         s.Run[l] = 0;
                     }
                 }
-                s.MaxBarracks = Math.Max(s.MaxBarracks, CountOwned(w, p, e => e.Kind == EntityKind.Barracks));
-                s.MaxFactories = Math.Max(s.MaxFactories, CountOwned(w, p, e => e.Kind == EntityKind.Factory));
+                int barracksNow = CountOwned(w, p, e => e.Kind == EntityKind.Barracks);
+                int factoriesNow = CountOwned(w, p, e => e.Kind == EntityKind.Factory);
+                s.MaxBarracks = Math.Max(s.MaxBarracks, barracksNow);
+                s.MaxFactories = Math.Max(s.MaxFactories, factoriesNow);
+                if (barracksNow > 1 && s.SecondBarracks < 0) s.SecondBarracks = w.Tick;
+                if (factoriesNow > 1 && s.SecondFactory < 0) s.SecondFactory = w.Tick;
             }
         });
         seats[i] = d;
@@ -18530,12 +18541,22 @@ int SpendProbe()
                        + $"most {runs.Max():F0} s; runs that ended, by length: {string.Join(", ", ended)})");
             }
             var peaks = pool.Select(x => (double)x.Peak).ToList();
+            string Second(Func<SpendSeat, int> at)
+            {
+                var ticksAt = pool.Where(x => at(x) >= 0).Select(x => (double)at(x)).ToList();
+                return ticksAt.Count == 0 ? "never" : $"median t={MedianOf(ticksAt):F0} ({ticksAt.Count} seats)";
+            }
+            var fielded = new List<string>();
+            for (int k = 0; k < FieldedByTicks.Length; k++)
+                fielded.Add($"by t={FieldedByTicks[k]} {pool.Sum(x => (long)x.UnitsBy[k]) / pool.Count}");
             Console.WriteLine($"  {rung} {FactionName(faction)} ({pool.Count} seats): mean banked {(samples == 0 ? 0 : sum / samples)}, "
                 + $"by 5-minute window {string.Join("/", win)}; peak median {MedianOf(peaks):F0}, most {peaks.Max():F0}; {string.Join("; ", at)}; "
                 + $"most barracks {pool.Max(x => x.MaxBarracks)}, most factories {pool.Max(x => x.MaxFactories)} "
-                + $"(seats holding more than one of either: {pool.Count(x => x.MaxBarracks > 1 || x.MaxFactories > 1)}); "
+                + $"(seats holding more than one of either: {pool.Count(x => x.MaxBarracks > 1 || x.MaxFactories > 1)}; second barracks "
+                + $"{Second(x => x.SecondBarracks)}, second factory {Second(x => x.SecondFactory)}); "
+                + $"mean units fielded per seat {string.Join(", ", fielded)}; "
                 + $"mean per seat {pool.Sum(x => (long)x.Units) / pool.Count} units and {pool.Sum(x => (long)x.Harvesters) / pool.Count} harvesters "
-                + $"delivered worth {pool.Sum(x => x.Delivered) / pool.Count}");
+                + $"delivered worth {pool.Sum(x => x.Delivered) / pool.Count} over the whole match");
         }
     int decided = results.Count(r => r.Winner >= 0);
     Console.WriteLine($"spendprobe: {decided} of {results.Length} matches decided; elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
@@ -19481,14 +19502,20 @@ sealed class MeasuredMatch
 /// and harvester its producers completed.</summary>
 sealed class SpendSeat
 {
-    public SpendSeat(int windows, int levels, int bins)
+    public SpendSeat(int windows, int levels, int bins, int fieldedBy)
     {
         WinSum = new long[windows]; WinN = new int[windows];
         AtOrAbove = new int[levels]; Longest = new int[levels]; LongestFrom = new int[levels];
         Run = new int[levels]; RunFrom = new int[levels]; Ended = new int[levels * bins];
+        UnitsBy = new int[fieldedBy];
     }
     public long Sum, Peak, Delivered;
     public int Samples, PeakTick, MaxBarracks, MaxFactories, Units, Harvesters;
+    /// <summary>The first sampled tick the seat held a second barracks, or a
+    /// second factory; -1 for never.</summary>
+    public int SecondBarracks = -1, SecondFactory = -1;
+    /// <summary>Units completed by each of spendprobe's fixed ticks.</summary>
+    public readonly int[] UnitsBy;
     public readonly long[] WinSum;
     /// <summary>Ended[level * bins + bin]: stretches at or above a level that
     /// ended before the match did, by length bin.</summary>

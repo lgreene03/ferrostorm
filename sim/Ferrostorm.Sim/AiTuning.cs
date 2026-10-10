@@ -114,17 +114,18 @@ public static class AiTuning
     // as many signature guns as it keeps fighters at home. A rung's producer
     // cap is decision D7's (Easy 1, Normal 2, Hard 3, Brutal 3); its reserve is
     // 4500, the superweapon rung's own credit test and the dearest in the
-    // ladder, so spending surplus never starves a rung; and its window is 1800
-    // ticks, the measured edge between a passing bank and a sustained one
-    // (spendprobe at the base: of the stretches at or above 4500 that ended
-    // short of 300 seconds, all but one ended inside 120).
+    // ladder, so spending surplus never starves a rung; and its window is 4500
+    // ticks, the far edge of the measured gap between a passing bank and a
+    // sustained one (spendprobe at the base: of 423 stretches at or above 4500
+    // that ended before their match, one lasted between two and five minutes;
+    // the near edge, 1800, failed F8's launch half in pillargate).
     public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2, FactionDefenceCap: 3);   // ai_standard
     public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2, FactionDefenceCap: 2);     // ai_rusher
     public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2, FactionDefenceCap: 5);   // ai_turtle
-    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0, ProducerCap: 1, SurplusReserve: 4500, SurplusWindowTicks: 1800);       // ai_easy
-    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0, ProducerCap: 2, SurplusReserve: 4500, SurplusWindowTicks: 1800);     // ai_normal
-    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 1800);       // ai_hard
-    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 1800); // ai_brutal
+    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0, ProducerCap: 1, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_easy
+    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0, ProducerCap: 2, SurplusReserve: 4500, SurplusWindowTicks: 4500);     // ai_normal
+    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_hard
+    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500); // ai_brutal
 
     /// <summary>The compiled reference row for an id. Throws rather than
     /// defaulting, and that is deliberate: a weapon id can be 0 for "unarmed",
