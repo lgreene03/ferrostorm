@@ -30,6 +30,15 @@ namespace Ferrostorm.Client;
 /// named in the heading, re-read whenever the scheme changes (SetScheme
 /// raises BindsChanged), so the page never describes a mouse the battle is
 /// not answering to.
+///
+/// P8-45's review: a REPLAY's copy of the page (<see cref="Replay"/>, the
+/// battle's help overlay during playback). A replay takes no orders, so it
+/// must not advertise them (TICKET-P5-SAVE-01, the rule the deleted key
+/// strip's replay line kept): telling a viewer to right-click to attack and
+/// then swallowing the click reads as a broken game. The replay copy is the
+/// SAME two tables filtered, never a second list: a mouse row carries whether
+/// everything it says is true in a replay, and a key is listed when it is one
+/// a viewer can use (<see cref="ShownInReplay"/>).
 /// </summary>
 public partial class ControlsPage : VBoxContainer
 {
@@ -37,7 +46,12 @@ public partial class ControlsPage : VBoxContainer
     private readonly List<(Label Gesture, Label Does)> _mouseRows = new();
     private GridContainer _mouseGrid = null!;
     private Label _mouseHeading = null!;
+    private Label _note = null!;
     private ControlScheme _mouseScheme;
+
+    /// <summary>P8-45's review: is this the replay's copy, which lists only
+    /// what a replay viewer can do? Set before the page enters the tree.</summary>
+    public bool Replay { get; init; }
 
     /// <summary>What each mouse gesture does in a battle under the scheme in
     /// force. The one list of them: the strip's verbs, and the force-attack
@@ -46,36 +60,78 @@ public partial class ControlsPage : VBoxContainer
 
     /// <summary>P8-36: what each gesture does under a given scheme.</summary>
     public static IReadOnlyList<(string Gesture, string Does)> MouseGestures(ControlScheme scheme) =>
-        scheme == ControlScheme.Classic ? ClassicMouse : ModernMouse;
+        MouseGestures(scheme, replay: false);
+
+    /// <summary>P8-45's review: the gestures under a scheme, and in a replay
+    /// only the rows whose every word holds there, filtered from the one
+    /// table so the replay's copy cannot fall behind it.</summary>
+    public static IReadOnlyList<(string Gesture, string Does)> MouseGestures(ControlScheme scheme, bool replay)
+    {
+        var rows = new List<(string, string)>();
+        foreach (var (gesture, does, inReplay) in scheme == ControlScheme.Classic ? ClassicMouse : ModernMouse)
+            if (!replay || inReplay) rows.Add((gesture, does));
+        return rows;
+    }
 
     /// <summary>The heading the mouse rows sit under, naming the scheme.</summary>
     public static string MouseHeading(ControlScheme scheme) =>
         scheme == ControlScheme.Classic ? "MOUSE: CLASSIC SCHEME" : "MOUSE: MODERN SCHEME";
 
-    private static readonly (string Gesture, string Does)[] ModernMouse =
+    /// <summary>P8-45's review: the heading, and in a replay saying so.</summary>
+    public static string MouseHeading(ControlScheme scheme, bool replay) =>
+        !replay ? MouseHeading(scheme)
+        : scheme == ControlScheme.Classic ? "MOUSE IN A REPLAY: CLASSIC SCHEME" : "MOUSE IN A REPLAY: MODERN SCHEME";
+
+    /// <summary>
+    /// P8-45's review: the Bindable actions a replay viewer can use, which a
+    /// replay's copy of the page lists and no others: the camera, the
+    /// selection (it reads and orders nothing), the jump to the last alert,
+    /// help, the operations menu and cancel. Every other entry gives an order,
+    /// which a replay refuses, or works the sidebar, which a replay hides.
+    /// Named by what a viewer CAN do rather than by what it cannot, so a key
+    /// added to Bindable stays off a replay's page until someone says it
+    /// belongs there: a camera key missing from a replay's page costs a
+    /// viewer less than an order advertised and then swallowed.
+    /// </summary>
+    private static readonly HashSet<string> ReplayActions = new()
     {
-        ("LEFT CLICK", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION"),
-        ("DOUBLE-CLICK OR CTRL + CLICK", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS"),
-        ("RIGHT CLICK", "MOVE, ATTACK, HARVEST, ENTER OR BOARD; SETS A FACTORY'S RALLY POINT"),
-        ("SHIFT + RIGHT CLICK", "QUEUES THE ORDER BEHIND THE LAST"),
-        ("CTRL + RIGHT CLICK", "FORCE-ATTACK: FELLS A NEUTRAL BRIDGE"),
-        ("WHEEL, SCREEN EDGE, MINIMAP", "MOVE THE CAMERA"),
+        "select_all_army", "idle_harvester", "jump_to_event", "help", "pause_menu", "cancel",
+        "camera_left", "camera_right", "camera_forward", "camera_back",
+        "group_1", "group_2", "group_3", "group_4", "group_5", "group_6", "group_7", "group_8", "group_9", "group_0",
+        "bookmark_1", "bookmark_2", "bookmark_3", "bookmark_4",
+    };
+
+    /// <summary>P8-45's review: does a replay's copy of the page list this
+    /// action?</summary>
+    public static bool ShownInReplay(string action) => ReplayActions.Contains(action);
+
+    // The third field: is every word of the row true in a replay? A row that
+    // orders anything, or that names something a replay cannot have (a
+    // targeting, a placement, an MCV deploying), is false.
+    private static readonly (string Gesture, string Does, bool InReplay)[] ModernMouse =
+    {
+        ("LEFT CLICK", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION", true),
+        ("DOUBLE-CLICK OR CTRL + CLICK", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS", false),
+        ("RIGHT CLICK", "MOVE, ATTACK, HARVEST, ENTER OR BOARD; SETS A FACTORY'S RALLY POINT", false),
+        ("SHIFT + RIGHT CLICK", "QUEUES THE ORDER BEHIND THE LAST", false),
+        ("CTRL + RIGHT CLICK", "FORCE-ATTACK: FELLS A NEUTRAL BRIDGE", false),
+        ("WHEEL, SCREEN EDGE, MINIMAP", "MOVE THE CAMERA", true),
     };
 
     /// <summary>Doc 11's Scheme A as built: the click on something of your
     /// own selects it, the click anywhere else orders the selection there,
     /// and the right click takes things away. An own Carrier is the one thing
     /// of your own a click orders at, when the selection can board it.</summary>
-    private static readonly (string Gesture, string Does)[] ClassicMouse =
+    private static readonly (string Gesture, string Does, bool InReplay)[] ClassicMouse =
     {
-        ("LEFT CLICK ON YOUR OWN", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION"),
-        ("LEFT CLICK ANYWHERE ELSE", "MOVE, ATTACK, HARVEST OR ENTER; WITH A FACTORY SELECTED, SETS ITS RALLY POINT"),
-        ("LEFT CLICK ON YOUR OWN CARRIER", "BOARDS IT, WHEN WHAT IS SELECTED CAN BOARD"),
-        ("DOUBLE-CLICK OR CTRL + CLICK ON YOUR OWN", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS"),
-        ("SHIFT + LEFT CLICK ELSEWHERE", "QUEUES THE ORDER BEHIND THE LAST"),
-        ("CTRL + LEFT CLICK ON A BRIDGE", "FORCE-ATTACK: FELLS A NEUTRAL BRIDGE"),
-        ("RIGHT CLICK", "CANCELS A TARGETING OR A PLACEMENT; OTHERWISE DESELECTS"),
-        ("WHEEL, SCREEN EDGE, MINIMAP", "MOVE THE CAMERA"),
+        ("LEFT CLICK ON YOUR OWN", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION", true),
+        ("LEFT CLICK ANYWHERE ELSE", "MOVE, ATTACK, HARVEST OR ENTER; WITH A FACTORY SELECTED, SETS ITS RALLY POINT", false),
+        ("LEFT CLICK ON YOUR OWN CARRIER", "BOARDS IT, WHEN WHAT IS SELECTED CAN BOARD", false),
+        ("DOUBLE-CLICK OR CTRL + CLICK ON YOUR OWN", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS", false),
+        ("SHIFT + LEFT CLICK ELSEWHERE", "QUEUES THE ORDER BEHIND THE LAST", false),
+        ("CTRL + LEFT CLICK ON A BRIDGE", "FORCE-ATTACK: FELLS A NEUTRAL BRIDGE", false),
+        ("RIGHT CLICK", "CANCELS A TARGETING OR A PLACEMENT; OTHERWISE DESELECTS", false),
+        ("WHEEL, SCREEN EDGE, MINIMAP", "MOVE THE CAMERA", true),
     };
 
     public override void _Ready()
@@ -101,7 +157,7 @@ public partial class ControlsPage : VBoxContainer
         body.AddThemeConstantOverride("separation", 6);
         pad.AddChild(body);
 
-        _mouseHeading = Heading(MouseHeading(Settings.Scheme));
+        _mouseHeading = Heading(MouseHeading(Settings.Scheme, Replay));
         body.AddChild(_mouseHeading);
         _mouseGrid = new GridContainer { Columns = 2, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         _mouseGrid.AddThemeConstantOverride("h_separation", 24);
@@ -116,6 +172,7 @@ public partial class ControlsPage : VBoxContainer
         body.AddChild(grid);
         foreach (var (action, label) in Settings.Bindable)
         {
+            if (Replay && !ShownInReplay(action)) continue;
             var l = new Label { Text = label, SizeFlagsHorizontal = SizeFlags.ExpandFill };
             l.AddThemeFontSizeOverride("font_size", 12);
             l.AddThemeColorOverride("font_color", UplinkUi.Bone);
@@ -126,10 +183,16 @@ public partial class ControlsPage : VBoxContainer
             grid.AddChild(k);
             _rows.Add((action, l, k));
         }
-        AddChild(UplinkUi.Note(
-            "hold CTRL (or CMD) with a group key to put the selection in that group, or with a bookmark key to store "
-            + "the view there; hold ALT with a group key to build that slot of the open sidebar tab. "
-            + "Change any key, or the mouse scheme, under SETTINGS.", 11));
+        // P8-45's review: a replay's note keeps the modifiers a viewer can use
+        // and drops ALT's, which builds, and says why the page is shorter.
+        const string modifiers = "hold CTRL (or CMD) with a group key to put the selection in that group, or with a "
+                                 + "bookmark key to store the view there";
+        _note = UplinkUi.Note(Replay
+            ? "a replay takes no orders, so only what a viewer can do is listed; " + modifiers + ". "
+              + "Change any key, or the mouse scheme, under SETTINGS."
+            : modifiers + "; hold ALT with a group key to build that slot of the open sidebar tab. "
+              + "Change any key, or the mouse scheme, under SETTINGS.", 11);
+        AddChild(_note);
         Refresh();
     }
 
@@ -139,8 +202,8 @@ public partial class ControlsPage : VBoxContainer
         foreach (var child in _mouseGrid.GetChildren()) { _mouseGrid.RemoveChild(child); child.QueueFree(); }
         _mouseRows.Clear();
         _mouseScheme = Settings.Scheme;
-        _mouseHeading.Text = MouseHeading(_mouseScheme);
-        foreach (var (gesture, does) in MouseGestures(_mouseScheme))
+        _mouseHeading.Text = MouseHeading(_mouseScheme, Replay);
+        foreach (var (gesture, does) in MouseGestures(_mouseScheme, Replay))
         {
             var gl = new Label { Text = gesture };
             gl.AddThemeFontSizeOverride("font_size", 12);
@@ -174,6 +237,9 @@ public partial class ControlsPage : VBoxContainer
 
     /// <summary>P8-36 verification read: the heading over the mouse rows.</summary>
     public string MouseHeadingShown() => _mouseHeading.Text;
+
+    /// <summary>P8-45 review verification read: the note under the rows.</summary>
+    public string NoteShown() => _note.Text;
 
     /// <summary>Verification read: each row as SHOWN, label and key, in
     /// screen order.</summary>

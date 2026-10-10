@@ -1328,6 +1328,11 @@ public partial class SkirmishLive : Node3D
     /// reminder of a key is not a reason to stop a battle. The scrim stops the
     /// mouse, as the pause menu's does, so a click meant for CLOSE cannot
     /// order the army underneath it.
+    ///
+    /// P8-45's review: during playback it is the page's REPLAY copy, which
+    /// lists only what a viewer can do. A replay takes no orders, so it must
+    /// not advertise them (TICKET-P5-SAVE-01), which is why the key strip this
+    /// replaced had a replay line of its own.
     /// </summary>
     private void ToggleHelp()
     {
@@ -1336,7 +1341,7 @@ public partial class SkirmishLive : Node3D
         var overlay = UplinkUi.FullOverlay(_hud, 0.78f);
         overlay.Name = "HelpOverlay";
         var v = UplinkUi.OverlayBox(overlay, "CONTROLS", 330, 330);
-        var page = new ControlsPage();
+        var page = new ControlsPage { Replay = _replay != null };
         v.AddChild(page);
         v.AddChild(UplinkUi.Note(
             $"{Settings.KeyName(Settings.BindOf("help"))} or {Settings.KeyName(Settings.BindOf("cancel"))} closes this; "

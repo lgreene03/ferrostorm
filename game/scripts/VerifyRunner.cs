@@ -9550,6 +9550,7 @@ public partial class VerifyRunner : Node
             RunHudPanelStage();
             RunHudTickStage();
             RunHudHelpStage();
+            RunHudHelpReplayStage();
             RunHudIconStage();
             RunHudToastStage();
             RunHudDoorsStage();
@@ -9713,6 +9714,117 @@ public partial class VerifyRunner : Node
         {
             DeleteRecording(g);
             g.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// P8-45's review: the help overlay opened during a REPLAY lists only
+    /// what a replay viewer can do. A replay takes no orders, so it must not
+    /// advertise them (TICKET-P5-SAVE-01), and the key strip the overlay
+    /// replaced had a replay line for exactly that reason. A short match is
+    /// recorded through the real recorder and played back from seat 1, and
+    /// the overlay is opened under each scheme. "Ordering" is read against
+    /// this stage's own transcript of the verbs and keys that order, not
+    /// against the page's filter, so a filter that lets an order through
+    /// cannot pass by agreeing with itself.
+    /// </summary>
+    private void RunHudHelpReplayStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        string frep = g.RecordingPath;
+        string side = frep.Length > 0 ? System.IO.Path.ChangeExtension(frep, ".json") : "";
+        SkirmishLive? p = null;
+        var schemeWas = Settings.Scheme;
+        try
+        {
+            g.StepTicks(GameFiles.MinRecordedTicks + 15);
+            g.LeaveForMenuForTest = () => { };
+            g.QuitToMenuForTest();
+            g.LeaveForMenuForTest = null;
+            var meta = side.Length > 0 ? MatchMeta.Read(side) : null;
+            HudGate(meta != null && System.IO.File.Exists(frep), "help-replay",
+                    $"precondition: a short match is recorded and closed ({frep}, sidecar {meta != null})");
+            if (meta == null) return;
+
+            var restore = MatchConfig.CurrentSetup();
+            string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+            var wasStructs = MatchConfig.AllowedStructures;
+            var wasUnits = MatchConfig.AllowedUnits;
+            try
+            {
+                MatchConfig.ApplyFrom(meta);
+                MatchConfig.ReplayPath = frep;
+                MatchConfig.ReplayTicks = meta.Tick;
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.PendingNet = null;
+                SkirmishLive.LocalSeat = 1;
+                p = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(p);
+            }
+            finally
+            {
+                MatchConfig.ApplyFrom(restore);
+                MatchConfig.MissionPath = wasMission;
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.AllowedStructures = wasStructs;
+                MatchConfig.AllowedUnits = wasUnits;
+                MatchConfig.ReplayPath = null;
+            }
+            p.StepTicks(5);
+
+            // This stage's own transcript of what orders: the verbs an
+            // ordering mouse row names, and the Bindable keys that give an
+            // order or work the sidebar a replay hides.
+            string[] orderVerbs = { "ATTACK", "HARVEST", "ENTER", "BOARD", "RALLY", "QUEUES", "DEPLOYS", "FELLS", "BUILD", "TARGETING", "PLACEMENT" };
+            string[] orderKeys = { "ATTACK-MOVE", "SUPERWEAPON", "SUPPORT POWERS", "STOP", "HOLD FIRE", "GUARD", "PATROL",
+                                   "REPAIR", "SELL", "DEPLOY", "UNLOAD", "SIDEBAR TAB" };
+            // What a viewer must still be told, so an empty page cannot pass.
+            string[] viewerKeys = { "HELP", "CANCEL / BACK", "OPERATIONS MENU", "CAMERA LEFT", "CAMERA BOOKMARK 1", "GROUP 1" };
+            var wantKeys = new List<(string Label, string Key)>();
+            foreach (var (action, label) in Settings.Bindable)
+                if (ControlsPage.ShownInReplay(action)) wantKeys.Add((label, Settings.KeyName(Settings.BindOf(action))));
+
+            foreach (var scheme in new[] { ControlScheme.Modern, ControlScheme.Classic })
+            {
+                string s = scheme == ControlScheme.Classic ? "CLASSIC" : "MODERN";
+                Settings.Scheme = scheme;
+                p.PressKey(Settings.BindOf("help"));
+                var page = p.HelpPageShown;
+                var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
+                var keys = page?.RowsShown() ?? new List<(string Label, string Key)>();
+                string note = page?.NoteShown() ?? "";
+                string heading = page?.MouseHeadingShown() ?? "(no page)";
+                var bad = new List<string>();
+                foreach (var (gesture, does) in mouse)
+                    foreach (string verb in orderVerbs)
+                        if (does.Contains(verb) || gesture.Contains(verb)) { bad.Add($"mouse \"{gesture}: {does}\""); break; }
+                foreach (var (label, _) in keys)
+                    if (System.Array.IndexOf(orderKeys, label) >= 0) bad.Add($"key {label}");
+                if (note.Contains("ALT") || note.Contains("BUILD", System.StringComparison.OrdinalIgnoreCase)) bad.Add($"note \"{note}\"");
+                var missing = new List<string>();
+                foreach (string k in viewerKeys) if (!keys.Exists(r => r.Label == k)) missing.Add(k);
+                bool selects = mouse.Exists(r => r.Does.StartsWith("SELECT"));
+                bool camera = mouse.Exists(r => r.Does == "MOVE THE CAMERA");
+                string diff = page == null ? "no overlay opened" : RowsDiff(keys, wantKeys);
+                HudGate(p.IsReplay && page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0
+                        && heading == ControlsPage.MouseHeading(scheme, replay: true) && heading.Contains("REPLAY"),
+                        "help-replay",
+                        $"under {s}, the help overlay opened during a replay from seat {p.LocalPlayerId} (replay {p.IsReplay}) lists no "
+                        + $"ordering gesture or key ({bad.Count} found{(bad.Count > 0 ? $": {string.Join("; ", bad)}" : "")}), "
+                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (selecting {selects}, the camera "
+                        + $"{camera}) and {keys.Count} of the {Settings.Bindable.Length} Bindable keys, generated from the same table "
+                        + $"in its order{(diff.Length > 0 ? $" (but {diff})" : "")}{(missing.Count > 0 ? $", missing {string.Join(", ", missing)}" : "")}");
+                p.PressKey(Settings.BindOf("help"));
+            }
+        }
+        catch (System.Exception ex) { HudGate(false, "help-replay", $"the stage threw: {ex}"); }
+        finally
+        {
+            Settings.Scheme = schemeWas;
+            p?.QueueFree();
+            g.QueueFree();
+            if (frep.Length > 0) System.IO.File.Delete(frep);
+            if (side.Length > 0) System.IO.File.Delete(side);
         }
     }
 
