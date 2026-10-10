@@ -165,7 +165,7 @@ armour, reaches com_refinery's hit points (stage 7: 2000 against 2000, with
 a control showing strike_damage 2499 deals 1999 and fails). Stage 7 is D2's
 reason held in CI.
 
-**`pillargate`** (new, on demand): F8 over `pillarprobe`'s sweep, through the
+**`pillargate`** (new, on demand; note, 2026-10-09: since P8-72, pull request 170, `pillargate --bind` runs last in `tools/ci-local.sh` and on CI's ubuntu determinism leg): F8 over `pillarprobe`'s sweep, through the
 same function (`PillarF8`), which `pillarprobe` now calls too, so the gate's
 figure is the probe's by construction. Two halves with their own switches in
 `MeasurementHarness`:
@@ -607,6 +607,12 @@ whose diff touches `SkirmishAI`'s build ladder or a superweapon def records
 its two `pillargate --bind` verdict lines, the rate half and the first-launch
 half, in its ADR or its PR. P8-52's reissued playtest brief cites this ADR,
 as that row now says.
+Note, 2026-10-09: this condition's premise, that F8 is held in CI only by
+`powerdatagate`'s charge bound, no longer holds since P8-72 (pull request
+170), which runs `pillargate --bind`, both halves binding, last in
+`tools/ci-local.sh` and on CI's ubuntu determinism leg. Its rule, that a
+later row records its two `pillargate --bind` verdict lines, stands until
+the Architect lifts it.
 
 ## Architect sign-off
 Signed off with conditions by the Architect on 2026-10-03, reviewing the P8-18 integration branch with its audit follow-ups applied. Before-merge conditions C1 to C5 are met in the same pull request that lands this ADR (implemented in the row's lane as commit 815c74c, which the squash merge does not preserve). Carried conditions C6 (row P8-61 and P8-19's seismic damage), C7 (the single read predicate) and C8 (pillargate verdicts recorded until it runs in CI) are recorded in the tracker and in Consequences.

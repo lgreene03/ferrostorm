@@ -17,6 +17,8 @@ namespace Ferrostorm;
 ///     shared out by family with a cap each (P8-44)
 ///   - 1 x AudioStreamPlayer   the announcer's channel, one voice line at a
 ///     time from a priority queue (Announce, P8-44)
+///   - 1 x AudioStreamPlayer   the bark channel, one unit acknowledgement at a
+///     time, debounced (Bark, P8-41), loading res://audio/barks/
 ///   - 3 x AudioStreamPlayer   music decks for the score playlist (P8-46),
 ///     which loads its Ogg tracks from res://audio/music/ by name
 ///
@@ -97,6 +99,10 @@ public partial class AudioDirector : Node
         // have always played on, so the settings slider still holds them.
         _announcer = new AudioStreamPlayer { Name = "AnnouncerVoice", Bus = AudioBuses.Ui };
         AddChild(_announcer);
+        // P8-41: the bark channel, on the Ui bus with the other answers to a
+        // click, so the interface slider holds it.
+        _bark = new AudioStreamPlayer { Name = "BarkVoice", Bus = AudioBuses.Ui };
+        AddChild(_bark);
 
         _ambientPlayer = new AudioStreamPlayer { Name = "AmbientVoice", Bus = AudioBuses.Ambient };
         AddChild(_ambientPlayer);
@@ -120,6 +126,7 @@ public partial class AudioDirector : Node
     {
         LoadStreamDir(AudioDir);
         LoadStreamDir(AudioDir + "vo/");
+        LoadStreamDir(AudioDir + "barks/");   // P8-41
         LoadScore();
     }
 
@@ -425,6 +432,70 @@ public partial class AudioDirector : Node
     {
         _announcer.Stop();
         _announcerQueue.Reset();
+    }
+
+    // ---------------- P8-41: the bark channel ----------------
+    //
+    // FEEL-01. A unit answers its selection and its orders on a player of its
+    // own, so a bark never steals a UI click's voice and a click never cuts a
+    // bark off. ONE player, because two units answering at once is noise
+    // rather than news. THE DEBOUNCE: a bark asked for within BarkDebounceSeconds
+    // of the last one that STARTED is dropped, never queued (a late answer is
+    // worse than none), with one exception, because selecting and ordering at
+    // once is the commonest thing a player does: an ORDER bark is debounced
+    // only against the last order bark, and cuts a selection bark that is still
+    // sounding. So spamming clicks gives at most one answer per window, and an
+    // order right after a selection is still answered. docs/design/19-audio-spec.md
+    // has the rule, the set and the reasons.
+
+    /// <summary>The level every bark plays at, under the announcer's -4.</summary>
+    public const float BarkDb = -6f;
+    /// <summary>The window, longer than any bark in the set (the longest is
+    /// 0.33 s), so a bark is never cut by one of its own kind.</summary>
+    public const double BarkDebounceSeconds = 0.6;
+    private AudioStreamPlayer _bark = null!;
+    private double _lastBarkAt = double.NegativeInfinity;
+    private double _lastOrderBarkAt = double.NegativeInfinity;
+
+    /// <summary>Play a bark on the bark channel unless the debounce drops it;
+    /// true when it played. `order` is false for a selection's bark, which is
+    /// debounced against the last bark of either kind; an order's bark is
+    /// debounced against the last ORDER bark only (the exception above).</summary>
+    public bool Bark(string name, bool order)
+    {
+        CountRequest(name);
+        double now = Now();
+        if (now - (order ? _lastOrderBarkAt : _lastBarkAt) < BarkDebounceSeconds)
+        {
+            BarksDropped++;
+            return false;
+        }
+        if (!TryGetStream(name, out var stream)) return false;
+        _lastBarkAt = now;
+        if (order) _lastOrderBarkAt = now;
+        _bark.Stop();
+        _bark.Stream = stream;
+        _bark.VolumeDb = BarkDb;
+        _bark.PitchScale = 1f;
+        _bark.Play();
+        BarksPlayed++;
+        LastBark = name;
+        return true;
+    }
+
+    /// <summary>P8-41 verification reads: barks played and dropped by the
+    /// debounce, and the last one played.</summary>
+    public int BarksPlayed { get; private set; }
+    public int BarksDropped { get; private set; }
+    public string? LastBark { get; private set; }
+    /// <summary>Forget the debounce and the tallies, so a stage starts from a
+    /// quiet channel whatever the stages before it asked for.</summary>
+    public void ResetBarksForTest()
+    {
+        _bark.Stop();
+        _lastBarkAt = _lastOrderBarkAt = double.NegativeInfinity;
+        BarksPlayed = BarksDropped = 0;
+        LastBark = null;
     }
 
     // ---- P8-44: one clock for the pool and the announcer. Wall time in play;
