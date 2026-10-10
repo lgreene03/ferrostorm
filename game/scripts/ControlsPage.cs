@@ -119,12 +119,13 @@ public partial class ControlsPage : VBoxContainer
     };
 
     /// <summary>Doc 11's Scheme A as built: the click on something of your
-    /// own selects it, the click anywhere else orders the selection there,
-    /// and the right click takes things away. An own Carrier is the one thing
-    /// of your own a click orders at, when the selection can board it.</summary>
+    /// own, or of an ally's, selects instead (doc 11's own words), the click
+    /// anywhere else orders the selection there, and the right click takes
+    /// things away. An own Carrier is the one thing of your own a click
+    /// orders at, when the selection can board it.</summary>
     private static readonly (string Gesture, string Does, bool InReplay)[] ClassicMouse =
     {
-        ("LEFT CLICK ON YOUR OWN", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION", true),
+        ("LEFT CLICK ON YOUR OWN OR AN ALLY", "SELECT; DRAG TO BOX-SELECT; SHIFT ADDS TO THE SELECTION", true),
         ("LEFT CLICK ANYWHERE ELSE", "MOVE, ATTACK, HARVEST OR ENTER; WITH A FACTORY SELECTED, SETS ITS RALLY POINT", false),
         ("LEFT CLICK ON YOUR OWN CARRIER", "BOARDS IT, WHEN WHAT IS SELECTED CAN BOARD", false),
         ("DOUBLE-CLICK OR CTRL + CLICK ON YOUR OWN", "EVERY UNIT OF THAT TYPE ON SCREEN; AN MCV DEPLOYS", false),

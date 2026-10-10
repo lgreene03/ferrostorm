@@ -10077,6 +10077,7 @@ public partial class VerifyRunner : Node
             RunSchemeSettingStage();
             RunSchemeVerbStage(ControlScheme.Modern);
             RunSchemeVerbStage(ControlScheme.Classic);
+            RunSchemeAllyStage();
         }
         finally
         {
@@ -10547,6 +10548,128 @@ public partial class VerifyRunner : Node
         {
             DeleteRecording(g);
             g.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// P8-36 review, decided under the owner's standing authority: doc 11
+    /// line 6, "Left click on ally/own: select instead". In a teamed
+    /// four-seat battle from seat 1, with my squad selected, a CLASSIC left
+    /// click on an ally's squad and on an ally's building is a selection
+    /// click: the cursor reads Select, nothing is queued, IssueOrder is not
+    /// asked, and the click leaves what a selection click there leaves, which
+    /// is nothing of the ally's (an ally is never selectable, ADR-021). The
+    /// MODERN scheme is unchanged: its right click on the same ally squad is
+    /// still the move it was.
+    /// </summary>
+    private void RunSchemeAllyStage()
+    {
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        SkirmishLive? g = null;
+        try
+        {
+            try
+            {
+                MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-09.fmap");
+                MatchConfig.TeamMode = MatchSetup.TeamsEvenSides;
+                MatchConfig.Seats = 0;                 // fill the map: four seats
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.LocalSeat = 1;
+                SkirmishLive.PendingNet = null;
+                g = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(g);
+            }
+            finally
+            {
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.TeamMode = wasTeamMode;
+                MatchConfig.Seats = wasSeats;
+            }
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, ally = -1;
+            for (int p = 0; p < lw.PlayerCount; p++) if (p != me && !g.IsHostileSeat(p)) ally = p;
+            g.StepOneTick();
+            g.StepOneTick();
+            // Every other seat stands down, the ally too, so no commander
+            // moves a fixture between the spawn and the click.
+            for (int p = 0; p < lw.PlayerCount; p++) if (p != me) StandDownOpposition(lw, p);
+            if (ally < 0 || GroundNear(g, me) is not { } q)
+            {
+                SchemeGate(false, "ally", $"precondition: a teamed four-seat battle with an ally of seat {me} (ally {ally}) and quiet ground");
+                return;
+            }
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int mine = SpawnOfType(lw, me, rifle, q.X - 2, q.Y);
+            int theirs = SpawnOfType(lw, ally, rifle, q.X + 2, q.Y - 2);
+            int plant = lw.SpawnPowerPlant(ally, q.X + 2, q.Y + 2);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+            Vector2 Aim(int id)
+            {
+                g.PumpActorsForTest();
+                var (x, z) = PosOf(id);
+                g.FocusCameraOn(x, z, 22f);
+                return g.ScreenOf(x, z);
+            }
+            bool SelectMine()
+            {
+                var at = Aim(mine);
+                g.ClearSelectionForTest();
+                g.ClickLeft(at);
+                return g.SelectionCount == 1 && g.IsSelected(mine);
+            }
+            bool seen = me == 1 && lw.PlayerCount == 4 && !g.IsHostileSeat(ally)
+                        && g.DrawnForLocalSeatForTest(theirs) && g.DrawnForLocalSeatForTest(plant);
+            SchemeGate(seen, "ally", $"precondition: from seat {me} of {lw.PlayerCount}, ally seat {ally}'s squad and power plant "
+                                     + "are drawn beside my squad");
+
+            // CLASSIC: a left click on either is a selection click.
+            Settings.Scheme = ControlScheme.Classic;
+            var bad = new List<string>();
+            foreach (var (name, target) in new[] { ("squad", theirs), ("power plant", plant) })
+            {
+                bool sel = SelectMine();
+                var at = Aim(target);
+                string cursor = g.CursorNameAt(at);
+                int r0 = g.OrderResolutionsForTest, p0 = g.PendingForTest.Count;
+                g.ClickLeft(at);
+                int queued = g.PendingForTest.Count - p0, resolved = g.OrderResolutionsForTest - r0;
+                bool none = g.SelectionCount == 0 && !g.IsSelected(target);
+                if (!sel || cursor != "Select" || queued != 0 || resolved != 0 || !none)
+                    bad.Add($"the ally's {name} (my squad selected first {sel}; cursor {cursor}; {queued} queued, {resolved} resolved; "
+                            + $"{g.SelectionCount} left selected)");
+            }
+            SchemeGate(bad.Count == 0, "classic/ally",
+                       "with my squad selected, a left click on an ally's squad and on an ally's power plant selects instead, as doc 11 "
+                       + "line 6 says: the cursor reads Select, nothing is queued, IssueOrder is not asked, and the click leaves nothing "
+                       + $"of the ally's selected{(bad.Count > 0 ? $"; but {string.Join("; ", bad)}" : "")}");
+
+            // MODERN, unchanged: the right click on the ally's squad is a move.
+            Settings.Scheme = ControlScheme.Modern;
+            bool selM = SelectMine();
+            var onTheirs = Aim(theirs);
+            string mCursor = g.CursorNameAt(onTheirs);
+            int mr0 = g.OrderResolutionsForTest, mp0 = g.PendingForTest.Count;
+            g.PressRightClick(onTheirs);
+            int moves = 0, stray = 0;
+            for (int i = mp0; i < g.PendingForTest.Count; i++)
+            {
+                var c = g.PendingForTest[i];
+                if (c.PlayerId == me && c.Type == CommandType.PathMove && c.EntityId == mine) moves++;
+                else stray++;
+            }
+            SchemeGate(selM && mCursor == "Move" && moves == 1 && stray == 0 && g.OrderResolutionsForTest - mr0 == 1, "modern/ally",
+                       $"the modern scheme is unchanged: with my squad selected (first {selM}) the right click on the ally's squad, under "
+                       + $"the cursor {mCursor} (wanted Move), queues {moves} PathMove of seat {me}'s for my squad ({stray} stray), "
+                       + $"resolved by IssueOrder {g.OrderResolutionsForTest - mr0} time(s)");
+        }
+        catch (System.Exception ex) { SchemeGate(false, "ally", $"the stage threw: {ex}"); }
+        finally
+        {
+            if (g != null) { DeleteRecording(g); g.QueueFree(); }
         }
     }
 }

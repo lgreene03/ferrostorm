@@ -3678,7 +3678,8 @@ public partial class SkirmishLive : Node3D
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
         // P8-36: under the classic scheme the cursor promises what the LEFT
         // click will do, so where that click selects (something of the
-        // player's own, or nothing orderable selected) it reads Select; where
+        // player's own or an ally's, or nothing orderable selected) it reads
+        // Select; where
         // it orders, the verbs below are the ones IssueOrder will send, the
         // same answer the modern scheme gives for the right click.
         if (Settings.Scheme == ControlScheme.Classic && !ClassicClickOrders(screen)) return GameCursor.Select;
@@ -5424,7 +5425,7 @@ public partial class SkirmishLive : Node3D
                     // P8-36, decision D22: under the classic scheme a CLICK
                     // (a drag is still a box select) orders the selection
                     // wherever it does not land on something of the player's
-                    // own, and it orders through IssueOrder, the right click's
+                    // own or an ally's, and it orders through IssueOrder, the right click's
                     // own resolver, so the two schemes share one path. Read
                     // on the release, so a press that becomes a drag is never
                     // an order. Ctrl rides on the event, as D23's force-attack
@@ -5907,19 +5908,28 @@ public partial class SkirmishLive : Node3D
 
     /// <summary>
     /// Does a classic left click here ORDER the selection, rather than select?
-    /// Doc 11's Scheme A: a click on something of the player's own selects it,
-    /// and a click anywhere else orders the selection there, which is exactly
-    /// what the modern right click would send (IssueOrder). Three refinements,
-    /// each so that the classic click offers no less than the modern one:
-    /// nothing orderable selected (empty, a spectator, or only buildings that
-    /// take no rally) means the click selects; an own Carrier is an order when
-    /// the selection holds something that can board it, because boarding is
-    /// the order the modern right click sends there and a click that only
-    /// selected the Carrier would leave boarding unreachable; and an ALLIED
-    /// unit or building, which the player cannot select, is ordered at as the
-    /// modern right click is (doc 11 predates alliances; decided under the
-    /// owner's instruction, reverses if a playtest wants a click on an ally to
-    /// do nothing).
+    /// Doc 11's Scheme A: a click on something of the player's own, or of an
+    /// ally's, selects instead (doc 11 line 6, "Left click on ally/own: select
+    /// instead"), and a click anywhere else orders the selection there, which
+    /// is exactly what the modern right click would send (IssueOrder). Two
+    /// refinements, each so that the classic click offers no less than the
+    /// modern one: nothing orderable selected (empty, a spectator, or only
+    /// buildings that take no rally) means the click selects; and an own
+    /// Carrier is an order when the selection holds something that can board
+    /// it, because boarding is the order the modern right click sends there
+    /// and a click that only selected the Carrier would leave boarding
+    /// unreachable.
+    ///
+    /// The ally case was first ordered at, as the modern right click is, on
+    /// the reading that doc 11 predates alliances; but doc 11 names the ally
+    /// case, and a written spec outranks an implementer's judgement
+    /// (CLAUDE.md's source-of-truth order), so the click on an ally is a
+    /// selection click (FinishSelect), as on an own unit. It selects nothing
+    /// there, because the selection is own-only (ADR-021), which is exactly
+    /// what the modern LEFT click on an ally does. No verb is lost: nothing
+    /// the modern right click sends at an ally is more than a move to that
+    /// spot (a contact unit never acts on an ally, ContactCanAct), and a
+    /// classic click on the ground beside the ally sends that move.
     /// </summary>
     private bool ClassicClickOrders(Vector2 screen)
     {
@@ -5933,8 +5943,22 @@ public partial class SkirmishLive : Node3D
         }
         if (!anyMobile && !anyRally) return false;
         if (anyMobile && AnySelectedCanBoard() && PickOwnCarrier(screen) >= 0) return true;
-        return OwnSelectableAt(screen) < 0;
+        return OwnSelectableAt(screen) < 0 && AlliedAt(screen) < 0;
     }
+
+    /// <summary>P8-36 review: the ally's unit or building a classic click here
+    /// lands on, or -1, at the own picks' radii and in their order (a unit
+    /// first). An ally is a seat on the local seat's team other than its own;
+    /// a neutral (-1) is nobody's ally, so a bridge or an outpost stays
+    /// ground or a walk-in as before.</summary>
+    private int AlliedAt(Vector2 at)
+    {
+        int hit = PickEntity(at, 0.9f, v => IsAlliedSeat(v.PlayerId) && Mobile(v.Kind));
+        return hit >= 0 ? hit
+            : PickEntity(at, 1.4f, v => IsAlliedSeat(v.PlayerId) && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+    }
+
+    private bool IsAlliedSeat(int seat) => seat >= 0 && seat != LocalPlayerId && !IsHostileSeat(seat);
 
     /// <summary>The thing of the player's own a selection click here would
     /// take, or -1: the same two picks FinishSelect makes, own mobiles first.</summary>
