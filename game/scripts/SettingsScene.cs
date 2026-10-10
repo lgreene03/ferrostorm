@@ -254,12 +254,20 @@ public partial class SettingsScene : Control
     }
 
     public const string TickCounterLabel = "TICK COUNTER (DEVELOPER)";
+    public const string SchemeLabel = "CONTROL SCHEME";
 
     // ---------------- key rebinding ----------------
 
     private void BuildBinds(VBoxContainer v)
     {
         v.AddChild(Section("CONTROLS"));
+        // P8-36, decision D22: the mouse scheme, the same choice the first
+        // launch asks for. Live at once: the next click in a battle (this page
+        // opens over one from the pause menu) answers to the new scheme.
+        var scheme = Options(v, SchemeLabel, new[] { "MODERN", "CLASSIC" }, () => (int)Settings.Scheme);
+        scheme.ItemSelected += idx => Settings.SetScheme(idx == 1 ? ControlScheme.Classic : ControlScheme.Modern);
+        v.AddChild(UplinkUi.Note(
+            "MODERN: left click selects, right click orders. CLASSIC: left click selects what is yours and orders anywhere else, right click deselects.", 11));
         v.AddChild(UplinkUi.Note(
             "click a key to rebind it, then press the new key. a key already in use is refused, and the binding it would have broken is named.", 11));
         _bindRows = new VBoxContainer { SizeFlagsHorizontal = SizeFlags.ExpandFill };

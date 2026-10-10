@@ -3671,6 +3671,12 @@ public partial class SkirmishLive : Node3D
         if (_superArmed || _attackMoveArmed || _patrolArmed || _powerArmed != null) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
+        // P8-36: under the classic scheme the cursor promises what the LEFT
+        // click will do, so where that click selects (something of the
+        // player's own, or nothing orderable selected) it reads Select; where
+        // it orders, the verbs below are the ones IssueOrder will send, the
+        // same answer the modern scheme gives for the right click.
+        if (Settings.Scheme == ControlScheme.Classic && !ClassicClickOrders(screen)) return GameCursor.Select;
         bool force = ctrl ?? (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta));
         bool anyMobile = false, allContact = true, anyArmed = false, anyBoarder = false, anyHarvester = false;
         int contactAt = -1;
@@ -5406,7 +5412,24 @@ public partial class SkirmishLive : Node3D
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
-                else if (_dragging) { _dragging = false; _dragRect.Visible = false; FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift)); }
+                else if (_dragging)
+                {
+                    _dragging = false;
+                    _dragRect.Visible = false;
+                    // P8-36, decision D22: under the classic scheme a CLICK
+                    // (a drag is still a box select) orders the selection
+                    // wherever it does not land on something of the player's
+                    // own, and it orders through IssueOrder, the right click's
+                    // own resolver, so the two schemes share one path. Read
+                    // on the release, so a press that becomes a drag is never
+                    // an order. Ctrl rides on the event, as D23's force-attack
+                    // does on the right click.
+                    if (Settings.Scheme == ControlScheme.Classic && (mb.Position - _dragStart).Length() <= ClickSlopPx
+                        && ClassicClickOrders(mb.Position))
+                        IssueOrder(mb.Position, Input.IsKeyPressed(Key.Shift), mb.CtrlPressed || mb.MetaPressed);
+                    else
+                        FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift));
+                }
                 break;
             case InputEventMouseMotion mm when _dragging:
                 var tl = new Vector2(Mathf.Min(_dragStart.X, mm.Position.X), Mathf.Min(_dragStart.Y, mm.Position.Y));
@@ -5417,8 +5440,11 @@ public partial class SkirmishLive : Node3D
             // P8-8, decision D23: Ctrl (or Cmd) on the click is force-attack,
             // read off the EVENT like the group-assign modifier, so the
             // harness can drive it.
+            // P8-36: under the classic scheme the right click takes away
+            // rather than orders (ClassicRightClick).
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
-                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
+                if (Settings.Scheme == ControlScheme.Classic) ClassicRightClick();
+                else IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
                 break;
         }
     }
@@ -5446,15 +5472,7 @@ public partial class SkirmishLive : Node3D
             // P8-45: then the help overlay, for the same reason: it is the
             // thing on top, and a player looking at it wants it gone.
             if (_helpOverlay != null) { CloseHelp(); return true; }
-            // An armed order is cancelled through the family funnel, so cancel
-            // clears all four by construction. The toast names whichever order
-            // was armed; the funnel guarantees there is only ever one.
-            string? cancelled = _superArmed ? "SUPERWEAPON TARGETING CANCELLED"
-                : _powerArmed != null ? "SUPPORT POWER TARGETING CANCELLED"
-                : _attackMoveArmed ? "attack-move cancelled"
-                : _patrolArmed ? "patrol cancelled"
-                : null;
-            if (cancelled != null) { DisarmAllArmedOrders(); ShowToast(cancelled); return true; }
+            if (CancelArmedOrder()) return true;
             if (_placingType > 0) { ExitPlacement(); return true; }
             // P8-58: and a spectator's notice names this key as its way out.
             if (_matchOver || _replayDone || _spectating) { QuitToMenu(); return true; }
@@ -5852,6 +5870,102 @@ public partial class SkirmishLive : Node3D
     /// keeps this at 0 or 1; the harness asserts that across every pair.</summary>
     private int ArmedOrderCount() =>
         (_attackMoveArmed ? 1 : 0) + (_patrolArmed ? 1 : 0) + (_superArmed ? 1 : 0) + (_powerArmed != null ? 1 : 0);
+
+    /// <summary>
+    /// Cancel whichever armed order is standing, through the family funnel,
+    /// and say which it was; false when none was armed. An armed order is
+    /// cancelled through DisarmAllArmedOrders, so a cancel clears all four by
+    /// construction, and the funnel guarantees only one is ever named. P8-36
+    /// lifted this out of the cancel key so the classic right click cancels
+    /// through the SAME funnel rather than a copy that could forget an order,
+    /// which is how the family's rule broke twice before the funnel existed.
+    /// </summary>
+    private bool CancelArmedOrder()
+    {
+        string? cancelled = _superArmed ? "SUPERWEAPON TARGETING CANCELLED"
+            : _powerArmed != null ? "SUPPORT POWER TARGETING CANCELLED"
+            : _attackMoveArmed ? "attack-move cancelled"
+            : _patrolArmed ? "patrol cancelled"
+            : null;
+        if (cancelled == null) return false;
+        DisarmAllArmedOrders();
+        ShowToast(cancelled);
+        return true;
+    }
+
+    // -------- P8-36, decision D22: the classic left-click scheme --------
+
+    /// <summary>How far a press may travel and still be a click rather than a
+    /// box. FinishSelect's threshold, named once so the classic order and the
+    /// selection click cannot disagree about what a click is.</summary>
+    private const float ClickSlopPx = 8f;
+
+    /// <summary>
+    /// Does a classic left click here ORDER the selection, rather than select?
+    /// Doc 11's Scheme A: a click on something of the player's own selects it,
+    /// and a click anywhere else orders the selection there, which is exactly
+    /// what the modern right click would send (IssueOrder). Three refinements,
+    /// each so that the classic click offers no less than the modern one:
+    /// nothing orderable selected (empty, a spectator, or only buildings that
+    /// take no rally) means the click selects; an own Carrier is an order when
+    /// the selection holds something that can board it, because boarding is
+    /// the order the modern right click sends there and a click that only
+    /// selected the Carrier would leave boarding unreachable; and an ALLIED
+    /// unit or building, which the player cannot select, is ordered at as the
+    /// modern right click is (doc 11 predates alliances; decided under the
+    /// owner's instruction, reverses if a playtest wants a click on an ally to
+    /// do nothing).
+    /// </summary>
+    private bool ClassicClickOrders(Vector2 screen)
+    {
+        if (_replay != null || _selection.Count == 0) return false;
+        bool anyMobile = false, anyRally = false;
+        foreach (int id in _selection)
+        {
+            if (!_latest.TryGetValue(id, out var v) || v.PlayerId != LocalPlayerId) continue;
+            if (Mobile(v.Kind)) anyMobile = true;
+            else if (Ralliable(v.Kind)) anyRally = true;
+        }
+        if (!anyMobile && !anyRally) return false;
+        if (anyMobile && AnySelectedCanBoard() && PickOwnCarrier(screen) >= 0) return true;
+        return OwnSelectableAt(screen) < 0;
+    }
+
+    /// <summary>The thing of the player's own a selection click here would
+    /// take, or -1: the same two picks FinishSelect makes, own mobiles first.</summary>
+    private int OwnSelectableAt(Vector2 at)
+    {
+        int hit = PickOwnMobileAt(at);
+        return hit >= 0 ? hit : PickOwnStructureAt(at);
+    }
+
+    private int PickOwnMobileAt(Vector2 at) =>
+        PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
+
+    private int PickOwnStructureAt(Vector2 at) =>
+        PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+
+    /// <summary>
+    /// The classic right click: it takes away. A standing armed order is
+    /// cancelled first, through the cancel key's own path (CancelArmedOrder,
+    /// so every armed order still goes through DisarmAllArmedOrders), then a
+    /// placement, then the selection, in the cancel key's order. Doc 11 says
+    /// "right click: deselect all"; cancelling a targeting or a placement
+    /// first is decided under the owner's instruction, because under this
+    /// scheme the left click is the commit and the right click is the only
+    /// mouse way back out of a targeting, as in the classics. Reverses if a
+    /// playtest finds players expect the right click to deselect even with
+    /// a targeting up.
+    /// </summary>
+    private void ClassicRightClick()
+    {
+        if (CancelArmedOrder()) return;
+        if (_placingType > 0) { ExitPlacement(); return; }
+        if (_selection.Count == 0 && _inspected < 0) return;
+        _selection.Clear();
+        _inspected = -1;
+        _audio.Play("ui_click", -16);
+    }
 
     /// <summary>Readiness is re-read at the click rather than trusted from the
     /// arm: the charge can lapse, or the structure die, between the two.</summary>
@@ -6340,9 +6454,9 @@ public partial class SkirmishLive : Node3D
     {
         if (!add) _selection.Clear();
         _inspected = -1;   // any fresh click or drag retires the inspect readout
-        if ((at - _dragStart).Length() <= 8)
+        if ((at - _dragStart).Length() <= ClickSlopPx)
         {
-            int hit = PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
+            int hit = PickOwnMobileAt(at);
             // Doc 27 DR-05: ctrl-click on an own mobile is type-select, the
             // keyboard sibling of the double-click, THROUGH THE SAME helper so
             // the two gestures cannot drift apart. Device-polled here because
@@ -6354,8 +6468,7 @@ public partial class SkirmishLive : Node3D
                 SelectAllOfTypeOnScreen(hit);
                 return;
             }
-            if (hit < 0)
-                hit = PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+            if (hit < 0) hit = PickOwnStructureAt(at);
             if (hit >= 0)
             {
                 _selection.Add(hit);
@@ -7128,6 +7241,32 @@ public partial class SkirmishLive : Node3D
         _UnhandledInput(new InputEventMouseButton
         { ButtonIndex = MouseButton.Right, Pressed = true, Position = at, CtrlPressed = true });
 
+    /// <summary>P8-36: a whole left click, the press AND the release, through
+    /// the real input path. PressLeftClick is the press alone, which is all
+    /// an armed order or a placement needs; a selection click and the classic
+    /// scheme's order are both decided on the release.</summary>
+    public void ClickLeft(Vector2 at, bool ctrl = false)
+    {
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = at, CtrlPressed = ctrl });
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = false, Position = at, CtrlPressed = ctrl });
+    }
+
+    /// <summary>P8-36: a box drag through the real input path, the press, one
+    /// motion and the release, so the release lands past the click slop and is
+    /// read as a drag under either scheme.</summary>
+    public void DragLeft(Vector2 from, Vector2 to)
+    {
+        _UnhandledInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, Position = from });
+        _UnhandledInput(new InputEventMouseMotion { Position = to });
+        _UnhandledInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, Position = to });
+    }
+
+    /// <summary>P8-36 verification read: how many clicks IssueOrder has
+    /// resolved, whichever button and scheme sent them.</summary>
+    public int OrderResolutionsForTest => _orderResolutions;
+
     /// <summary>P8-1 (inputgate): the Commands a gesture has queued and the
     /// next tick has not yet drained. Read where they sit, because once a tick
     /// takes them they are gone, and a check of WHAT the gesture asked for has
@@ -7657,11 +7796,18 @@ public partial class SkirmishLive : Node3D
         return slots;
     }
 
-    /// <summary>The right click. `force` is decision D23's force-attack
-    /// modifier (Ctrl or Cmd on the click): it changes the order only over a
-    /// neutral bridge span, which nothing else attacks.</summary>
+    private int _orderResolutions;
+
+    /// <summary>The ordering click: the right click under the modern scheme,
+    /// the left click that lands on nothing of the player's own under the
+    /// classic one (P8-36), and the same method for both. `force` is decision
+    /// D23's force-attack modifier (Ctrl or Cmd on the click): it changes the
+    /// order only over a neutral bridge span, which nothing else attacks.</summary>
     public void IssueOrder(Vector2 screen, bool queued, bool force = false)
     {
+        // P8-36: counted, so the harness can prove both schemes resolve their
+        // orders HERE (one path, no copy of this method to drift).
+        _orderResolutions++;
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
         if (gp is not { } p) return;
