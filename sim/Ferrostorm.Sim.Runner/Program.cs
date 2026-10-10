@@ -19540,10 +19540,12 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-66 landed
-    /// (ADR-078: a walker whose step a separation push exactly undoes
-    /// sidesteps to the side its sector picks, which moves every match with
-    /// such a tie; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-22 landed
+    /// (ADR-079: the commander spends, with more producers, several orders a
+    /// beat and the harvester rebuy on the shortest line, which moves every
+    /// commander match that banks; with P8-66 landed, ADR-078's sidestep for
+    /// a walker whose step a separation push exactly undoes, they read
+    /// 313148, 54894 and 87023; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
     /// produced units exit in the producer's own frame, which moves every
     /// match with a producer past the map centre, they read 223650, 54910 and
     /// 138277; with P8-53 landed, ADR-077's multiplication truncating
@@ -19579,9 +19581,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 313148),
-        ("skirmish-08", 54894),
-        ("skirmish-09", 87023),
+        ("skirmish-07", 357451),
+        ("skirmish-08", 65757),
+        ("skirmish-09", 171729),
     };
 }
 
