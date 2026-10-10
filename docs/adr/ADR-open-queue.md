@@ -266,3 +266,35 @@ the same commit.
   moves no golden) and a goldens-neutral commit, and D38, read again at its
   final head under condition C3, stands. Ratified under D38; C6 is that pull
   request's CI and merge hygiene.
+- ADR-078: RATIFIED 2026-10-09 - ADR-078-an-exact-tie-sidesteps-the-way-its-sector-picks.md
+  (row P8-66, carried by the Architect's sign-off on D38). Number claimed here
+  per the numbering law, in the same commit as the draft; 077 is held by
+  P8-53, so 078 is the next free number. When a walker's step and its
+  separation push lie on one line and the push undoes the step, the push
+  gains a sideways part as long as itself, to the walker's right or left as
+  the sector it stands in picks (the centre lines and the diagonals through
+  the centre cut a map into eight, alternating), and on one of those lines
+  the tie is left. Exact under the half turn, the centre-line reflections and
+  the balance arena's diagonal; the walker's own right alone failed the
+  balance gate's mirror self-check. Five goldens move (`skirmish`,
+  `expansion`, `aisuper`, `mission`, `airanswer`), one cause, each with the
+  first walker it released; catalogue checksum unchanged; no save or wire
+  change; the `longmatchperf` proxy budget re-baselined. A sim rule, so old
+  replays diverge and a mixed-build LAN game desyncs rather than being
+  refused (Q024). `frozenprobe` reads no walker held by an exact
+  cancellation or caught in a cycle (8 frozen, 42 held for 450 consecutive
+  ticks and 166 cycling at D38's head), and `mission` passes under
+  truncation in both frames, so ADR-075's frame and ADR-077's rounding are
+  uncoupled; C7 keeps the sheltered frame (28 against 24 of 32); start split
+  8/10. Proposed 2026-10-09. Signed off with conditions by the Architect on
+  2026-10-09 (the ADR's section "Architect sign-off"), in pull request 172
+  (branch claude/p8-66-tie-break). Conditions 1 to 4 are met in it by one
+  goldens-neutral commit each: a step whose squared length truncates to
+  zero is not a tie (the division by zero closed, measured firing 0 times
+  over `pillargate`'s sweep and the goldens); every reversal clause reads
+  from its tool (`frozenprobe` splits held ties into sidestepped and left
+  on a line, both 0, and both forms of `mirrorprobe` say whether a tie is
+  among what differs at a first break, never at this head); the record
+  corrected; rows P8-74 to P8-78 filed. D38's two reversals, read again at
+  that head, are not met. Ratified under D39; condition 6 is that pull
+  request's CI and merge hygiene.

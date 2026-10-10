@@ -27,7 +27,7 @@ compare the same single number: the catalogue checksum (ADR-006).
 
 The catalogue checksum moves only when a value in `/data` (or a number folded
 into it) moves. **A change to what the sim's code does, with no catalogue value
-moved, is invisible to both.** Five rows have now shipped such a change:
+moved, is invisible to both.** Six rows have now shipped such a change:
 
 - **ADR-071's docking (P8-15).** A refinery docks from every face, and a walk
   onto a building routes to whichever face is open. Seven goldens moved; no
@@ -72,6 +72,12 @@ moved, is invisible to both.** Five rows have now shipped such a change:
   in its stage; no catalogue value, save format or wire format moves
   (ADR-077, "Compatibility"). It lands in one pull request with ADR-075's
   frame flip (decision D38), a commander-only change in the sense above.
+- **ADR-078's tie-break (P8-66).** A walker whose step a separation push
+  exactly undoes now sidesteps, to the side the map sector it stands in
+  picks. A rule of the sim, so it splits both: every match in `pillargate`'s
+  sweep meets such a tie, so an old replay diverges from the first one, and
+  a mixed-build LAN pair desyncs there. Five goldens move; no catalogue
+  value, save format or wire format moves (ADR-078, "Compatibility").
 
 The comment on `LockstepClient.SetAiCommanders` (sim/Ferrostorm.Net/Lockstep.cs)
 says "Two peers therefore provably run the same commander", because the
@@ -93,7 +99,7 @@ What happens today when the rules differ but the catalogues agree:
 
 A rules change is refused up front today only by accident, when the same row
 also happens to move a catalogue value. ADR-073 (P8-18) did, so every v3 replay
-and every LAN peer from before it is refused; ADR-071 did not, and neither ADR-074, ADR-075, ADR-076 nor ADR-077 does. Whether
+and every LAN peer from before it is refused; ADR-071 did not, and neither ADR-074, ADR-075, ADR-076, ADR-077 nor ADR-078 does. Whether
 a build refuses an incompatible partner should not depend on whether its row
 touched `/data`.
 
@@ -180,6 +186,6 @@ published build, which is why that is the decide-by.
 An Architect decision with Netcode's agreement on the wire change, recorded as an
 ADR that fixes the field, the header line, the hello frame, the refusal text and
 the CI rule, and that names the rows which would have bumped the epoch so far
-(ADR-071, ADR-074, ADR-076 and ADR-077 among them, and ADR-075 with the commander-only
+(ADR-071, ADR-074, ADR-076, ADR-077 and ADR-078 among them, and ADR-075 with the commander-only
 distinction above decided one way or the other) so its first value has a
 stated meaning.

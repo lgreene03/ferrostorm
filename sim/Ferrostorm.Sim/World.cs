@@ -5753,10 +5753,14 @@ public sealed partial class World
     /// displaced (stationary units act as soft obstacles), processed in entity
     /// index order with immediate application, so results are order-fixed and
     /// deterministic. Exact-overlap fallback direction derives from ids.
+    /// P8-66 (ADR-078): a walker whose step its push exactly opposes and
+    /// undoes is sidestepped (SidestepForExactTie).
     /// </summary>
     private void SeparationSystem()
     {
         _buckets.Clear();
+        _exactTies.Clear();
+        _exactTieAt.Clear();
         for (int i = 0; i < _entities.Count; i++)
         {
             var e = _entities[i];
@@ -5896,6 +5900,17 @@ public sealed partial class World
             settled:
             if (pushX != Fix64.Zero || pushY != Fix64.Zero)
             {
+                // P8-66 (ADR-078): movement's tie-break for an exact
+                // cancellation, added to the push before it is applied, so the
+                // blocked-cell test below governs the sidestep as it does the
+                // push.
+                if (SidestepForExactTie(in e, pushX, pushY, out Fix64 sideX, out Fix64 sideY))
+                {
+                    pushX += sideX;
+                    pushY += sideY;
+                    _exactTies.Add(i);
+                    _exactTieAt.Add((e.X, e.Y));
+                }
                 Fix64 nx = Fix64.Clamp(e.X + pushX, Fix64.Half, Fix64.FromInt(Map.Width) - Fix64.Half);
                 Fix64 ny = Fix64.Clamp(e.Y + pushY, Fix64.Half, Fix64.FromInt(Map.Height) - Fix64.Half);
                 if (!Map.IsBlocked(Map.CellOf(nx), Map.CellOf(e.Y))) e.X = nx;
@@ -6016,6 +6031,115 @@ public sealed partial class World
     }
 
     private readonly Dictionary<int, List<int>> _buckets = new(); // rebuilt per tick; keyed access only
+
+    /// <summary>
+    /// P8-66 (ADR-078): movement's tie-break for an exact cancellation.
+    /// MovementSystem steps a walker towards its aim, and SeparationSystem then
+    /// pushes it away from whatever it overlaps. When that push lies along
+    /// the step's line as the truncated products see it (the two halves of
+    /// their cross product, each truncated toward zero, are equal, so a push
+    /// a few units in the last place off the line counts as on it; that is
+    /// deterministic, and odd, so a twin's test agrees), points against it
+    /// and is at least as long as it, the push undoes the whole step and has
+    /// no sideways part to steer the walker round by, and since ADR-077 made
+    /// the arithmetic symmetric nothing else supplies one,
+    /// so the walker stays on that line for good. A harvester steps a second
+    /// time in HarvestSystem, so it is held by a push twice its first step,
+    /// its second step returning it exactly to where it began, as mission-01's
+    /// was. Flooring's one-unit asymmetry used to break such a tie by
+    /// accident. Now the push gains a sideways part as long as itself, at
+    /// right angles to the step.
+    ///
+    /// WHICH SIDE is keyed on where the walker stands and nothing else. The
+    /// map's two centre lines and its two diagonals through the centre cut it
+    /// into eight sectors, and the walker sidesteps to its own right in four
+    /// of them and to its left in the other four, alternating: to its right
+    /// where qx * qy * (|qx| - |qy|) is positive, (qx, qy) being its offset
+    /// from the map centre, and its right being the step (sx, sy) turned a
+    /// quarter turn clockwise on screen, where y grows downwards, (-sy, sx).
+    /// Every symmetry a map or a mirrored arena here has about its centre
+    /// carries that choice onto itself. The half turn relating every two-seat
+    /// map's starts (ADR-076) keeps the sector's sign and turns the step
+    /// round; the reflections relating skirmish-09's seats, and the diagonal
+    /// reflection of the balance tool's mirror arena, flip the sign exactly as
+    /// they turn a walker's right into its left. So a walker and any twin,
+    /// given mirrored inputs, sidestep as each other's image (truncating
+    /// multiplication and division are odd since ADR-077, and the lengths are
+    /// square roots of sums of squares). That holds per walker; across a tick
+    /// it also needs SeparationSystem, which applies each push at once in
+    /// entity order, to visit twins in mirrored order, and twins whose ids are
+    /// inverted can part through a tie between them (the id-order class of
+    /// ADR-075 and P8-54). It holds only for symmetries that fix the map
+    /// centre. On one of those four lines the sign is zero and the tie is
+    /// left as it is: there a reflection can map the walker onto itself, and
+    /// no rule could pick a side exactly. The walker's own heading alone would
+    /// not do, since a reflection turns right into left (it failed the balance
+    /// tool's mirror self-check); nor would the side facing the map centre,
+    /// which flips as a walker circles something and caught walkers in cycles
+    /// at the flip; a world axis or entity ids would split the half turn's
+    /// seats.
+    ///
+    /// The step is this tick's own: MovementSystem set PrevX and PrevY just
+    /// before it moved the walker, and in SeparationSystem only the walker's
+    /// own push moves it, so the difference is exactly the step. A walker of
+    /// speed zero is never stepped, so its PrevX and PrevY may be stale, and it
+    /// is excluded. Returns true for every exact cancellation, the ones left
+    /// on a line as well as the ones sidestepped, which is what
+    /// ExactTiesThisTick records. Pure: it reads the walker, the push and the
+    /// map's size, and writes nothing else.
+    /// </summary>
+    private bool SidestepForExactTie(in Entity e, Fix64 pushX, Fix64 pushY, out Fix64 sideX, out Fix64 sideY)
+    {
+        sideX = Fix64.Zero;
+        sideY = Fix64.Zero;
+        if (e.Speed == Fix64.Zero) return false;
+        Fix64 stepX = e.X - e.PrevX, stepY = e.Y - e.PrevY;
+        // A step whose squared length truncates to zero, both parts under
+        // 2^-16 of a cell, is too short for this rule to measure: its length
+        // below would be zero and the division by it would throw inside
+        // World.Step on every peer alike. So it is not a tie (ADR-078,
+        // "Division by zero closed").
+        Fix64 stepSq = Fix64.DistSq(stepX, stepY);
+        if (stepSq == Fix64.Zero) return false;
+        if (stepX * pushY != stepY * pushX) return false;                              // off the step's line
+        if (stepX * pushX + stepY * pushY > -stepSq) return false;                     // not against it, or shorter
+        Fix64 qx = e.X - Fix64.FromInt(Map.Width) * Fix64.Half, qy = e.Y - Fix64.FromInt(Map.Height) * Fix64.Half;
+        int sector = SignOf(qx) * SignOf(qy) * SignOf(Fix64.Abs(qx) - Fix64.Abs(qy));
+        if (sector == 0) return true;                                                  // on a centre line or a diagonal: left
+        Fix64 stepLen = Fix64.Sqrt(stepSq);
+        Fix64 pushLen = Fix64.Sqrt(Fix64.DistSq(pushX, pushY));
+        Fix64 side = sector > 0 ? pushLen : -pushLen;
+        sideX = -stepY * side / stepLen;
+        sideY = stepX * side / stepLen;
+        return true;
+    }
+
+    private static int SignOf(Fix64 v) => v > Fix64.Zero ? 1 : v < Fix64.Zero ? -1 : 0;
+
+    // P8-66 (ADR-078): the walkers SeparationSystem found in an exact
+    // cancellation this tick, sidestepped or left on a line, in entity index
+    // order, and beside each where it stood when the tie was found.
+    private readonly List<int> _exactTies = new();
+    private readonly List<(Fix64 X, Fix64 Y)> _exactTieAt = new();
+
+    /// <summary>P8-66 (ADR-078): the walkers found in an exact cancellation
+    /// during the last tick, each sidestepped by movement's tie-break or, on a
+    /// centre line or a diagonal through the map centre, left as it was, in
+    /// entity index order, read by the runner's frozenprobe and mirrorprobe.
+    /// OBSERVATION ONLY, on FlowFieldBuilds' terms: it is rebuilt at the start
+    /// of every SeparationSystem, never read by the sim, never hashed and
+    /// never saved, so a world made by Load reads it empty until it steps.</summary>
+    public IReadOnlyList<int> ExactTiesThisTick => _exactTies;
+
+    /// <summary>P8-66 (ADR-078, the Architect's condition 2): where each walker
+    /// in ExactTiesThisTick stood when its tie was found, at the same index:
+    /// after this tick's step and before its push, the position the
+    /// tie-break reads its sector at. A walker held by a tie stands a step
+    /// short of it, so the runner's frozenprobe computes the sector sign
+    /// itself from this point to tell a tie sidestepped from one left on a
+    /// line. The same OBSERVATION ONLY terms as ExactTiesThisTick: rebuilt
+    /// with it, never read by the sim, never hashed, never saved.</summary>
+    public IReadOnlyList<(Fix64 X, Fix64 Y)> ExactTiePositionsThisTick => _exactTieAt;
 
     /// <summary>
     /// SPAWN-04's occupancy test: does any standing entity hold this cell?
