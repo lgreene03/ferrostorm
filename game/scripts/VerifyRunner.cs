@@ -10069,7 +10069,8 @@ public partial class VerifyRunner : Node
     /// forced click on a neutral bridge (D23), an engineer's walk-in, a
     /// factory's rally, a harvest, a boarding, and an armed attack-move's
     /// commit; under CLASSIC also the right click cancelling each of the four
-    /// armed orders through the family funnel. Each ordering verb reads the
+    /// armed orders through the family funnel, and a placement and nothing
+    /// else. Each ordering verb reads the
     /// cursor first (it must promise what the click does), then the scheme's
     /// ordering gesture, what it queued (seat 1's, nothing stray), that
     /// IssueOrder resolved it once, and that the next tick handed it to the sim.
@@ -10394,6 +10395,31 @@ public partial class VerifyRunner : Node
                            "with each of the four armed orders standing in turn (attack-move, patrol, the superweapon, a support power), "
                            + "the right click cancels it through the family funnel, leaving no flag set, the selection kept and nothing "
                            + $"ordered, and a second right click deselects{(bad.Count > 0 ? $"; but {string.Join("; ", bad)}" : "")}");
+
+                // --- CLASSIC only: the right click during a placement cancels
+                // the placement and does nothing else. The row records the
+                // order as a decision (a targeting, then a placement, then the
+                // selection), and the cancel check above reaches only the
+                // first and the last: with nothing armed, a right click that
+                // skipped the placement would deselect the army and leave the
+                // ghost standing.
+                SelectArmy();
+                var held = g.SelectedIdsForTest();
+                int inspectedWas = g.InspectedId;
+                g.EnterPlacement(World.FactoryStructType);
+                int placing = g.PlacingType;
+                int rp0 = g.OrderResolutionsForTest, pp0 = g.PendingForTest.Count;
+                g.PressRightClick(ground);
+                int keptOf = 0;
+                foreach (int id in held) if (g.IsSelected(id)) keptOf++;
+                bool kept = held.Count >= 2 && keptOf == held.Count && g.SelectionCount == held.Count && g.InspectedId == inspectedWas;
+                SchemeGate(placing == World.FactoryStructType && g.PlacingType == 0 && kept && g.ArmedOrderCountForTest == 0
+                           && g.PendingForTest.Count == pp0 && g.OrderResolutionsForTest == rp0, "classic/placement",
+                           $"with the army selected and a FACTORY placement up (placing type {placing}), the right click cancels the "
+                           + $"placement (placing type now {g.PlacingType}) and nothing else: the selection is kept ({keptOf} of "
+                           + $"{held.Count} still selected, {g.SelectionCount} in all), no order is armed ({g.ArmedOrderCountForTest}) "
+                           + $"and nothing is ordered ({g.PendingForTest.Count - pp0} queued, {g.OrderResolutionsForTest - rp0} resolved)");
+                g.CancelPlacementForTest();
             }
         }
         catch (System.Exception ex) { SchemeGate(false, s, $"the stage threw: {ex}"); }
