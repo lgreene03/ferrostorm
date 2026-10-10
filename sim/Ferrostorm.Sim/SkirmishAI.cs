@@ -867,11 +867,20 @@ public sealed class SkirmishAI
             }
         }
         // P8-22 (ADR-079): the harvester and the MCV go to the shortest
-        // factory line, and only while it is EMPTY, which was the one
-        // factory's guard; one already on ANY line counts, which that guard
-        // implied while there was only one line to be on.
-        int idleFactory = Route(factories);
-        bool factoryFree = idleFactory >= 0 && Depth(idleFactory) == 0;
+        // factory line, and one already on ANY line counts, which the one
+        // factory's guard implied while there was only one line to be on.
+        // The MCV still waits for that line to be EMPTY, the old guard: the
+        // army stands aside while an expansion is wanted, so the line empties
+        // of itself. The harvester no longer waits for that. It takes the
+        // shortest line while the line has room (fewer than two orders, this
+        // beat's own included), the depth the army keeps, and it is placed
+        // before the army in the beat, so it takes that room first. Waiting
+        // for an empty line behind an army that keeps every line busy is
+        // waiting for the rest of the match: ADR-072 measured a commander
+        // banking 17000 credits on one harvester for 4000 ticks that way and
+        // left the rebuy to this row.
+        int shortestFactory = Route(factories);
+        int shortestDepth = shortestFactory >= 0 ? Depth(shortestFactory) : int.MaxValue;
         if (antiAirOrdered)
         {
             // The factory's turn this beat is spent on the answer: the
@@ -879,10 +888,10 @@ public sealed class SkirmishAI
             // this beat's orders, so without this they would stack behind it.
         }
         else if (factory >= 0 && refinery >= 0
-            && harvesters + QueuedAnywhere(factories, 4) < refineryCount * _harvestersPerRefinery && factoryFree)
-            Ordered(idleFactory, 4);
-        else if (expansionDesired && w.Credits(_player) >= 3500 && QueuedAnywhere(factories, World.McvUnitType) == 0 && factoryFree)
-            Ordered(idleFactory, World.McvUnitType);
+            && harvesters + QueuedAnywhere(factories, 4) < refineryCount * _harvestersPerRefinery && shortestDepth < 2)
+            Ordered(shortestFactory, 4);
+        else if (expansionDesired && w.Credits(_player) >= 3500 && QueuedAnywhere(factories, World.McvUnitType) == 0 && shortestDepth == 0)
+            Ordered(shortestFactory, World.McvUnitType);
 
         for (int i = 0; i < w.Entities.Count; i++)
         {
