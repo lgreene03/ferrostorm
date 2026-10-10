@@ -1126,11 +1126,17 @@ public partial class VerifyRunner : Node
         // one order), where the arrays were in rough tech order. Label, tab and
         // icon are what a player reads, and all three are unchanged.
         //
-        // P8-45 moved the icon column ON PURPOSE, and only that column: the
-        // four buildings that had no icon (barracks, radar uplink, wall, mine)
-        // have one of their own now, rendered from the mesh (art/3d/icons.py),
-        // and the four that wore another building's have their own too, which
-        // hudgate/icons asserts by path. Labels and tabs are still the
+        // P8-45 moved the icon column ON PURPOSE, and only that column, for
+        // eight of the fifteen buildings transcribed here: four had no icon
+        // (the barracks and the radar uplink, never cut, and the wall and the
+        // mine, which pointed at com_wall_straight.png, a file no commit ever
+        // held) and four wore another building's (the emplacement, the
+        // airfield, the Bastion and the Shroud Nest). All eight have their own
+        // now, rendered from the mesh (art/3d/icons.py), which hudgate/icons
+        // asserts by path. Across every button the sidebar builds that was
+        // four borrowed icons and eighteen missing ones: the ten units, these
+        // four, and the gate, the generator, the Watch Post and the seismic
+        // charge from the list below. Labels and tabs are still the
         // transcript's.
         {
             var wasListed = new (int Type, string Label, int Tab, bool Icon)[]
@@ -9710,8 +9716,9 @@ public partial class VerifyRunner : Node
     }
 
     /// <summary>Every button the sidebar builds wears the icon named by its
-    /// own /data id, where seven buildings wore another's and fifteen buttons
-    /// had none.</summary>
+    /// own /data id, where four buildings wore another building's and eighteen
+    /// buttons (ten units, eight buildings) had none: three of those eight
+    /// pointed at com_wall_straight.png, which no commit ever held.</summary>
     private void RunHudIconStage()
     {
         var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);

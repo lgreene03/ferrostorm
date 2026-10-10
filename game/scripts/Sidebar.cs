@@ -63,8 +63,11 @@ public partial class Sidebar : PanelContainer
     /// The icon name is the id, the convention every icon in ui/icons follows and
     /// the one the units already use. P8-45 rendered the twenty-two that were
     /// missing from the Blender meshes (art/3d/icons.py), so every button has an
-    /// icon of its own and the substitution table that dressed seven buildings
-    /// in another building's icon is gone. MakeButton's Exists guard stays, so a
+    /// icon of its own. Before that, four buildings wore another building's icon
+    /// and eighteen buttons (ten units, eight buildings) had none at all; the
+    /// substitution table that did the dressing is gone, and three of its seven
+    /// entries had pointed at com_wall_straight.png, which no commit ever held,
+    /// so those three were among the eighteen. MakeButton's Exists guard stays, so a
     /// building added without an icon still gets its button; the harness's
     /// hudgate/icons stage is what refuses it.
     /// </summary>
