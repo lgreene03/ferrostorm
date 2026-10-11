@@ -1,5 +1,5 @@
 # ADR-079: the commander spends: a sustained surplus buys production up to its rung's cap, every order takes the shortest line, and a beat places as many orders as its reserve allows
-- Status: **Proposed** 2026-10-10 (row P8-22 of docs/tickets/P8-formidable-tracker.md, decisions D6 and D7). Built on P8-66 (ADR-078, pull request 172, branch `claude/p8-66-tie-break` at ef45c9e, which carries main's merge of #171), because the Architect ruled that P8-66 lands before any commander row; every figure below is measured against that head. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so a replay of an AI match recorded before it diverges (Q024). It moves the catalogue checksum (data/ai). It lands as six commits: three goldens-neutral ones (the probe, the four numbers in data/ai, the window and the probe's fixed-time reading), the behaviour, the harvester rebuy, and the proxy budget re-baselined; this ADR, its queue entry, ADR-060's forward pointer and the tracker row follow in one docs commit. Drafted by the implementer agent.
+- Status: **Ratified under D40** of docs/tickets/P8-formidable-tracker.md (row P8-22, decisions D6 and D7), 2026-10-11, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with conditions of 2026-10-10 (section "Architect sign-off" below), in the pull request from branch `worktree-wf_ae038544-456-1` into main, whose number is recorded here when it opens. Proposed on 2026-10-10. Built on P8-66 (ADR-078, pull request 172, branch `claude/p8-66-tie-break` at ef45c9e, which carries main's merge of #171), because the Architect ruled that P8-66 lands before any commander row; every figure below is measured against that head unless it says it was re-measured on main at d295931, where the branch now stands. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so a replay of an AI match recorded before it diverges (Q024). It moves the catalogue checksum (data/ai). It lands as six commits: three goldens-neutral ones (the probe, the four numbers in data/ai, the window and the probe's fixed-time reading), the behaviour, the harvester rebuy, and the proxy budget re-baselined; this ADR, its queue entry, ADR-060's forward pointer and the tracker row follow in one docs commit; then one commit for each of the Architect's conditions 1 to 5 and one for condition 7's re-measurement on main, and condition 6 is this status and its records. Drafted by the implementer agent.
 - Date: 2026-10-10
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s9 line 76 (Normal "competent build orders", Hard "strong macro"); GDD s4 (the floating economy); GDD pillar 2 (matches of 15 to 30 minutes); TDD s1 ("determinism is the product"); criteria F4, F5 (its split by start), F6 and F8 of the P8 tracker; decisions D6, D7, D16, D32 and D33; findings AI-03, ML-04 and OJ-04; ADR-032 (the AI's tuning is authored data), ADR-045 (ask for a capability, not a type id), ADR-060 (a side's own defence, bought from surplus, whose refusal to build several this ADR amends), ADR-072 (which left the harvester rebuy to this row), ADR-073 (D33's purchase floor), ADR-076 and ADR-078 (the half turn and the reflections the commander must stay exact under)
@@ -127,7 +127,7 @@ ADR-060 bought one of a side's own defences from `Cost + 1500` and refused
 several, "to overturn: a playtest showing one faction defence is decorative".
 Row P8-22 names "further faction defences from surplus" from findings AI-03,
 ML-04 and OJ-04 under decisions D6 and D7, so this ADR overturns that refusal
-on the tracker's authority and records it there. The first is bought exactly
+on the tracker's authority and records it there (D40). The first is bought exactly
 as ADR-060 bought it. Every one after it is bought only from a sustained
 surplus, after any producer the rung's cap still allows, while fewer than the
 personality's `faction_defence_cap` stand: Standard 3, Rusher 2, Turtle 5,
@@ -575,3 +575,168 @@ end with a result. What it leaves, each recorded with its owner:
   its personality's cap of faction defences, so "Turtle walls and extra
   defences" means walls and any defence beyond `faction_defence_cap`.
 - The `longmatchperf` proxy budget is a day's figure again (P8-31).
+
+## Architect sign-off
+
+- Date: 2026-10-09, as the review brief dates it. The seven commits reviewed are dated 2026-10-09 (7a7cc01, 9c2594e) and 2026-10-10 (the other five), and the status line says Proposed on 2026-10-10, so the orchestrator confirms this date when it ratifies.
+  - Corrected at ratification (D40): **2026-10-10**. The last commit reviewed, be8b1a8, was committed at 22:12 on 2026-10-10, and this sign-off was in the review's journal by 23:04 that evening, so it was given on 2026-10-10 and not on the brief's 2026-10-09.
+- Reviewer: Systems Architect (A3).
+- Pull request: the P8-22 pull request from branch `worktree-wf_70980100-66f-1` into main. It is not yet pushed or opened, and its number is recorded here when it opens. I reviewed its seven commits, 7a7cc01 to be8b1a8, on ef45c9e. That is the head of `claude/p8-66-tie-break` (pull request 172), which carries main's merge of pull request 171. A determinism audit and an adversarial verifier each reviewed it independently.
+  - Recorded at ratification (D40). Pull request 172 merged first, as condition 7 asks, and the seven commits reviewed were cherry-picked unchanged onto main at 4568553 and then, with that pass's commits for conditions 1 and 2, onto main at d295931 (P8-78, P8-61 and P8-70, pull request 173), without conflict, on branch `worktree-wf_ae038544-456-1`. The reviewed hashes this ADR names are, on that branch: 7a7cc01 is ff1849a, 9c2594e is 456ef22, 2859bf8 is b019e0b, 57853cd is 77f4cc8, f0c9b74 is 8e2308d, f4c0e82 is 21ead37 and be8b1a8 is b30fa71. Conditions 1 to 5 are met in it by one commit each (92b40f9, 01b49dc, 170d988, ef149c0 and d848054), condition 7's re-measurement on main by 571ae17, and condition 6 by the ratifying commit. The pull request is the one from that branch into main; it is not yet opened, and its number is recorded here when it opens. Conditions 1 to 3 come back to the Architect for a check.
+- Verdict: **signed off with conditions.** The design is approved:
+  - the sustained surplus;
+  - the four numbers and their split between rung and personality;
+  - routing to the shortest line, ties to the oldest producer;
+  - several orders a beat above the reserve;
+  - further faction defences from surplus, and with them the amendment to ADR-060;
+  - the harvester rebuy as a commit that can be reverted on its own.
+
+  The three golden moves and the catalogue checksum move are approved as attributed. The pull request merges once conditions 1 to 7 below are met in it.
+
+**Reproduced, on macOS only.** Most of the figures below come from the audit's and the verifier's builds, each in a tree of its own. The three marked as mine I measured myself, in trees exported from ef45c9e and be8b1a8.
+
+- **Goldens.** `golden 2026` gives the committed lines. `skirmish`, `aisuper` and `airanswer` move, and the other 22 are byte-identical.
+  - 2859bf8 gives the base's hashes. It carries the data, schema, loader, checksum fold and probe, but the commander reads none of the four numbers.
+  - 57853cd moves only `skirmish` and `aisuper`.
+  - Reverting f0c9b74 alone at the head gives 57853cd's hashes, so the rebuy reverts on its own.
+- **CI.** `tools/ci-local.sh` is green at the head on all 20 steps. It ends with `pillargate --bind`, which passes both halves: median first launch 11536, 56 of 72 matches launching, at most 3.2 launches a seat per 30 minutes. `aiairgate`, `cheesegate`, `powerdatagate`, `difficultygate` and `aituninggate` pass in `match`, and the balance gate passes.
+- **The data wins.**
+  - `aituninggate` stage 2d fails on its own check for each key when the commander reads that key from the compiled reference.
+  - Stage 3 fails when the `FactionDefenceCap` fold is removed.
+  - Raising `producer_cap` to 3 in `data/ai/ai_normal.yaml` gives three barracks and three factories at Normal in `spendprobe`.
+- **Measurements and mirrors.** `spendprobe`, `endgate`, `laddergate`, `seatfairgate`, `frozenprobe`, `mirrorprobe` (two-seat and `seats=4`) and the D32 control reproduce every figure in "What it measured". The verifier also built a half-turn pair with two barracks a seat. It was a mirror in 12 cases of 12, including one with seat 1's barracks in reversed spatial order, so the tie follows build order, not position.
+- **Measured by me: the balance tool.** It exits 0 with a PASS verdict at the base and at the head. Its mirror self-check is unchanged (28 annihilations, 12 cloaked runs identical). Only section 6, the faction war, and the checksum line differ:
+
+  | | Directorate | Sodality | Undecided | Seat 0 | Seat 1 |
+  |---|---|---|---|---|---|
+  | base | 3 | 1 | 2 | 3 | 1 |
+  | head | 4 | 2 | 0 | 5 | 1 |
+
+  Figures are cells of 6. The credits banked at the end of the base's undecided or late cells (up to 49150) are gone at the head (at most 10087).
+- **Measured by me: held yards.** A scratch probe, not committed, counts yards that hold a finished structure unplaced for 450 or more consecutive ticks over `pillargate`'s 72 matches. It reads 0 at the base and 0 at the head. Its positive control, at a threshold of 1 tick, sees ordinary one-beat holds of 14 ticks.
+- **Measured by me: frozen harvesters.** At the base, `frozenprobe`'s two frozen harvesters are P8-75's witness, harvester #59 in skirmish-08's mixed pairing (DS o0 and SD o1). The verifier wrote skirmish-09, which was a slip. At the head that freeze is gone and a new one appears, traced below.
+
+Windows and Linux are left to CI.
+
+**The break is justified.** D6 names this row and D7 sets its caps. The bank the row was written to spend is measured, and it is spent:
+
+| pool | mean banked, base | head | units by t=9000, base | head |
+|---|---|---|---|---|
+| Normal Directorate | 29725 | 11533 | 52 | 60 |
+| Normal Sodality | 15931 | 7653 | 75 | 97 |
+| Hard Directorate | 47560 | 15771 | 47 | 59 |
+| Hard Sodality | 26633 | 8908 | 69 | 107 |
+
+The commander now holds two producers of each kind at Normal and three at Hard. The ladder separates as a consequence rather than by tuning: `laddergate`'s failing halves fall from 5 to 0. Matches resolve: `endgate`'s unresolved matches fall from 24 to 3 of 72. The binding gates hold at every stage.
+
+The checksum move is that mechanism doing its job: old replays, saves and mixed-build LAN games are refused, not desynced. The window was measured into shape, and the alternative at the near edge of the gap was built and failed two named bars. That is the method I want for every number in this phase.
+
+**The design holds.**
+- **Determinism.** Everything new in `/sim` is integer arithmetic over the commander's own counts, queue lengths and treasury. `pending` is looked up and never enumerated. Nothing reads a position, a world axis or an id compared across seats. `_surplusFrom` is AI state, like `_produced` and `_airSeen`: it is never hashed and never saved. That is safe across peers, because LAN commanders attach only at tick 0 and replays carry the commands.
+- **Mirror exactness.** The tie to the oldest producer is the right rule. Entities are only appended, so a commander's producers in entity order are its own build order. That order is the twin of its twin's under the half turn and both centre-line reflections. ADR-078's argument against breaking a tie by world axis or by id applies unchanged, and this ADR cites it.
+- **Data.** The rung and personality split follows DR-14. Each family has one key table, so each key is refused in the other family. All four keys are folded into `CatalogueChecksum` inside the sorted-id loop. ADR-032 clause 2 and ADR-033 require that now that every peer runs its AI seats locally.
+- **Isolation.** The window commit, the behaviour and the rebuy are separate commits, and each moves what it should and nothing else. The rebuy is the decision I would most expect a later row to reverse, so I approve keeping it in its own commit with its own reversal clause.
+- **ADR-060.** Its refusal is overturned on row P8-22's authority rather than on its own playtest clause. The owner's standing instruction permits that, with the reason recorded. ADR-060's measured harm was a faction war flipped by an ungated rung. Here the extra defences are gated on the window and the reserve, and my balance runs show the war is not flipped: 4 to 2 at the head against 3 to 1 at the base. That reading has to be in the record (condition 4).
+
+**What is wrong.**
+
+- **The new routing is outside the cross-platform gate.** No golden reaches `Route` over two producers, or a surplus factory or barracks:
+  - `skirmish` stops at 5000 ticks;
+  - the LAN modes end before the window;
+  - `aisuper` reaches the surplus branch only for its second Bastion.
+
+  Every LAN peer runs its AI seats locally (ADR-033), so this code runs on both platforms in any long LAN game with an AI seat. The standing rule is that the golden gate proves such code agrees across platforms. Without coverage, a later row that changes this code (P8-23, P8-26, P8-27) can call itself goldens neutral and be right only by accident.
+- **Four live conditions are guarded by nothing.** The verifier removed each of these in a scratch build:
+  - the surplus branch's `harvesters > 0`;
+  - the surplus building's own reserve test;
+  - `committed += extraCost`;
+  - `committed` in the later-order test.
+
+  Each removal left all goldens identical and `match` green, and each changed `spendprobe`'s output. The ADR presents each as a decision, but stage 2d bites only the four key reads.
+- **A latent wrap, and a guard weaker than the loader's.**
+  - `_surplusReserve + extraCost` is computed in `int`. The sustained test keeps the wrap out of reach, because the treasury would have to pass 2^31 less the building's price.
+  - `World.RegisterAiTuning` refuses a producer cap below 1, but it accepts a negative reserve, window or faction defence cap. The loader refuses all three, so a def registered directly can pass what a file cannot.
+- **The record is wrong or silent in several places.**
+  - Section 2 says the surplus building's price stops the army promising the same credits again. That holds only for orders after the beat's first. The first army order stands on its own price, so a beat that buys a surplus building can end up to one unit's price below the reserve.
+  - Section 2 also omits that the building's own test ignores the engineer order placed earlier in the beat.
+  - While the anti-air answer is short, every line of its kind now holds its army orders, not only the line the answer takes. That is a behaviour change, and the ADR does not state it.
+  - The frozen harvesters are counted correctly but identified wrongly: the head's two are a new freeze, not the base's.
+  - The faction war that ADR-060 rested on is not reported.
+  - The wall-time claims rest on one loaded machine. The verifier read skirmish-08 at 17.1 ms under load averages of 25 to 50, so whether F12 also fails there is unsettled.
+- **The new freeze.** Harvester #208 is in skirmish-01's Sodality mirror, owned by the seat at start 1 in both orientations.
+  - It is heading to its refinery at (87, 57) and stands at (85.072629, 49.627714) from t=7500 to the end of its match at t=10861.
+  - It sits at the north end of a one-cell corridor between its own turret (centre 84, 51) and its second refinery (centre 87, 51).
+  - No structure was placed by any seat from t=7300 to t=9560, and the probe finds a route from its cell.
+  - It returns to exactly the same position each tick, which is the signature of P8-75's triangle.
+
+  It is not attributed to this row's mechanism. Whether this row's denser base closed a wider route is not measured.
+- **Records lag.**
+  - ADR-072 still names P8-22 as the owner of the starving rebuy that f0c9b74 delivers.
+  - ADR-073 still says D32 waits on P8-22.
+  - D32's reversal falls due when this row lands, and this row reads it as not met, but D32's entry does not say so. Neither do D33's or D7's entries.
+  - The pending cells of P8-23, P8-24 and P8-26 do not say what they now inherit.
+
+**Conditions before merge.**
+
+1. **Close the wrap and match the registration guard to the loader (goldens neutral).**
+   - The surplus branch compares in `long`: `(long)_surplusReserve + extraCost`.
+   - `World.RegisterAiTuning` refuses a rung whose `SurplusReserve` or `SurplusWindowTicks` is negative, and a personality whose `FactionDefenceCap` is negative, with messages in the loader's words.
+   - `aituninggate` shows each refusal beside its existing registration checks.
+   - `golden 2026` stays byte-identical to be8b1a8's.
+2. **Bite the four unguarded conditions (goldens neutral).** Add a stage 2e to `aituninggate` on stage 2d's fixture, with one check per condition, each failing by name when its condition is removed:
+   - a finished base with no harvester alive and a sustained surplus orders no surplus building;
+   - a treasury above the reserve by less than a factory's price orders no factory;
+   - on a beat that buys a surplus building, no army order after the first is placed once what is left would breach the reserve;
+   - with credits equal to the reserve plus the second unit's price, the second order is refused, because the first order's price is counted.
+
+   ADR-079 records each bite as the verifier ran it. If a check cannot be built through the public surface, the ADR names that condition as unguarded and says why.
+3. **Put the new routing under the cross-platform gate.** Append one golden scenario after `airanswer`, so the existing 25 lines stay byte-identical and in order.
+   - It plays commanders until one seat holds two factories and two barracks, has routed orders over both lines of one kind, and has placed a later order on a beat. `spendprobe`'s Normal Sodality pool reaches its second barracks by a median t=4995.
+   - The cheapest map, pairing and horizon that reach this state are the implementer's choice.
+   - The scenario asserts that it reached the state, so a later row that stops reaching it fails rather than silently losing the coverage.
+   - ADR-079's "Golden hashes" and the tracker cell record the new line without writing a line count into prose.
+   - Any existing golden this moves comes back to me.
+4. **Correct the record** in ADR-079, and wherever the `SkirmishAI.cs` comments, the schema descriptions or the tracker cell repeat it.
+   - **Committed credits.** The surplus building's price binds only orders after the beat's first. The first army order stands on its own price, so a beat can end up to one unit's price below the reserve. The building's own test ignores the engineer order placed earlier in the beat, and the harvester, MCV and anti-air guards test only their own price.
+   - **The anti-air hold.** While the answer is short, every line of its kind holds its army orders. Give the reason: under unanswered air, a second factory's tank is fed to the flyers just as the first's would be.
+   - **Section 8.** "The oldest" is the first in entity order only while producers are appended and never change hands. A captured producer keeps the other seat's index, which twin commanders would sort differently. The commander never captures a producer, so AI mirrors cannot reach this; a row that teaches it to capture judges this first.
+   - **`LineFor`.** A cycle unit produced anywhere but a barracks or a factory gets no line. The army loop then ends every beat without advancing the cycle, and the army stops. Shipped cycles hold no such unit, and D10 keeps the commander out of the air in P8. The row that adds one (P8-28, or a flying commander after D10) extends `LineFor` in the same change.
+   - **Transcribed numbers.** The reserve equals the superweapon rung's 4500 by transcription, not by reference, because that rung reads a literal in `SkirmishAI.cs`. The faction defence caps equal half the wave with a floor of two, also by transcription. A row that moves either source re-reads its copy in `data/ai`.
+   - **`frozenprobe`.** The head's two frozen harvesters are not the base's. Name harvester #208 as above, unattributed. Note that P8-75's witness, skirmish-08's #59, is gone at the head. Add #208 to row P8-75's cell as a candidate second witness for its detector.
+   - **The faction war.** Section 5 gains the balance tool's faction war at the base and the head, as tabled above. The seat split is read as chaotic at six cells, and `seatfairgate` stays the measure of seat fairness.
+   - **Wall time.** The wall-time figures name their machine. skirmish-08's F12 reading is unsettled, and P8-31 settles it on a calm machine.
+   - **The held yard.** "What it measured" gains this risk. A finished surplus building that cannot be placed holds the yard through the `ready` path, so the ladder could never rebuild. The Architect's scratch probe read 0 holds of 450 or more ticks at the base and at the head over `pillargate`'s sweep, with a positive control. The risk grows with every structure a base holds.
+5. **Records and seams (docs only).**
+   - ADR-072 gains forward pointers at "Fixing the harvester rebuy here" and at "The harvester rebuy starves", naming ADR-079 section 6 and f0c9b74.
+   - ADR-073's "It waits on P8-22 in any case" gains a pointer: read at P8-22's head, not met (2, 3, 0 and 0).
+   - D32 records its reversal as read at this head and not met (2, 3, 0 and 0), so the gate keeps counting at the answer tick.
+   - D33's and D7's reversals are recorded as read and not met: median first launch 11536 against D33's 14400, 56 of 72 launching, and no `laddergate` inversion.
+   - The pending cells of the downstream rows say what they inherit, keeping the history already there:
+     - **P8-23** inherits two or three producers, several orders a beat, and `faction_defence_cap`, which is a personality number it may retune. f0c9b74's reversal clause names it.
+     - **P8-24** gets the position at this head: 3 of 72 unresolved, 27 of 72 in the F6 window and 42 before minute 15, plus f0c9b74's reversal clause.
+     - **P8-26** inherits producer caps already authored at D7's values, so it judges and binds them rather than adding them. The reserve and window are rung keys it owns per rung. Easy reaches further faction defences from surplus because that cap is a personality key; Easy's reserve or window can switch it off. Its goldens-neutral expectation is re-measured against condition 3's golden.
+     - **P8-31** records that F12's wall bar now fails on skirmish-09 too, and that the proxy was re-baselined again.
+6. **Status and ratification.**
+   - The orchestrator ratifies ADR-079 under a new decision of the P8 tracker. That decision also records that ADR-060's refusal of several faction defences is overturned on row P8-22's authority, citing the faction-war reading from condition 4 as the evidence that ADR-060's measured harm does not recur.
+   - ADR-079's status, its open-queue entry, row P8-22 and ADR-060's amendment banner stop calling it Proposed, and they cite this section and the pull request's number.
+   - This section's date is confirmed or corrected in the same commit.
+7. **Integration, CI and hygiene.**
+   - Pull request 172 merges first. My D38 carry stands until it does.
+   - This branch is then brought onto main. If the result differs from ef45c9e under `sim/`, `data/` or the goldens, re-measure: the 22 unmoved goldens must equal main's, the three moved values must reproduce, and condition 3's line is recorded. Any other difference comes back to me.
+   - P8-61 also moves the catalogue checksum. Whichever of the two merges second re-measures the checksum and records it; no gate pins an absolute value.
+   - All three CI jobs are green on the pull request. The determinism job reproduces the three moved hashes and condition 3's new one on Windows and Linux, and `pillargate --bind` passes in the ubuntu leg. `tools/ci-local.sh` is run again at the final head.
+   - Nothing under `.claude/agent-memory` is committed, and no attribution trailer is added.
+   - Conditions 1 to 3 change code, so they come back to me for a check, as ADR-078's did. Any commit beyond these conditions, or any golden other than those named, also comes back to me.
+
+**Carried.**
+- **The window is not saved.** `_surplusFrom` restarts on a single-player resume, so a player who saves and reloads more often than every five minutes holds the commander off its surplus buildings. This is the same class as `_airSeen` and `_produced`. If commander state ever enters the save, `_surplusFrom` joins it. The playtest notes whether anyone finds this.
+- **Seat fairness, not determinism, and non-binding.**
+  - `seatfairgate`'s income clause falls from 28 to 25 of 32.
+  - `mirrorprobe seats=4`'s widest income gap at t=9000 grows from 14.5 to 16.0 per cent (DD) and from 4.6 to 9.9 per cent (SS).
+  - The balance tool's seat split is 5 to 1 over six cells.
+
+  Each is chaotic at its sample size, and all go to F5's owner and Balance. F11 (Directorate 4 of 6 cells, Sodality 2 of 6) goes to P8-33.
+- **F6 is now a pacing problem.** Matches end early rather than not at all. P8-23 looks first, then P8-24. f0c9b74's reversal clause is the measured lever.
+- **`longmatchperf`.** My ADR-078 carry on P8-31 stands: the budget is set from a stated reason, not re-baselined to each row's reading, and this row re-baselines it again.
+- **Credit thresholds in code.** The commander's own credit thresholds (1500, 3500 and the superweapon's 4500) are still literals in `SkirmishAI.cs`. P8-26, which owns rung shape, moves them to `data/ai` beside the reserve, or records why not.
+- **Q024** is settled before the first published build.

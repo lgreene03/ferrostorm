@@ -110,7 +110,14 @@ The rung stops at one, like every other rung in this ladder. Defence density is
 a balance question, and this row is about identity. **To overturn:** a playtest
 showing one faction defence is decorative.
 
-> **AMENDED 2026-10-10 by ADR-079 (Proposed, row P8-22).** "Build several" is
+> **AMENDED 2026-10-10 by ADR-079 (row P8-22), ratified under D40 of the P8
+> tracker after the Architect's sign-off with conditions of 2026-10-10
+> (ADR-079's section "Architect sign-off"), in the pull request from branch
+> `worktree-wf_ae038544-456-1`, whose number is recorded here when it opens.**
+> D40 records the overturned refusal with its evidence: the balance tool's
+> faction war reads Directorate 3, Sodality 1, undecided 2 of six cells at the
+> base and Directorate 4, Sodality 2, undecided 0 at ADR-079's head, so the war
+> this ADR measured an ungated rung flipping is not flipped. "Build several" is
 > overturned on the P8 tracker's authority rather than by a playtest: row P8-22
 > names further faction defences from surplus (findings AI-03, ML-04, OJ-04;
 > decisions D6 and D7). The first is still bought exactly as above, from

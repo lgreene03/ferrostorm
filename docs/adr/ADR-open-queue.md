@@ -298,7 +298,7 @@ the same commit.
   corrected; rows P8-74 to P8-78 filed. D38's two reversals, read again at
   that head, are not met. Ratified under D39; condition 6 is that pull
   request's CI and merge hygiene.
-- ADR-079: PROPOSED 2026-10-10 - ADR-079-the-commander-spends.md (row P8-22,
+- ADR-079: RATIFIED 2026-10-11 - ADR-079-the-commander-spends.md (row P8-22,
   decisions D6 and D7, findings AI-03, ML-04 and OJ-04). Number claimed here
   per the numbering law, in the same commit as the draft; 078 is held by
   P8-66, so 079 is the next free number. Built on P8-66's branch, as the
@@ -319,4 +319,20 @@ the same commit.
   harvester commit), each with the first beat the commander did something
   new; the goldens-neutral commit before them gives the base's 25. Old
   replays and saves are refused by the checksum; Q024 stands for a later
-  logic-only change. NOT RATIFIED: routed for Architect sign-off.
+  logic-only change. Proposed 2026-10-10. Signed off with conditions by the
+  Architect on 2026-10-10 (the ADR's section "Architect sign-off"; the
+  review brief's 2026-10-09 corrected), in the pull request from branch
+  worktree-wf_ae038544-456-1, whose number is recorded here when it opens.
+  The seven commits reviewed were cherry-picked unchanged onto main at
+  d295931, after pull requests 172 and 173 merged. Conditions 1 to 5 are met
+  in it by one commit each: the reserve test compares in long and
+  registration refuses a negative reserve, window or faction defence cap
+  as the loader does; aituninggate stage 2e bites the four conditions the
+  spending rests on; the `aispend` golden, appended after `airanswer`, puts
+  the routing and the surplus producers under the cross-platform gate; the
+  record corrected; the seams recorded. Condition 7's re-measurement on
+  main: the catalogue checksum, which P8-61 also moves, reads
+  0x0DB4F466E14C9D42 on main and 0x652D8C7E6D1C847D at the head, and the
+  goldens the row does not move equal main's. Ratified under D40, which
+  also records ADR-060's overturned refusal and the faction-war evidence;
+  the rest of condition 7 is that pull request's CI and merge hygiene.
