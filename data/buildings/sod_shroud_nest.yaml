@@ -28,3 +28,6 @@ build_tab: defence
 # and speed, ONE hit point, no weapon, and no sight at all. The deception is
 # that an observer cannot tell which army is which until they shoot it.
 support_powers: [decoy_army]
+# P8-61: the power's charge, every power's 500 ticks, moved here from the sim
+# constant (ADR-073).
+charge_ticks: 500

@@ -131,7 +131,7 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 108000,
-      "description": "P8-18 (ADR-073, D1). A SUPERWEAPON's charge in sim ticks at 15Hz: how long after it is placed, and after each impact, before it can launch again. The charge pauses while its owner's base is underpowered. REQUIRED on both superweapons and REFUSED on every other building by the loader, because a support power's charge is the compiled absolute World.SupportPowerChargeTicks and a value authored here would never be read. GDD s8's ~6 minutes is 5400. Folded into World.CatalogueChecksum because it decides when a LaunchSuper is accepted."
+      "description": "P8-18 (ADR-073, D1). A SUPERWEAPON's charge in sim ticks at 15Hz: how long after it is placed, and after each impact, before it can launch again. GDD s8's ~6 minutes is 5400. P8-61: and on a building granting support powers, the one charge those powers share: how long after it is placed, and after each use, before any of them can fire again (500 on every such building, World.SupportPowerChargeTicks being the compiled reference). Either charge pauses while its owner's base is underpowered. REQUIRED on both superweapons and on every building with support_powers, REFUSED on every other building by the loader. Folded into World.CatalogueChecksum because it decides when a LaunchSuper or a UseSupportPower is accepted."
     },
     "strike_damage": {
       "type": "integer",
@@ -144,6 +144,12 @@
       "minimum": 1,
       "maximum": 27000,
       "description": "P8-18 (ADR-073, D15). How many sim ticks an orbital scan lights its circle of the map (the radius is the building's own sight_range). REQUIRED on a building granting orbital_scan and REFUSED everywhere else by the loader. Folded into World.CatalogueChecksum because what a player can see decides what its units acquire."
+    },
+    "jam_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 27000,
+      "description": "P8-61 (ADR-073, Architect condition C6). How many sim ticks a radar jam blinds every player hostile to its firer (refreshed, not stacked, by a second jam). 166 on the Watch Post, a third of its 500-tick charge, World.RadarJamTicks being the compiled reference; the ceiling is reveal_ticks', a whole 30-minute match. REQUIRED on a building granting radar_jamming and REFUSED everywhere else by the loader. Folded into World.CatalogueChecksum because it decides how long a player's radar stays dark."
     }
   }
 }

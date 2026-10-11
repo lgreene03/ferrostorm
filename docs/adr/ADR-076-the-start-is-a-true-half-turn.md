@@ -253,7 +253,7 @@ The alternatives considered for clause 3 itself are kept for its re-landing. **R
 - **The production exit (clause 3, held under D37).** Every producer still walks `SpawnOffsets` from its footprint's bottom-right cell, south first, so two half-turned producers set their units down at cells that are not each other's half turn; it is `mirrorprobe`'s first break on twelve mirrors at this ADR's head. **Gone since D38's pull request** (2026-10-08), where clause 3 re-landed: `mirrorprobe` finds no production exit as a first break on any mirror there.
 - **The other three users of `SpawnOffsets`**: the Carrier's unload, the decoy army and the tunnel deployment walk the fixed list, south first, and still do so now that clause 3 has landed. Each is a candidate row of its own.
 - **`SetExitMove`'s clamp** (World.cs) bounds the walk target to [0, width - 0.5], which is not symmetric: it binds only when a producer within three cells of a map edge sends a unit out on its edge side, and then the target is a cell edge on one side of the map and a cell centre on the other.
-- **`SpawnFreeHarvester`'s clamp** bounds the delivery to [0, width - 1], whose reflection is [1, width], not itself. It cannot bind for a 2x2 refinery on a map more than four cells wide, so it is dead on every shipped map and kept only as a guard.
+- **`SpawnFreeHarvester`'s clamp** bounds the delivery to [0, width - 1], whose reflection is [1, width], not itself. It cannot bind for a 2x2 refinery on a map more than four cells wide, so it is dead on every shipped map and kept only as a guard. (Closed on 2026-10-09 by P8-70: see "Amendment, 2026-10-09: the free harvester's clamp is mirror-exact".)
 - **The centre-line tie, in three cases** (Architect condition C4), each the subject of ADR-075's tie clause ("The tie (a structure centred on the map's centre line) reverses if a map is ever made whose start or base straddles that line, when it needs a per-axis rule of its own"):
   - a **start on an odd axis's centre line**: two starts that are each other's half turn on that line both keep the authored layout on that axis, so their hands are translations of each other there, not rotations (on a 95-wide map, starts (47,8) and (47,55) both put their force at x 49.5 to 51.5, where the half turn needs 43.5 to 45.5). `mapgate` refuses such a two-seat map, and every shipped map has even dimensions;
   - a **refinery (and, since clause 3 landed, a producer) centred on an even axis's centre line**: its half-turned partner, also centred on that line, delivers its harvester (or would set its units down) on the same side of the line, a translation rather than a rotation. A player can build one there on any map with an even dimension;
@@ -310,3 +310,30 @@ The alternatives considered for clause 3 itself are kept for its re-landing. **R
 - C5: `mapgate` fails naming the map and clause 1's reversal on a start that is not an image of start 0, and on an empty hand; both refusals are asserted inside the gate on a synthetic edge-midpoint four-seat map and a hand-less skirmish-01, and shown to bite.
 - C6: `freeharvestergate` stage 4 adds single-axis pairs on a 64 by 48 map and is shown to fail with the y frame read off `Map.Width`, the x frame read off `Map.Height`, and the frames exchanged. spawngate's single-axis check travels with clause 3.
 - C7: clause 2's reversal names `pillarprobe`, which prints the count (0 Idle and 0 stranded of 534 checked at the head); clause 3's reversal goes with clause 3 and is made measurable when it re-lands.
+
+## Amendment, 2026-10-09: the free harvester's clamp is mirror-exact (P8-70)
+
+"What remains asymmetric" listed `SpawnFreeHarvester`'s clamp, which bounded the
+delivery POINT to [0, width - 1], whose reflection is [1, width]. It now bounds
+the delivery CELL to [0, width - 1] and takes that cell's centre, so the point
+lies in [0.5, width - 0.5], which is its own reflection (a cell c reflects to
+width - 1 - c, and clause 2's frame rule already maps the delivery cell that
+way off the centre lines). The same holds on y.
+
+The row offered a second route, showing the clamp unreachable and removing it,
+and it is not open: the old clamp bound on any axis at most two cells longer
+than the refinery's footprint (a 2x2 refinery at the near edge of a map three
+cells wide delivers into the last column, whose centre 2.5 it cut to 2.0 while
+the mirror delivered at 0.5), and the map loader accepts any positive size.
+The new clamp binds only on an axis exactly as long as the footprint, where the
+refinery fills the axis; it stays as the guard for that case.
+
+Measured: goldens 25 of 25 byte-identical, as clause 2's sign-off predicted,
+because no golden buys a refinery on so small a map. `spawngate` (in `match`)
+gains the stage: on maps 3 by 20 and 20 by 3, a base and its own reflection in
+the short axis each buy one refinery at the edge; the first harvester must land
+in the last cell of that axis, and the two must be each other's reflection,
+raw. With the old clamp it fails naming the 3 by 20 pair, (2.0, 10.5) against
+(0.5, 10.5), and with the old clamp on y alone it fails naming the 20 by 3 pair.
+The centre-line tie and `SetExitMove`'s clamp (row P8-69) remain as listed
+above.

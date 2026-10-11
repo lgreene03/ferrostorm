@@ -104,11 +104,20 @@ public readonly struct Fix64 : IEquatable<Fix64>, IComparable<Fix64>
     public override int GetHashCode() => Raw.GetHashCode();
     public int CompareTo(Fix64 other) => Raw.CompareTo(other.Raw);
 
-    /// <summary>Debug display only. Never feed the result back into the sim.</summary>
+    /// <summary>Debug display only. Never feed the result back into the sim.
+    /// P8-78: the sign, then the magnitude's whole part and its first six
+    /// fractional digits, truncated. It used to print the value's floor and
+    /// then the fraction above that floor, so -0.25 read "-1.750000" and every
+    /// probe line or selftest failure carrying a negative offset misled its
+    /// reader. A value at or above zero prints exactly as it did. The magnitude
+    /// is taken unsigned so MinValue, whose negation overflows a long, prints
+    /// too; and with every part an unsigned integer and the sign a literal, no
+    /// culture's negative sign can reach the text.</summary>
     public override string ToString()
     {
-        long ip = Raw >> FracBits;
-        ulong fp = (ulong)(Raw & 0xFFFFFFFFL) * 1_000_000UL >> FracBits;
-        return $"{ip}.{fp:D6}";
+        ulong mag = Raw < 0 ? unchecked(0UL - (ulong)Raw) : (ulong)Raw;
+        ulong ip = mag >> FracBits;
+        ulong fp = (mag & 0xFFFFFFFFUL) * 1_000_000UL >> FracBits;
+        return Raw < 0 ? $"-{ip}.{fp:D6}" : $"{ip}.{fp:D6}";
     }
 }

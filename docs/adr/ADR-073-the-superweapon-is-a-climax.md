@@ -591,7 +591,8 @@ numbers they were derived from. CLAUDE.md's "Support powers" paragraph was
 reworded to match on integration.
 
 **What is not done.** The support-power charge and the jam are still compiled
-absolutes (tracker row P8-61, the Architect's carried condition C6). The
+absolutes (tracker row P8-61, the Architect's carried condition C6; met on
+2026-10-09, see "Amendment, 2026-10-09" below). The
 seismic charge's damage is still compiled; P8-19's row now names moving
 `SeismicDamage` (350) into its `strike_damage` (also C6), by changing the strike
 rule in the single read predicate `World.PacingColumnsRead`, which the loader
@@ -616,3 +617,52 @@ the Architect lifts it.
 
 ## Architect sign-off
 Signed off with conditions by the Architect on 2026-10-03, reviewing the P8-18 integration branch with its audit follow-ups applied. Before-merge conditions C1 to C5 are met in the same pull request that lands this ADR (implemented in the row's lane as commit 815c74c, which the squash merge does not preserve). Carried conditions C6 (row P8-61 and P8-19's seismic damage), C7 (the single read predicate) and C8 (pillargate verdicts recorded until it runs in CI) are recorded in the tracker and in Consequences.
+
+## Amendment, 2026-10-09: condition C6's support-power half is met (P8-61)
+
+The support powers' charge (500) and the radar jam (166) leave their sim
+constants on decision 2's pattern, at the values they held, so no number
+changes and no A11 co-sign arises. The seismic charge's damage, the other half
+of C6, stays with P8-19.
+
+| key | on | read where | compiled reference |
+|---|---|---|---|
+| `charge_ticks` | every building with `support_powers` (the Bastion, the Watch Post, the Veil Projector, the Shroud Nest), beside both superweapons | the charge a power building is spawned with, and the restart on each use | `SupportPowerChargeTicks` |
+| `jam_ticks` | the Watch Post | the length of the jam it fires | `RadarJamTicks` |
+
+**One column for both charges, on each building.** A support power was always a
+property of its structure def, and the powers on a building already share its
+charge, so the charge is the building's and `charge_ticks` says it in the key
+the superweapon uses. Rejected: a single global table for the two numbers,
+which is a new /data kind (a directory, a schema, a loader and a checksum
+section) for two integers, and which would make the power's charge the one
+pacing number not on the def of the building that fires it. The price is that
+four files now carry 500 where one constant did. `powerdatagate` stage 1 holds
+them together: each must reproduce its compiled reference, and every building
+granting a power must charge in `SupportPowerChargeTicks`, so a per-building
+charge is a decision someone has to take, not a drift.
+
+`World.PacingColumnsRead` gains the rules in its one place (C7): a building
+granting any power reads its charge, and one granting radar jamming reads its
+jam. The loader and registration therefore demand and refuse both exactly as
+they do the other three columns, and `jam_ticks`'s ceiling is `reveal_ticks`'
+(27000, a whole match), named `World.MaxJamTicks`. `JamTicks` joins the def's
+equality, so the selftest round-trip proves the file, and the checksum fold
+beside `RevealTicks`; the charge was already folded.
+
+**Measured.** Goldens 25 of 25 byte-identical: every power building's file and
+reference agree with the constant they replace. The catalogue checksum moves,
+0x1255012DCF3D3A68 to 0x0DB4F466E14C9D42, by construction: four defs now carry
+a charge of 500 where they carried 0, and every structure folds one more
+column. Saves and replays recorded against the old catalogue refuse, the trade
+P8-18 took. `powerdatagate` stage 2e plays the Watch Post's own file with its
+two lines changed to 123 and 40, through the loader: the post fires 128 ticks
+after it is built, jams for less than 45 ticks and recharges within 128, where
+the unchanged file (the control) does none of the three. With each of the
+three reads put back to its constant in turn, the stage fails naming that read.
+
+**Reverses** if a per-building power charge is ever wanted as a design (then
+stage 1's equality to `SupportPowerChargeTicks` is dropped by that decision,
+not by drift), or if a power ever needs a charge independent of its
+building's, which ADR-064 rejected ("The powers on a building SHARE its
+charge").

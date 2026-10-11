@@ -22,6 +22,9 @@ build_tab: defence
 # land is the producers' own spawn ring, and it may only aim at ground the
 # player can already SEE - which is its counterplay, expressed as a rule.
 support_powers: [tunnel_deployment]
+# P8-61: the power's charge, every power's 500 ticks, moved here from the sim
+# constant (ADR-073).
+charge_ticks: 500
 notes: >
   Sodality doctrine and the one structure the sim really does gate by faction.
   The faction gate and this prerequisite are ORTHOGONAL (ADR-009 clause 3):
