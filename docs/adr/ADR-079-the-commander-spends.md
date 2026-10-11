@@ -40,6 +40,9 @@ seen (ADR-072).
 
 **The reserve is 4500**, the superweapon rung's own credit test and the
 dearest in the ladder, so nothing bought out of surplus can starve a rung.
+It equals that test by transcription, not by reference: the rung reads a
+literal 4500 in `SkirmishAI.cs`, and the reserve is a copy of it in data/ai,
+so a row that moves either re-reads the other.
 
 **The window is 4500 ticks, five minutes, and it was measured into shape.** At
 the base, of the 423 stretches a Normal or Hard treasury spent at or above
@@ -64,8 +67,15 @@ sustained, the yard buys, in this order, the first that applies:
 Each is asked of the catalogue as a capability (`BuildableStructOfKind`,
 `BuildableFactionDefence`, ADR-045), each needs its prerequisites standing
 (a building the yard is refused stalls it forever), and each is bought only
-while its price still leaves the reserve; its price joins the beat's
-commitments, so the army cannot promise the same credits again. The factory
+while its price still leaves the reserve. Its price joins the beat's
+commitments, and those bind only the army's orders after the beat's first.
+Nothing else in the beat reads them: the building's own test reads the
+treasury alone, so it does not count an engineer ordered earlier in the beat;
+the anti-air answer tests its own price, the MCV a floor of 3500 credits and
+the harvester no price at all; and the first army order stands on its own
+price (section 4). So a beat that buys a surplus building can end below the
+reserve by the first army order's price, and by that of any engineer,
+anti-air answer or harvester the beat also ordered. The factory
 comes first because its units are the dear ones; a producer before a defence
 because a gun spends once and a producer for the rest of the match. "Every
 line busy" is what makes another producer the answer: a line that sits empty
@@ -86,6 +96,19 @@ line of their kind holds, which the one-line guards implied while there was
 one line to be on. The commander used to name the LAST producer of a kind it
 found, which with two would have left the other idle.
 
+**While the anti-air answer is short, every line of its kind holds its army
+orders**, not only the line the answer takes, which is all P8-17's hold
+covered while there was one producer. Under unanswered air a second
+factory's tank is fed to the flyers just as the first's would be. It is inert
+until air is seen.
+
+**A unit produced anywhere but a barracks or a factory gets no line**
+(`LineFor`). If a unit cycle ever holds one, the army loop ends every beat at
+it without advancing the cycle, and the army stops. Shipped cycles hold no
+such unit (only aircraft are produced elsewhere, and D10 keeps the commander
+out of the air in P8), so the row that adds one, P8-28 or a flying commander
+after D10, extends `LineFor` in the same change.
+
 ### 4. Several orders a beat, the later ones only above the reserve
 
 The unit cycle is walked in its own order, one unit after the next, for as
@@ -93,6 +116,9 @@ long as each can be placed; the first that cannot ends the beat, so the
 doctrine's mix is kept rather than topped up with whatever has room. The first
 order of a beat stands on its own price, exactly as the one order always did;
 every later one only while the beat's orders so far still leave the reserve.
+A beat that opens at or above the reserve can therefore end below it by one
+unit's price, plus that of any engineer, anti-air answer or harvester placed
+earlier in the beat (section 2), whether or not it bought a surplus building.
 The depth guard bounds how many a beat can place.
 
 ### 5. Further faction defences from surplus (amends ADR-060)
@@ -106,11 +132,30 @@ as ADR-060 bought it. Every one after it is bought only from a sustained
 surplus, after any producer the rung's cap still allows, while fewer than the
 personality's `faction_defence_cap` stand: Standard 3, Rusher 2, Turtle 5,
 each the personality's own ground garrison (half its wave, with a floor of
-two), so a base keeps as many signature guns as fighters at home. It is a
+two), so a base keeps as many signature guns as fighters at home. Each cap is
+transcribed from that rule, not derived from the wave size when loaded, so a
+row that moves a personality's wave size re-reads its cap in data/ai. It is a
 personality number, beside the wave size, because how many guns guard a base
 is taste (DR-14). ADR-060's measurement, that an ungated rung flipped the
 faction war, is why these are gated on the window and the reserve: they never
 reach the opening.
+
+**The faction war is not flipped.** The Architect ran the balance tool at the
+base and at this ADR's head. It exits 0 with a PASS verdict at both, and its
+mirror self-check is unchanged (28 annihilations, 12 cloaked runs identical).
+Only its faction war and its checksum line differ, in cells of six:
+
+| | Directorate | Sodality | Undecided | Seat 0 | Seat 1 |
+|---|---|---|---|---|---|
+| base | 3 | 1 | 2 | 3 | 1 |
+| head | 4 | 2 | 0 | 5 | 1 |
+
+The Directorate leads at both, so ADR-060's measured harm does not recur; the
+undecided cells resolve, and the credits banked at the end of the base's
+undecided or late cells (up to 49150) are gone at the head (at most 10087).
+The seat split of 5 to 1 is read as chaotic at six cells, and `seatfairgate`
+stays the measure of seat fairness. F11's faction balance (Directorate 4 of 6
+cells, Sodality 2) goes to P8-33.
 
 ### 6. The harvester rebuy takes the shortest factory line with room
 
@@ -196,10 +241,23 @@ ADR-076). `mirrorprobe` confirms what it can see: no first break moves
 is a walker's by t=2668 and the earliest median second factory is t=4815, so
 that tie's exactness rests on the construction above rather than on the probe.
 
+"The oldest" is the first in entity order only while producers are appended
+and never change hands. A captured producer keeps the index it had on the
+other seat, which twin commanders would sort differently. The commander never
+captures a producer (its only capture order is the neutral Outpost's), so AI
+mirrors cannot reach this; a row that teaches it to capture one judges this
+tie first.
+
 ## What it measured (seed 2026, macOS)
 
 Three columns: the base (ef45c9e); the behaviour commit (sections 1 to 5);
 and this ADR's head, with the harvester rebuy (section 6).
+
+Every figure was taken on one machine, the owner's Apple M4 (10 cores, 24 GB,
+macOS), which parallel agent runs share. Tick counts and every figure a
+deterministic tool prints do not depend on the machine; the wall-time figures
+do. The implementer's load was not recorded, and the verifier read load
+averages of 25 to 50 during its runs.
 
 **What the commander banks and fields (`spendprobe`, the 72 rung mirrors):**
 
@@ -236,7 +294,7 @@ median first launch 11536 at every stage, launching in 64 of 72 matches at the
 base and 56 of 72 at both later stages (half is 36), at most 3.5, 3.6 and 3.2
 launches per seat per 30 minutes (bar 5); `aiairgate` PASS, every last flyer
 down by t=4965; `cheesegate` 10 of 10; `powerdatagate`, `difficultygate`,
-`aituninggate` and the rest of `match` green; `golden 2026` gives the 25
+`aituninggate` and the rest of `match` green; `golden 2026` gives the
 committed lines; `determinism`, `selftest`, the LAN, replay and save modes and
 the balance gate's mirror self-check, all through `tools/ci-local.sh`.
 
@@ -247,7 +305,30 @@ at every stage (18 of 32 is 56 per cent).
 **`frozenprobe`**: held by an exact cancellation **0** at every stage (sidestepped
 0, left on a line 0); walkers in one on 450 or more consecutive ticks 0, in a
 cycle 0. Frozen walkers fall from 2 harvesters and 17 units to 2 harvesters and
-0 units.
+0 units. The two harvesters at the head are not the base's. At the base they
+are P8-75's witness, harvester #59 in skirmish-08's mixed pairing (DS o0 and
+SD o1), and that freeze is gone at the head. At the head they are one new
+freeze seen from both orientations: harvester #208 in skirmish-01's Sodality
+mirror (SS o0 and o1), owned by the seat at start 1, heading to its refinery
+at (87, 57) and standing at (85.072629, 49.627714) from t=7500 to its match's
+end at t=10861, 3361 ticks. It stands at the north end of a one-cell corridor
+between its own turret (centre 84, 51) and its second refinery (centre 87,
+51); no seat placed a structure from t=7300 to t=9560, the probe finds a route
+from its cell, and it returns to exactly the same position every tick, which
+is the signature of P8-75's triangle. It is **not attributed** to this row's
+mechanism, and whether this row's denser base closed a wider route is not
+measured. Row P8-75 carries it as a candidate second witness for its detector.
+`frozenprobe` reproduces it, and the absence of #59, at this branch's head on
+main d295931.
+
+**A held yard** (a risk, measured as unreached). A finished surplus building
+that cannot be placed holds the yard through the `ready` path, which retries
+the placement and queues nothing else, so the ladder could never rebuild while
+it holds. The Architect's scratch probe, not committed, counted yards holding
+a finished structure unplaced for 450 or more consecutive ticks over
+`pillargate`'s 72 matches: 0 at the base and 0 at the head, with a positive
+control at a threshold of one tick that sees ordinary one-beat holds of 14
+ticks. The risk grows with every structure a base holds.
 
 **`mirrorprobe`**: every first break is the one the base prints, at the same
 tick with the same treasuries, on all 16 two-seat cells (from skirmish-02 DD
@@ -302,7 +383,11 @@ tick 313148, 54894 and 87023 to **357451, 65757 and 171729** on skirmish-07, 08
 and 09. Recorded with it: the wall-time p999 on skirmish-09 rises from 7.324
 to about 13 ms a tick (field builds per tick 0.0898 to 0.2234, the four-seat
 match ending at t=9736 rather than t=21331), so F12's 8 ms bar now fails there
-as well as on skirmish-07 (23.7 to about 25.6).
+as well as on skirmish-07 (23.7 to about 25.6). These wall times are the
+implementer's, on the machine named above with its load unrecorded. The
+verifier, under load averages of 25 to 50, read 40.8, 17.1 and 22.8 ms on
+skirmish-07, 08 and 09, so whether F12 also fails on skirmish-08 is
+**unsettled**; P8-31 settles it on a calm machine.
 
 **The catalogue checksum** moves `0x1255012DCF3D3A68` to `0x35327CDBF04A326F`
 over this row (`0xB1AFE8990A02ABBB` at the commit that authored the numbers with
@@ -348,6 +433,23 @@ buys a surplus building or holds an order for one the beat placed earlier.
 probe, and the commander reads none of the four: its `golden 2026` gives all 25
 of the base's hashes. The behaviour commit moves `skirmish` and `aisuper` and
 nothing else; the harvester commit then moves `airanswer` and nothing else.
+
+**The new line, `aispend`** (the Architect's condition 3): `aispend 2026
+0x6FF9A772D908875A`, appended after `airanswer`, so every line above it is
+byte-identical and in order and CI's ordered diff gains one line. Before it no
+golden reached a second producer, although every LAN peer runs its AI seats
+itself (ADR-033). A Normal Standard commander plays a finished Directorate
+base with a purse that keeps its treasury above the reserve through the
+window, the rival yard sealed behind a blocked column as `aisuper`'s is, for
+the compiled Normal window plus 3000 ticks. Measured: a later army order on
+the first beat (t=0), orders routed over both factory lines by t=4815, and
+two factories and two barracks held at once from t=6181. The second barracks
+comes late because the barracks line is empty as each beat opens, so the yard
+first buys the two further Bastions the faction defence cap allows and then
+the ladder's superweapon. The scenario asserts all three states and fails by
+name when one is not reached: a producer cap of one fails the two-of-each
+check, `Route` always taking the first producer fails the routing check, and
+one army order a beat fails the later-order check.
 
 ## Compatibility
 
@@ -451,7 +553,8 @@ end with a result. What it leaves, each recorded with its owner:
   before minute 15. P8-23's staging and growing threshold are the first place
   to look, then P8-24.
 - **F12's wall bar now fails on skirmish-09** as well as skirmish-07, from the
-  extra field builds of a larger army (P8-31).
+  extra field builds of a larger army, and skirmish-08's reading is unsettled
+  (P8-31, on a calm machine).
 - **D32's reversal is not met**: two Hard cells end the control with no
   harvester (P8-23's waves, P8-26's ladder).
 - **P8-26 inherits the producer caps already authored** (D7's numbers, its row's

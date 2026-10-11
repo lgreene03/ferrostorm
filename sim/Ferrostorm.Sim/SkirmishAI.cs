@@ -498,7 +498,15 @@ public sealed class SkirmishAI
         // producer's line, so the routing and the depth guard below read every
         // line as it will stand once this beat's orders apply, and the credits
         // those orders will draw (pay-as-you-build takes nothing up front, so
-        // without this a beat could promise the same credits twice).
+        // without this a beat could promise the same credits twice). ONLY the
+        // army's orders after the beat's first read `committed`. The surplus
+        // building's own test reads the treasury alone, so it does not count
+        // an engineer ordered earlier in the beat; the engineer and anti-air
+        // orders test their own price, the MCV a floor of 3500 and the
+        // harvester none; and the first army order stands on its own price.
+        // So a beat that opens at or above the reserve can end below it by
+        // that first army order's price, plus any engineer, anti-air answer
+        // or harvester it also ordered (ADR-079, sections 2 and 4).
         var pending = new Dictionary<int, int>();
         long committed = 0;
         void Ordered(int producer, int unitType)
@@ -513,7 +521,13 @@ public sealed class SkirmishAI
         // its twin on the opposite start see the same queue lengths, and each
         // built its producers in the same sequence, so the oldest is the twin
         // of the oldest. Nothing here reads a world axis or compares ids
-        // across seats. -1 when none stands.
+        // across seats. -1 when none stands. "The oldest" is the first in
+        // entity order only while producers are appended and never change
+        // hands: a captured producer keeps the index it had on the other
+        // seat, which twin commanders would sort differently. This commander
+        // never captures a producer (its only capture order is the neutral
+        // Outpost's), so AI mirrors cannot reach that; a row that teaches it
+        // to capture one judges this tie first.
         int Route(List<int> line)
         {
             int best = -1, bestDepth = int.MaxValue;
@@ -524,6 +538,13 @@ public sealed class SkirmishAI
             }
             return best;
         }
+        // A unit produced anywhere but a barracks or a factory gets NO line.
+        // If the unit cycle below ever holds one, the army loop ends every
+        // beat at it without advancing the cycle, and the army stops. Shipped
+        // cycles hold no such unit (only aircraft are produced elsewhere, and
+        // D10 keeps the commander out of the air in P8), so the row that adds
+        // one (P8-28, or a flying commander after D10) extends this in the
+        // same change.
         List<int> LineFor(int producedAt)
             => producedAt == World.BarracksStructType ? barracksLine
              : producedAt == World.FactoryStructType ? factories : new List<int>();
@@ -742,8 +763,12 @@ public sealed class SkirmishAI
             // the treasury has stood at or above the reserve for the whole
             // window, so a passing bank is never mistaken for income. The
             // building is bought only while its price still leaves the
-            // reserve, and its price joins this beat's commitments so the
-            // army below cannot promise the same credits again.
+            // reserve, and its price joins this beat's commitments, so no army
+            // order after the beat's first can promise the same credits again.
+            // The first army order stands on its own price, and this test reads
+            // the treasury alone, so it does not count an engineer ordered
+            // earlier in the beat: the beat can still end below the reserve
+            // (see `committed` above).
             int extra = SurplusStructure(w, factories, barracksLine, factionDefence, factionDefences);
             int extraCost = extra != 0 ? w.GetStructureType(extra).Cost : 0;
             // In long, as the treasury is: a reserve near the top of int plus
@@ -968,7 +993,10 @@ public sealed class SkirmishAI
                 // P8-17: and while the anti-air answer is short, its producers
                 // build that first (above), so the army waits its turn on that
                 // kind of line. Inert until air is seen, when antiAirShort is
-                // false everywhere.
+                // false everywhere. P8-22 (ADR-079): EVERY line of the answer's
+                // kind holds its army orders, not only the line the answer
+                // takes, because under unanswered air a second factory's tank
+                // is fed to the flyers just as the first's would be.
                 if (producer < 0 || Depth(producer) >= 2) break;
                 if (antiAirShort && def.ProducedAt == antiAirKind) break;
                 if (first ? w.Credits(_player) < def.Cost
