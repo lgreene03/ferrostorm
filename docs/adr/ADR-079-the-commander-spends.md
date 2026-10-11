@@ -396,6 +396,16 @@ rebase, and no new gate pins an absolute value: `aituninggate` prints the
 checksum it computes from both sources and asserts that they agree and that
 each number moves it.
 
+**Re-measured on main at d295931** (the Architect's condition 7), which
+carries P8-61's charge and jam in /data and so moves the checksum too. Main
+reads `0x0DB4F466E14C9D42`; this branch's head reads `0x652D8C7E6D1C847D`,
+from `aituninggate` (both sources agree) and from `catalogueloadgate` (the
+single call, the per-kind sequence and the compiled table agree). Both rows'
+folds are kept: P8-61's columns and this row's four numbers each still move
+it. `powerdatagate` and `aituninggate` pass at that head. `golden 2026` at
+that head gives main's line for each of the 22 goldens this row does not
+move, reproduces the three moves below exactly, and adds the `aispend` line.
+
 ## Golden hashes
 
 `golden 2026`, diffed in order against the base's `sim/golden-hashes.txt`.
