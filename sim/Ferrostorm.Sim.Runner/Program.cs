@@ -2014,6 +2014,129 @@ ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string
     return world.ComputeStateHash();
 }
 
+ulong ScenarioAiSpend(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-079, Architect condition 3: the golden that puts the commander's
+    // spending under the cross-platform gate. Every LAN peer runs its AI seats
+    // itself (ADR-033), yet until this scenario no golden reached a second
+    // producer: skirmish stops at 5000 ticks, the LAN modes end before the
+    // surplus window, and aisuper reaches the surplus branch only for its
+    // second Bastion. So the routing over two lines and the surplus factory
+    // and barracks ran on one machine at a time and were compared nowhere.
+    //
+    // A Normal Standard commander holds a finished Directorate base (plant,
+    // two refineries, barracks, factory, turret, radar and one Bastion, a
+    // harvester per refinery on a rich field) and a purse that keeps its
+    // treasury above the reserve for the whole window. The rival yard is
+    // sealed behind a blocked column, as aisuper's is, so the subject is the
+    // spending and not the ground war. A bare World plays the compiled
+    // catalogue and the compiled AI tuning, as every golden does. The plant's
+    // supply is raised so the ladder never asks for another (it asks while
+    // supply is under draw plus 40), which keeps the yard free for the
+    // surplus. The scenario asserts it reaches all three of:
+    //   - one seat holding two factories and two barracks at once;
+    //   - its orders routed over both lines of one kind;
+    //   - a later order placed on a beat (a second army order in one beat,
+    //     which stands only while the beat's orders so far leave the reserve).
+    // A later row that stops reaching any of them fails here rather than
+    // silently losing the coverage.
+    //
+    // Appended LAST to the golden list, so the lines above it are untouched by
+    // construction and the cross-platform diff gains exactly one line.
+    var world = new World(seed, 96, 64, players: 2);
+    world.GrantCredits(0, 40000);
+    world.SpawnConstructionYard(0, 8, 30);
+    world.SpawnPowerPlant(0, 13, 30, supply: 2000);
+    world.SpawnRefinery(0, 8, 24);
+    world.SpawnRefinery(0, 13, 24);
+    world.SpawnBarracks(0, 18, 30);
+    world.SpawnFactory(0, 8, 36);
+    world.SpawnTurret(0, 18, 24);
+    world.SpawnRadarUplink(0, 13, 36);
+    world.SpawnFactionDefence(0, world.BuildableFactionDefence(0), 18, 36);
+    world.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(70, y, true);
+    world.SpawnConstructionYard(1, 86, 30);
+    var ai = SkirmishAI.Standard(0);
+    var cmds = new List<Command>();
+
+    // The window is read off the compiled Normal rung the commander plays, so
+    // the horizon follows it if it moves. MEASURED at P8-22's head: the
+    // second factory is placed about 300 ticks after the window, and the
+    // second barracks only about 1700 after it, because the barracks line is
+    // empty as each beat opens while the factory's is not, so the yard first
+    // buys the two further Bastions the faction defence cap allows and then
+    // the ladder's superweapon once its charge has elapsed (D33). 3000 ticks
+    // past the window leaves room for that chain to slip by more than a
+    // thousand ticks before the assertion below fails it.
+    int window = AiTuning.Get(AiTuning.NormalId).SurplusWindowTicks;
+    int ticks = window + 3000;
+    var orderedAt = new Dictionary<EntityKind, SortedSet<int>>
+    {
+        [EntityKind.Factory] = new SortedSet<int>(),
+        [EntityKind.Barracks] = new SortedSet<int>(),
+    };
+    int mostFactories = 0, mostBarracks = 0, bothHeldAt = -1, routedAt = -1, laterOrderAt = -1;
+    EntityKind routedKind = EntityKind.Factory;
+    for (int t = 0; t < ticks; t++)
+    {
+        ai.Act(world, cmds);
+        // The harvester rebuy and the expansion's MCV are ordered outside the
+        // army loop, so they are not army orders. No outpost stands and no
+        // flyer is seen, so no engineer or anti-air order is placed either.
+        int armyOrders = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type != CommandType.Produce || c.PlayerId != 0) continue;
+            if (c.AuxId != World.HarvesterUnitType && c.AuxId != World.McvUnitType) armyOrders++;
+            var kind = world.Entities[c.EntityId].Kind;
+            if (orderedAt.TryGetValue(kind, out var set)) set.Add(c.EntityId);
+        }
+        if (armyOrders >= 2 && laterOrderAt < 0) laterOrderAt = world.Tick;
+        if (routedAt < 0)
+            foreach (var kind in new[] { EntityKind.Factory, EntityKind.Barracks })
+                if (orderedAt[kind].Count >= 2) { routedAt = world.Tick; routedKind = kind; break; }
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        bool placed = false;
+        foreach (var ev in world.Events)
+            if (ev.Type == GameEventType.StructurePlaced && world.Entities[ev.A].PlayerId == 0) placed = true;
+        if (placed)
+        {
+            int factories = 0, barracks = 0;
+            for (int i = 0; i < world.EntityCount; i++)
+            {
+                var e = world.Entities[i];
+                if (!e.Alive || e.PlayerId != 0) continue;
+                if (e.Kind == EntityKind.Factory) factories++;
+                if (e.Kind == EntityKind.Barracks) barracks++;
+            }
+            if (factories > mostFactories) mostFactories = factories;
+            if (barracks > mostBarracks) mostBarracks = barracks;
+            if (factories >= 2 && barracks >= 2 && bothHeldAt < 0) bothHeldAt = world.Tick;
+        }
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (bothHeldAt < 0)
+        throw new Exception($"aispend: seat 0 never held two factories and two barracks at once in {ticks} ticks (most "
+                            + $"{mostFactories} and {mostBarracks}), so the surplus producers are not under the golden gate");
+    if (routedAt < 0)
+        throw new Exception($"aispend: no kind had orders routed over two of its lines in {ticks} ticks (factories ordered "
+                            + $"{orderedAt[EntityKind.Factory].Count}, barracks {orderedAt[EntityKind.Barracks].Count}), so the "
+                            + "shortest-line routing is not under the golden gate");
+    if (laterOrderAt < 0)
+        throw new Exception($"aispend: no beat in {ticks} ticks placed a second army order, so the later orders above the "
+                            + "reserve are not under the golden gate");
+    report?.Invoke($"aispend: a Normal commander placed a later army order on a beat at t={laterOrderAt}, held two factories "
+                   + $"and two barracks at once from t={bothHeldAt} (window {window}), and had routed orders over both of its "
+                   + $"{(routedKind == EntityKind.Factory ? "factory" : "barracks")} lines by t={routedAt}; most held "
+                   + $"{mostFactories} factories and {mostBarracks} barracks, treasury {world.Credits(0)} at t={ticks} "
+                   + "(ADR-079 condition 3, the spending under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -2041,6 +2164,7 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("depot", (s, cp) => ScenarioDepot(s, cp)),
     ("walls", (s, cp) => ScenarioWalls(s, cp)),
     ("airanswer", (s, cp) => ScenarioAirAnswer(s, cp)),
+    ("aispend", (s, cp) => ScenarioAiSpend(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -15228,6 +15352,7 @@ int Match(ulong seed)
     ScenarioDepot(seed, null, Console.WriteLine);
     ScenarioWalls(seed, null, Console.WriteLine);
     ScenarioAirAnswer(seed, null, Console.WriteLine);
+    ScenarioAiSpend(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
     // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as
