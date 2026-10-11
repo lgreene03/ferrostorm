@@ -337,7 +337,9 @@ D1, D2 and D15 it did in all four. **After D33 it does not: the Hard
 Sodality control ends the window with no harvester** (12 lost to the ground
 war; the Normal Sodality cell, which had none before this row, now keeps 5).
 So the condition is not met on this base. It waits on P8-22 in any case,
-and the gate is not changed here.
+and the gate is not changed here. (Forward pointer: read at P8-22's head
+(ADR-079), not met: the control reads 2, 3, 0 and 0, so the gate keeps
+counting at the answer tick.)
 
 ### `cheesegate` (binding)
 
