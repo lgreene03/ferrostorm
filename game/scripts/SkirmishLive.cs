@@ -589,6 +589,9 @@ public partial class SkirmishLive : Node3D
         public Vector3 IntakeRest;
         public readonly List<(Node3D Node, Vector3 Home)> Doors = new();
         public Tween? DoorTw;
+        /// <summary>P8-49: a gate's own model, the nodes its glb brought, each
+        /// with its rest position; what the open state lowers.</summary>
+        public readonly List<(Node3D Node, Vector3 Home)> GateBody = new();
         public float PrevSpeed;   // W2-04 hull pitch spring
         public float Pitch;
         public float BobPhase;    // W2-07 infantry stride
@@ -657,6 +660,24 @@ public partial class SkirmishLive : Node3D
         Visible = false,
     };
     private readonly Dictionary<int, (MeshInstance3D P1, MeshInstance3D P2)> _rankPips = new();
+
+    /// <summary>P8-49: how far an open gate's model is lowered, in world units.
+    /// The com_gate mesh is one joined piece (art/3d/builder.py), so its barred
+    /// leaf cannot slide on its own; lowering the whole piece by this much takes
+    /// the leaf (top 0.79) below the posts' caps and leaves the post stubs and
+    /// caps standing, which reads at 40 px as a gap in the wall, the passable
+    /// truth of an open gate. A model with a separate leaf is still owed to
+    /// art-pipeline (ModelLibrary's gate entry).</summary>
+    private const float GateOpenSink = 0.62f;
+
+    /// <summary>P8-49: put a gate's model where its state says, written every
+    /// frame from the sim's read, so it can never disagree with it for longer
+    /// than a frame.</summary>
+    private static void DrawGateOpen(ActorRig rig, bool open)
+    {
+        foreach (var (b, home) in rig.GateBody)
+            b.Position = open ? home - new Vector3(0, GateOpenSink, 0) : home;
+    }
 
     private static void ScanRig(Node n, ActorRig rig)
     {
@@ -4812,6 +4833,16 @@ public partial class SkirmishLive : Node3D
                     node.RotationDegrees = new Vector3(0, yawDeg, 0);
                 }
                 else node = _models.Instantiate((int)v.Kind, v.UnitType, v.StructType);
+                // P8-49: a gate's own model, taken before the dressing below
+                // adds its shadow and team strip, so the open state lowers the
+                // gate and leaves those on the ground.
+                List<(Node3D, Vector3)>? gateBody = null;
+                if (v.Kind == EntityKind.Gate)
+                {
+                    gateBody = new();
+                    foreach (var c in node.GetChildren())
+                        if (c is Node3D b) gateBody.Add((b, b.Position));
+                }
                 node.Position = pos;
                 // V3 (doc 25): presentation up-scale, mobiles only. Set once at
                 // creation and it persists, because the per-frame actor update
@@ -4856,6 +4887,7 @@ public partial class SkirmishLive : Node3D
                 _cloakLook.Remove(v.Id);          // P8-6: a fresh node wears no look yet
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
+                if (gateBody != null) newRig.GateBody.AddRange(gateBody);
                 _rigs[v.Id] = newRig;
                 // A rebuilt segment loses its ring child with its old mesh.
                 if (v.Kind == EntityKind.Wall && _selection.Contains(v.Id)) AddSelRingFor(v.Id);
@@ -4915,6 +4947,13 @@ public partial class SkirmishLive : Node3D
                     if (off) _offlineDimmed.Add(v.Id); else _offlineDimmed.Remove(v.Id);
                 }
             }
+            // P8-49: a gate is drawn open or shut as the sim rules it
+            // (World.IsGateOpen, the sim's own read, so the client keeps no copy
+            // of the rule). It was always drawn shut, so a gate an ally had
+            // opened, which anybody may then walk through, read as a solid wall.
+            // One global state, so it is drawn the same for every seat.
+            if (v.Kind == EntityKind.Gate && _rigs.TryGetValue(v.Id, out var gateRig))
+                DrawGateOpen(gateRig, v.Id >= 0 && v.Id < _world.EntityCount && _world.IsGateOpen(v.Id));
             // TICKET-P5-REP-03: an amber pulsing ground ring on own structures
             // while the sim says they are repairing. Post-Step read of
             // Repairing (the rally precedent); the sim clears the flag itself
@@ -7298,6 +7337,16 @@ public partial class SkirmishLive : Node3D
     /// node the actor loop last wrote, never recomputed, so a check of the fog
     /// rule reads what the player would actually see.</summary>
     public bool ActorShownForTest(int id) => _actors.TryGetValue(id, out var n) && n.Visible;
+    /// <summary>P8-49: how a gate's model is DRAWN, read off the scene nodes
+    /// themselves: null when the actor has no model nodes to move, else whether
+    /// they stand lowered (open) rather than at rest (shut).</summary>
+    public bool? GateDrawnOpenForTest(int id)
+    {
+        if (!_rigs.TryGetValue(id, out var r) || r.GateBody.Count == 0) return null;
+        foreach (var (b, home) in r.GateBody)
+            if (b.Position.Y > home.Y - GateOpenSink / 2) return false;
+        return true;
+    }
     /// <summary>P8-6: a Command sent PAST the cursor and the click, as a LAN
     /// peer's stream could carry one, so a check can ask what the SIM does with
     /// an order the client declines to offer. Carries LocalPlayerId like every

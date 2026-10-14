@@ -4372,8 +4372,68 @@ public partial class VerifyRunner : Node
         RunLapsedBoardingStage(g);
         RunNeutralTargetStages(g);
         RunAirfieldStages(g);
+        RunGateDrawnStage(g);
         RunInputGateCoverage();
         g.QueueFree();
+    }
+
+    /// <summary>
+    /// P8-49: a gate is DRAWN open or shut as the sim rules it (World.IsGateOpen).
+    /// It was always drawn shut, so a gate an ally had opened, which anybody may
+    /// then walk through, read as solid wall. From seat 1: an own gate stands
+    /// shut and is drawn shut; an own rifle squad two cells off opens it and it
+    /// is drawn open; with the squad gone it stays open, and is drawn so, for
+    /// the sim's 45-tick hysteresis, and then shuts and is drawn shut. The
+    /// middle reading is what tells "drawn from the sim's state" from "drawn
+    /// from a unit standing near it".
+    /// </summary>
+    private void RunGateDrawnStage(SkirmishLive g)
+    {
+        GD.Print("  --    inputgate (P8-49): a gate is drawn open or shut as the sim rules it");
+        var lw = g.LiveWorld;
+        int me = g.LocalPlayerId;
+        int ownYard = g.FindEntity(EntityKind.ConstructionYard, me);
+        if (ownYard < 0) { Check(false, "inputgate/gate-open: seat 1 owns a yard (the precondition)"); return; }
+        var (ycx, ycy) = g.CellOfForTest(ownYard);
+        if (QuietGround(lw, ycx, ycy) is not { } s)
+        {
+            Check(false, "inputgate/gate-open: open, quiet ground for the fixture (none found)");
+            return;
+        }
+        int gate = lw.SpawnGate(me, s.X, s.Y);
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool? shutDrawn = g.GateDrawnOpenForTest(gate);
+        Check(!lw.IsGateOpen(gate) && shutDrawn == false,
+              $"inputgate/gate-open: a new gate of mine with nobody near it is shut in the sim and drawn shut (the "
+              + $"precondition; drawn open {shutDrawn?.ToString() ?? "with no model to move"})");
+
+        int rifle = SpawnOfType(lw, me, 2, s.X - 2, s.Y);   // two cells off: inside the sim's three-cell reach
+        g.StepTicks(1);
+        g.PumpActorsForTest();
+        bool openSim = lw.IsGateOpen(gate);
+        bool? openDrawn = g.GateDrawnOpenForTest(gate);
+        Gate(openSim && openDrawn == true, "gate-open",
+             $"my rifle squad two cells off opens it in the sim ({openSim}) and it is DRAWN open ({openDrawn})");
+
+        // The squad goes: taken out of the world, a fixture step rather than a
+        // gesture, because the stage is about how the gate is drawn, not about
+        // how the squad was ordered away.
+        var re = lw.Entities[rifle];
+        re.Alive = false;
+        lw.SetEntityForTest(rifle, re);
+        g.StepTicks(20);
+        g.PumpActorsForTest();
+        bool heldSim = lw.IsGateOpen(gate);
+        bool? heldDrawn = g.GateDrawnOpenForTest(gate);
+        g.StepTicks(World.GateHysteresisTicks);
+        g.PumpActorsForTest();
+        bool shutSim = !lw.IsGateOpen(gate);
+        bool? reshutDrawn = g.GateDrawnOpenForTest(gate);
+        Gate(heldSim && heldDrawn == true && shutSim && reshutDrawn == false, "gate-open",
+             $"with the squad gone it is still open 20 ticks on, in the sim ({heldSim}) and on screen ({heldDrawn}), "
+             + $"and {World.GateHysteresisTicks} ticks later it is shut in the sim ({shutSim}) and drawn shut "
+             + $"(drawn open {reshutDrawn})");
     }
 
     /// <summary>The inputgate's closing check: every verb is staged, the

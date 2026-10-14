@@ -35,6 +35,7 @@ using Ferrostorm.Sim;
 //   wallgategate       - P7-10: a gate is ORDERED and placed like a wall, blocks while shut, opens for an ALLY and shuts 45 ticks after the last one leaves, lets an ENEMY follow them through (the design, not an oversight), does not flutter, and round-trips its remaining delay through a save
 //   teamgate           - P7-8c: every seat starts on its own team so a free-for-all is unchanged by construction; allies are not targets, victory is by TEAM while elimination stays per player, contact effects and detectors respect the alliance, and tech, fog, the veil and splash deliberately do not
 //   teamdetectgate     - P8-55 (ADR-081): on skirmish-09 under even sides a cloaked enemy only a TEAMMATE detected is targetable, by an ordered Attack and by auto-acquire; the same fixture in a free-for-all is not (in match)
+//   gatetrapprobe      - P8-49 (PV-10, D29): MEASUREMENT, non-asserting. A ring of own wall with an own gate traps a unit outside and one inside, and a client waypoint cannot open the gate (a PathMove stops 4 cells short of it, the gate opens at 3); on demand, not in match
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   dockfacegate       - P8-15, ADR-071: any open face of a refinery docks, a sealed one falls back to the next, a walk onto a building reaches an open face, and the commander keeps its refineries' aprons clear
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
@@ -9800,6 +9801,98 @@ int TeamDetectionGate()
                       + $"acquires it and fires {teamed.AutoShots} in {Window} ticks, {teamed.HpTaken} damage in all; the "
                       + $"same fixture in a FREE FOR ALL, where seat {Ally} is no ally, drops the order and fires "
                       + $"{ffa.OrderShots} and {ffa.AutoShots} (ADR-081, D24b)");
+    return 0;
+}
+
+int GateTrapProbe()
+{
+    // P8-49 (PV-10, decision D29): MEASUREMENT, non-asserting under ADR-061's
+    // gate-vs-probe rule. D29 ships no fix for the gate trap until a probe
+    // shows the harm, so this is that probe. A player who closes a ring of
+    // their own wall with their own gate in it, and orders a unit across it,
+    // measured in the sim the client's right click feeds (a PathMove, which
+    // `inputgate/PathMove` proves is what the click sends).
+    //
+    // It also measures the fix the row named, "route through an own gate
+    // when the destination is unreachable", before anybody builds it: the
+    // only thing a client can do is send waypoints, and a waypoint walk ends by
+    // the crowd-arrival rule (World.StepToward: a PathMove is complete within
+    // four cells), while a gate opens only for an ally within three
+    // (World.GateOpenRadiusSq). Each line below is one fresh world.
+    const int Rifle = 2;
+    const int Ticks = 600;
+    const int GateX = 20, GateY = 25;
+    (World W, int U, int G) Ring(int ux, int uy)
+    {
+        // An 11 by 11 ring of seat 0's wall, x and y 20 to 30, whose one way
+        // through is seat 0's gate in the west face at (20, 25).
+        var w = new World(4900, 48, 48, players: 2);
+        int gate = -1;
+        for (int x = 20; x <= 30; x++) { w.SpawnWall(0, x, 20); w.SpawnWall(0, x, 30); }
+        for (int y = 21; y <= 29; y++)
+        {
+            if (y == GateY) gate = w.SpawnGate(0, GateX, y); else w.SpawnWall(0, GateX, y);
+            w.SpawnWall(0, 30, y);
+        }
+        var d = w.GetUnitType(Rifle);
+        int u = w.SpawnUnit(0, Map.CellCentre(ux), Map.CellCentre(uy), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                            d.SightCells, veterancy: false, unitType: Rifle);
+        return (w, u, gate);
+    }
+    string Run(int ux, int uy, params (int X, int Y, bool Queued)[] orders) => RunAs(ux, uy, null, orders);
+    string RunAs(int ux, int uy, CommandType[]? types, params (int X, int Y, bool Queued)[] orders)
+    {
+        var (w, u, g) = Ring(ux, uy);
+        var cmds = new List<Command>();
+        for (int k = 0; k < orders.Length; k++)
+        {
+            var o = orders[k];
+            var type = types is null ? CommandType.PathMove : types[k];
+            cmds.Add(new Command(w.Tick, 0, type, u, Map.CellCentre(o.X), Map.CellCentre(o.Y), -1, o.Queued));
+        }
+        Fix64 x0 = w.Entities[u].X, y0 = w.Entities[u].Y;
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        int openedAt = -1;
+        Fix64 nearestSq = Fix64.MaxValue;
+        for (int t = 1; t < Ticks; t++)
+        {
+            w.Step(default);
+            var e = w.Entities[u];
+            var dsq = Fix64.DistSq(e.X - w.Entities[g].X, e.Y - w.Entities[g].Y);
+            if (dsq < nearestSq) nearestSq = dsq;
+            if (openedAt < 0 && w.IsGateOpen(g)) openedAt = w.Tick;
+        }
+        var f = w.Entities[u];
+        bool inside = Map.CellOf(f.X) > 20 && Map.CellOf(f.X) < 30 && Map.CellOf(f.Y) > 20 && Map.CellOf(f.Y) < 30;
+        return $"moved {Fix64.Sqrt(Fix64.DistSq(f.X - x0, f.Y - y0))} cells, ends {(inside ? "INSIDE" : "outside")} the ring, "
+               + $"nearest the gate {Fix64.Sqrt(nearestSq)} cells, gate {(openedAt < 0 ? "never opened" : $"opened at tick {openedAt}")}";
+    }
+
+    Console.WriteLine($"gatetrapprobe: seat 0's 11x11 ring of wall with its own gate at ({GateX},{GateY}); a rifle squad of "
+                      + $"seat 0; each line {Ticks} ticks in a fresh world. The gate opens for an ally within 3 cells "
+                      + "and a PathMove is complete within 4.");
+    Console.WriteLine($"  the trap, in:  from 10 cells out, ordered to the ring's centre       : {Run(10, 25, (25, 25, false))}");
+    Console.WriteLine($"  the trap, out: from the ring's centre, ordered 10 cells out         : {Run(25, 25, (10, 25, false))}");
+    Console.WriteLine($"  the named fix: to the gate's cell, then (queued) to the centre       : {Run(10, 25, (GateX, GateY, false), (25, 25, true))}");
+    Console.WriteLine($"  ...to the cell beside the gate, then (queued) to the centre          : {Run(10, 25, (GateX - 1, GateY, false), (25, 25, true))}");
+    Console.WriteLine($"  control: from 3 cells, ordered to the centre, once                   : {Run(GateX - 3, GateY, (25, 25, false))}");
+    Console.WriteLine($"  control: from 3 cells, beside the gate, then (queued) to the centre  : {Run(GateX - 3, GateY, (GateX - 1, GateY, false), (25, 25, true))}");
+    // The one verb with no crowd arrival is the direct Move (UseFlow false),
+    // which F1 records as superseded and the client never sends. It closes the
+    // last cells exactly, and it is not taken because it does not ask the
+    // passability grid at all, which the last line shows.
+    var pmMovePm = new[] { CommandType.PathMove, CommandType.Move, CommandType.PathMove };
+    Console.WriteLine($"  direct Move: to the gate's cell, Move beside it, then the centre     : "
+                      + $"{RunAs(10, 25, pmMovePm, (GateX, GateY, false), (GateX - 1, GateY, true), (25, 25, true))}");
+    Console.WriteLine($"  direct Move: at the centre across the far face, no gate on the line  : "
+                      + $"{RunAs(25, 10, new[] { CommandType.Move }, (25, 25, false))}");
+    Console.WriteLine("gatetrapprobe: a unit outside a closed ring never moves, and one inside never leaves; a gate opens "
+                      + "only when an ally already stands within 3 cells of it, and a move refused as unreachable is not "
+                      + "retried when it does. A PathMove waypoint at the gate cannot bring a unit within 3 cells: the walk "
+                      + "ends 4 cells short by the crowd-arrival rule. The direct Move closes the gap only because it never "
+                      + "asks the passability grid, and the same verb walks a unit straight through a wall. So the trap is "
+                      + "real, and routing through the gate is not something the client's orders can do safely; it needs "
+                      + "a rule in the sim (P8-49)");
     return 0;
 }
 
@@ -19891,6 +19984,7 @@ return args.Length == 0
         "wallgategate" => WallGateGate(),
         "teamgate" => TeamGate(),
         "teamdetectgate" => TeamDetectionGate(),
+        "gatetrapprobe" => GateTrapProbe(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "harvesterdatagate" => HarvesterDataGate(),
