@@ -1354,6 +1354,9 @@ public partial class SkirmishLive : Node3D
     /// lists only what a viewer can do. A replay takes no orders, so it must
     /// not advertise them (TICKET-P5-SAVE-01), which is why the key strip this
     /// replaced had a replay line of its own.
+    ///
+    /// P8-79: and for an eliminated LAN seat it is the SPECTATOR's copy, the
+    /// same viewer copy, through NewControlsPage.
     /// </summary>
     private void ToggleHelp()
     {
@@ -1362,7 +1365,7 @@ public partial class SkirmishLive : Node3D
         var overlay = UplinkUi.FullOverlay(_hud, 0.78f);
         overlay.Name = "HelpOverlay";
         var v = UplinkUi.OverlayBox(overlay, "CONTROLS", 330, 330);
-        var page = new ControlsPage { Replay = _replay != null };
+        var page = NewControlsPage();
         v.AddChild(page);
         v.AddChild(UplinkUi.Note(
             $"{Settings.KeyName(Settings.BindOf("help"))} or {Settings.KeyName(Settings.BindOf("cancel"))} closes this; "
@@ -1372,6 +1375,19 @@ public partial class SkirmishLive : Node3D
         _helpPage = page;
         _audio.Play("ui_click", -12);
     }
+
+    /// <summary>
+    /// P8-79: the CONTROLS page this battle shows, built in ONE place for the
+    /// help overlay and the pause menu alike. A seat that takes no orders gets
+    /// the viewer copy: a replay (P8-45's review) and an eliminated LAN seat
+    /// spectating (P8-58), whose orders are dropped before they reach the
+    /// relay. The pause menu built `new ControlsPage()` for itself and so
+    /// listed every order during a replay, and the overlay asked about a
+    /// replay alone and so listed them to a spectator; asking here, once, is
+    /// what keeps the two from disagreeing again.
+    /// </summary>
+    public ControlsPage NewControlsPage() =>
+        new ControlsPage { Replay = _replay != null, Spectator = _spectating && _replay == null };
 
     private void CloseHelp()
     {

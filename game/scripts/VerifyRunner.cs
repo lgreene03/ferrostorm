@@ -5880,6 +5880,34 @@ public partial class VerifyRunner : Node
         Check(join.SpectatingForTest && !join.MatchOverForTest && join.SpectateNoticeVisibleForTest,
               "lanspectate: ...and it is still spectating, its notice still up");
 
+        // P8-79: a spectator takes no orders, so the help overlay and the pause
+        // menu's CONTROLS page show it the viewer copy, as a replay's do. The
+        // overlay asked about a replay alone and listed every order here. The
+        // host, still commanding in the same match, is the control.
+        string spectatorHeading = ControlsPage.SpectatorMouseHeading(Settings.Scheme);
+        join.PressKey(Settings.BindOf("help"));
+        var (helpOk, helpDetail) = ViewerPageVerdict(join.HelpPageShown, spectatorHeading);
+        Check(join.SpectatingForTest && helpOk,
+              $"lanspectate/help-viewer: the spectating joiner's help overlay, from seat {js}, {helpDetail}");
+        join.PressKey(Settings.BindOf("help"));
+        join.PressKey(Settings.BindOf("pause_menu"));
+        var jpm = join.PauseMenuView;
+        bool jpressed = jpm != null && jpm.PressForTest("CONTROLS");
+        var (ctlOk, ctlDetail) = ViewerPageVerdict(jpm?.ControlsShown, spectatorHeading);
+        Check(jpressed && ctlOk,
+              $"lanspectate/controls-viewer: ...and its pause menu's CONTROLS page (pressed {jpressed}) {ctlDetail}");
+        join.PressKey(Settings.BindOf("cancel"));   // shuts the menu; the notice's way out is tested below
+        host.PressKey(Settings.BindOf("help"));
+        var hostPage = host.HelpPageShown;
+        int hostKeys = hostPage?.RowsShown().Count ?? -1;
+        string hostHeading = hostPage?.MouseHeadingShown() ?? "(no page)";
+        Check(!host.SpectatingForTest && hostKeys == Settings.Bindable.Length && hostHeading == ControlsPage.MouseHeading(Settings.Scheme),
+              $"lanspectate/help-viewer: ...while the host, still commanding, is shown the full page: {hostKeys} of "
+              + $"{Settings.Bindable.Length} keys under \"{hostHeading}\"");
+        host.PressKey(Settings.BindOf("help"));
+        Check(!join.PauseOpen && join.HelpPageShown == null && host.HelpPageShown == null,
+              "lanspectate: precondition for what follows: no menu or overlay is left open on either peer");
+
         // The way out the notice names: the cancel key leaves for the menu,
         // and leaving closes the spectator's connection, so the relay tells
         // the survivor the usual way.
@@ -9821,50 +9849,43 @@ public partial class VerifyRunner : Node
             }
             p.StepTicks(5);
 
-            // This stage's own transcript of what orders: the verbs an
-            // ordering mouse row names, and the Bindable keys that give an
-            // order or work the sidebar a replay hides.
-            string[] orderVerbs = { "ATTACK", "HARVEST", "ENTER", "BOARD", "RALLY", "QUEUES", "DEPLOYS", "FELLS", "BUILD", "TARGETING", "PLACEMENT" };
-            string[] orderKeys = { "ATTACK-MOVE", "SUPERWEAPON", "SUPPORT POWERS", "STOP", "HOLD FIRE", "GUARD", "PATROL",
-                                   "REPAIR", "SELL", "DEPLOY", "UNLOAD", "SIDEBAR TAB" };
-            // What a viewer must still be told, so an empty page cannot pass.
-            string[] viewerKeys = { "HELP", "CANCEL / BACK", "OPERATIONS MENU", "CAMERA LEFT", "CAMERA BOOKMARK 1", "GROUP 1" };
-            var wantKeys = new List<(string Label, string Key)>();
-            foreach (var (action, label) in Settings.Bindable)
-                if (ControlsPage.ShownInReplay(action)) wantKeys.Add((label, Settings.KeyName(Settings.BindOf(action))));
-
             foreach (var scheme in new[] { ControlScheme.Modern, ControlScheme.Classic })
             {
                 string s = scheme == ControlScheme.Classic ? "CLASSIC" : "MODERN";
                 Settings.Scheme = scheme;
                 p.PressKey(Settings.BindOf("help"));
-                var page = p.HelpPageShown;
-                var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
-                var keys = page?.RowsShown() ?? new List<(string Label, string Key)>();
-                string note = page?.NoteShown() ?? "";
-                string heading = page?.MouseHeadingShown() ?? "(no page)";
-                var bad = new List<string>();
-                foreach (var (gesture, does) in mouse)
-                    foreach (string verb in orderVerbs)
-                        if (does.Contains(verb) || gesture.Contains(verb)) { bad.Add($"mouse \"{gesture}: {does}\""); break; }
-                foreach (var (label, _) in keys)
-                    if (System.Array.IndexOf(orderKeys, label) >= 0) bad.Add($"key {label}");
-                if (note.Contains("ALT") || note.Contains("BUILD", System.StringComparison.OrdinalIgnoreCase)) bad.Add($"note \"{note}\"");
-                var missing = new List<string>();
-                foreach (string k in viewerKeys) if (!keys.Exists(r => r.Label == k)) missing.Add(k);
-                bool selects = mouse.Exists(r => r.Does.StartsWith("SELECT"));
-                bool camera = mouse.Exists(r => r.Does == "MOVE THE CAMERA");
-                string diff = page == null ? "no overlay opened" : RowsDiff(keys, wantKeys);
-                HudGate(p.IsReplay && page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0
-                        && heading == ControlsPage.MouseHeading(scheme, replay: true) && heading.Contains("REPLAY"),
-                        "help-replay",
-                        $"under {s}, the help overlay opened during a replay from seat {p.LocalPlayerId} (replay {p.IsReplay}) lists no "
-                        + $"ordering gesture or key ({bad.Count} found{(bad.Count > 0 ? $": {string.Join("; ", bad)}" : "")}), "
-                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (selecting {selects}, the camera "
-                        + $"{camera}) and {keys.Count} of the {Settings.Bindable.Length} Bindable keys, generated from the same table "
-                        + $"in its order{(diff.Length > 0 ? $" (but {diff})" : "")}{(missing.Count > 0 ? $", missing {string.Join(", ", missing)}" : "")}");
+                var (ok, detail) = ViewerPageVerdict(p.HelpPageShown, ControlsPage.MouseHeading(scheme, replay: true));
+                HudGate(p.IsReplay && ok, "help-replay",
+                        $"under {s}, the help overlay opened during a replay from seat {p.LocalPlayerId} (replay {p.IsReplay}) {detail}");
                 p.PressKey(Settings.BindOf("help"));
+
+                // P8-79: and the pause menu's CONTROLS page, which built the full
+                // page for itself and so advertised every order to a viewer.
+                p.PressKey(Settings.BindOf("pause_menu"));
+                var pm = p.PauseMenuView;
+                bool pressed = pm != null && pm.PressForTest("CONTROLS");
+                var (pok, pdetail) = ViewerPageVerdict(pm?.ControlsShown, ControlsPage.MouseHeading(scheme, replay: true));
+                HudGate(p.IsReplay && pressed && pok, "controls-replay",
+                        $"under {s}, the pause menu's CONTROLS page opened during a replay from seat {p.LocalPlayerId} "
+                        + $"(pressed {pressed}) {pdetail}");
+                p.PressKey(Settings.BindOf("cancel"));
             }
+
+            // P8-79: the viewer's list is a second list of action names
+            // (ControlsPage's note says why it stays one), so every name on it
+            // is held to Settings.Bindable: a renamed action would otherwise
+            // fall off every viewer's page in silence.
+            var stale = new List<string>();
+            foreach (string a in ControlsPage.ViewerActionsForTest)
+            {
+                bool known = false;
+                foreach (var (action, _) in Settings.Bindable) if (action == a) { known = true; break; }
+                if (!known) stale.Add(a);
+            }
+            stale.Sort(System.StringComparer.Ordinal);
+            HudGate(stale.Count == 0 && ControlsPage.ViewerActionsForTest.Count > 0, "viewer-list",
+                    $"every one of the {ControlsPage.ViewerActionsForTest.Count} actions on the viewer's list names a Bindable "
+                    + $"action{(stale.Count > 0 ? $"; these do not: {string.Join(", ", stale)}" : "")}");
         }
         catch (System.Exception ex) { HudGate(false, "help-replay", $"the stage threw: {ex}"); }
         finally
@@ -9875,6 +9896,52 @@ public partial class VerifyRunner : Node
             if (frep.Length > 0) System.IO.File.Delete(frep);
             if (side.Length > 0) System.IO.File.Delete(side);
         }
+    }
+
+    /// <summary>
+    /// P8-45's review, shared by P8-79's stages: does this CONTROLS page list
+    /// only what a viewer can do, under the scheme in force, with the heading
+    /// it should wear? "Ordering" is read against this check's own transcript
+    /// of the verbs and keys that order, not against the page's filter, so a
+    /// filter that lets an order through cannot pass by agreeing with itself;
+    /// and what a viewer must still be told is listed too, so an empty page
+    /// cannot pass either.
+    /// </summary>
+    private (bool Ok, string Detail) ViewerPageVerdict(ControlsPage? page, string wantHeading)
+    {
+        // The verbs an ordering mouse row names, and the Bindable keys that
+        // give an order or work the sidebar a viewer does not have.
+        string[] orderVerbs = { "ATTACK", "HARVEST", "ENTER", "BOARD", "RALLY", "QUEUES", "DEPLOYS", "FELLS", "BUILD", "TARGETING", "PLACEMENT" };
+        string[] orderKeys = { "ATTACK-MOVE", "SUPERWEAPON", "SUPPORT POWERS", "STOP", "HOLD FIRE", "GUARD", "PATROL",
+                               "REPAIR", "SELL", "DEPLOY", "UNLOAD", "SIDEBAR TAB" };
+        string[] viewerKeys = { "HELP", "CANCEL / BACK", "OPERATIONS MENU", "CAMERA LEFT", "CAMERA BOOKMARK 1", "GROUP 1" };
+        var wantKeys = new List<(string Label, string Key)>();
+        foreach (var (action, label) in Settings.Bindable)
+            if (ControlsPage.ShownInReplay(action)) wantKeys.Add((label, Settings.KeyName(Settings.BindOf(action))));
+
+        var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
+        var keys = page?.RowsShown() ?? new List<(string Label, string Key)>();
+        string note = page?.NoteShown() ?? "";
+        string heading = page?.MouseHeadingShown() ?? "(no page)";
+        var bad = new List<string>();
+        foreach (var (gesture, does) in mouse)
+            foreach (string verb in orderVerbs)
+                if (does.Contains(verb) || gesture.Contains(verb)) { bad.Add($"mouse \"{gesture}: {does}\""); break; }
+        foreach (var (label, _) in keys)
+            if (System.Array.IndexOf(orderKeys, label) >= 0) bad.Add($"key {label}");
+        if (note.Contains("ALT") || note.Contains("BUILD", System.StringComparison.OrdinalIgnoreCase)) bad.Add($"note \"{note}\"");
+        var missing = new List<string>();
+        foreach (string k in viewerKeys) if (!keys.Exists(r => r.Label == k)) missing.Add(k);
+        bool selects = mouse.Exists(r => r.Does.StartsWith("SELECT"));
+        bool camera = mouse.Exists(r => r.Does == "MOVE THE CAMERA");
+        string diff = page == null ? "no page opened" : RowsDiff(keys, wantKeys);
+        bool ok = page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0 && heading == wantHeading;
+        string detail = $"lists no ordering gesture or key ({bad.Count} found{(bad.Count > 0 ? $": {string.Join("; ", bad)}" : "")}), "
+                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (wanted \"{wantHeading}\"; selecting "
+                        + $"{selects}, the camera {camera}) and {keys.Count} of the {Settings.Bindable.Length} Bindable keys, generated "
+                        + $"from the same table in its order{(diff.Length > 0 ? $" (but {diff})" : "")}"
+                        + $"{(missing.Count > 0 ? $", missing {string.Join(", ", missing)}" : "")}";
+        return (ok, detail);
     }
 
     /// <summary>Every button the sidebar builds wears the icon named by its

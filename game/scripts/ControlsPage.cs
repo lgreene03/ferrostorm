@@ -39,6 +39,15 @@ namespace Ferrostorm.Client;
 /// SAME two tables filtered, never a second list: a mouse row carries whether
 /// everything it says is true in a replay, and a key is listed when it is one
 /// a viewer can use (<see cref="ShownInReplay"/>).
+///
+/// P8-79: the same copy for EVERY seat that takes no orders. A LAN seat that
+/// has been eliminated and spectates (P8-58) cannot order either, its orders
+/// dropped before they reach the relay, so it gets the viewer copy too
+/// (<see cref="Spectator"/>), filtered by the same two tables and the same
+/// list; only the heading and the note say which kind of viewer it is. And
+/// the battle builds every copy it shows, the help overlay's and the pause
+/// menu's alike, through one call (SkirmishLive.NewControlsPage), so the two
+/// cannot disagree about who is watching.
 /// </summary>
 public partial class ControlsPage : VBoxContainer
 {
@@ -52,6 +61,14 @@ public partial class ControlsPage : VBoxContainer
     /// <summary>P8-45's review: is this the replay's copy, which lists only
     /// what a replay viewer can do? Set before the page enters the tree.</summary>
     public bool Replay { get; init; }
+
+    /// <summary>P8-79: is this an eliminated LAN seat's copy? The same viewer
+    /// filter as a replay's, worded for a spectator. Set before the page
+    /// enters the tree.</summary>
+    public bool Spectator { get; init; }
+
+    /// <summary>P8-79: either kind of viewer, which is what the filter asks.</summary>
+    private bool Viewer => Replay || Spectator;
 
     /// <summary>What each mouse gesture does in a battle under the scheme in
     /// force. The one list of them: the strip's verbs, and the force-attack
@@ -82,6 +99,14 @@ public partial class ControlsPage : VBoxContainer
         !replay ? MouseHeading(scheme)
         : scheme == ControlScheme.Classic ? "MOUSE IN A REPLAY: CLASSIC SCHEME" : "MOUSE IN A REPLAY: MODERN SCHEME";
 
+    /// <summary>P8-79: the heading over a spectator's copy.</summary>
+    public static string SpectatorMouseHeading(ControlScheme scheme) =>
+        scheme == ControlScheme.Classic ? "MOUSE WHILE SPECTATING: CLASSIC SCHEME" : "MOUSE WHILE SPECTATING: MODERN SCHEME";
+
+    /// <summary>The heading this copy of the page shows under a scheme.</summary>
+    private string HeadingFor(ControlScheme scheme) =>
+        Replay ? MouseHeading(scheme, replay: true) : Spectator ? SpectatorMouseHeading(scheme) : MouseHeading(scheme);
+
     /// <summary>
     /// P8-45's review: the Bindable actions a replay viewer can use, which a
     /// replay's copy of the page lists and no others: the camera, the
@@ -92,6 +117,18 @@ public partial class ControlsPage : VBoxContainer
     /// added to Bindable stays off a replay's page until someone says it
     /// belongs there: a camera key missing from a replay's page costs a
     /// viewer less than an order advertised and then swallowed.
+    ///
+    /// P8-79: WHY THIS IS A SECOND LIST OF ACTION NAMES AND STAYS ONE. It is
+    /// not a copy of anything: whether a viewer can use an action is a
+    /// judgement made nowhere else, so there is nothing to derive it from.
+    /// The one alternative is to move it, as a third column on
+    /// Settings.Bindable, which would make every new action state it; that is
+    /// the right move the day this judgement gets a second reader, and until
+    /// then it would change the shape that every Bindable reader destructures
+    /// for one reader's sake. What keeps a second list honest is a check, so
+    /// the harness fails any name here that is not a Bindable action (a rename
+    /// would otherwise drop a key off the viewer's page in silence), and the
+    /// allow-list form already fails safe for an action added later.
     /// </summary>
     private static readonly HashSet<string> ReplayActions = new()
     {
@@ -102,8 +139,12 @@ public partial class ControlsPage : VBoxContainer
     };
 
     /// <summary>P8-45's review: does a replay's copy of the page list this
-    /// action?</summary>
+    /// action? P8-79: and a spectator's, which is the same copy.</summary>
     public static bool ShownInReplay(string action) => ReplayActions.Contains(action);
+
+    /// <summary>P8-79 verification read: every name on the viewer's list, so
+    /// the harness can hold each one to Settings.Bindable.</summary>
+    public static IReadOnlyCollection<string> ViewerActionsForTest => ReplayActions;
 
     // The third field: is every word of the row true in a replay? A row that
     // orders anything, or that names something a replay cannot have (a
@@ -158,7 +199,7 @@ public partial class ControlsPage : VBoxContainer
         body.AddThemeConstantOverride("separation", 6);
         pad.AddChild(body);
 
-        _mouseHeading = Heading(MouseHeading(Settings.Scheme, Replay));
+        _mouseHeading = Heading(HeadingFor(Settings.Scheme));
         body.AddChild(_mouseHeading);
         _mouseGrid = new GridContainer { Columns = 2, SizeFlagsHorizontal = SizeFlags.ExpandFill };
         _mouseGrid.AddThemeConstantOverride("h_separation", 24);
@@ -173,7 +214,7 @@ public partial class ControlsPage : VBoxContainer
         body.AddChild(grid);
         foreach (var (action, label) in Settings.Bindable)
         {
-            if (Replay && !ShownInReplay(action)) continue;
+            if (Viewer && !ShownInReplay(action)) continue;
             var l = new Label { Text = label, SizeFlagsHorizontal = SizeFlags.ExpandFill };
             l.AddThemeFontSizeOverride("font_size", 12);
             l.AddThemeColorOverride("font_color", UplinkUi.Bone);
@@ -186,10 +227,12 @@ public partial class ControlsPage : VBoxContainer
         }
         // P8-45's review: a replay's note keeps the modifiers a viewer can use
         // and drops ALT's, which builds, and says why the page is shorter.
+        // P8-79: a spectator's says the same thing in its own words.
         const string modifiers = "hold CTRL (or CMD) with a group key to put the selection in that group, or with a "
                                  + "bookmark key to store the view there";
-        _note = UplinkUi.Note(Replay
-            ? "a replay takes no orders, so only what a viewer can do is listed; " + modifiers + ". "
+        string why = Replay ? "a replay takes no orders" : "a spectator takes no orders";
+        _note = UplinkUi.Note(Viewer
+            ? why + ", so only what a viewer can do is listed; " + modifiers + ". "
               + "Change any key, or the mouse scheme, under SETTINGS."
             : modifiers + "; hold ALT with a group key to build that slot of the open sidebar tab. "
               + "Change any key, or the mouse scheme, under SETTINGS.", 11);
@@ -203,8 +246,8 @@ public partial class ControlsPage : VBoxContainer
         foreach (var child in _mouseGrid.GetChildren()) { _mouseGrid.RemoveChild(child); child.QueueFree(); }
         _mouseRows.Clear();
         _mouseScheme = Settings.Scheme;
-        _mouseHeading.Text = MouseHeading(_mouseScheme, Replay);
-        foreach (var (gesture, does) in MouseGestures(_mouseScheme, Replay))
+        _mouseHeading.Text = HeadingFor(_mouseScheme);
+        foreach (var (gesture, does) in MouseGestures(_mouseScheme, Viewer))
         {
             var gl = new Label { Text = gesture };
             gl.AddThemeFontSizeOverride("font_size", 12);
