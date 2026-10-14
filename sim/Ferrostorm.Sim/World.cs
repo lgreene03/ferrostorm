@@ -162,9 +162,9 @@ public struct Entity
     public int ReadyStructure;
 
     // Stealth and detection (TICKET-P2-SIM-09). A stealthed entity can only
-    // be targeted by players whose bit is set in DetectedMask (recomputed
-    // each tick from detector coverage) or while RevealTicks > 0 (firing
-    // breaks stealth for everyone).
+    // be targeted by players whose bit, or a teammate's bit (P8-55, ADR-081),
+    // is set in DetectedMask (recomputed each tick from detector coverage) or
+    // while RevealTicks > 0 (firing breaks stealth for everyone).
     public bool Stealth;
     public bool Detector;
     public int RevealTicks;
@@ -4833,9 +4833,42 @@ public sealed partial class World
         }
     }
 
-    /// <summary>Can observer player target this entity? Stealth blocks targeting unless revealed by firing or detected by that player's detectors.</summary>
-    private static bool CanTarget(int byPlayer, in Entity t)
-        => !(t.Stealth || t.FieldCloaked) || t.RevealTicks > 0 || (t.DetectedMask & (1 << byPlayer)) != 0;
+    /// <summary>
+    /// Can observer player target this entity? Stealth blocks targeting unless
+    /// revealed by firing or detected by a detector of the player's TEAM.
+    ///
+    /// P8-55 (ADR-081, decision D24b): detection is a team asset. This read the
+    /// attacker's own bit alone, so an enemy that only an ally's Sentinel Scout
+    /// had found was drawn on the player's screen (P8-6) and still refused by
+    /// every gun the player owned. It now reads every bit of the attacker's
+    /// team. With no SetTeam call each seat is a team of one, so the mask is
+    /// the attacker's own bit and every golden is byte-identical by
+    /// construction. Vision still does not flow (ADR-038 section 3): only
+    /// DETECTION is pooled.
+    /// </summary>
+    private bool CanTarget(int byPlayer, in Entity t)
+        => !(t.Stealth || t.FieldCloaked) || t.RevealTicks > 0 || (t.DetectedMask & TeamDetectionMask(byPlayer)) != 0;
+
+    /// <summary>
+    /// P8-55 (ADR-081): one bit per seat on this player's team, its own
+    /// included, in DetectedMask's layout (bit n is seat n). The one place the
+    /// team-wide detection rule is spelt, so the client's drawing and pick and
+    /// the commander's census ask it rather than keep a copy.
+    ///
+    /// Derived on every call rather than cached, so there is no second copy of
+    /// the team map to save, hash or keep in step: the loop runs only for a
+    /// cloaked, unrevealed target (CanTarget's last clause), over at most eight
+    /// seats, in seat order. A player outside the seat range (a neutral, -1)
+    /// is on no seat's team, so its mask is empty, exactly as `1 << -1` against
+    /// a byte was before.
+    /// </summary>
+    public int TeamDetectionMask(int player)
+    {
+        int mask = 0, team = TeamOf(player);
+        for (int p = 0; p < _players; p++)
+            if (_playerTeam[p] == team) mask |= 1 << p;
+        return mask;
+    }
 
     /// <summary>
     /// Has this world ever held a mine? The gate on MineSystem's scan, and the

@@ -336,3 +336,17 @@ the same commit.
   goldens the row does not move equal main's. Ratified under D40, which
   also records ADR-060's overturned refusal and the faction-war evidence;
   the rest of condition 7 is that pull request's CI and merge hygiene.
+- ADR-081: RATIFIED 2026-10-14 - ADR-081-detection-is-a-team-asset.md (row
+  P8-55, decision D24b). Number claimed here per the numbering law, in the
+  same commit as the draft; 080 is being claimed in parallel by P8-23, so 081
+  is taken. `World.CanTarget` reads the detection of the attacker's whole
+  TEAM through one derived read, `World.TeamDetectionMask`, which the
+  commander's air census and the client's drawing and pick now ask too, so the
+  client's local-seat pick rule is dropped. `DetectedMask` keeps its per-seat
+  meaning (the widening is on the read side), and vision still does not flow
+  (ADR-038 section 3). Goldens NEUTRAL, measured (all 25 byte-identical, by
+  construction: no golden calls SetTeam); catalogue checksum unchanged; no save
+  or wire change. A teamed (EVEN SIDES) replay recorded before it can diverge,
+  and a mixed-build EVEN SIDES LAN game desyncs rather than being refused
+  (Q024). Proved by `teamdetectgate` (in match) and `inputgate/stealth-team`.
+  Ratified under D24b by the orchestrator's standing authority.

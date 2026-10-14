@@ -42,6 +42,9 @@ registrars were matched instead, and `SetFaction` is left as a separate finding.
   outpost case is untouched, because a neutral is nobody's ally and capturing one
   is ADR-021's whole point.
 - **Detectors** stop bothering to reveal a teammate's stealth units.
+  (Note of 2026-10-14: ADR-081 adds a fifth. A cloaked enemy detected by any
+  seat on the attacker's team is targetable by the attacker, so detection, and
+  not vision, is pooled; section 3's vision clause stands.)
 
 ### 3. And FOUR things being allied deliberately does not imply
 

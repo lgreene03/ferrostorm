@@ -6269,16 +6269,16 @@ public partial class VerifyRunner : Node
         teamed.FocusCameraOn(px, pz, 22f);
         string overAllyFound = teamed.CursorNameAt(teamed.ScreenOf(px, pz));
         Gate(selRifle && overAllyFound == "Move", "stealth-team",
-             $"...but the cursor over it offers {overAllyFound}, because Attack would be a promise the sim breaks: its "
-             + "CanTarget takes only my own seat's detection");
-        // The claim the line above rests on, measured rather than read: the
-        // same Attack sent past the cursor is cleared by the sim the tick it
-        // lands, because CombatSystem asks CanTarget for seat 1 alone.
+             $"...but the cursor over it offers {overAllyFound}: the pick still asks the local seat's own detection, "
+             + "which P8-55's client half drops now that the sim's CanTarget is team-wide");
+        // P8-55 (ADR-081): the sim's half, measured rather than read. The same
+        // Attack sent past the cursor is HELD, because CombatSystem now asks
+        // CanTarget for seat 1's whole team, and seat 3 is on it.
         teamed.QueueCommandForTest(CommandType.Attack, rifle, phantom);
         teamed.StepTicks(1);
-        Check(lw.Entities[rifle].ExplicitTarget != phantom && (lw.Entities[phantom].DetectedMask & (1 << me)) == 0,
-              "inputgate/stealth-team: ...and the sim bears it out: an Attack sent past the cursor on the ally-detected "
-              + $"Phantom Tank is dropped the tick it lands (target now {lw.Entities[rifle].ExplicitTarget})");
+        Check(lw.Entities[rifle].ExplicitTarget == phantom && (lw.Entities[phantom].DetectedMask & (1 << me)) == 0,
+              "inputgate/stealth-team: ...and the sim holds an Attack sent past the cursor on the ally-detected Phantom "
+              + $"Tank, with no detector of mine near it (ADR-081; target now {lw.Entities[rifle].ExplicitTarget})");
 
         SpawnOfType(lw, me, scoutType, s.X + 2, s.Y - 2);         // and now one of my own
         Settle();
