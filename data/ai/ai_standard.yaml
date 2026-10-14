@@ -30,3 +30,12 @@ wave_size: 6
 # harvesters, which is where AI-01's raid struck.
 anti_air_cap: 6
 anti_air_garrison: 2
+# P8-22 (ADR-079): faction_defence_cap 3 is the most of its own side's defence
+# (the Bastion or the Shroud Nest) this commander keeps, and it is this
+# personality's own ground garrison, half its wave with a floor of two, derived
+# rather than chosen: a base keeps as many signature guns as it keeps fighters
+# at home. The ladder still buys the first exactly as it always did; every one
+# after it is bought only from a sustained surplus (the rung's reserve and
+# window), after any producer the rung's cap still allows. How many guns guard
+# a base is taste, so this is a personality number beside the wave size.
+faction_defence_cap: 3

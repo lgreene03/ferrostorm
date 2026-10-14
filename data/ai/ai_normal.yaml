@@ -18,3 +18,15 @@ beat_numerator: 1
 beat_denominator: 1
 harvesters_per_refinery: 1
 starting_credit_handicap: 0
+# P8-22 (ADR-079, decisions D6 and D7): what this rung SPENDS, and the three
+# numbers D6 means when it says the commander improves at every rung while
+# Normal stays the identity of the knob table. difficultygate's identity claim
+# is that the default commander IS this row, which holds whatever they read.
+# producer_cap 2 is D7's Normal cap: a second barracks and a second factory,
+# each bought only once its own kind is the bottleneck and the surplus is
+# sustained. surplus_reserve 4500 and surplus_window_ticks 4500 are Easy's,
+# with the same derivation (the superweapon rung's threshold; the far edge of
+# the measured gap between a passing bank and a sustained one).
+producer_cap: 2
+surplus_reserve: 4500
+surplus_window_ticks: 4500

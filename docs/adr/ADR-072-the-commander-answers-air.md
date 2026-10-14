@@ -186,7 +186,10 @@ rather than an answer to air.
 empty factory queue that the army block keeps at one or two orders, so a
 commander can sit on 17000 credits with one harvester for 4000 ticks. That is
 general, it moves ground-only matches, and P8-22 ("orders routed to the
-shortest queue, several Produce per beat") owns it.
+shortest queue, several Produce per beat") owns it. (Forward pointer: P8-22
+delivers it in ADR-079 section 6, commit f0c9b74 as the Architect reviewed it:
+the harvester takes the shortest factory line with room, its own commit so it
+can be reverted alone.)
 
 **Keeping the end-of-window reading.** It cannot pass the Normal Sodality
 cell with any air answer, as its no-raid control proves, so binding it would
@@ -342,7 +345,8 @@ Found and left to their owners:
 
 - **The harvester rebuy starves** behind army orders at a busy factory
   (P8-22). It is why a commander that loses harvesters to anything recovers
-  slowly.
+  slowly. (Forward pointer: fixed by P8-22 in ADR-079 section 6, commit
+  f0c9b74 as the Architect reviewed it.)
 - **The orbital cannon strikes the commander's refinery** roughly every 1600
   to 2000 ticks from t=4621, killing harvesters and the escorts beside them
   (P8-18's pacing).

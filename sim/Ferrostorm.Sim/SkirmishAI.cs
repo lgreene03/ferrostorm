@@ -79,6 +79,20 @@ public sealed class SkirmishAI
     // beside the wave size, because a home guard's size is shape, not strength.
     private readonly int _antiAirCap;       // most anti-air units it builds once it has seen air
     private readonly int _antiAirGarrison;  // how many of those it holds at home
+    // P8-22 (ADR-079): what the commander SPENDS. Three from the rung, which
+    // owns macro (DR-14), and one from the personality, which owns shape.
+    private readonly int _producerCap;       // most barracks, and separately most factories, held at once
+    private readonly int _surplusReserve;    // credits kept back from everything bought out of surplus
+    private readonly int _surplusWindow;     // ticks the treasury must stand at or above the reserve, unbroken
+    private readonly int _factionDefenceCap; // most of its own side's defence it keeps
+
+    /// <summary>P8-22 (ADR-079): the decision beat on which the treasury last
+    /// rose to the reserve and has stood at or above it on every beat since,
+    /// or -1 while it stands below. The surplus is SUSTAINED once this is at
+    /// least the window old. AI-internal like every field here: never hashed,
+    /// never saved, and a loaded match's commander starts the window again,
+    /// exactly as it relearns <see cref="_airSeen"/>.</summary>
+    private int _surplusFrom = -1;
 
     /// <summary>P8-17 (ADR-072): the MOST enemy aircraft this commander has seen
     /// at once, with its own eyes, so far this match. Zero until the first
@@ -172,6 +186,12 @@ public sealed class SkirmishAI
         // P8-17: shape, so from the personality, exactly as the wave size is.
         _antiAirCap = shape.AntiAirCap;
         _antiAirGarrison = shape.AntiAirGarrison;
+        // P8-22 (ADR-079): production and patience are macro, from the rung;
+        // how many guns guard a base is taste, from the personality.
+        _producerCap = rung.ProducerCap;
+        _surplusReserve = rung.SurplusReserve;
+        _surplusWindow = rung.SurplusWindowTicks;
+        _factionDefenceCap = shape.FactionDefenceCap;
     }
 
     /// <summary>The tuning row for an id: the world's registered one where a
@@ -239,7 +259,23 @@ public sealed class SkirmishAI
     {
         if (w.Tick % _actEvery != 0) return;
 
+        // P8-22 (ADR-079): IS THE SURPLUS SUSTAINED? The treasury is read on
+        // every beat, and the run restarts on any beat it stands below the
+        // reserve, so a single delivery can never pass for income.
+        long treasury = w.Credits(_player);
+        if (treasury < _surplusReserve) _surplusFrom = -1;
+        else if (_surplusFrom < 0) _surplusFrom = w.Tick;
+        bool surplusSustained = _surplusFrom >= 0 && w.Tick - _surplusFrom >= _surplusWindow;
+
         int cy = -1, factory = -1, refinery = -1, barracks = -1;
+        // P8-22 (ADR-079): EVERY producer, oldest first. `factory` and
+        // `barracks` above now only say whether one stands; every order picks
+        // its producer from these lists (see Route), because a commander that
+        // holds two factories and always names the last one it found would
+        // leave the other idle.
+        var factories = new List<int>();
+        var barracksLine = new List<int>();
+        int factionDefences = 0;
         bool hasPlant = false, hasTurret = false, hasRadar = false;
         // P7-18: tracked by TYPE rather than by kind, because a side's own
         // defence and the common turret can share a kind (the Sodality's Shroud
@@ -280,18 +316,18 @@ public sealed class SkirmishAI
                 // P7-18: compared against the type the QUERY returned, so the
                 // flag and the rung can never disagree about what "my side's
                 // defence" means.
-                if (World.IsStructure(e.Kind) && e.StructType == factionDefence) hasFactionDefence = true;
+                if (World.IsStructure(e.Kind) && e.StructType == factionDefence) { hasFactionDefence = true; factionDefences++; }
                 switch (e.Kind)
                 {
                     case EntityKind.ConstructionYard:
                         cyCount++;
                         if (cy < 0) { cy = i; homeX = e.X; homeY = e.Y; }
                         break;
-                    case EntityKind.Factory: factory = i; break;
+                    case EntityKind.Factory: factory = i; factories.Add(i); break;
                     // ADR-009 clause 7: the barracks is tracked exactly as the
                     // factory is, because it is now a producer the AI routes
                     // to, not scenery.
-                    case EntityKind.Barracks: barracks = i; break;
+                    case EntityKind.Barracks: barracks = i; barracksLine.Add(i); break;
                     case EntityKind.Refinery: refinery = i; refineryCount++; break;
                     case EntityKind.PowerPlant: hasPlant = true; break;
                     case EntityKind.Turret: hasTurret = true; break;
@@ -458,6 +494,67 @@ public sealed class SkirmishAI
             return;
         }
 
+        // P8-22 (ADR-079): the orders this beat has already put on each
+        // producer's line, so the routing and the depth guard below read every
+        // line as it will stand once this beat's orders apply, and the credits
+        // those orders will draw (pay-as-you-build takes nothing up front, so
+        // without this a beat could promise the same credits twice). ONLY the
+        // army's orders after the beat's first read `committed`. The surplus
+        // building's own test reads the treasury alone, so it does not count
+        // an engineer ordered earlier in the beat; the engineer and anti-air
+        // orders test their own price, the MCV a floor of 3500 and the
+        // harvester none; and the first army order stands on its own price.
+        // So a beat that opens at or above the reserve can end below it by
+        // that first army order's price, plus any engineer, anti-air answer
+        // or harvester it also ordered (ADR-079, sections 2 and 4).
+        var pending = new Dictionary<int, int>();
+        long committed = 0;
+        void Ordered(int producer, int unitType)
+        {
+            output.Add(new Command(w.Tick, _player, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
+            pending[producer] = (pending.TryGetValue(producer, out int n) ? n : 0) + 1;
+            committed += w.GetUnitType(unitType).Cost;
+        }
+        int Depth(int producer) => w.QueueLength(producer) + (pending.TryGetValue(producer, out int n) ? n : 0);
+        // THE SHORTEST QUEUE, ties to the OLDEST producer (the first in entity
+        // order among its own kind). Both are mirror-exact: a commander and
+        // its twin on the opposite start see the same queue lengths, and each
+        // built its producers in the same sequence, so the oldest is the twin
+        // of the oldest. Nothing here reads a world axis or compares ids
+        // across seats. -1 when none stands. "The oldest" is the first in
+        // entity order only while producers are appended and never change
+        // hands: a captured producer keeps the index it had on the other
+        // seat, which twin commanders would sort differently. This commander
+        // never captures a producer (its only capture order is the neutral
+        // Outpost's), so AI mirrors cannot reach that; a row that teaches it
+        // to capture one judges this tie first.
+        int Route(List<int> line)
+        {
+            int best = -1, bestDepth = int.MaxValue;
+            foreach (int p in line)
+            {
+                int d = Depth(p);
+                if (d < bestDepth) { bestDepth = d; best = p; }
+            }
+            return best;
+        }
+        // A unit produced anywhere but a barracks or a factory gets NO line.
+        // If the unit cycle below ever holds one, the army loop ends every
+        // beat at it without advancing the cycle, and the army stops. Shipped
+        // cycles hold no such unit (only aircraft are produced elsewhere, and
+        // D10 keeps the commander out of the air in P8), so the row that adds
+        // one (P8-28, or a flying commander after D10) extends this in the
+        // same change.
+        List<int> LineFor(int producedAt)
+            => producedAt == World.BarracksStructType ? barracksLine
+             : producedAt == World.FactoryStructType ? factories : new List<int>();
+        int QueuedAnywhere(List<int> line, int unitType)
+        {
+            int n = 0;
+            foreach (int p in line) n += QueuedCount(w, p, unitType);
+            return n;
+        }
+
         // --- ADR-021: take the free income. A neutral Outpost pays whoever
         // walks an engineer into it, and until now only a human ever did, so
         // on any map carrying one the AI simply conceded the economy.
@@ -480,12 +577,11 @@ public sealed class SkirmishAI
                     Fix64.Zero, Fix64.Zero, outpost));
             }
             else if (barracks >= 0 && w.Credits(_player) >= w.GetUnitType(EngineerType).Cost
-                     && !AlreadyQueued(w, barracks, EngineerType))
+                     && QueuedAnywhere(barracksLine, EngineerType) == 0)
             {
-                // No engineer standing and none on the line: buy one. Gated on
-                // the queue so this cannot spam an engineer every beat.
-                output.Add(new Command(w.Tick, _player, CommandType.Produce, barracks,
-                    Fix64.Zero, Fix64.Zero, EngineerType));
+                // No engineer standing and none on any line: buy one. Gated on
+                // the queues so this cannot spam an engineer every beat.
+                Ordered(Route(barracksLine), EngineerType);
             }
         }
 
@@ -658,6 +754,33 @@ public sealed class SkirmishAI
             output.Add(new Command(w.Tick, _player, CommandType.BuildStructure, cy,
                 Fix64.Zero, Fix64.Zero, wanted));
         }
+        else if (wanted == 0 && harvesters > 0 && w.QueueLength(cy) == 0 && surplusSustained)
+        {
+            // --- P8-22 (ADR-079): THE SURPLUS BUILDS. Only once the ladder
+            // wants nothing, so a surplus never jumps a rung; never while
+            // nothing is mining, which is the one time the ladder's silence
+            // means "save for a harvester" rather than "done"; and only once
+            // the treasury has stood at or above the reserve for the whole
+            // window, so a passing bank is never mistaken for income. The
+            // building is bought only while its price still leaves the
+            // reserve, and its price joins this beat's commitments, so no army
+            // order after the beat's first can promise the same credits again.
+            // The first army order stands on its own price, and this test reads
+            // the treasury alone, so it does not count an engineer ordered
+            // earlier in the beat: the beat can still end below the reserve
+            // (see `committed` above).
+            int extra = SurplusStructure(w, factories, barracksLine, factionDefence, factionDefences);
+            int extraCost = extra != 0 ? w.GetStructureType(extra).Cost : 0;
+            // In long, as the treasury is: a reserve near the top of int plus
+            // a building's price would otherwise wrap negative and buy while
+            // ignoring the reserve (ADR-079, condition 1).
+            if (extra != 0 && w.Credits(_player) >= (long)_surplusReserve + extraCost)
+            {
+                output.Add(new Command(w.Tick, _player, CommandType.BuildStructure, cy,
+                    Fix64.Zero, Fix64.Zero, extra));
+                committed += extraCost;
+            }
+        }
 
         // --- DR-13: keep the base standing. A structure the AI could mend but
         // never does is the endgame's most-noticed absent behaviour (doc 27
@@ -725,9 +848,8 @@ public sealed class SkirmishAI
         }
         // --- Economy: one harvester per refinery, kept working; the MCV
         // purchase fires the moment the war chest covers it. Both are FACTORY
-        // units (produced_at com_factory), so these two guards already read
-        // the right producer's queue and need no generalisation; the army
-        // block below is the one that routes. ---
+        // units (produced_at com_factory); since P8-22 (ADR-079) both go to the
+        // shortest factory line, as the army does below. ---
         // DR-14: the harvester target is the ladder's economy knob. At Normal
         // the multiplier is 1, so this reads exactly as it always did (one
         // harvester per refinery); Hard and Brutal run a second per refinery,
@@ -740,14 +862,17 @@ public sealed class SkirmishAI
         // While the answer is short it takes its producer's turn ahead of the
         // harvester and the army: a harvester or a tank bought under
         // unanswered air is fed to the flyers.
-        int antiAirProducer = -1;
+        int antiAirProducer = -1, antiAirKind = -1;
         bool antiAirShort = false, antiAirOrdered = false;
         if (orderAntiAir)
         {
             var aa = w.GetUnitType(antiAirType);
-            antiAirProducer = aa.ProducedAt == World.BarracksStructType ? barracks
-                            : aa.ProducedAt == World.FactoryStructType ? factory : -1;
-            int have = antiAir + (antiAirProducer >= 0 ? QueuedCount(w, antiAirProducer, antiAirType) : 0);
+            // P8-22 (ADR-079): the shortest line of its kind, and every line
+            // of that kind counts what it already holds.
+            var aaLine = LineFor(aa.ProducedAt);
+            antiAirKind = aa.ProducedAt;
+            antiAirProducer = Route(aaLine);
+            int have = antiAir + QueuedAnywhere(aaLine, antiAirType);
             antiAirShort = have < antiAirTarget && antiAirProducer >= 0 && w.HasPrereqs(_player, aa.Prereqs);
             if (antiAirShort && w.Credits(_player) >= aa.Cost)
             {
@@ -765,22 +890,36 @@ public sealed class SkirmishAI
                     if (line[q] != antiAirType)
                         output.Add(new Command(w.Tick, _player, CommandType.CancelProduce, antiAirProducer,
                                                Fix64.Zero, Fix64.Zero, q));
-                output.Add(new Command(w.Tick, _player, CommandType.Produce, antiAirProducer,
-                                       Fix64.Zero, Fix64.Zero, antiAirType));
+                Ordered(antiAirProducer, antiAirType);
                 antiAirOrdered = true;
             }
         }
+        // P8-22 (ADR-079): the harvester and the MCV go to the shortest
+        // factory line, and one already on ANY line counts, which the one
+        // factory's guard implied while there was only one line to be on.
+        // The MCV still waits for that line to be EMPTY, the old guard: the
+        // army stands aside while an expansion is wanted, so the line empties
+        // of itself. The harvester no longer waits for that. It takes the
+        // shortest line while the line has room (fewer than two orders, this
+        // beat's own included), the depth the army keeps, and it is placed
+        // before the army in the beat, so it takes that room first. Waiting
+        // for an empty line behind an army that keeps every line busy is
+        // waiting for the rest of the match: ADR-072 measured a commander
+        // banking 17000 credits on one harvester for 4000 ticks that way and
+        // left the rebuy to this row.
+        int shortestFactory = Route(factories);
+        int shortestDepth = shortestFactory >= 0 ? Depth(shortestFactory) : int.MaxValue;
         if (antiAirOrdered)
         {
             // The factory's turn this beat is spent on the answer: the
             // harvester and MCV guards below read the queue as it stood before
             // this beat's orders, so without this they would stack behind it.
         }
-        else if (factory >= 0 && refinery >= 0 && harvesters < refineryCount * _harvestersPerRefinery
-            && w.QueueLength(factory) == 0)
-            output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 4));
-        else if (expansionDesired && w.Credits(_player) >= 3500 && w.QueueLength(factory) == 0)
-            output.Add(new Command(w.Tick, _player, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 7));
+        else if (factory >= 0 && refinery >= 0
+            && harvesters + QueuedAnywhere(factories, 4) < refineryCount * _harvestersPerRefinery && shortestDepth < 2)
+            Ordered(shortestFactory, 4);
+        else if (expansionDesired && w.Credits(_player) >= 3500 && QueuedAnywhere(factories, World.McvUnitType) == 0 && shortestDepth == 0)
+            Ordered(shortestFactory, World.McvUnitType);
 
         for (int i = 0; i < w.Entities.Count; i++)
         {
@@ -808,44 +947,62 @@ public sealed class SkirmishAI
             // Opening book (one principle, both factions): hold the line
             // with cheap units until a wave's worth of army stands - nobody
             // opens with their Mammoth. Specials enter once the line exists.
-            int unitType;
             bool lineHolds = army >= _waveSize;
-            if (w.FactionOf(_player) == World.FactionSodality)
-                unitType = !lineHolds
-                    ? ((_produced % 2 == 0) ? 2 : 3)
-                    : (_produced % 3) switch { 0 => 2, 1 => 9, _ => 3 };
-            else
-                unitType = !lineHolds
-                    ? ((_produced % 2 == 0) ? 2 : 3)
-                    : (_produced % 6) switch
-                    {
-                        0 => 2,
-                        1 => 1,
-                        2 => 2,
-                        3 => 10,
-                        4 => 8, // howitzer: splash shells are the answer to squad blobs
-                        _ => scouts < 2 ? 6 : 2,
-                    };
-            // ADR-009 clause 7: route by the chosen type's OWN produced_at,
-            // here at the command site rather than in the selection switch
-            // above - the switch expresses doctrine, this expresses which
-            // building can legally take the order. Infantry go to the
-            // barracks, vehicles to the factory.
-            int producer = w.GetUnitType(unitType).ProducedAt == World.BarracksStructType ? barracks : factory;
-            // The queue-depth guard is PER PRODUCER, and that is load-bearing:
-            // routing rifles to a barracks while the guard still read the
-            // factory queue would leave the barracks queue unbounded and drain
-            // the treasury pay-as-you-build, which is the runaway ADR-009
-            // clause 7 names. A producer that does not stand yet takes no
-            // order at all.
-            // P8-17: and a producer whose anti-air answer is short builds
-            // that first (above), so the army waits its turn there. Inert
-            // until air is seen, when antiAirShort is false everywhere.
-            if (producer >= 0 && w.QueueLength(producer) < 2
-                && !(antiAirShort && producer == antiAirProducer)
-                && w.Credits(_player) >= w.GetUnitType(unitType).Cost)
+            // P8-22 (ADR-079): SEVERAL ORDERS A BEAT. The cycle is walked in
+            // its own order, one unit after the next, for as long as each can
+            // be placed; the first that cannot ends the beat, so the doctrine's
+            // mix is kept rather than topped up with whatever has room. The
+            // first order of a beat is placed exactly as the one order always
+            // was, on its own price; every order after it only while the
+            // beat's orders so far still leave the rung's reserve, so no order
+            // after the first is placed on credits the reserve keeps; the beat
+            // can still end below the reserve (ADR-079 section 2).
+            for (bool first = true; ; first = false)
             {
-                output.Add(new Command(w.Tick, _player, CommandType.Produce, producer, Fix64.Zero, Fix64.Zero, unitType));
+                int unitType;
+                if (w.FactionOf(_player) == World.FactionSodality)
+                    unitType = !lineHolds
+                        ? ((_produced % 2 == 0) ? 2 : 3)
+                        : (_produced % 3) switch { 0 => 2, 1 => 9, _ => 3 };
+                else
+                    unitType = !lineHolds
+                        ? ((_produced % 2 == 0) ? 2 : 3)
+                        : (_produced % 6) switch
+                        {
+                            0 => 2,
+                            1 => 1,
+                            2 => 2,
+                            3 => 10,
+                            4 => 8, // howitzer: splash shells are the answer to squad blobs
+                            _ => scouts < 2 ? 6 : 2,
+                        };
+                // ADR-009 clause 7: route by the chosen type's OWN produced_at,
+                // here at the command site rather than in the selection switch
+                // above - the switch expresses doctrine, this expresses which
+                // building can legally take the order. Infantry go to the
+                // barracks, vehicles to the factory. P8-22: of that kind, the
+                // shortest line (Route).
+                var def = w.GetUnitType(unitType);
+                int producer = Route(LineFor(def.ProducedAt));
+                // The queue-depth guard is PER PRODUCER, and that is load-bearing:
+                // routing rifles to a barracks while the guard still read the
+                // factory queue would leave the barracks queue unbounded and drain
+                // the treasury pay-as-you-build, which is the runaway ADR-009
+                // clause 7 names. A producer that does not stand yet takes no
+                // order at all. P8-22: the depth counts this beat's orders too,
+                // which also bounds how many a beat can place.
+                // P8-17: and while the anti-air answer is short, its producers
+                // build that first (above), so the army waits its turn on that
+                // kind of line. Inert until air is seen, when antiAirShort is
+                // false everywhere. P8-22 (ADR-079): EVERY line of the answer's
+                // kind holds its army orders, not only the line the answer
+                // takes, because under unanswered air a second factory's tank
+                // is fed to the flyers just as the first's would be.
+                if (producer < 0 || Depth(producer) >= 2) break;
+                if (antiAirShort && def.ProducedAt == antiAirKind) break;
+                if (first ? w.Credits(_player) < def.Cost
+                          : w.Credits(_player) - committed - _surplusReserve < def.Cost) break;
+                Ordered(producer, unitType);
                 _produced++;
             }
         }
@@ -1037,6 +1194,46 @@ public sealed class SkirmishAI
         }
     }
 
+    /// <summary>
+    /// P8-22 (ADR-079): what a sustained surplus buys, or 0 for nothing. In
+    /// order:
+    ///   1. another FACTORY, while the rung's producer cap allows one and every
+    ///      factory standing already has an order on its line as the beat
+    ///      opens: production of that kind is the bottleneck, so more of it is
+    ///      what turns the bank into army;
+    ///   2. another BARRACKS, on the same two conditions;
+    ///   3. another of its own side's FACTION DEFENCE (World.BuildableFactionDefence),
+    ///      while fewer than the personality's cap stand.
+    /// The factory comes first because its units are the dear ones (a
+    /// Directorate cycle after the line holds is four factory units in six),
+    /// and a producer before a defence because a gun that cannot move spends
+    /// once while a producer spends for the rest of the match. Each building
+    /// is asked of the catalogue as a capability, and each must have its
+    /// prerequisites standing, because a building the yard is refused stalls
+    /// it forever. A filter over this commander's own state only: counts and
+    /// queue lengths, no position, no world axis and no id compared across
+    /// seats, so a commander and its twin on the opposite start choose alike.
+    /// </summary>
+    private int SurplusStructure(World w, List<int> factories, List<int> barracksLine, int factionDefence, int factionDefences)
+    {
+        bool Saturated(List<int> line)
+        {
+            if (line.Count == 0) return false;
+            foreach (int p in line) if (w.QueueLength(p) == 0) return false;
+            return true;
+        }
+        int Buildable(EntityKind kind)
+        {
+            int t = w.BuildableStructOfKind(_player, kind);
+            return t != 0 && w.HasPrereqs(_player, w.GetStructureType(t).Prereqs) ? t : 0;
+        }
+        if (factories.Count < _producerCap && Saturated(factories) && Buildable(EntityKind.Factory) is int f and not 0) return f;
+        if (barracksLine.Count < _producerCap && Saturated(barracksLine) && Buildable(EntityKind.Barracks) is int b and not 0) return b;
+        if (factionDefence != 0 && factionDefences < _factionDefenceCap
+            && w.HasPrereqs(_player, w.GetStructureType(factionDefence).Prereqs)) return factionDefence;
+        return 0;
+    }
+
     /// <summary>Richest live field beyond 20 cells of home; ties break to lower id.</summary>
     /// <summary>
     /// P7-5e: where a FIELD-DESTROYING superweapon should land, which is a
@@ -1169,17 +1366,11 @@ public sealed class SkirmishAI
         return best;
     }
 
-    /// <summary>Is this unit type already on a producer's line? Keeps the
-    /// outpost logic from queueing an engineer every decision beat.</summary>
-    private static bool AlreadyQueued(World w, int producer, int unitType)
-    {
-        var q = w.QueueContents(producer);
-        for (int i = 0; i < q.Count; i++) if (q[i] == unitType) return true;
-        return false;
-    }
-
     /// <summary>P8-17: how many of a unit type are on a producer's line, so the
-    /// anti-air target counts units being built as well as units standing.</summary>
+    /// anti-air target counts units being built as well as units standing.
+    /// P8-22 (ADR-079): summed over every line of a kind, it also keeps the
+    /// outpost logic from queueing an engineer every decision beat, which
+    /// AlreadyQueued did for the one barracks there used to be.</summary>
     private static int QueuedCount(World w, int producer, int unitType)
     {
         var q = w.QueueContents(producer);

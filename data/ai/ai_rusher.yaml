@@ -20,3 +20,6 @@ wave_size: 4
 # garrison keeps the same floor of two at home.
 anti_air_cap: 4
 anti_air_garrison: 2
+# P8-22 (ADR-079): faction_defence_cap 2, on Standard's rule: this
+# personality's ground garrison, half of four with the floor of two.
+faction_defence_cap: 2
