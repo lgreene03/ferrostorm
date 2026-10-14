@@ -67,6 +67,11 @@ using Ferrostorm.Sim;
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
 //   frozenprobe        - P8-66, ADR-078: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
+//   waveprobe          - P8-23, ADR-080: over pillarprobe's sweep (and its options), every wave each commander launches, read from its orders: when, how big,
+//                        and whether it broke in, arrived, was recalled, stalled or was lost within two minutes (not a gate; nothing asserts)
+//   pathdebug          - a 500-unit flow-field crossing of a walled 64x64 world; with map= (and pairs=, orient=, ticks=, every=) it instead traces a Normal
+//                        mirror on that map as ADR-053 tabled skirmish-07: each seat's army, its nearest unit to an enemy structure, how many are within
+//                        the arrival bound and how many stand idle between the bases (P8-23 re-probes skirmish-04's mirror stall with it; nothing asserts)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy within the budget P8-31's
 //                        rule derives (binding since P8-31; wall=report, as CI's ubuntu leg runs it, prints the wall bar without asserting it)
@@ -17089,6 +17094,69 @@ int ExDebug()
 
 int PathDebug()
 {
+    // P8-23 (ADR-080): with map= this re-probes a mirror STALL rather than
+    // the fixed crossing below. A Normal Standard mirror on that map plays to
+    // ticks= (27000), and every every= ticks (1500) each seat prints ADR-053's
+    // arrival columns: its army, its nearest unit's distance in whole cells to
+    // a standing enemy structure, how many are within the arrival bound
+    // (World.CyBuildRadius + 3), and how many PARK: idle, with no target,
+    // more than that bound from every structure of either side, which is the
+    // stall's signature (an army standing between the bases). Reads only.
+    var po = MeasureOptions("pathdebug", false, "map", "pairs", "orient", "ticks", "every");
+    if (po.Count > 0)
+    {
+        string root = MeasureRoot();
+        if (!po.TryGetValue("map", out var mapSpec)) throw new FormatException("pathdebug: the mirror trace needs map=");
+        var maps = MeasureMaps(root, mapSpec);
+        var pairs = MeasurePairs(po.GetValueOrDefault("pairs"), "DD,SS");
+        var orients = MeasureOrients(po.GetValueOrDefault("orient"), "0");
+        int ticks = OptInt(po, "ticks", MeasurementHarness.WindowCloseTicks);
+        int every = OptInt(po, "every", 1500);
+        int bound = World.CyBuildRadius + 3;
+        Fix64 boundSq = Fix64.FromInt(bound * bound);
+        foreach (var map in maps)
+            foreach (var (f0, f1, name) in pairs)
+                foreach (bool swap in orients)
+                {
+                    var spec = new MatchSpec(map, swap, f0, f1, AiDifficulty.Normal, AiDifficulty.Normal, 0, 0, 2026UL, ticks);
+                    Console.WriteLine($"pathdebug: {map} {name} o{(swap ? 1 : 0)}, Normal Standard mirror to {ticks} ticks");
+                    Console.WriteLine("    tick | seat army nearest within parked | seat army nearest within parked");
+                    var r = PlayMeasured(root, spec, observe: w =>
+                    {
+                        if (w.Tick % every != 0) return;
+                        var line = new System.Text.StringBuilder($"  {w.Tick,6} |");
+                        for (int seat = 0; seat < 2; seat++)
+                        {
+                            int army = 0, within = 0, parked = 0;
+                            Fix64 nearest = Fix64.MaxValue;
+                            for (int i = 0; i < w.EntityCount; i++)
+                            {
+                                var u = w.Entities[i];
+                                if (!u.Alive || u.PlayerId != seat || u.Kind != EntityKind.Unit) continue;
+                                army++;
+                                Fix64 toEnemy = Fix64.MaxValue, toAny = Fix64.MaxValue;
+                                for (int k = 0; k < w.EntityCount; k++)
+                                {
+                                    var e = w.Entities[k];
+                                    if (!e.Alive || !World.IsStructure(e.Kind) || e.PlayerId is not (0 or 1)) continue;
+                                    Fix64 d = Fix64.DistSq(e.X - u.X, e.Y - u.Y);
+                                    if (d < toAny) toAny = d;
+                                    if (e.PlayerId != seat && d < toEnemy) toEnemy = d;
+                                }
+                                if (toEnemy < nearest) nearest = toEnemy;
+                                if (toEnemy <= boundSq) within++;
+                                if (!u.Moving && u.ExplicitTarget < 0 && toAny > boundSq) parked++;
+                            }
+                            string near = nearest == Fix64.MaxValue ? "-" : Fix64.Sqrt(nearest).ToIntFloor().ToString();
+                            line.Append($" {seat,4} {army,4} {near,7} {within,6} {parked,6} |");
+                        }
+                        Console.WriteLine(line.ToString());
+                    });
+                    Console.WriteLine($"  {PillarLine(r)}");
+                }
+        return 0;
+    }
+
     var world = BuildPathingWorld(2026, out int units);
     var target = (X: Fix64.FromInt(60) + Fix64.Half, Y: Fix64.FromInt(32) + Fix64.Half);
     var cmds = new List<Command>();
@@ -17779,8 +17847,11 @@ int CountOwned(World w, int seat, Func<Entity, bool> pred)
 
 // One AI-against-AI match in the shipped setup, to the tick cap or until
 // MatchOver says it is over, recording what the P8-13 modes read. `observe`
-// sees the world after every step, for the traces that need more.
-MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = null)
+// sees the world after every step, for the traces that need more. `orders`
+// (P8-23, waveprobe) sees the commands both commanders issued for a tick,
+// before the step applies them; it reads them only, so a sweep plays exactly
+// as it does without it.
+MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = null, Action<World, List<Command>>? orders = null)
 {
     var map = LoadMeasureMap(root, s.Map, s.Swap);
     var w = map.BuildWorld(s.Seed, players: 2, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
@@ -17802,6 +17873,7 @@ MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = nu
         cmds.Clear();
         ais[0].Act(w, cmds);
         ais[1].Act(w, cmds);
+        orders?.Invoke(w, cmds);
         // F5's income, OBSERVED rather than inferred from the treasury, which
         // nets deliveries against the per-tick build payments. A harvester
         // that is Unloading with a load and comes out of the step alive, empty
@@ -18650,6 +18722,176 @@ int PillarProbe()
                               + $"held {exitHeld[i]}, unreflected order alone would release {exitUnreflectedOnly[i]}, own-frame search alone {exitReflectedOnly[i]}");
     Console.WriteLine($"pillarprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
     return 0;
+}
+
+// P8-23 (ADR-080): what a commander's waves DO, read from the orders it gives
+// rather than from inside it, so the same probe measures any commander. A wave
+// order is an AttackMove whose point is exactly the centre of a standing enemy
+// structure (the wave's aim; the garrison aims at a unit and the staging and a
+// retreat are PathMoves). A unit is IN FLIGHT from its first wave order until
+// its commander gives it any other order or it dies. A LAUNCH is the set of
+// units a seat sends on one tick that were not already in flight, so a
+// commander that re-aims every unit in flight every 300 ticks (the base's
+// stream) launches whatever joined since, and one that holds a wave back until
+// it stands launches the whole wave at once.
+//
+// Each launch is followed for WaveHorizonTicks (two minutes) or to the match's
+// end: ARRIVED counts its units that came within ADR-053's arrival bound
+// (World.CyBuildRadius + 3 cells) of a standing enemy structure, read once a
+// second; RAZED counts enemy structures that died in that span, by any cause,
+// so two launches whose spans overlap can each count one death; LOST counts
+// its units dead at the span's end; RECALLED counts its units given another
+// order inside the span. It is then classed: BROKE IN (arrived and razed),
+// ARRIVED (arrived, razed nothing), RECALLED (every unit recalled, none
+// arrived), STALLED (none arrived, at least half alive and not recalled) or
+// LOST (none arrived, most dead).
+const int WaveHorizonTicks = 1800;
+
+int WaveProbe()
+{
+    // A PROBE: it prints and asserts nothing. The defaults are pillarprobe's
+    // sweep (every shipped map, the four faction pairings, both orientations,
+    // Normal against Normal, 27000 ticks, seed 2026) and so are the options.
+    string root = MeasureRoot();
+    var o = MeasureOptions("waveprobe", false, "maps", "pairs", "orient", "p0", "p1", "ticks", "seed", "jobs");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int p0 = MeasurePersonality("p0", o.GetValueOrDefault("p0")), p1 = MeasurePersonality("p1", o.GetValueOrDefault("p1"));
+    int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    ulong seed = OptSeed(o);
+    var specs = PillarSpecs(maps, pairs, orients, p0, p1, seed, ticks);
+    Console.WriteLine($"waveprobe: {specs.Count} matches ({maps.Length} maps x {pairs.Length} faction pairings x {orients.Length} "
+        + $"orientation(s)), Normal against Normal, personalities {o.GetValueOrDefault("p0") ?? "standard"}/{o.GetValueOrDefault("p1") ?? "standard"}, "
+        + $"cap {ticks} ticks, seed {seed}; each launch followed for {WaveHorizonTicks} ticks. A probe: nothing asserts.");
+    var sw = Stopwatch.StartNew();
+    Fix64 arriveSq = Fix64.FromInt((World.CyBuildRadius + 3) * (World.CyBuildRadius + 3));
+    var results = RunOrdered(specs.Count, jobs, i =>
+    {
+        var s = specs[i];
+        var launches = new List<WaveLaunch>();
+        var inFlight = new[] { new Dictionary<int, WaveLaunch>(), new Dictionary<int, WaveLaunch>() };
+        var open = new List<WaveLaunch>();
+        var r = PlayMeasured(root, s, observe: w =>
+        {
+            foreach (var ev in w.Events)
+            {
+                if (ev.Type != GameEventType.Died || ev.A < 0 || ev.A >= w.EntityCount) continue;
+                var dead = w.Entities[ev.A];
+                if (dead.PlayerId is not (0 or 1)) continue;
+                if (World.IsStructure(dead.Kind))
+                {
+                    foreach (var l in open) if (l.Seat != dead.PlayerId) l.Razed++;
+                }
+                else if (dead.Kind == EntityKind.Unit)
+                    foreach (var l in open) if (l.Seat == dead.PlayerId && l.Ids.Contains(ev.A)) l.Lost++;
+            }
+            if (w.Tick % World.TicksPerSecond == 0)
+                foreach (var l in open)
+                    foreach (int id in l.Ids)
+                    {
+                        if (l.Arrived.Contains(id)) continue;
+                        var u = w.Entities[id];
+                        if (!u.Alive) continue;
+                        for (int k = 0; k < w.EntityCount; k++)
+                        {
+                            var e = w.Entities[k];
+                            if (!e.Alive || !World.IsStructure(e.Kind) || e.PlayerId != 1 - l.Seat) continue;
+                            if (Fix64.DistSq(e.X - u.X, e.Y - u.Y) <= arriveSq) { l.Arrived.Add(id); break; }
+                        }
+                    }
+            for (int k = open.Count - 1; k >= 0; k--)
+                if (w.Tick >= open[k].Tick + WaveHorizonTicks) { open[k].Closed = true; open.RemoveAt(k); }
+        }, orders: (w, cmds) =>
+        {
+            for (int seat = 0; seat < 2; seat++)
+            {
+                WaveLaunch? launch = null;
+                foreach (var c in cmds)
+                {
+                    if (c.PlayerId != seat || c.EntityId < 0 || c.EntityId >= w.EntityCount) continue;
+                    var u = w.Entities[c.EntityId];
+                    if (u.Kind != EntityKind.Unit) continue;
+                    bool waveOrder = false;
+                    if (c.Type == CommandType.AttackMove)
+                        for (int k = 0; k < w.EntityCount && !waveOrder; k++)
+                        {
+                            var e = w.Entities[k];
+                            waveOrder = e.Alive && World.IsStructure(e.Kind) && e.PlayerId == 1 - seat && e.X == c.X && e.Y == c.Y;
+                        }
+                    if (waveOrder)
+                    {
+                        if (inFlight[seat].ContainsKey(c.EntityId)) continue;
+                        if (launch is null)
+                        {
+                            launch = new WaveLaunch(seat, w.Tick);
+                            launches.Add(launch);
+                            open.Add(launch);
+                        }
+                        launch.Ids.Add(c.EntityId);
+                        inFlight[seat][c.EntityId] = launch;
+                    }
+                    else if (c.Type is CommandType.PathMove or CommandType.Move or CommandType.AttackMove or CommandType.Attack
+                             && inFlight[seat].Remove(c.EntityId, out var was) && !was.Closed)
+                        was.Recalled++;
+                }
+            }
+            // A unit that died leaves flight, so a later order to a recycled
+            // slot cannot be read as a recall.
+            for (int seat = 0; seat < 2; seat++)
+            {
+                List<int>? gone = null;
+                foreach (var id in inFlight[seat].Keys) if (!w.Entities[id].Alive) (gone ??= new()).Add(id);
+                if (gone != null) foreach (int id in gone) inFlight[seat].Remove(id);
+            }
+        });
+        // A match that ends inside a span closes it at its final tick.
+        foreach (var l in open) l.Closed = true;
+        return (r, launches);
+    }, (_, x) =>
+    {
+        Console.WriteLine(PillarLine(x.r));
+        for (int seat = 0; seat < 2; seat++)
+            Console.WriteLine($"      seat {seat}: {WaveSummary(x.launches.Where(l => l.Seat == seat).ToList())}");
+    });
+    sw.Stop();
+    var all = results.SelectMany(x => x.launches).ToList();
+    var perSeat = results.SelectMany(x => new[] { x.launches.Count(l => l.Seat == 0), x.launches.Count(l => l.Seat == 1) })
+        .Select(n => (double)n).ToList();
+    var firsts = results.SelectMany(x => new[] { 0, 1 }.Select(seat => x.launches.FirstOrDefault(l => l.Seat == seat)))
+        .Where(l => l != null).Select(l => (double)l!.Tick).ToList();
+    var largest = results.SelectMany(x => new[] { 0, 1 }.Select(seat => x.launches.Where(l => l.Seat == seat).Select(l => l.Ids.Count).DefaultIfEmpty(0).Max()))
+        .Select(n => (double)n).ToList();
+    Console.WriteLine($"waveprobe: pooled over {results.Length * 2} seats: {WaveSummary(all)}");
+    Console.WriteLine($"  launches per seat: median {MedianOf(perSeat)}; first launch: median t={MedianOf(firsts)} ({firsts.Count} seats launched); "
+        + $"largest launch per seat: median {MedianOf(largest)}");
+    int inWindow = results.Count(x => PillarClass(x.r) == "WINDOW"), early = results.Count(x => PillarClass(x.r) == "EARLY");
+    int none = results.Count(x => !x.r.Resolved);
+    Console.WriteLine($"  F6: {inWindow} of {results.Length} in the window ({100.0 * inWindow / results.Length:F0} per cent), {early} early, {none} with no result");
+    Console.WriteLine($"waveprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
+string WaveSummary(List<WaveLaunch> ls)
+{
+    if (ls.Count == 0) return "no launch";
+    var sizes = ls.Select(l => (double)l.Ids.Count).ToList();
+    int broke = 0, arrived = 0, recalled = 0, stalled = 0, lost = 0;
+    foreach (var l in ls)
+    {
+        switch (l.Class)
+        {
+            case "BROKE IN": broke++; break;
+            case "ARRIVED": arrived++; break;
+            case "RECALLED": recalled++; break;
+            case "STALLED": stalled++; break;
+            default: lost++; break;
+        }
+    }
+    string Pc(int n) => $"{n} ({100.0 * n / ls.Count:F0}%)";
+    return $"{ls.Count} launches, first at t={ls.Min(l => l.Tick)}, size median {MedianOf(sizes)} largest {sizes.Max()}; "
+         + $"broke in {Pc(broke)}, arrived {Pc(arrived)}, recalled {Pc(recalled)}, stalled {Pc(stalled)}, lost {Pc(lost)}";
 }
 
 // P8-66 (ADR-078, the Architect's condition 2): the sector sign movement's
@@ -20545,6 +20787,7 @@ return args.Length == 0
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
         "frozenprobe" => Measured(FrozenProbe),
+        "waveprobe" => Measured(WaveProbe),
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         // P8-30: F12's large-map perf run, the same conventions.
         "longmatchperf" => Measured(LongMatchPerfGate),
@@ -20554,7 +20797,7 @@ return args.Length == 0
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
-        "pathdebug" => PathDebug(),
+        "pathdebug" => Measured(PathDebug),
         "exdebug" => ExDebug(),
         "stdebug" => StDebug(),
         "facdebug" => FacDebug(),
@@ -20692,6 +20935,24 @@ sealed class MeasuredMatch
     /// Construction Yard died, and whether a superweapon impact killed it.</summary>
     public readonly int[] LastYardDeath = { -1, -1 };
     public readonly bool[] LastYardBySuperweapon = new bool[2];
+}
+
+/// <summary>P8-23 (ADR-080): one launch as waveprobe reads it, from the orders
+/// a commander gives (see WaveHorizonTicks for the definitions). Ids are the
+/// units sent that were not already in flight, in the order they were ordered.</summary>
+sealed class WaveLaunch
+{
+    public WaveLaunch(int seat, int tick) { Seat = seat; Tick = tick; }
+    public int Seat { get; }
+    public int Tick { get; }
+    public readonly List<int> Ids = new();
+    public readonly HashSet<int> Arrived = new();
+    public int Razed, Lost, Recalled;
+    public bool Closed;
+    public string Class
+        => Arrived.Count > 0 ? (Razed > 0 ? "BROKE IN" : "ARRIVED")
+         : Recalled >= Ids.Count ? "RECALLED"
+         : 2 * (Ids.Count - Lost - Recalled) >= Ids.Count ? "STALLED" : "LOST";
 }
 
 /// <summary>P8-22 (ADR-079): what spendprobe reads of one seat over one match.
