@@ -321,8 +321,8 @@ the same commit.
   replays and saves are refused by the checksum; Q024 stands for a later
   logic-only change. Proposed 2026-10-10. Signed off with conditions by the
   Architect on 2026-10-10 (the ADR's section "Architect sign-off"; the
-  review brief's 2026-10-09 corrected), in the pull request from branch
-  worktree-wf_ae038544-456-1, whose number is recorded here when it opens.
+  review brief's 2026-10-09 corrected), in pull request 175, from branch
+  worktree-wf_ae038544-456-1 (pushed as claude/p8-22-ai-spends).
   The seven commits reviewed were cherry-picked unchanged onto main at
   d295931, after pull requests 172 and 173 merged. Conditions 1 to 5 are met
   in it by one commit each: the reserve test compares in long and
