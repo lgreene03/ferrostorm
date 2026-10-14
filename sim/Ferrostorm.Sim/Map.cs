@@ -16,6 +16,8 @@ public sealed class Map
     public bool InBounds(int cx, int cy) => (uint)cx < (uint)Width && (uint)cy < (uint)Height;
     public bool IsBlocked(int cx, int cy) => _blocked[CellIndex(cx, cy)];
     public void SetBlocked(int cx, int cy, bool blocked) => _blocked[CellIndex(cx, cy)] = blocked;
+    /// <summary>P8-31: passability by cell index, read only, for the flow-field build's inner loop.</summary>
+    internal ReadOnlySpan<bool> BlockedCells => _blocked;
 
     public static int CellOf(Fix64 v) => v.ToIntFloor();
     public static Fix64 CellCentre(int c) => Fix64.FromInt(c) + Fix64.Half;
@@ -23,11 +25,11 @@ public sealed class Map
 
 /// <summary>
 /// Flow field toward a single target cell (TICKET-P1-04, TDD s3 pathfinding).
-/// Built with Dijkstra over the passability grid using an array binary heap
-/// whose comparisons tie-break on cell index, so pop order - and therefore the
-/// resulting field - is bit-identical on every platform. Straight moves cost 2,
-/// diagonals 3; diagonal moves require both adjacent orthogonals passable
-/// (no corner cutting). Fields are cached per target cell.
+/// Built with Dijkstra over the passability grid, settling cells in ascending
+/// (distance, cell index) order, so the resulting field is bit-identical on
+/// every platform. Straight moves cost 2, diagonals 3; diagonal moves require
+/// both adjacent orthogonals passable (no corner cutting). Fields are cached
+/// per target cell.
 ///
 /// ADR-071 adds the second shape, a field toward a structure's FOOTPRINT
 /// (BuildToFootprint): many sources rather than one, seeded at every passable
@@ -35,17 +37,20 @@ public sealed class Map
 /// from whichever face is open. The single-target field is unchanged.
 ///
 /// P8-31: the build itself lives in <see cref="FlowFieldBuilder"/>, which owns
-/// the scratch a build needs so that a cache's builds reuse it. The static
+/// the scratch a build needs so that a cache's builds reuse it, and settles
+/// cells from ordered buckets rather than a binary heap (D28). The static
 /// Build and BuildToFootprint below keep their signatures for callers outside
 /// a cache and use a builder of their own per call.
 /// </summary>
 public sealed class FlowField
 {
     // 8 neighbours: E, W, N, S, NE, NW, SE, SW. Index 255 = unreachable/target.
-    internal static readonly int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
-    internal static readonly int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
-    internal static readonly int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
-    internal static readonly byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+    // P8-31: Cost and Opposite are the encoding FlowFieldBuilder.Relax writes
+    // out step by step; they are kept here as its statement.
+    private static readonly int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
+    private static readonly int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    private static readonly int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
+    private static readonly byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
 
     internal const byte Unreachable = 255;
     /// <summary>ADR-071: a goal cell of a footprint field, one of its sources.
@@ -110,28 +115,44 @@ public sealed class FlowField
 /// needs so that a cache's builds reuse it instead of allocating it each time.
 /// One builder serves one caller at a time: a FlowFieldCache holds its own, so
 /// each World, stepped on one thread, has its own. Nothing in the scratch
-/// outlives a build (each build resets every cell it will read), so which
-/// builder made a field cannot change the field. The only allocations per
-/// build are the field and its direction array, which the cache keeps.
+/// outlives a build (each build resets every cell it will read and empties
+/// every bucket it fills), so which builder made a field cannot change the
+/// field. The only allocations per build are the field and its direction
+/// array, which the cache keeps; the scratch is allocated once per builder,
+/// and again only if a larger map comes along.
 /// </summary>
 public sealed class FlowFieldBuilder
 {
     // Per-cell distance to the nearest source, valid for the last build only.
     private int[] _dist = Array.Empty<int>();
     private int _cells;
+    // Dial's buckets: the cells waiting at distance d sit in bucket d & 3.
+    // Four suffice because every step costs 2 or 3, so while bucket d drains,
+    // every push lands in d + 2 or d + 3, and the buckets for d - 2 and d - 1,
+    // which share those slots, are already empty. A bucket never holds a cell
+    // twice (a cell enters bucket d only when its distance falls to d, and it
+    // only ever falls), so a map's cell count bounds each one.
+    private readonly int[][] _bucket = { Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>() };
+    private readonly int[] _count = new int[4];
 
     /// <summary>The distance every cell had at the end of the last build, in
     /// cell index order (int.MaxValue where unreachable). Read only by the
     /// runner's `flowparity` stage; nothing in the sim reads it.</summary>
     public ReadOnlySpan<int> Distances => _dist.AsSpan(0, _cells);
 
-    // Sized to the map and reset for one build: every cell unreachable.
+    // Sized to the map and reset for one build: every cell unreachable, every
+    // bucket empty.
     private int[] Reset(Map map, out byte[] next)
     {
         int n = map.Width * map.Height;
-        if (_dist.Length < n) _dist = new int[n];
+        if (_dist.Length < n)
+        {
+            _dist = new int[n];
+            for (int b = 0; b < 4; b++) _bucket[b] = new int[n];
+        }
         _cells = n;
         Array.Fill(_dist, int.MaxValue, 0, n);
+        Array.Clear(_count);
         next = new byte[n];
         Array.Fill(next, FlowField.Unreachable);
         return _dist;
@@ -143,24 +164,27 @@ public sealed class FlowFieldBuilder
         var dist = Reset(map, out var next);
         int target = map.CellIndex(targetCx, targetCy);
         dist[target] = 0;
+        _bucket[0][0] = target;
+        _count[0] = 1;
 
-        relaxed = Relax(map, dist, next, new List<(int D, int C)> { (0, target) });
+        relaxed = Relax(map, dist, next, 1);
         return new FlowField(target, next);
     }
 
     /// <summary>
     /// ADR-071: a field toward a size x size footprint anchored at (ax,ay).
-    /// The ring is walked row by row, y then x, which is ascending cell index:
-    /// a fixed, sorted seed order, and an ascending list is already a valid
-    /// min-heap. No dictionary or set is enumerated anywhere in the build.
-    /// Relaxation never overwrites a source (it has distance 0 and every step
-    /// costs at least 2), so a goal cell keeps its mark.
+    /// The ring is walked row by row, y then x, which is ascending cell index,
+    /// so the sources enter bucket 0 already in the order it is drained in. No
+    /// dictionary or set is enumerated anywhere in the build. Relaxation never
+    /// overwrites a source (it has distance 0 and every step costs at least
+    /// 2), so a goal cell keeps its mark.
     /// </summary>
     public FlowField BuildToFootprint(Map map, int ax, int ay, int size, out int relaxed)
     {
         var dist = Reset(map, out var next);
 
-        var heap = new List<(int D, int C)>();
+        var sources = _bucket[0];
+        int seeds = 0;
         for (int y = ay - 1; y <= ay + size; y++)
             for (int x = ax - 1; x <= ax + size; x++)
             {
@@ -169,82 +193,87 @@ public sealed class FlowFieldBuilder
                 int c = map.CellIndex(x, y);
                 dist[c] = 0;
                 next[c] = FlowField.AtGoal;
-                heap.Add((0, c));
+                sources[seeds++] = c;
             }
+        _count[0] = seeds;
 
-        relaxed = Relax(map, dist, next, heap);
+        relaxed = Relax(map, dist, next, seeds);
         return new FlowField(map.CellIndex(ax, ay), next);
     }
 
-    /// <summary>The Dijkstra relaxation both shapes share, from whatever the
-    /// heap was seeded with. Moved here unchanged from Build by ADR-071.
+    /// <summary>The Dijkstra relaxation both shapes share, from the sources
+    /// waiting in bucket 0 (pending of them).
+    ///
+    /// P8-31 (D28): Dial's algorithm. The pre-P8-31 build popped (distance,
+    /// cell) pairs from a binary heap ordered by distance and then by cell
+    /// index, skipping a stale pair (one whose cell had since been lowered).
+    /// That pop order is a strict total order over every pair ever pushed,
+    /// and every push made while popping a pair at distance d is at d + 2 or
+    /// d + 3, so the heap settled cells in exactly ascending (distance, cell
+    /// index) order. This settles them in the same order: buckets are drained
+    /// in ascending distance, and each bucket is complete before it drains (its
+    /// cells were pushed from buckets d - 2 and d - 3, already drained), so it
+    /// is sorted by cell index and walked in that order, a stale cell skipped
+    /// by the same test. Each settled cell then relaxes its neighbours in the
+    /// old order (E, W, N, S, NE, NW, SE, SW) under the old rules, so every
+    /// comparison and every write happens in the same sequence against the
+    /// same distances, and the distances, the directions and the count come
+    /// out identical: the tie order is not merely equivalent, it is the same.
+    /// `flowparity` proves it on every shipped map rather than leaving it to
+    /// this argument.
     ///
     /// P8-30: returns the number of RELAXATIONS, the times a cell's distance
-    /// was lowered (each one a heap push). That is the build's unit of work,
-    /// and it depends only on the grid, the seeds and the pop order, so it is
-    /// the same on every machine; a replacement that pops in the same order
-    /// (P8-31's ordered buckets) relaxes the same cells and reports the same
-    /// count. The count is returned, never stored here, and nothing in the
-    /// relaxation reads it.</summary>
-    private static int Relax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
+    /// was lowered (each one a push). That is the build's unit of work, and it
+    /// depends only on the grid, the seeds and the settling order, so it is
+    /// the same on every machine and the same as the heap's. The count is
+    /// returned, never stored here, and nothing in the relaxation reads it.</summary>
+    private int Relax(Map map, int[] dist, byte[] next, int pending)
     {
-        var Dx = FlowField.Dx; var Dy = FlowField.Dy; var Cost = FlowField.Cost; var Opposite = FlowField.Opposite;
+        int w = map.Width, h = map.Height;
+        ReadOnlySpan<bool> blocked = map.BlockedCells;
+        int[][] buckets = _bucket;
+        int[] counts = _count;
         int relaxed = 0;
-        // Array binary min-heap of (dist, cell); ties broken by lower cell index.
-        void Push((int, int) item)
+        for (int d = 0; pending > 0; d++)
         {
-            heap.Add(item);
-            int i = heap.Count - 1;
-            while (i > 0)
+            int count = counts[d & 3];
+            if (count == 0) continue;
+            counts[d & 3] = 0;
+            pending -= count;
+            int[] bucket = buckets[d & 3];
+            if (count > 1) Array.Sort(bucket, 0, count);
+            // Every push from this bucket lands in one of these two.
+            int d2 = d + 2, d3 = d + 3;
+            int[] b2 = buckets[d2 & 3], b3 = buckets[d3 & 3];
+            int n2 = counts[d2 & 3], n3 = counts[d3 & 3];
+            int before = relaxed;
+            for (int i = 0; i < count; i++)
             {
-                int p = (i - 1) >> 1;
-                if (Less(heap[i], heap[p])) { (heap[i], heap[p]) = (heap[p], heap[i]); i = p; }
-                else break;
+                int c = bucket[i];
+                if (dist[c] != d) continue; // stale: lowered since it was pushed
+                int cy = c / w, cx = c - cy * w;
+                // The four orthogonal neighbours, open and in bounds; a
+                // diagonal needs both orthogonals beside it open (no corner
+                // cutting), which also puts it in bounds.
+                bool e = cx + 1 < w && !blocked[c + 1];
+                bool wo = cx > 0 && !blocked[c - 1];
+                bool no = cy > 0 && !blocked[c - w];
+                bool so = cy + 1 < h && !blocked[c + w];
+                int nc;
+                // The direction written is FlowField.Opposite of the step: the
+                // way from the neighbour back toward c.
+                if (e && d2 < dist[nc = c + 1]) { dist[nc] = d2; next[nc] = 1; b2[n2++] = nc; relaxed++; }
+                if (wo && d2 < dist[nc = c - 1]) { dist[nc] = d2; next[nc] = 0; b2[n2++] = nc; relaxed++; }
+                if (no && d2 < dist[nc = c - w]) { dist[nc] = d2; next[nc] = 3; b2[n2++] = nc; relaxed++; }
+                if (so && d2 < dist[nc = c + w]) { dist[nc] = d2; next[nc] = 2; b2[n2++] = nc; relaxed++; }
+                if (e && no && !blocked[nc = c - w + 1] && d3 < dist[nc]) { dist[nc] = d3; next[nc] = 7; b3[n3++] = nc; relaxed++; }
+                if (wo && no && !blocked[nc = c - w - 1] && d3 < dist[nc]) { dist[nc] = d3; next[nc] = 6; b3[n3++] = nc; relaxed++; }
+                if (e && so && !blocked[nc = c + w + 1] && d3 < dist[nc]) { dist[nc] = d3; next[nc] = 5; b3[n3++] = nc; relaxed++; }
+                if (wo && so && !blocked[nc = c + w - 1] && d3 < dist[nc]) { dist[nc] = d3; next[nc] = 4; b3[n3++] = nc; relaxed++; }
             }
-        }
-        (int, int) Pop()
-        {
-            var top = heap[0];
-            heap[0] = heap[^1];
-            heap.RemoveAt(heap.Count - 1);
-            int i = 0;
-            while (true)
-            {
-                int l = 2 * i + 1, r = l + 1, m = i;
-                if (l < heap.Count && Less(heap[l], heap[m])) m = l;
-                if (r < heap.Count && Less(heap[r], heap[m])) m = r;
-                if (m == i) break;
-                (heap[i], heap[m]) = (heap[m], heap[i]); i = m;
-            }
-            return top;
-        }
-        static bool Less((int D, int C) a, (int D, int C) b)
-            => a.D != b.D ? a.D < b.D : a.C < b.C;
-
-        while (heap.Count > 0)
-        {
-            var (d, c) = Pop();
-            if (d > dist[c]) continue; // stale entry
-            int cx = c % map.Width, cy = c / map.Width;
-            for (int k = 0; k < 8; k++)
-            {
-                int nx = cx + Dx[k], ny = cy + Dy[k];
-                if (!map.InBounds(nx, ny) || map.IsBlocked(nx, ny)) continue;
-                if (k >= 4) // no corner cutting
-                {
-                    if (map.IsBlocked(cx + Dx[k], cy) || map.IsBlocked(cx, cy + Dy[k])) continue;
-                }
-                int nc = map.CellIndex(nx, ny);
-                int nd = d + Cost[k];
-                if (nd < dist[nc])
-                {
-                    dist[nc] = nd;
-                    // Direction FROM neighbour TOWARD c is the opposite of k.
-                    next[nc] = Opposite[k];
-                    Push((nd, nc));
-                    relaxed++;
-                }
-            }
+            counts[d2 & 3] = n2;
+            counts[d3 & 3] = n3;
+            pending += relaxed - before;
         }
         return relaxed;
     }
