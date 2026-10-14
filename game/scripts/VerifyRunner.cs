@@ -53,6 +53,16 @@ public partial class VerifyRunner : Node
         CampaignProgress.PathOverrideForTest = HarnessProgressPath;
         LastMatchMemory.PathOverrideForTest = HarnessLastMatchPath;
         DeleteHarnessFiles();
+        // P8-36: every stage before schemegate drives the MODERN scheme (a
+        // right click orders), and the scheme is a persisted player choice,
+        // read from the player's own settings file. Loaded here, before any
+        // scene loads it, and pinned in memory (nothing is saved), so a
+        // developer who chose CLASSIC does not silently change what every
+        // older stage's right click does, and no menu this harness builds
+        // stops to ask the first-launch question. schemegate sets both itself.
+        Settings.EnsureLoaded();
+        Settings.Scheme = ControlScheme.Modern;
+        Settings.SchemeChosen = true;
         // The seat and the step mode must both be set before the scene loads.
         // AutoStep off means the sim only advances when StepTicks says so, which
         // is what lets a check measure state at an exact tick instead of racing
@@ -1115,24 +1125,37 @@ public partial class VerifyRunner : Node
         // the walk is in ascending type id (so both seats and both machines see
         // one order), where the arrays were in rough tech order. Label, tab and
         // icon are what a player reads, and all three are unchanged.
+        //
+        // P8-45 moved the icon column ON PURPOSE, and only that column, for
+        // eight of the fifteen buildings transcribed here: four had no icon
+        // (the barracks and the radar uplink, never cut, and the wall and the
+        // mine, which pointed at com_wall_straight.png, a file no commit ever
+        // held) and four wore another building's (the emplacement, the
+        // airfield, the Bastion and the Shroud Nest). All eight have their own
+        // now, rendered from the mesh (art/3d/icons.py), which hudgate/icons
+        // asserts by path. Across every button the sidebar builds that was
+        // four borrowed icons and eighteen missing ones: the ten units, these
+        // four, and the gate, the generator, the Watch Post and the seismic
+        // charge from the list below. Labels and tabs are still the
+        // transcript's.
         {
             var wasListed = new (int Type, string Label, int Tab, bool Icon)[]
             {
                 (1,  "POWER PLANT",    Sidebar.TabBuildings, true),
                 (3,  "REFINERY",       Sidebar.TabBuildings, true),
-                (11, "BARRACKS",       Sidebar.TabBuildings, false),  // no sprite cut yet
+                (11, "BARRACKS",       Sidebar.TabBuildings, true),   // P8-45: its own (was none)
                 (2,  "FACTORY",        Sidebar.TabBuildings, true),
                 (8,  "SERVICE DEPOT",  Sidebar.TabBuildings, true),
-                (12, "RADAR UPLINK",   Sidebar.TabBuildings, false),  // no sprite cut yet
+                (12, "RADAR UPLINK",   Sidebar.TabBuildings, true),   // P8-45: its own (was none)
                 (5,  "TURRET",         Sidebar.TabDefence,   true),
-                (15, "EMPLACEMENT",    Sidebar.TabDefence,   true),   // wears the turret's
-                (16, "AIRFIELD",       Sidebar.TabDefence,   true),   // wears the factory's
-                (17, "BASTION",        Sidebar.TabDefence,   true),   // wears the turret's
-                (18, "SHROUD NEST",    Sidebar.TabDefence,   true),   // wears the veil's
-                (9,  "WALL",           Sidebar.TabDefence,   false),  // com_wall_straight is not cut
+                (15, "EMPLACEMENT",    Sidebar.TabDefence,   true),   // P8-45: its own (wore the turret's)
+                (16, "AIRFIELD",       Sidebar.TabDefence,   true),   // P8-45: its own (wore the factory's)
+                (17, "BASTION",        Sidebar.TabDefence,   true),   // P8-45: its own (wore the turret's)
+                (18, "SHROUD NEST",    Sidebar.TabDefence,   true),   // P8-45: its own (wore the veil's)
+                (9,  "WALL",           Sidebar.TabDefence,   true),   // P8-45: its own (was none)
                 (7,  "VEIL PROJECTOR", Sidebar.TabDefence,   true),
                 (6,  "SUPERWEAPON",    Sidebar.TabDefence,   true),
-                (19, "MINE",           Sidebar.TabDefence,   false),  // wears the wall's, also not cut
+                (19, "MINE",           Sidebar.TabDefence,   true),   // P8-45: its own (was none)
             };
             string drift = "";
             foreach (var (type, label, tab, icon) in wasListed)
@@ -1161,15 +1184,16 @@ public partial class VerifyRunner : Node
             {
                 "com_gate",        // P7-10: struct type 10, ADR-005's reservation filled
                 // P7-5 (DR-02): struct type 20, the Sodality's own power grid.
-                // It carries no icon of its own and wears the plant's, exactly
-                // as the Bastion wears the turret's - art is owed, and the
-                // button is real either way. Note this button is faction-gated,
-                // so a Directorate player never sees it; the count here is of
+                // It has its own model (P7-31's mesh, drawn since P7-32) and,
+                // since P8-45, its own icon rendered from that mesh, as the
+                // Bastion has too. Note this button is faction-gated, so a
+                // Directorate player never sees it; the count here is of
                 // buttons BUILT, before FixedGatesAllow hides any.
                 "sod_generator",
                 // P7-5b (DR-03): struct type 21, the Sodality's Watch Post and
                 // the first detector that side has ever had. Faction-gated the
-                // same way, and it wears the veil projector's model and icon.
+                // same way. Its own model came with P7-31 and its own icon,
+                // rendered from that model, with P8-45.
                 "sod_watch_post",
                 // P7-5c (DR-04): struct type 22, the Sodality's seismic charge.
                 // It SHARES EntityKind.Superweapon with the orbital cannon, so
@@ -1316,6 +1340,10 @@ public partial class VerifyRunner : Node
         RunDoorFaceStages();
         // P8-41: my units answer a selection and an order, debounced.
         RunBarkStages();
+        // P8-45: the HUD, the help overlay, the icons and the toast names.
+        RunHudStages();
+        // P8-36: the classic left-click scheme, each verb under each scheme.
+        RunSchemeStages();
     }
 
     // ---------------- P8-10: eventgate ----------------
@@ -9494,5 +9522,1154 @@ public partial class VerifyRunner : Node
                     for (int v = 1; v <= SkirmishLive.BarkVariants; v++)
                         n += audio.PlayRequests($"bark_{f}_{c}_{o}_{v}");
         return n;
+    }
+
+    // ---------------- P8-45: hudgate ----------------
+
+    private void HudGate(bool ok, string stage, string what) => Check(ok, $"hudgate/{stage}: {what}");
+
+    /// <summary>
+    /// P8-45, one group, each stage in a fresh battle from seat 1. The status
+    /// line was a bare label with the match clock always on it; a key strip
+    /// along the bottom named about a dozen keys by hand and had fallen behind
+    /// every key added since; twenty-two sidebar buttons had no icon of their
+    /// own; a building numbered above 12 was READY as "STRUCTURE"; and a
+    /// completion must open its own factory's doors and no other. Every
+    /// binding and switch a stage moves is put back, and nothing is saved.
+    /// </summary>
+    private void RunHudStages()
+    {
+        GD.Print("  --    hudgate (P8-45): the themed panel, the tick behind its switch, the help overlay, icons, toast names, the producing factory");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        bool tickWas = Settings.ShowTickCounter;
+        var keysWas = new Dictionary<string, Key>();
+        foreach (var (a, _) in Settings.Bindable) keysWas[a] = Settings.BindOf(a);
+        Settings.SaveSuppressedForTest = true;
+        try
+        {
+            RunHudPanelStage();
+            RunHudTickStage();
+            RunHudHelpStage();
+            RunHudHelpReplayStage();
+            RunHudIconStage();
+            RunHudToastStage();
+            RunHudDoorsStage();
+        }
+        finally
+        {
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, Key.None);
+            foreach (var (a, k) in keysWas) if (Settings.BindOf(a) != k) Settings.TryRebind(a, k);
+            Settings.ShowTickCounter = tickWas;
+            Settings.SaveSuppressedForTest = saveWas;
+        }
+    }
+
+    /// <summary>The status readout stands in the uplink panel, at the head of
+    /// the top-left column, and reads the joiner's own seat.</summary>
+    private void RunHudPanelStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            lw.GrantCredits(me, 4321 - lw.Credits(me));
+            lw.GrantCredits(foe, 1234 - lw.Credits(foe));
+            g.StepOneTick();
+            var panel = g.HudPanelForTest;
+            var style = panel.GetThemeStylebox("panel") as StyleBoxFlat;
+            bool themed = style != null
+                          && Mathf.IsEqualApprox(style.BgColor.R, UplinkUi.Panel.R) && Mathf.IsEqualApprox(style.BgColor.G, UplinkUi.Panel.G)
+                          && Mathf.IsEqualApprox(style.BgColor.B, UplinkUi.Panel.B) && style.BorderColor == UplinkUi.Seam
+                          && style.BorderWidthTop == 1 && style.BorderWidthLeft == 1;
+            bool heads = panel.GetParent() is VBoxContainer col && col.Name == "PowersColumn" && col.GetChild(0) == panel;
+            string status = g.StatusTextForTest;
+            long mine = lw.Credits(me), theirs = lw.Credits(foe);
+            bool reads = mine != theirs && status.StartsWith($"CREDITS {mine} ") && !status.Contains($"CREDITS {theirs} ");
+            string hint = g.HelpHintForTest;
+            HudGate(themed && heads && g.StatusInPanelForTest && reads && hint == $"{Settings.KeyName(Settings.BindOf("help"))}  HELP", "panel",
+                    $"the status readout stands in the uplink panel (cinder fill, seam border; themed {themed}) at the head of the "
+                    + $"top-left column (first child {heads}), with the help key beside it (\"{hint}\"), and it reads seat {me}'s "
+                    + $"treasury ({mine}) and not seat {foe}'s ({theirs}): \"{status}\"");
+        }
+        catch (System.Exception ex) { HudGate(false, "panel", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The match clock is off as shipped, and the settings page's
+    /// switch, reached from the pause menu, turns it on and off again.</summary>
+    private void RunHudTickStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            Settings.ResetDefaults();   // the shipped defaults (nothing is saved)
+            g.StepOneTick();
+            g.StepOneTick();
+            bool offAsShipped = !Settings.ShowTickCounter && !g.StatusTextForTest.Contains("TICK");
+            string before = g.StatusTextForTest;
+
+            g.PressKey(Settings.BindOf("pause_menu"));
+            var pm = g.PauseMenuView;
+            bool openedSettings = pm != null && pm.PressForTest("SETTINGS");
+            var sp = pm?.SettingsShown;
+            string shownOff = sp?.OptionShownForTest(SettingsScene.TickCounterLabel) ?? "(no row)";
+            string? on = sp?.ChooseOptionForTest(SettingsScene.TickCounterLabel, 1);
+            bool backed = sp != null && sp.PressBackForTest();
+            g.PressKey(Settings.BindOf("cancel"));
+            g.StepOneTick();
+            string withTick = g.StatusTextForTest;
+            bool shows = !g.PauseOpen && Settings.ShowTickCounter && withTick.Contains($"TICK {lw.Tick}");
+            HudGate(offAsShipped && openedSettings && shownOff == "OFF" && on == "ON" && backed && shows, "tick",
+                    $"the tick counter is OFF as shipped (\"{before}\"), and its switch on the settings page, reached through the pause "
+                    + $"menu's SETTINGS, turns it ON, after which the panel reads the match clock (\"{withTick}\", tick {lw.Tick})");
+
+            g.PressKey(Settings.BindOf("pause_menu"));
+            pm = g.PauseMenuView;
+            pm?.PressForTest("SETTINGS");
+            string? off = pm?.SettingsShown?.ChooseOptionForTest(SettingsScene.TickCounterLabel, 0);
+            pm?.SettingsShown?.PressBackForTest();
+            g.PressKey(Settings.BindOf("cancel"));
+            g.StepOneTick();
+            HudGate(off == "OFF" && !Settings.ShowTickCounter && !g.StatusTextForTest.Contains("TICK"), "tick",
+                    $"...and OFF again takes it away (\"{g.StatusTextForTest}\")");
+        }
+        catch (System.Exception ex) { HudGate(false, "tick", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>The key strip is gone and the help key opens the overlay in
+    /// its place: the generated CONTROLS page with the mouse above it, live
+    /// to a rebind, shut by its own key and by cancel, and covered by the
+    /// conflict check both ways.</summary>
+    private void RunHudHelpStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            g.StepOneTick();
+            var strip = g.BottomEdgeLabelsForTest();
+            Key def = Settings.DefaultBindOf("help");
+            bool clear = def != Key.None;
+            for (int b = 1; b <= 4; b++) clear &= Settings.DefaultBindOf($"bookmark_{b}") != def;
+            HudGate(strip.Count == 0 && def == Key.F10 && clear && g.HelpPageShown == null, "help",
+                    $"the key strip along the bottom of the battle is gone ({strip.Count} labels there"
+                    + $"{(strip.Count > 0 ? $": \"{string.Join("\", \"", strip)}\"" : "")}), and the help key that replaces it ships on "
+                    + $"{Settings.KeyName(def)}, clear of the four camera bookmarks, with nothing open yet");
+
+            Key help = Settings.BindOf("help");
+            g.PressKey(help);
+            var page = g.HelpPageShown;
+            string diff = page == null ? "no overlay opened" : RowsDiff(page.RowsShown(), BindableNow());
+            var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
+            var wantMouse = ControlsPage.MouseGestures();
+            bool mouseSame = mouse.Count == wantMouse.Count;
+            for (int i = 0; mouseSame && i < mouse.Count; i++) mouseSame = mouse[i] == wantMouse[i];
+            bool force = mouse.Exists(r => r.Gesture == "CTRL + RIGHT CLICK" && r.Does.Contains("BRIDGE"));
+            HudGate(page != null && diff.Length == 0 && mouseSame && force, "help",
+                    $"{Settings.KeyName(help)} opens the help overlay, which is the generated CONTROLS page: all {Settings.Bindable.Length} "
+                    + $"Bindable entries in table order with their live keys, and the {mouse.Count} mouse rows above them, the "
+                    + $"force-attack gesture among them (force {force}){(diff.Length > 0 ? $"; but {diff}" : "")}");
+
+            string? clash = Settings.TryRebind("help", Key.F11);
+            string shown = RowKey(page, "HELP");
+            string after = page == null ? "no page" : RowsDiff(page.RowsShown(), BindableNow());
+            g.StepOneTick();
+            string hint = g.HelpHintForTest;
+            HudGate(clash == null && shown == Settings.KeyName(Key.F11) && after.Length == 0 && hint == $"{Settings.KeyName(Key.F11)}  HELP", "help",
+                    $"...a rebind made while it is open shows on it at once (HELP reads {shown}) and on the status panel (\"{hint}\")");
+
+            g.PressKey(Key.F10);
+            bool stillOpen = g.HelpPageShown != null;
+            g.PressKey(Key.F11);
+            bool shut = g.HelpPageShown == null;
+            g.PressKey(Key.F11);
+            bool reopened = g.HelpPageShown != null;
+            g.PressKey(Settings.BindOf("cancel"));
+            bool cancelled = g.HelpPageShown == null && !g.PauseOpen;
+            HudGate(stillOpen && shut && reopened && cancelled, "help",
+                    $"...the old key does nothing (open {stillOpen}), the new one shuts it ({shut}) and opens it again ({reopened}), and the "
+                    + $"cancel key shuts it without opening the operations menu ({cancelled})");
+
+            string? onBookmark = Settings.TryRebind("help", Key.F1);
+            string? stopOnHelp = Settings.TryRebind("stop", Settings.BindOf("help"));
+            HudGate(onBookmark == "bookmark_1" && stopOnHelp == "help" && Settings.BindOf("help") == Key.F11, "help",
+                    $"the conflict check covers the help key both ways: HELP onto F1 is refused for {Settings.LabelOf(onBookmark ?? "")} "
+                    + $"(the reason it does not ship there), and STOP onto HELP's key is refused for {Settings.LabelOf(stopOnHelp ?? "")}");
+        }
+        catch (System.Exception ex) { HudGate(false, "help", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// P8-45's review: the help overlay opened during a REPLAY lists only
+    /// what a replay viewer can do. A replay takes no orders, so it must not
+    /// advertise them (TICKET-P5-SAVE-01), and the key strip the overlay
+    /// replaced had a replay line for exactly that reason. A short match is
+    /// recorded through the real recorder and played back from seat 1, and
+    /// the overlay is opened under each scheme. "Ordering" is read against
+    /// this stage's own transcript of the verbs and keys that order, not
+    /// against the page's filter, so a filter that lets an order through
+    /// cannot pass by agreeing with itself.
+    /// </summary>
+    private void RunHudHelpReplayStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        string frep = g.RecordingPath;
+        string side = frep.Length > 0 ? System.IO.Path.ChangeExtension(frep, ".json") : "";
+        SkirmishLive? p = null;
+        var schemeWas = Settings.Scheme;
+        try
+        {
+            g.StepTicks(GameFiles.MinRecordedTicks + 15);
+            g.LeaveForMenuForTest = () => { };
+            g.QuitToMenuForTest();
+            g.LeaveForMenuForTest = null;
+            var meta = side.Length > 0 ? MatchMeta.Read(side) : null;
+            HudGate(meta != null && System.IO.File.Exists(frep), "help-replay",
+                    $"precondition: a short match is recorded and closed ({frep}, sidecar {meta != null})");
+            if (meta == null) return;
+
+            var restore = MatchConfig.CurrentSetup();
+            string? wasMission = MatchConfig.MissionPath, wasMap = MatchConfig.MapPath;
+            var wasStructs = MatchConfig.AllowedStructures;
+            var wasUnits = MatchConfig.AllowedUnits;
+            try
+            {
+                MatchConfig.ApplyFrom(meta);
+                MatchConfig.ReplayPath = frep;
+                MatchConfig.ReplayTicks = meta.Tick;
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.PendingNet = null;
+                SkirmishLive.LocalSeat = 1;
+                p = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(p);
+            }
+            finally
+            {
+                MatchConfig.ApplyFrom(restore);
+                MatchConfig.MissionPath = wasMission;
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.AllowedStructures = wasStructs;
+                MatchConfig.AllowedUnits = wasUnits;
+                MatchConfig.ReplayPath = null;
+            }
+            p.StepTicks(5);
+
+            // This stage's own transcript of what orders: the verbs an
+            // ordering mouse row names, and the Bindable keys that give an
+            // order or work the sidebar a replay hides.
+            string[] orderVerbs = { "ATTACK", "HARVEST", "ENTER", "BOARD", "RALLY", "QUEUES", "DEPLOYS", "FELLS", "BUILD", "TARGETING", "PLACEMENT" };
+            string[] orderKeys = { "ATTACK-MOVE", "SUPERWEAPON", "SUPPORT POWERS", "STOP", "HOLD FIRE", "GUARD", "PATROL",
+                                   "REPAIR", "SELL", "DEPLOY", "UNLOAD", "SIDEBAR TAB" };
+            // What a viewer must still be told, so an empty page cannot pass.
+            string[] viewerKeys = { "HELP", "CANCEL / BACK", "OPERATIONS MENU", "CAMERA LEFT", "CAMERA BOOKMARK 1", "GROUP 1" };
+            var wantKeys = new List<(string Label, string Key)>();
+            foreach (var (action, label) in Settings.Bindable)
+                if (ControlsPage.ShownInReplay(action)) wantKeys.Add((label, Settings.KeyName(Settings.BindOf(action))));
+
+            foreach (var scheme in new[] { ControlScheme.Modern, ControlScheme.Classic })
+            {
+                string s = scheme == ControlScheme.Classic ? "CLASSIC" : "MODERN";
+                Settings.Scheme = scheme;
+                p.PressKey(Settings.BindOf("help"));
+                var page = p.HelpPageShown;
+                var mouse = page?.MouseRowsShown() ?? new List<(string Gesture, string Does)>();
+                var keys = page?.RowsShown() ?? new List<(string Label, string Key)>();
+                string note = page?.NoteShown() ?? "";
+                string heading = page?.MouseHeadingShown() ?? "(no page)";
+                var bad = new List<string>();
+                foreach (var (gesture, does) in mouse)
+                    foreach (string verb in orderVerbs)
+                        if (does.Contains(verb) || gesture.Contains(verb)) { bad.Add($"mouse \"{gesture}: {does}\""); break; }
+                foreach (var (label, _) in keys)
+                    if (System.Array.IndexOf(orderKeys, label) >= 0) bad.Add($"key {label}");
+                if (note.Contains("ALT") || note.Contains("BUILD", System.StringComparison.OrdinalIgnoreCase)) bad.Add($"note \"{note}\"");
+                var missing = new List<string>();
+                foreach (string k in viewerKeys) if (!keys.Exists(r => r.Label == k)) missing.Add(k);
+                bool selects = mouse.Exists(r => r.Does.StartsWith("SELECT"));
+                bool camera = mouse.Exists(r => r.Does == "MOVE THE CAMERA");
+                string diff = page == null ? "no overlay opened" : RowsDiff(keys, wantKeys);
+                HudGate(p.IsReplay && page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0
+                        && heading == ControlsPage.MouseHeading(scheme, replay: true) && heading.Contains("REPLAY"),
+                        "help-replay",
+                        $"under {s}, the help overlay opened during a replay from seat {p.LocalPlayerId} (replay {p.IsReplay}) lists no "
+                        + $"ordering gesture or key ({bad.Count} found{(bad.Count > 0 ? $": {string.Join("; ", bad)}" : "")}), "
+                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (selecting {selects}, the camera "
+                        + $"{camera}) and {keys.Count} of the {Settings.Bindable.Length} Bindable keys, generated from the same table "
+                        + $"in its order{(diff.Length > 0 ? $" (but {diff})" : "")}{(missing.Count > 0 ? $", missing {string.Join(", ", missing)}" : "")}");
+                p.PressKey(Settings.BindOf("help"));
+            }
+        }
+        catch (System.Exception ex) { HudGate(false, "help-replay", $"the stage threw: {ex}"); }
+        finally
+        {
+            Settings.Scheme = schemeWas;
+            p?.QueueFree();
+            g.QueueFree();
+            if (frep.Length > 0) System.IO.File.Delete(frep);
+            if (side.Length > 0) System.IO.File.Delete(side);
+        }
+    }
+
+    /// <summary>Every button the sidebar builds wears the icon named by its
+    /// own /data id, where four buildings wore another building's and eighteen
+    /// buttons (ten units, eight buildings) had none: three of those eight
+    /// pointed at com_wall_straight.png, which no commit ever held.</summary>
+    private void RunHudIconStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            g.StepOneTick();
+            var icons = g.SidebarView.ButtonIconsForTest();
+            var wrong = new List<string>();
+            int structs = 0, units = 0;
+            foreach (var (t, unit, path) in icons)
+            {
+                if (unit) units++; else structs++;
+                string id = unit ? UnitCatalogue.IdOf(t) : StructureCatalogue.IdOf(t);
+                if (path != $"res://ui/icons/{id}.png") wrong.Add($"{id} wears {(path.Length == 0 ? "nothing" : path)}");
+            }
+            HudGate(icons.Count > 0 && wrong.Count == 0, "icons",
+                    $"every one of the {icons.Count} buttons the sidebar builds ({structs} buildings, {units} units) wears the icon named "
+                    + $"by its own /data id{(wrong.Count > 0 ? $"; but {string.Join("; ", wrong)}" : "")}");
+        }
+        catch (System.Exception ex) { HudGate(false, "icons", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>A building pressed on the sidebar is READY under its catalogue
+    /// name, the Airfield being one the old table called "STRUCTURE", and a
+    /// unit is DEPLOYED under its own.</summary>
+    private void RunHudToastStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } rq)
+            {
+                HudGate(false, "toast", "quiet ground for a radar uplink (none: a fixture failure)");
+                return;
+            }
+            lw.SpawnRadarUplink(me, rq.X, rq.Y);
+            lw.GrantCredits(me, 30000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.StepOneTick();
+            var sb = g.SidebarView;
+            int yard = g.FindEntity(EntityKind.ConstructionYard, me);
+            int airfield = World.AirfieldStructType;
+            bool pressed = sb.PressStructButton(airfield);
+            g.AlertsView.ResetForTest();
+            bool done = false, said = false;
+            string want = $"{StructureCatalogue.DisplayNameOf(airfield)} READY  -  PLACE >>";
+            for (int t = 0; t < 3000 && !done; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.A == yard && ev.B == airfield) done = true;
+                if (done) said = g.AlertsView.StackTexts().Contains(want);
+            }
+            HudGate(pressed && done && said && want.StartsWith("AIRFIELD "), "toast",
+                    $"the AIRFIELD pressed on the sidebar is READY under its catalogue name (\"{want}\" on the stack {said}; the old "
+                    + $"table stopped at type 12 and called type {airfield} \"STRUCTURE\"; pressed {pressed}, built {done})");
+
+            if (GroundNear(g, me) is not { } fq)
+            {
+                HudGate(false, "toast", "quiet ground for a factory (none: a fixture failure)");
+                return;
+            }
+            int factory = lw.SpawnFactory(me, fq.X, fq.Y);
+            g.StepTicks(1);
+            g.StepOneTick();
+            int flak = UnitCatalogue.TypeIdOf("com_flak_track");
+            bool pressedUnit = sb.PressUnitButton(flak);
+            g.AlertsView.ResetForTest();
+            int built = -1;
+            bool saidUnit = false;
+            string wantUnit = $"{UnitCatalogue.DisplayNameOf(flak)} DEPLOYED";
+            for (int t = 0; t < 3000 && built < 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete && ev.C == factory) built = ev.A;
+                if (built >= 0) saidUnit = g.AlertsView.StackTexts().Contains(wantUnit);
+            }
+            HudGate(pressedUnit && built >= 0 && saidUnit, "toast",
+                    $"...and a FLAK TRACK pressed on the sidebar is DEPLOYED under its own (\"{wantUnit}\" on the stack {saidUnit}; unit {built})");
+        }
+        catch (System.Exception ex) { HudGate(false, "toast", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>Two factories of my own, and orders pressed on the sidebar's
+    /// button: each completion is answered by its own factory's doors and the
+    /// other one's are never asked. eventgate/doors holds mine against an
+    /// enemy's through a scripted order; this is the gesture, between two of
+    /// my own.
+    ///
+    /// Since P8-71 a completion opens only the doors on the face its unit came
+    /// out of, and a face with no door opens nothing (a doorless exit). So the
+    /// OPENINGS alone cannot tell a wrong factory from a right one: a stray
+    /// call for the idle factory finds the new unit off one of its doorless
+    /// faces and opens nothing, which is how this stage stopped biting when
+    /// P8-71 landed beneath it. What it counts is every door REACTION, an
+    /// opening or a doorless exit: the producer answers each of its
+    /// completions once, the idle factory never, and the producer opened if
+    /// and only if its unit came out of a face with doors (doorgate holds
+    /// which faces those are).</summary>
+    private void RunHudDoorsStage()
+    {
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            if (GroundNear(g, me) is not { } a)
+            {
+                HudGate(false, "doors", "quiet ground for a first factory (none: a fixture failure)");
+                return;
+            }
+            int first = lw.SpawnFactory(me, a.X, a.Y);
+            if (GroundNear(g, me) is not { } b)
+            {
+                HudGate(false, "doors", "quiet ground for a second factory (none: a fixture failure)");
+                return;
+            }
+            int second = lw.SpawnFactory(me, b.X, b.Y);
+            lw.GrantCredits(me, 20000);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            int vehicle = -1;
+            foreach (int id in lw.UnitTypeIds())
+            {
+                var d = lw.GetUnitType(id);
+                if (d.ProducedAt == World.FactoryStructType && (d.Prereqs == null || d.Prereqs.Length == 0) && d.MaxAlive == 0
+                    && (d.Faction == World.FactionCommon || d.Faction == lw.FactionOf(me))) { vehicle = id; break; }
+            }
+            int doorsA = g.DoorCountForTest(first), doorsB = g.DoorCountForTest(second);
+            HudGate(vehicle >= 0 && doorsA > 0 && doorsB > 0 && first < second, "doors",
+                    $"precondition: two factories of my own whose rigs carry doors ({doorsA} and {doorsB}), and a vehicle of my side "
+                    + $"with no prerequisite ({(vehicle >= 0 ? UnitCatalogue.DisplayNameOf(vehicle) : "none")})");
+            if (vehicle < 0) return;
+            var sb = g.SidebarView;
+            // Every door reaction a factory has had: an opening, or a doorless
+            // exit. And did its last completion come out of a face with doors?
+            int Reactions(int f) => g.DoorOpeningsForTest(f) + g.DoorlessExitsForTest(f);
+            bool OutOfDoorFace(int f) => (g.LastDoorExitForTest(f).Used & g.DoorFacesForTest(f)) != SkirmishLive.Face.None;
+            int a0 = g.DoorOpeningsForTest(first), b0 = g.DoorOpeningsForTest(second);
+            int ra0 = Reactions(first), rb0 = Reactions(second);
+
+            // One order: the sidebar sends it to the factory with the shorter
+            // queue, ties to the lower id, so the first factory builds it.
+            bool p1 = sb.PressUnitButton(vehicle);
+            int doneA = 0, doneB = 0;
+            for (int t = 0; t < 3000 && doneA == 0; t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete) { if (ev.C == first) doneA++; else if (ev.C == second) doneB++; }
+            }
+            int openA = g.DoorOpeningsForTest(first) - a0, openB = g.DoorOpeningsForTest(second) - b0;
+            int reactA = Reactions(first) - ra0, reactB = Reactions(second) - rb0;
+            bool doorA = OutOfDoorFace(first);
+            HudGate(p1 && doneA == 1 && doneB == 0 && reactA == 1 && reactB == 0 && openA == (doorA ? 1 : 0) && openB == 0, "doors",
+                    $"one {UnitCatalogue.DisplayNameOf(vehicle)} pressed on the sidebar is built at the first factory, whose doors answer "
+                    + $"it ({reactA} reaction for {doneA}, {openA} opening, out of a face {(doorA ? "with" : "without")} doors) while the "
+                    + $"second's are never asked ({reactB} reactions, {openB} openings)");
+
+            // Two orders, a tick apart, so the second goes to the idle line.
+            bool p2 = sb.PressUnitButton(vehicle);
+            g.StepOneTick();
+            bool p3 = sb.PressUnitButton(vehicle);
+            int doneA2 = 0, doneB2 = 0;
+            for (int t = 0; t < 3000 && (doneA2 == 0 || doneB2 == 0); t++)
+            {
+                g.StepTicks(1);
+                foreach (var ev in lw.Events)
+                    if (ev.Type == GameEventType.ProductionComplete) { if (ev.C == first) doneA2++; else if (ev.C == second) doneB2++; }
+            }
+            int openA2 = g.DoorOpeningsForTest(first) - a0 - openA, openB2 = g.DoorOpeningsForTest(second) - b0 - openB;
+            int reactA2 = Reactions(first) - ra0 - reactA, reactB2 = Reactions(second) - rb0 - reactB;
+            bool doorA2 = OutOfDoorFace(first), doorB2 = OutOfDoorFace(second);
+            HudGate(p2 && p3 && doneA2 == 1 && doneB2 == 1 && reactA2 == 1 && reactB2 == 1
+                    && openA2 == (doorA2 ? 1 : 0) && openB2 == (doorB2 ? 1 : 0), "doors",
+                    $"...and two pressed a tick apart are built one at each, each answered by its own doors alone (first {reactA2} "
+                    + $"reaction and {openA2} opening for {doneA2}, second {reactB2} and {openB2} for {doneB2}; out of a door face: "
+                    + $"{doorA2} and {doorB2})");
+        }
+        catch (System.Exception ex) { HudGate(false, "doors", $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    // ---------------- P8-36: schemegate ----------------
+
+    private void SchemeGate(bool ok, string stage, string what) => Check(ok, $"schemegate/{stage}: {what}");
+
+    private static readonly string HarnessSettingsPath =
+        System.IO.Path.Combine(OS.GetUserDataDir(), "harness-settings.cfg");
+
+    private static bool SameRows(List<(string Gesture, string Does)> shown, IReadOnlyList<(string Gesture, string Does)> want)
+    {
+        if (shown.Count != want.Count) return false;
+        for (int i = 0; i < want.Count; i++) if (shown[i] != want[i]) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// P8-36, decision D22, one group. GDD s10 promises the classic
+    /// left-click scheme and the modern one, both offered at first launch, and
+    /// only the modern one existed. The classic scheme orders through the
+    /// modern right click's own resolver (IssueOrder), and these stages drive
+    /// every click verb under EACH scheme from seat 1 and read what it queued,
+    /// that IssueOrder resolved it, and that the next tick handed it to the
+    /// sim. The scheme and the chosen flag are put back afterwards, and the
+    /// only settings file written is the harness's own.
+    /// </summary>
+    private void RunSchemeStages()
+    {
+        GD.Print("  --    schemegate (P8-36): the classic left-click scheme, a first-launch choice and a setting, both schemes through IssueOrder");
+        bool saveWas = Settings.SaveSuppressedForTest;
+        var schemeWas = Settings.Scheme;
+        bool chosenWas = Settings.SchemeChosen;
+        Settings.SaveSuppressedForTest = true;
+        try
+        {
+            RunSchemeFirstLaunchStage();
+            RunSchemeSettingStage();
+            RunSchemeVerbStage(ControlScheme.Modern);
+            RunSchemeVerbStage(ControlScheme.Classic);
+            RunSchemeAllyStage();
+        }
+        finally
+        {
+            Settings.PathOverrideForTest = null;
+            System.IO.File.Delete(HarnessSettingsPath);
+            Settings.Scheme = schemeWas;
+            Settings.SchemeChosen = chosenWas;
+            Settings.SaveSuppressedForTest = saveWas;
+        }
+    }
+
+    /// <summary>A player who has never chosen is asked at the main menu; the
+    /// choice is written and read back the way the next launch reads it, and
+    /// the next menu does not ask again.</summary>
+    private void RunSchemeFirstLaunchStage()
+    {
+        MainMenu? first = null, second = null;
+        try
+        {
+            Settings.PathOverrideForTest = HarnessSettingsPath;
+            System.IO.File.Delete(HarnessSettingsPath);
+            Settings.SaveSuppressedForTest = false;   // the harness's own file, never the player's
+            Settings.Scheme = ControlScheme.Modern;
+            Settings.SchemeChosen = false;
+            first = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(first);
+            bool asked = first.SchemeChoiceShownForTest;
+            bool pressed = first.PressMenuButtonForTest(MainMenu.ClassicChoiceText);
+            bool chose = Settings.Scheme == ControlScheme.Classic && Settings.SchemeChosen && !first.SchemeChoiceShownForTest;
+            bool written = System.IO.File.Exists(HarnessSettingsPath);
+            // Forget it, then load the file as the next launch would.
+            Settings.Scheme = ControlScheme.Modern;
+            Settings.SchemeChosen = false;
+            Settings.Load();
+            bool persisted = Settings.Scheme == ControlScheme.Classic && Settings.SchemeChosen;
+            second = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(second);
+            bool notAgain = !second.SchemeChoiceShownForTest;
+            SchemeGate(asked && pressed && chose && written && persisted && notAgain, "first-launch",
+                       $"a player who has never chosen is asked at the main menu (shown {asked}); CLASSIC there sets the scheme and "
+                       + $"closes the question ({chose}), it is written ({written}) and read back as the next launch reads it "
+                       + $"({persisted}), and the next menu does not ask again ({notAgain})");
+        }
+        catch (System.Exception ex) { SchemeGate(false, "first-launch", $"the stage threw: {ex}"); }
+        finally
+        {
+            first?.QueueFree();
+            second?.QueueFree();
+            Settings.SaveSuppressedForTest = true;
+            Settings.PathOverrideForTest = null;
+            System.IO.File.Delete(HarnessSettingsPath);
+        }
+    }
+
+    /// <summary>The settings page's CONTROL SCHEME row switches the scheme
+    /// live, and the CONTROLS page and the help overlay both show the scheme
+    /// in force, following a switch made while they are open.</summary>
+    private void RunSchemeSettingStage()
+    {
+        MainMenu? menu = null;
+        SettingsScene? sp = null;
+        SkirmishLive? g = null;
+        try
+        {
+            Settings.Scheme = ControlScheme.Modern;
+            Settings.SchemeChosen = true;
+            menu = GD.Load<PackedScene>("res://scenes/MainMenu.tscn").Instantiate<MainMenu>();
+            AddChild(menu);
+            var page = menu.OpenControlsForTest();
+            string h0 = page?.MouseHeadingShown() ?? "(no page)";
+            bool modernRows = page != null && SameRows(page.MouseRowsShown(), ControlsPage.MouseGestures(ControlScheme.Modern));
+            sp = new SettingsScene { OnBack = () => { } };
+            AddChild(sp);
+            string shown0 = sp.OptionShownForTest(SettingsScene.SchemeLabel) ?? "(no row)";
+            string? chosen = sp.ChooseOptionForTest(SettingsScene.SchemeLabel, 1);
+            string h1 = page?.MouseHeadingShown() ?? "(no page)";
+            bool classicRows = page != null && SameRows(page.MouseRowsShown(), ControlsPage.MouseGestures(ControlScheme.Classic));
+            SchemeGate(shown0 == "MODERN" && chosen == "CLASSIC" && Settings.Scheme == ControlScheme.Classic
+                       && h0 == ControlsPage.MouseHeading(ControlScheme.Modern) && modernRows
+                       && h1 == ControlsPage.MouseHeading(ControlScheme.Classic) && classicRows, "setting",
+                       $"the settings page's CONTROL SCHEME row reads {shown0} and switches to {chosen}, and the main menu's CONTROLS "
+                       + $"page, open beside it, goes from \"{h0}\" and its rows to \"{h1}\" and the classic rows at once");
+
+            g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+            g.StepOneTick();
+            g.StepOneTick();
+            g.PressKey(Settings.BindOf("help"));
+            var help = g.HelpPageShown;
+            bool helpClassic = help != null && help.MouseHeadingShown() == ControlsPage.MouseHeading(ControlScheme.Classic)
+                               && SameRows(help.MouseRowsShown(), ControlsPage.MouseGestures(ControlScheme.Classic));
+            string? back = sp.ChooseOptionForTest(SettingsScene.SchemeLabel, 0);
+            bool helpModern = help != null && help.MouseHeadingShown() == ControlsPage.MouseHeading(ControlScheme.Modern)
+                              && SameRows(help.MouseRowsShown(), ControlsPage.MouseGestures(ControlScheme.Modern));
+            SchemeGate(helpClassic && back == "MODERN" && helpModern && Settings.Scheme == ControlScheme.Modern, "setting",
+                       $"in a battle from seat 1 the help overlay shows the classic rows while CLASSIC is in force ({helpClassic}) and "
+                       + $"follows the switch back to MODERN made while it is open ({helpModern})");
+        }
+        catch (System.Exception ex) { SchemeGate(false, "setting", $"the stage threw: {ex}"); }
+        finally
+        {
+            menu?.QueueFree();
+            sp?.QueueFree();
+            if (g != null) { DeleteRecording(g); g.QueueFree(); }
+        }
+    }
+
+    /// <summary>
+    /// Every click verb under one scheme, in a fresh battle from seat 1: the
+    /// selection click, the deselect, a box drag, a move, an attack, the plain and the
+    /// forced click on a neutral bridge (D23), an engineer's walk-in, a
+    /// factory's rally, a harvest, a boarding, and an armed attack-move's
+    /// commit; under CLASSIC also the right click cancelling each of the four
+    /// armed orders through the family funnel, and a placement and nothing
+    /// else. Each ordering verb reads the
+    /// cursor first (it must promise what the click does), then the scheme's
+    /// ordering gesture, what it queued (seat 1's, nothing stray), that
+    /// IssueOrder resolved it once, and that the next tick handed it to the sim.
+    /// </summary>
+    private void RunSchemeVerbStage(ControlScheme scheme)
+    {
+        string s = scheme == ControlScheme.Classic ? "classic" : "modern";
+        bool classic = scheme == ControlScheme.Classic;
+        Settings.Scheme = scheme;
+        Settings.SchemeChosen = true;
+        var g = BootBattleForStages("data/maps/skirmish-01.fmap", seat: 1);
+        try
+        {
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, foe = g.EnemyPlayerId;
+            g.StepOneTick();
+            g.StepOneTick();
+            StandDownOpposition(lw, foe);
+            (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+            void Aim(float x, float z) => g.FocusCameraOn(x, z, 22f);
+            Vector2 At(float x, float z) => g.ScreenOf(x, z);
+            // The scheme's ordering gesture: the right click under MODERN, a
+            // whole left click (press and release) under CLASSIC.
+            void Order(Vector2 at, bool ctrl)
+            {
+                if (classic) g.ClickLeft(at, ctrl);
+                else if (ctrl) g.PressRightClickWithCtrl(at);
+                else g.PressRightClick(at);
+            }
+            // A selection by the real left click, which selects under both.
+            // The view is pumped first: the click picks through the client's
+            // interpolated view, which lags a unit that is moving (the
+            // harvester is, on its way to the deposit), so the pick and the
+            // sim's position must be of the same tick.
+            bool ClickSelect(int id)
+            {
+                g.PumpActorsForTest();
+                var (x, z) = PosOf(id);
+                Aim(x, z);
+                g.ClearSelectionForTest();
+                g.ClickLeft(At(x, z));
+                return g.SelectionCount == 1 && g.IsSelected(id);
+            }
+            bool SelectArmy()
+            {
+                g.ClearSelectionForTest();
+                g.PressKey(Settings.BindOf("select_all_army"));
+                return g.SelectionCount >= 2;
+            }
+            void Settle()
+            {
+                g.PressKey(Settings.BindOf("stop"));
+                g.StepTicks(1);
+            }
+            // Open ground with nothing standing within r cells of it, nearest
+            // the asked-for point, so a click there lands on nothing.
+            (float X, float Z) ClearGround(float x, float z, float r)
+            {
+                int cx = (int)x, cy = (int)z;
+                for (int rad = 0; rad < 14; rad++)
+                    for (int dy = -rad; dy <= rad; dy++)
+                        for (int dx = -rad; dx <= rad; dx++)
+                        {
+                            if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dy)) != rad) continue;
+                            int ax = cx + dx, ay = cy + dy;
+                            if (ax < 2 || ay < 2 || ax >= lw.Map.Width - 2 || ay >= lw.Map.Height - 2 || lw.Map.IsBlocked(ax, ay)) continue;
+                            float px = ax + 0.5f, pz = ay + 0.5f;
+                            bool clear = true;
+                            for (int i = 0; i < lw.EntityCount && clear; i++)
+                            {
+                                var e = lw.Entities[i];
+                                if (!e.Alive) continue;
+                                float ex = Fx(e.X) - px, ez = Fx(e.Y) - pz;
+                                if (ex * ex + ez * ez < r * r) clear = false;
+                            }
+                            if (clear) return (px, pz);
+                        }
+                return (x, z);
+            }
+
+            // ---- fixtures: the buildings first, near the yard, then quiet
+            // ground away from them for the units, so no two picks overlap.
+            int factory = g.FindPlacementCell(World.FactoryStructType) is { } fc ? lw.SpawnFactory(me, fc.X, fc.Y) : -1;
+            if (!g.RefineryLive && g.FindPlacementCell(3) is { } rc) lw.SpawnRefinery(me, rc.X, rc.Y);
+            int sw = g.FindPlacementCell(6) is { } wc ? lw.SpawnSuperweapon(me, wc.X, wc.Y, chargeTicks: 0) : -1;
+            int nest = g.FindPlacementCell(18) is { } nc ? lw.SpawnFactionDefence(me, 18, nc.X, nc.Y) : -1;
+            if (nest >= 0) { var ne = lw.Entities[nest]; ne.ChargeTicks = 0; lw.SetEntityForTest(nest, ne); }
+            if (GroundNear(g, me) is not { } q || factory < 0 || sw < 0 || nest < 0)
+            {
+                SchemeGate(false, s, $"precondition: fixtures (factory {factory}, superweapon {sw}, nest {nest}) and quiet ground");
+                return;
+            }
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int rifleA = SpawnOfType(lw, me, rifle, q.X - 2, q.Y - 2);
+            int rifleB = SpawnOfType(lw, me, rifle, q.X - 1, q.Y - 2);
+            int engineer = SpawnOfType(lw, me, World.EngineerUnitType, q.X - 2, q.Y + 1);
+            int boarder = SpawnOfType(lw, me, rifle, q.X + 1, q.Y + 4);
+            int carrier = SpawnOfType(lw, me, World.CarrierUnitType, q.X + 3, q.Y + 4);
+            int enemy = SpawnOfType(lw, foe, rifle, q.X + 4, q.Y - 2);
+            { var ee = lw.Entities[enemy]; ee.Stance = Stance.HoldFire; lw.SetEntityForTest(enemy, ee); }
+            int plant = lw.SpawnPowerPlant(foe, q.X + 2, q.Y);
+            int span = lw.SpawnBridge(q.X - 2, q.Y + 4);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            bool seen = g.DrawnForLocalSeatForTest(enemy) && g.DrawnForLocalSeatForTest(plant) && g.DrawnForLocalSeatForTest(span);
+            SchemeGate(seen, s, $"precondition: under {s.ToUpperInvariant()}, from seat {me}, the enemy squad, the enemy plant and the "
+                                + "neutral bridge stand in sight of my units");
+
+            // One ordering verb, read four ways.
+            void Verb(string name, Vector2 at, bool ctrl, string wantCursor, CommandType type, int aux, int want)
+            {
+                string cursor = g.CursorNameAt(at, ctrl);
+                int r0 = g.OrderResolutionsForTest;
+                int p0 = g.PendingForTest.Count;
+                Order(at, ctrl);
+                int queued = 0, stray = 0;
+                for (int i = p0; i < g.PendingForTest.Count; i++)
+                {
+                    var c = g.PendingForTest[i];
+                    if (c.PlayerId == me && c.Type == type && c.AuxId == aux) queued++;
+                    else stray++;
+                }
+                int resolved = g.OrderResolutionsForTest - r0;
+                g.StepTicks(1);
+                int handed = 0;
+                foreach (var c in g.TickCommandsForTest)
+                    if (c.PlayerId == me && c.Type == type && c.AuxId == aux) handed++;
+                SchemeGate(cursor == wantCursor && want > 0 && queued == want && stray == 0 && resolved == 1 && handed == want,
+                           $"{s}/{name}",
+                           $"{(classic ? "a left click" : "a right click")}{(ctrl ? " with CTRL" : "")} under the cursor {cursor} "
+                           + $"(wanted {wantCursor}) queues {queued} {type} of seat {me}'s for {want} wanted ({stray} stray), "
+                           + $"resolved by IssueOrder {resolved} time(s), and the next tick hands the sim {handed}");
+            }
+
+            // --- select: with the army selected, a left click on my engineer
+            // selects it under both schemes and orders nothing.
+            bool armySel = SelectArmy();
+            var (ex0, ez0) = PosOf(engineer);
+            Aim(ex0, ez0);
+            var onEngineer = At(ex0, ez0);
+            string selCursor = g.CursorNameAt(onEngineer);
+            int rs0 = g.OrderResolutionsForTest, ps0 = g.PendingForTest.Count;
+            g.ClickLeft(onEngineer);
+            bool selected = g.SelectionCount == 1 && g.IsSelected(engineer);
+            string wantSelCursor = classic ? "Select" : "Move";
+            SchemeGate(armySel && selected && g.PendingForTest.Count == ps0 && g.OrderResolutionsForTest == rs0 && selCursor == wantSelCursor,
+                       $"{s}/select",
+                       $"with the army selected a left click on my engineer selects it ({selected}) and orders nothing "
+                       + $"({g.PendingForTest.Count - ps0} queued, {g.OrderResolutionsForTest - rs0} resolved); the cursor there "
+                       + $"reads {selCursor}, as the {(classic ? "left click selects" : "right click would move")}");
+
+            // --- deselect: CLASSIC's right click, MODERN's left click on
+            // empty ground; neither orders.
+            var (gx, gz) = ClearGround(q.X + 0.5f, q.Y + 2.5f, 2f);
+            Aim(gx, gz);
+            var ground = At(gx, gz);
+            SelectArmy();
+            int rd0 = g.OrderResolutionsForTest, pd0 = g.PendingForTest.Count;
+            if (classic) g.PressRightClick(ground);
+            else g.ClickLeft(ground);
+            SchemeGate(g.SelectionCount == 0 && g.PendingForTest.Count == pd0 && g.OrderResolutionsForTest == rd0, $"{s}/deselect",
+                       $"{(classic ? "the right click" : "a left click on empty ground")} deselects the army ({g.SelectionCount} left "
+                       + $"selected) and orders nothing ({g.PendingForTest.Count - pd0} queued, {g.OrderResolutionsForTest - rd0} resolved)");
+
+            // --- box: a drag across my two rifle squads, released on open
+            // ground, selects them under both schemes and orders nothing. The
+            // army is selected first, so under CLASSIC a release read as a
+            // click would have been a move there (the release cursor proves
+            // it), and the boarding squad, army but outside the box, proves
+            // the drag replaced the selection rather than leaving it.
+            {
+                g.PumpActorsForTest();
+                var (ax, az) = PosOf(rifleA);
+                var (bx0, bz0) = PosOf(rifleB);
+                // The camera's closest zoom (the boarding stage's reason: at
+                // the usual height a cell is a few pixels across), and a box a
+                // cell wider than the two squads on every side, so its corners
+                // stand clear of them (a click picks an own unit within 0.9 of
+                // a cell) while the engineer, three cells off, stays outside.
+                g.FocusCameraOn((ax + bx0) * 0.5f, (az + bz0) * 0.5f, 8f);
+                Vector2 c1 = At(Mathf.Min(ax, bx0) - 1f, Mathf.Min(az, bz0) - 1f);
+                Vector2 c2 = At(Mathf.Max(ax, bx0) + 1f, Mathf.Max(az, bz0) + 1f);
+                bool armyUp = SelectArmy() && g.IsSelected(boarder);
+                // Released on the corner where a click would ORDER (the cursor
+                // reads Move there), which is what makes the classic half bite.
+                Vector2 from = c1, to = c2;
+                if (g.CursorNameAt(to) != "Move") { from = c2; to = c1; }
+                string releaseCursor = g.CursorNameAt(to);
+                float travel = (to - from).Length();
+                int rb0 = g.OrderResolutionsForTest, pb0 = g.PendingForTest.Count;
+                g.DragLeft(from, to);
+                bool caught = g.IsSelected(rifleA) && g.IsSelected(rifleB) && !g.IsSelected(boarder);
+                SchemeGate(armyUp && travel > 8f && releaseCursor == "Move" && caught && g.PendingForTest.Count == pb0
+                           && g.OrderResolutionsForTest == rb0, $"{s}/box",
+                           $"with the army selected, a drag of {travel:0} px across my two rifle squads released where the cursor reads "
+                           + $"{releaseCursor} (wanted Move) selects the two ({caught}; [{string.Join(",", g.SelectedIdsForTest())}] "
+                           + $"selected of #{rifleA} and #{rifleB}, the boarding squad #{boarder} outside the box dropped "
+                           + $"{!g.IsSelected(boarder)}) and orders nothing ({g.PendingForTest.Count - pb0} queued, "
+                           + $"{g.OrderResolutionsForTest - rb0} resolved)");
+                // The camera moved: the open ground the deselect found is
+                // read again where it now falls on the screen.
+                Aim(gx, gz);
+                ground = At(gx, gz);
+            }
+
+            // --- move, attack: the army.
+            SelectArmy();
+            int armyCount = g.SelectionCount;
+            Verb("PathMove", ground, false, "Move", CommandType.PathMove, -1, armyCount);
+            Settle();
+            SelectArmy();
+            var (tx, tz) = PosOf(enemy);
+            Aim(tx, tz);
+            Verb("Attack", At(tx, tz), false, "Attack", CommandType.Attack, enemy, g.SelectionCount);
+            Settle();
+
+            // --- the neutral bridge: a plain click is ground, CTRL fells it.
+            bool selA = ClickSelect(rifleA);
+            var (bx, bz) = PosOf(span);
+            Aim(bx, bz);
+            if (!selA) SchemeGate(false, $"{s}/force", "precondition: a click selects one rifle squad");
+            Verb("plain-bridge", At(bx, bz), false, "Move", CommandType.PathMove, -1, 1);
+            Settle();
+            ClickSelect(rifleA);
+            Aim(bx, bz);
+            Verb("force-attack", At(bx, bz), true, "Attack", CommandType.Attack, span, 1);
+            Settle();
+
+            // --- the engineer's walk-in on the enemy plant.
+            bool selEng = ClickSelect(engineer);
+            var (px, pz) = PosOf(plant);
+            Aim(px, pz);
+            if (!selEng) SchemeGate(false, $"{s}/walk-in", "precondition: a click selects the engineer");
+            Verb("walk-in", At(px, pz), false, "Enter", CommandType.Attack, plant, 1);
+            Settle();
+
+            // --- the factory's rally point.
+            bool selFac = ClickSelect(factory);
+            var (fx, fz) = PosOf(factory);
+            var (rx, rz) = ClearGround(fx + 3f, fz + 3f, 2f);
+            Aim(rx, rz);
+            if (!selFac) SchemeGate(false, $"{s}/SetRally", "precondition: a click selects the factory");
+            Verb("SetRally", At(rx, rz), false, "Select", CommandType.SetRally, 0, 1);
+
+            // --- the harvester on the nearest deposit.
+            int harv = g.FindEntity(EntityKind.Harvester, me);
+            int field = -1;
+            Fix64 best = Fix64.MaxValue;
+            for (int i = 0; harv >= 0 && i < lw.EntityCount; i++)
+            {
+                var f = lw.Entities[i];
+                if (!f.Alive || f.Kind != EntityKind.FerriteField || f.FerriteAmount <= 0) continue;
+                Fix64 d = Fix64.DistSq(f.X - lw.Entities[harv].X, f.Y - lw.Entities[harv].Y);
+                if (d < best) { best = d; field = i; }
+            }
+            bool selHarv = harv >= 0 && ClickSelect(harv);
+            if (!selHarv || field < 0)
+                SchemeGate(false, $"{s}/Harvest", $"precondition: a click selects my harvester ({harv}, "
+                           + $"{(harv >= 0 ? lw.Entities[harv].HState.ToString() : "none")}; selected "
+                           + $"[{string.Join(",", g.SelectedIdsForTest())}]) and a deposit stands ({field})");
+            else
+            {
+                var (hx, hz) = PosOf(field);
+                Aim(hx, hz);
+                Verb("Harvest", At(hx, hz), false, "Harvest", CommandType.Harvest, field, 1);
+            }
+
+            // --- boarding my own Carrier: under CLASSIC a click on something
+            // of my own selects it, except a Carrier the selection can board.
+            bool selBoarder = ClickSelect(boarder);
+            var (cx, cz) = PosOf(carrier);
+            Aim(cx, cz);
+            if (!selBoarder) SchemeGate(false, $"{s}/LoadTransport", "precondition: a click selects the boarding squad");
+            Verb("LoadTransport", At(cx, cz), false, "Enter", CommandType.LoadTransport, carrier, 1);
+
+            // --- an armed attack-move is committed by the left click under
+            // both schemes, as before, and that commit is not IssueOrder's.
+            SelectArmy();
+            int amArmy = g.SelectionCount;
+            g.PressKey(Settings.BindOf("attack_move"));
+            bool armed = g.AttackMoveArmed;
+            Aim(gx, gz);
+            int ra0 = g.OrderResolutionsForTest, pa0 = g.PendingForTest.Count;
+            g.ClickLeft(At(gx, gz));
+            int amQueued = 0;
+            for (int i = pa0; i < g.PendingForTest.Count; i++)
+                if (g.PendingForTest[i].Type == CommandType.AttackMove && g.PendingForTest[i].PlayerId == me) amQueued++;
+            g.StepTicks(1);
+            SchemeGate(armed && amQueued == amArmy && !g.AttackMoveArmed && g.OrderResolutionsForTest == ra0, $"{s}/AttackMove",
+                       $"the attack-move key arms ({armed}) and the left click commits it for all {amArmy} ({amQueued} AttackMove), "
+                       + "consuming the click as it always has rather than passing it to IssueOrder");
+            Settle();
+
+            // --- CLASSIC only: the right click cancels each armed order
+            // through the family funnel, and only a second one deselects.
+            if (classic)
+            {
+                var orders = new (string Name, string Key, System.Func<bool> Up)[]
+                {
+                    ("attack-move", "attack_move", () => g.AttackMoveArmed),
+                    ("patrol", "patrol", () => g.PatrolArmed),
+                    ("superweapon", "launch_super", () => g.SuperArmed),
+                    ("support power", "support_power", () => g.SupportPowerArmed != null),
+                };
+                var bad = new List<string>();
+                foreach (var (name, key, up) in orders)
+                {
+                    SelectArmy();
+                    int before = g.SelectionCount;
+                    g.PressKey(Settings.BindOf(key));
+                    bool wasUp = up();
+                    int rc0 = g.OrderResolutionsForTest, pc0 = g.PendingForTest.Count;
+                    g.PressRightClick(ground);
+                    bool cancelled = wasUp && g.ArmedOrderCountForTest == 0 && g.SelectionCount == before
+                                     && g.PendingForTest.Count == pc0 && g.OrderResolutionsForTest == rc0;
+                    g.PressRightClick(ground);
+                    if (!cancelled || g.SelectionCount != 0)
+                        bad.Add($"{name} (armed {wasUp}, flags left {g.ArmedOrderCountForTest}, selection after the second {g.SelectionCount})");
+                }
+                SchemeGate(bad.Count == 0, "classic/cancel",
+                           "with each of the four armed orders standing in turn (attack-move, patrol, the superweapon, a support power), "
+                           + "the right click cancels it through the family funnel, leaving no flag set, the selection kept and nothing "
+                           + $"ordered, and a second right click deselects{(bad.Count > 0 ? $"; but {string.Join("; ", bad)}" : "")}");
+
+                // --- CLASSIC only: the right click during a placement cancels
+                // the placement and does nothing else. The row records the
+                // order as a decision (a targeting, then a placement, then the
+                // selection), and the cancel check above reaches only the
+                // first and the last: with nothing armed, a right click that
+                // skipped the placement would deselect the army and leave the
+                // ghost standing.
+                SelectArmy();
+                var held = g.SelectedIdsForTest();
+                int inspectedWas = g.InspectedId;
+                g.EnterPlacement(World.FactoryStructType);
+                int placing = g.PlacingType;
+                int rp0 = g.OrderResolutionsForTest, pp0 = g.PendingForTest.Count;
+                g.PressRightClick(ground);
+                int keptOf = 0;
+                foreach (int id in held) if (g.IsSelected(id)) keptOf++;
+                bool kept = held.Count >= 2 && keptOf == held.Count && g.SelectionCount == held.Count && g.InspectedId == inspectedWas;
+                SchemeGate(placing == World.FactoryStructType && g.PlacingType == 0 && kept && g.ArmedOrderCountForTest == 0
+                           && g.PendingForTest.Count == pp0 && g.OrderResolutionsForTest == rp0, "classic/placement",
+                           $"with the army selected and a FACTORY placement up (placing type {placing}), the right click cancels the "
+                           + $"placement (placing type now {g.PlacingType}) and nothing else: the selection is kept ({keptOf} of "
+                           + $"{held.Count} still selected, {g.SelectionCount} in all), no order is armed ({g.ArmedOrderCountForTest}) "
+                           + $"and nothing is ordered ({g.PendingForTest.Count - pp0} queued, {g.OrderResolutionsForTest - rp0} resolved)");
+                g.CancelPlacementForTest();
+            }
+        }
+        catch (System.Exception ex) { SchemeGate(false, s, $"the stage threw: {ex}"); }
+        finally
+        {
+            DeleteRecording(g);
+            g.QueueFree();
+        }
+    }
+
+    /// <summary>
+    /// P8-36 review, decided under the owner's standing authority: doc 11
+    /// line 6, "Left click on ally/own: select instead". In a teamed
+    /// four-seat battle from seat 1, with my squad selected, a CLASSIC left
+    /// click on an ally's squad and on an ally's building is a selection
+    /// click: the cursor reads Select, nothing is queued, IssueOrder is not
+    /// asked, and the click leaves what a selection click there leaves, which
+    /// is nothing of the ally's (an ally is never selectable, ADR-021). The
+    /// MODERN scheme is unchanged: its right click on the same ally squad is
+    /// still the move it was.
+    /// </summary>
+    private void RunSchemeAllyStage()
+    {
+        string? wasMap = MatchConfig.MapPath;
+        int wasTeamMode = MatchConfig.TeamMode, wasSeats = MatchConfig.Seats;
+        SkirmishLive? g = null;
+        try
+        {
+            try
+            {
+                MatchConfig.MapPath = GameFiles.Abs("data/maps/skirmish-09.fmap");
+                MatchConfig.TeamMode = MatchSetup.TeamsEvenSides;
+                MatchConfig.Seats = 0;                 // fill the map: four seats
+                SkirmishLive.AutoStep = false;
+                SkirmishLive.LocalSeat = 1;
+                SkirmishLive.PendingNet = null;
+                g = GD.Load<PackedScene>("res://scenes/Skirmish.tscn").Instantiate<SkirmishLive>();
+                AddChild(g);
+            }
+            finally
+            {
+                MatchConfig.MapPath = wasMap;
+                MatchConfig.TeamMode = wasTeamMode;
+                MatchConfig.Seats = wasSeats;
+            }
+            var lw = g.LiveWorld;
+            int me = g.LocalPlayerId, ally = -1;
+            for (int p = 0; p < lw.PlayerCount; p++) if (p != me && !g.IsHostileSeat(p)) ally = p;
+            g.StepOneTick();
+            g.StepOneTick();
+            // Every other seat stands down, the ally too, so no commander
+            // moves a fixture between the spawn and the click.
+            for (int p = 0; p < lw.PlayerCount; p++) if (p != me) StandDownOpposition(lw, p);
+            if (ally < 0 || GroundNear(g, me) is not { } q)
+            {
+                SchemeGate(false, "ally", $"precondition: a teamed four-seat battle with an ally of seat {me} (ally {ally}) and quiet ground");
+                return;
+            }
+            int rifle = UnitCatalogue.TypeIdOf("com_rifle_squad");
+            int mine = SpawnOfType(lw, me, rifle, q.X - 2, q.Y);
+            int theirs = SpawnOfType(lw, ally, rifle, q.X + 2, q.Y - 2);
+            int plant = lw.SpawnPowerPlant(ally, q.X + 2, q.Y + 2);
+            g.StepTicks(1);
+            g.StepOneTick();
+            g.PumpActorsForTest();
+            (float X, float Z) PosOf(int id) => (Fx(lw.Entities[id].X), Fx(lw.Entities[id].Y));
+            Vector2 Aim(int id)
+            {
+                g.PumpActorsForTest();
+                var (x, z) = PosOf(id);
+                g.FocusCameraOn(x, z, 22f);
+                return g.ScreenOf(x, z);
+            }
+            bool SelectMine()
+            {
+                var at = Aim(mine);
+                g.ClearSelectionForTest();
+                g.ClickLeft(at);
+                return g.SelectionCount == 1 && g.IsSelected(mine);
+            }
+            bool seen = me == 1 && lw.PlayerCount == 4 && !g.IsHostileSeat(ally)
+                        && g.DrawnForLocalSeatForTest(theirs) && g.DrawnForLocalSeatForTest(plant);
+            SchemeGate(seen, "ally", $"precondition: from seat {me} of {lw.PlayerCount}, ally seat {ally}'s squad and power plant "
+                                     + "are drawn beside my squad");
+
+            // CLASSIC: a left click on either is a selection click.
+            Settings.Scheme = ControlScheme.Classic;
+            var bad = new List<string>();
+            foreach (var (name, target) in new[] { ("squad", theirs), ("power plant", plant) })
+            {
+                bool sel = SelectMine();
+                var at = Aim(target);
+                string cursor = g.CursorNameAt(at);
+                int r0 = g.OrderResolutionsForTest, p0 = g.PendingForTest.Count;
+                g.ClickLeft(at);
+                int queued = g.PendingForTest.Count - p0, resolved = g.OrderResolutionsForTest - r0;
+                bool none = g.SelectionCount == 0 && !g.IsSelected(target);
+                if (!sel || cursor != "Select" || queued != 0 || resolved != 0 || !none)
+                    bad.Add($"the ally's {name} (my squad selected first {sel}; cursor {cursor}; {queued} queued, {resolved} resolved; "
+                            + $"{g.SelectionCount} left selected)");
+            }
+            SchemeGate(bad.Count == 0, "classic/ally",
+                       "with my squad selected, a left click on an ally's squad and on an ally's power plant selects instead, as doc 11 "
+                       + "line 6 says: the cursor reads Select, nothing is queued, IssueOrder is not asked, and the click leaves nothing "
+                       + $"of the ally's selected{(bad.Count > 0 ? $"; but {string.Join("; ", bad)}" : "")}");
+
+            // MODERN, unchanged: the right click on the ally's squad is a move.
+            Settings.Scheme = ControlScheme.Modern;
+            bool selM = SelectMine();
+            var onTheirs = Aim(theirs);
+            string mCursor = g.CursorNameAt(onTheirs);
+            int mr0 = g.OrderResolutionsForTest, mp0 = g.PendingForTest.Count;
+            g.PressRightClick(onTheirs);
+            int moves = 0, stray = 0;
+            for (int i = mp0; i < g.PendingForTest.Count; i++)
+            {
+                var c = g.PendingForTest[i];
+                if (c.PlayerId == me && c.Type == CommandType.PathMove && c.EntityId == mine) moves++;
+                else stray++;
+            }
+            SchemeGate(selM && mCursor == "Move" && moves == 1 && stray == 0 && g.OrderResolutionsForTest - mr0 == 1, "modern/ally",
+                       $"the modern scheme is unchanged: with my squad selected (first {selM}) the right click on the ally's squad, under "
+                       + $"the cursor {mCursor} (wanted Move), queues {moves} PathMove of seat {me}'s for my squad ({stray} stray), "
+                       + $"resolved by IssueOrder {g.OrderResolutionsForTest - mr0} time(s)");
+        }
+        catch (System.Exception ex) { SchemeGate(false, "ally", $"the stage threw: {ex}"); }
+        finally
+        {
+            if (g != null) { DeleteRecording(g); g.QueueFree(); }
+        }
     }
 }
