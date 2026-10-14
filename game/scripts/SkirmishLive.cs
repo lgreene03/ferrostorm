@@ -215,6 +215,12 @@ public partial class SkirmishLive : Node3D
     // HUD
     private CanvasLayer _hud = null!;
     private Label _status = null!;
+    // P8-45: the themed status panel, the help key beside the readout, and
+    // the help overlay while it is open (null when shut).
+    private PanelContainer _hudPanel = null!;
+    private Label _helpHint = null!;
+    private Control? _helpOverlay;
+    private ControlsPage? _helpPage;
     private Label _banner = null!;
     private Panel _dragRect = null!;
     private Vector2 _dragStart;
@@ -1309,6 +1315,68 @@ public partial class SkirmishLive : Node3D
         _paused = false;
     }
 
+    /// <summary>
+    /// P8-45: the help overlay, which replaced the key strip along the bottom
+    /// of the battle. The strip was a hand-written line of about a dozen keys
+    /// out of thirty-odd, which fell behind every key added after it (no
+    /// group 0, no bookmarks, no support powers, no unload, no force-attack).
+    /// The overlay IS the CONTROLS page, generated from Settings.Bindable with
+    /// the mouse above it, so it lists every key the battle answers to with
+    /// the key it is bound to now, and follows a rebind made while it is open.
+    ///
+    /// It does not pause: a LAN match cannot (TogglePause's reason), and a
+    /// reminder of a key is not a reason to stop a battle. The scrim stops the
+    /// mouse, as the pause menu's does, so a click meant for CLOSE cannot
+    /// order the army underneath it.
+    ///
+    /// P8-45's review: during playback it is the page's REPLAY copy, which
+    /// lists only what a viewer can do. A replay takes no orders, so it must
+    /// not advertise them (TICKET-P5-SAVE-01), which is why the key strip this
+    /// replaced had a replay line of its own.
+    /// </summary>
+    private void ToggleHelp()
+    {
+        if (_helpOverlay != null) { CloseHelp(); return; }
+        if (_faulted) return;
+        var overlay = UplinkUi.FullOverlay(_hud, 0.78f);
+        overlay.Name = "HelpOverlay";
+        var v = UplinkUi.OverlayBox(overlay, "CONTROLS", 330, 330);
+        var page = new ControlsPage { Replay = _replay != null };
+        v.AddChild(page);
+        v.AddChild(UplinkUi.Note(
+            $"{Settings.KeyName(Settings.BindOf("help"))} or {Settings.KeyName(Settings.BindOf("cancel"))} closes this; "
+            + "the battle carries on behind it", 11));
+        v.AddChild(UplinkUi.MenuButton("CLOSE", CloseHelp));
+        _helpOverlay = overlay;
+        _helpPage = page;
+        _audio.Play("ui_click", -12);
+    }
+
+    private void CloseHelp()
+    {
+        if (_helpOverlay is null) return;
+        _helpOverlay.QueueFree();
+        _helpOverlay = null;
+        _helpPage = null;
+    }
+
+    /// <summary>P8-45 verification reads: the overlay's page while it is open
+    /// (null when shut), the status panel and its two labels as shown, and
+    /// every label left standing along the bottom edge of the HUD (where the
+    /// key strip was).</summary>
+    public ControlsPage? HelpPageShown => _helpOverlay != null ? _helpPage : null;
+    public PanelContainer HudPanelForTest => _hudPanel;
+    public bool StatusInPanelForTest => _hudPanel.IsAncestorOf(_status) && _hudPanel.IsAncestorOf(_helpHint);
+    public string StatusTextForTest => _status.Text;
+    public string HelpHintForTest => _helpHint.Text;
+    public List<string> BottomEdgeLabelsForTest()
+    {
+        var l = new List<string>();
+        foreach (var n in _hud.GetChildren())
+            if (n is Label lab && lab.AnchorTop >= 1f && lab.AnchorBottom >= 1f && lab.OffsetTop > -60) l.Add(lab.Text);
+        return l;
+    }
+
     // ---------------- sidebar command surface ----------------
 
     private int FindOwnStructure(EntityKind kind)
@@ -1658,37 +1726,30 @@ public partial class SkirmishLive : Node3D
     {
         var hud = _hud = new CanvasLayer { Name = "Hud" };
         AddChild(hud);
-        _status = new Label
-        {
-            Position = new Vector2(16, 12),
-            Theme = ThemeDB.GetProjectTheme(),
-        };
-        _status.AddThemeColorOverride("font_color", new Color(0.84f, 0.82f, 0.77f));
-        hud.AddChild(_status);
-
-        // TICKET-P5-SET-01: the hint reads the live bindings rather than
-        // restating the defaults. A hint that says "R repair" to a player who
-        // rebound repair to F is worse than no hint.
-        string K(string action) => Settings.KeyName(Settings.BindOf(action));
-        var hint = new Label
-        {
-            // TICKET-P5-SAVE-01: a replay takes no orders, so it must not advertise
-            // orders. Telling a spectator to right-click to attack, and then
-            // swallowing the click, is the exact "silently ignores orders" read
-            // that makes a working replay look like a broken game.
-            Text = _replay != null
-                ? $"REPLAY PLAYBACK   the recorded stream issues every order   click: select   arrows/edge/wheel camera   {K("cancel")}: uplink"
-                : $"click: select   right click: move / attack / harvest / rally   {K("attack_move")} attack-move  {K("stop")} stop  "
-                  // TICKET-P5-REP-09: "repair bldgs", because R repairs
-                  // structures and the old hint promised more than R could do.
-                  // TICKET-P5-ALERT-02: "last alert" advertises the jump key,
-                  // read from the live binding like every other key here.
-                  + $"{K("repair")} repair bldgs  {K("sell")} sell  {K("select_all_army")} army  {K("idle_harvester")} idle harv  {K("jump_to_event")} last alert  {K("pause_menu")} menu   ctrl+0-9 groups   arrows/edge/wheel camera",
-            AnchorTop = 1, AnchorBottom = 1, AnchorRight = 1,
-            OffsetTop = -30, OffsetLeft = 16,
-        };
-        hint.AddThemeColorOverride("font_color", new Color(0.5f, 0.5f, 0.48f));
-        hud.AddChild(hint);
+        // P8-45: the status readout wears the uplink panel (UplinkUi's cinder
+        // fill and seam border, the sidebar's and the menus' clothes), where it
+        // was a bare line of text floating on the battlefield. Beside the
+        // readout, the help key read from its live binding, because the key
+        // strip that listed every key along the bottom of the screen is gone:
+        // the help overlay lists them now, generated from Settings.Bindable,
+        // and this is how a player learns the overlay is there. The panel is
+        // the first item of the top-left column, so the superweapon gauge and
+        // the powers strip stack beneath it and cannot overlap it.
+        _hudPanel = new PanelContainer { Name = "HudPanel", MouseFilter = Control.MouseFilterEnum.Ignore };
+        var hudStyle = new StyleBoxFlat { BgColor = UplinkUi.Panel with { A = 0.92f }, BorderColor = UplinkUi.Seam };
+        hudStyle.SetBorderWidthAll(1);
+        hudStyle.ContentMarginLeft = 12; hudStyle.ContentMarginRight = 12;
+        hudStyle.ContentMarginTop = 5; hudStyle.ContentMarginBottom = 5;
+        _hudPanel.AddThemeStyleboxOverride("panel", hudStyle);
+        var hudRow = new HBoxContainer { MouseFilter = Control.MouseFilterEnum.Ignore };
+        hudRow.AddThemeConstantOverride("separation", 22);
+        _hudPanel.AddChild(hudRow);
+        _status = new Label { Theme = ThemeDB.GetProjectTheme() };
+        _status.AddThemeColorOverride("font_color", UplinkUi.Bone);
+        hudRow.AddChild(_status);
+        _helpHint = new Label();
+        _helpHint.AddThemeColorOverride("font_color", UplinkUi.FerriteGold);
+        hudRow.AddChild(_helpHint);
 
         // TICKET-P5-SET-01: the desync notice. Latched and unmissable, in the
         // one colour this HUD reserves for a thing that has gone wrong, because
@@ -1831,14 +1892,17 @@ public partial class SkirmishLive : Node3D
         // one column so the two can never overlap: the gauge above (the weapon
         // that ends matches), the minor powers below. The column sits where
         // the strip alone used to.
+        // P8-45: the status panel heads the column, so the column starts at
+        // the corner where the bare status line used to sit.
         var topLeft = new VBoxContainer
         {
             Name = "PowersColumn",
-            Position = new Vector2(16, 40),
+            Position = new Vector2(12, 8),
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
         topLeft.AddThemeConstantOverride("separation", 8);
         hud.AddChild(topLeft);
+        topLeft.AddChild(_hudPanel);
         _swGauge = new SuperweaponGauge();
         topLeft.AddChild(_swGauge);
         _swGauge.Init();
@@ -2187,7 +2251,7 @@ public partial class SkirmishLive : Node3D
                     // to whoever recorded the match. The readout stays (it is
                     // real information); the prompt goes.
                     string msg = pe.Kind == EntityKind.ConstructionYard
-                        ? $"{(ev.B > 0 && ev.B < StructNames.Length ? StructNames[ev.B] : "STRUCTURE")} READY"
+                        ? $"{StructNameOf(ev.B)} READY"
                             + (_replay is null ? "  -  PLACE >>" : "")
                         : $"{UnitNameOf(pe.UnitType)} DEPLOYED";
                     // TICKET-P6-VO-01: the battlefield voice, ALONGSIDE the
@@ -2848,7 +2912,13 @@ public partial class SkirmishLive : Node3D
         // silently ignores orders reads as a broken game.
         string mode = _replay != null ? $"    REPLAY {_world.Tick}/{_replayTicks}"
             : _resumed ? "    RESUMED (not recording)" : "";
-        _status.Text = $"CREDITS {_world.Credits(LocalPlayerId)}    {pwr}    UNITS {CountOwn()}    TICK {_world.Tick}{mode}";
+        // P8-45: the tick is a developer's reading, shown only while the
+        // settings page's TICK COUNTER is on. The replay's own position above
+        // stays: it is where in the recording the spectator is, not a debug
+        // figure.
+        string tick = Settings.ShowTickCounter ? $"    TICK {_world.Tick}" : "";
+        _status.Text = $"CREDITS {_world.Credits(LocalPlayerId)}    {pwr}    UNITS {CountOwn()}{tick}{mode}";
+        _helpHint.Text = $"{Settings.KeyName(Settings.BindOf("help"))}  HELP";
 
         var dots = new List<(float, float, Color)>();
         foreach (var v in _view)
@@ -2999,15 +3069,25 @@ public partial class SkirmishLive : Node3D
         return CursorFor(screen) == GameCursor.Harvest;
     }
 
-    // W3-19: structure names by type id (Sidebar's table is private).
-    // Index is the struct type; 9 is the barrier (ADR-005). A barrier never
-    // raises ProductionComplete (BuildTicks 0 keeps it out of the queue), so
-    // the entry exists for completeness rather than for a live code path.
-    // TICKET-P5-PROD-01 named type 7: the Veil Projector has a button now, so
-    // its ready toast must name it. ADR-008 extended the table to type 12:
-    // index 10 is ADR-005's reserved gate (no def, never toasted), 11 the
-    // barracks (catalogued, unbuildable until ADR-009's wave), 12 the radar.
-    private static readonly string[] StructNames = { "", "POWER PLANT", "FACTORY", "REFINERY", "STRUCTURE", "TURRET", "SUPERWEAPON", "VEIL PROJECTOR", "SERVICE DEPOT", "WALL", "", "BARRACKS", "RADAR UPLINK" };
+    /// <summary>
+    /// P8-45: the name a READY toast gives a building, derived from the
+    /// catalogue by the one derivation the sidebar's buttons and UnitNameOf
+    /// use (StructureCatalogue.DisplayNameOf), so the toast names what the
+    /// button the player pressed names.
+    ///
+    /// This was a hand-kept table indexed by struct type, the fourth copy of a
+    /// list the catalogue already holds. It stopped at type 12, so every
+    /// building numbered from 13 up (the emplacement, the airfield, the
+    /// Bastion, the Shroud Nest, the mine, the Sodality generator, the Watch
+    /// Post and the seismic charge) was READY as "STRUCTURE", and its slot 10
+    /// still read as the reserved gate after P7-10 filled it. Throws on a type
+    /// the catalogue does not name, UnitNameOf's rule: that is a bug, not a
+    /// thing to call "STRUCTURE".
+    /// </summary>
+    private static string StructNameOf(int type) => StructureCatalogue.DisplayNameOf(type);
+
+    /// <summary>Verification read: what a READY toast calls a building.</summary>
+    public string StructNameForTest(int type) => StructNameOf(type);
 
     /// <summary>W3-19's toast, as a ROUTINE line through the one alert service
     /// (P8-10). Every acknowledgement and refusal the scene speaks comes
@@ -3596,6 +3676,13 @@ public partial class SkirmishLive : Node3D
         if (_superArmed || _attackMoveArmed || _patrolArmed || _powerArmed != null) return GameCursor.Attack; // ADR-015: patrol legs are attack-moves
         if (_now <= _sellConfirmUntil) return GameCursor.Sell;
         if (_now <= _repairConfirmUntil) return GameCursor.Repair;
+        // P8-36: under the classic scheme the cursor promises what the LEFT
+        // click will do, so where that click selects (something of the
+        // player's own or an ally's, or nothing orderable selected) it reads
+        // Select; where
+        // it orders, the verbs below are the ones IssueOrder will send, the
+        // same answer the modern scheme gives for the right click.
+        if (Settings.Scheme == ControlScheme.Classic && !ClassicClickOrders(screen)) return GameCursor.Select;
         bool force = ctrl ?? (Input.IsKeyPressed(Key.Ctrl) || Input.IsKeyPressed(Key.Meta));
         bool anyMobile = false, allContact = true, anyArmed = false, anyBoarder = false, anyHarvester = false;
         int contactAt = -1;
@@ -5331,7 +5418,24 @@ public partial class SkirmishLive : Node3D
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Left } mb:
                 if (mb.Pressed) { _dragging = true; _dragStart = mb.Position; }
-                else if (_dragging) { _dragging = false; _dragRect.Visible = false; FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift)); }
+                else if (_dragging)
+                {
+                    _dragging = false;
+                    _dragRect.Visible = false;
+                    // P8-36, decision D22: under the classic scheme a CLICK
+                    // (a drag is still a box select) orders the selection
+                    // wherever it does not land on something of the player's
+                    // own or an ally's, and it orders through IssueOrder, the right click's
+                    // own resolver, so the two schemes share one path. Read
+                    // on the release, so a press that becomes a drag is never
+                    // an order. Ctrl rides on the event, as D23's force-attack
+                    // does on the right click.
+                    if (Settings.Scheme == ControlScheme.Classic && (mb.Position - _dragStart).Length() <= ClickSlopPx
+                        && ClassicClickOrders(mb.Position))
+                        IssueOrder(mb.Position, Input.IsKeyPressed(Key.Shift), mb.CtrlPressed || mb.MetaPressed);
+                    else
+                        FinishSelect(mb.Position, Input.IsKeyPressed(Key.Shift));
+                }
                 break;
             case InputEventMouseMotion mm when _dragging:
                 var tl = new Vector2(Mathf.Min(_dragStart.X, mm.Position.X), Mathf.Min(_dragStart.Y, mm.Position.Y));
@@ -5342,8 +5446,11 @@ public partial class SkirmishLive : Node3D
             // P8-8, decision D23: Ctrl (or Cmd) on the click is force-attack,
             // read off the EVENT like the group-assign modifier, so the
             // harness can drive it.
+            // P8-36: under the classic scheme the right click takes away
+            // rather than orders (ClassicRightClick).
             case InputEventMouseButton { ButtonIndex: MouseButton.Right, Pressed: true } rmb:
-                IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
+                if (Settings.Scheme == ControlScheme.Classic) ClassicRightClick();
+                else IssueOrder(rmb.Position, Input.IsKeyPressed(Key.Shift), rmb.CtrlPressed || rmb.MetaPressed);
                 break;
         }
     }
@@ -5368,20 +5475,18 @@ public partial class SkirmishLive : Node3D
             // it is tested first - a player who opened it wants out of it, not
             // out of placement mode underneath it.
             if (_pauseMenu != null) { ClosePause(); return true; }
-            // An armed order is cancelled through the family funnel, so cancel
-            // clears all four by construction. The toast names whichever order
-            // was armed; the funnel guarantees there is only ever one.
-            string? cancelled = _superArmed ? "SUPERWEAPON TARGETING CANCELLED"
-                : _powerArmed != null ? "SUPPORT POWER TARGETING CANCELLED"
-                : _attackMoveArmed ? "attack-move cancelled"
-                : _patrolArmed ? "patrol cancelled"
-                : null;
-            if (cancelled != null) { DisarmAllArmedOrders(); ShowToast(cancelled); return true; }
+            // P8-45: then the help overlay, for the same reason: it is the
+            // thing on top, and a player looking at it wants it gone.
+            if (_helpOverlay != null) { CloseHelp(); return true; }
+            if (CancelArmedOrder()) return true;
             if (_placingType > 0) { ExitPlacement(); return true; }
             // P8-58: and a spectator's notice names this key as its way out.
             if (_matchOver || _replayDone || _spectating) { QuitToMenu(); return true; }
             return false;
         }
+        // P8-45: the help key opens and shuts the help overlay. A spectator
+        // and a commander alike: the camera keys are for both.
+        if (ev.IsActionPressed("help")) { ToggleHelp(); return true; }
         if (ev.IsActionPressed("attack_move")) { ArmAttackMove(); return true; }
         if (ev.IsActionPressed("launch_super")) { ArmSuperweapon(); return true; }
         // The support powers' key: arms the first READY power, and cycles to
@@ -5771,6 +5876,125 @@ public partial class SkirmishLive : Node3D
     /// keeps this at 0 or 1; the harness asserts that across every pair.</summary>
     private int ArmedOrderCount() =>
         (_attackMoveArmed ? 1 : 0) + (_patrolArmed ? 1 : 0) + (_superArmed ? 1 : 0) + (_powerArmed != null ? 1 : 0);
+
+    /// <summary>
+    /// Cancel whichever armed order is standing, through the family funnel,
+    /// and say which it was; false when none was armed. An armed order is
+    /// cancelled through DisarmAllArmedOrders, so a cancel clears all four by
+    /// construction, and the funnel guarantees only one is ever named. P8-36
+    /// lifted this out of the cancel key so the classic right click cancels
+    /// through the SAME funnel rather than a copy that could forget an order,
+    /// which is how the family's rule broke twice before the funnel existed.
+    /// </summary>
+    private bool CancelArmedOrder()
+    {
+        string? cancelled = _superArmed ? "SUPERWEAPON TARGETING CANCELLED"
+            : _powerArmed != null ? "SUPPORT POWER TARGETING CANCELLED"
+            : _attackMoveArmed ? "attack-move cancelled"
+            : _patrolArmed ? "patrol cancelled"
+            : null;
+        if (cancelled == null) return false;
+        DisarmAllArmedOrders();
+        ShowToast(cancelled);
+        return true;
+    }
+
+    // -------- P8-36, decision D22: the classic left-click scheme --------
+
+    /// <summary>How far a press may travel and still be a click rather than a
+    /// box. FinishSelect's threshold, named once so the classic order and the
+    /// selection click cannot disagree about what a click is.</summary>
+    private const float ClickSlopPx = 8f;
+
+    /// <summary>
+    /// Does a classic left click here ORDER the selection, rather than select?
+    /// Doc 11's Scheme A: a click on something of the player's own, or of an
+    /// ally's, selects instead (doc 11 line 6, "Left click on ally/own: select
+    /// instead"), and a click anywhere else orders the selection there, which
+    /// is exactly what the modern right click would send (IssueOrder). Two
+    /// refinements, each so that the classic click offers no less than the
+    /// modern one: nothing orderable selected (empty, a spectator, or only
+    /// buildings that take no rally) means the click selects; and an own
+    /// Carrier is an order when the selection holds something that can board
+    /// it, because boarding is the order the modern right click sends there
+    /// and a click that only selected the Carrier would leave boarding
+    /// unreachable.
+    ///
+    /// The ally case was first ordered at, as the modern right click is, on
+    /// the reading that doc 11 predates alliances; but doc 11 names the ally
+    /// case, and a written spec outranks an implementer's judgement
+    /// (CLAUDE.md's source-of-truth order), so the click on an ally is a
+    /// selection click (FinishSelect), as on an own unit. It selects nothing
+    /// there, because the selection is own-only (ADR-021), which is exactly
+    /// what the modern LEFT click on an ally does. No verb is lost: nothing
+    /// the modern right click sends at an ally is more than a move to that
+    /// spot (a contact unit never acts on an ally, ContactCanAct), and a
+    /// classic click on the ground beside the ally sends that move.
+    /// </summary>
+    private bool ClassicClickOrders(Vector2 screen)
+    {
+        if (_replay != null || _selection.Count == 0) return false;
+        bool anyMobile = false, anyRally = false;
+        foreach (int id in _selection)
+        {
+            if (!_latest.TryGetValue(id, out var v) || v.PlayerId != LocalPlayerId) continue;
+            if (Mobile(v.Kind)) anyMobile = true;
+            else if (Ralliable(v.Kind)) anyRally = true;
+        }
+        if (!anyMobile && !anyRally) return false;
+        if (anyMobile && AnySelectedCanBoard() && PickOwnCarrier(screen) >= 0) return true;
+        return OwnSelectableAt(screen) < 0 && AlliedAt(screen) < 0;
+    }
+
+    /// <summary>P8-36 review: the ally's unit or building a classic click here
+    /// lands on, or -1, at the own picks' radii and in their order (a unit
+    /// first). An ally is a seat on the local seat's team other than its own;
+    /// a neutral (-1) is nobody's ally, so a bridge or an outpost stays
+    /// ground or a walk-in as before.</summary>
+    private int AlliedAt(Vector2 at)
+    {
+        int hit = PickEntity(at, 0.9f, v => IsAlliedSeat(v.PlayerId) && Mobile(v.Kind));
+        return hit >= 0 ? hit
+            : PickEntity(at, 1.4f, v => IsAlliedSeat(v.PlayerId) && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+    }
+
+    private bool IsAlliedSeat(int seat) => seat >= 0 && seat != LocalPlayerId && !IsHostileSeat(seat);
+
+    /// <summary>The thing of the player's own a selection click here would
+    /// take, or -1: the same two picks FinishSelect makes, own mobiles first.</summary>
+    private int OwnSelectableAt(Vector2 at)
+    {
+        int hit = PickOwnMobileAt(at);
+        return hit >= 0 ? hit : PickOwnStructureAt(at);
+    }
+
+    private int PickOwnMobileAt(Vector2 at) =>
+        PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
+
+    private int PickOwnStructureAt(Vector2 at) =>
+        PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+
+    /// <summary>
+    /// The classic right click: it takes away. A standing armed order is
+    /// cancelled first, through the cancel key's own path (CancelArmedOrder,
+    /// so every armed order still goes through DisarmAllArmedOrders), then a
+    /// placement, then the selection, in the cancel key's order. Doc 11 says
+    /// "right click: deselect all"; cancelling a targeting or a placement
+    /// first is decided under the owner's instruction, because under this
+    /// scheme the left click is the commit and the right click is the only
+    /// mouse way back out of a targeting, as in the classics. Reverses if a
+    /// playtest finds players expect the right click to deselect even with
+    /// a targeting up.
+    /// </summary>
+    private void ClassicRightClick()
+    {
+        if (CancelArmedOrder()) return;
+        if (_placingType > 0) { ExitPlacement(); return; }
+        if (_selection.Count == 0 && _inspected < 0) return;
+        _selection.Clear();
+        _inspected = -1;
+        _audio.Play("ui_click", -16);
+    }
 
     /// <summary>Readiness is re-read at the click rather than trusted from the
     /// arm: the charge can lapse, or the structure die, between the two.</summary>
@@ -6259,9 +6483,9 @@ public partial class SkirmishLive : Node3D
     {
         if (!add) _selection.Clear();
         _inspected = -1;   // any fresh click or drag retires the inspect readout
-        if ((at - _dragStart).Length() <= 8)
+        if ((at - _dragStart).Length() <= ClickSlopPx)
         {
-            int hit = PickEntity(at, 0.9f, v => v.PlayerId == LocalPlayerId && Mobile(v.Kind));
+            int hit = PickOwnMobileAt(at);
             // Doc 27 DR-05: ctrl-click on an own mobile is type-select, the
             // keyboard sibling of the double-click, THROUGH THE SAME helper so
             // the two gestures cannot drift apart. Device-polled here because
@@ -6273,8 +6497,7 @@ public partial class SkirmishLive : Node3D
                 SelectAllOfTypeOnScreen(hit);
                 return;
             }
-            if (hit < 0)
-                hit = PickEntity(at, 1.4f, v => v.PlayerId == LocalPlayerId && !Mobile(v.Kind) && v.Kind != EntityKind.FerriteField);
+            if (hit < 0) hit = PickOwnStructureAt(at);
             if (hit >= 0)
             {
                 _selection.Add(hit);
@@ -7047,6 +7270,32 @@ public partial class SkirmishLive : Node3D
         _UnhandledInput(new InputEventMouseButton
         { ButtonIndex = MouseButton.Right, Pressed = true, Position = at, CtrlPressed = true });
 
+    /// <summary>P8-36: a whole left click, the press AND the release, through
+    /// the real input path. PressLeftClick is the press alone, which is all
+    /// an armed order or a placement needs; a selection click and the classic
+    /// scheme's order are both decided on the release.</summary>
+    public void ClickLeft(Vector2 at, bool ctrl = false)
+    {
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = true, Position = at, CtrlPressed = ctrl });
+        _UnhandledInput(new InputEventMouseButton
+        { ButtonIndex = MouseButton.Left, Pressed = false, Position = at, CtrlPressed = ctrl });
+    }
+
+    /// <summary>P8-36: a box drag through the real input path, the press, one
+    /// motion and the release, so the release lands past the click slop and is
+    /// read as a drag under either scheme.</summary>
+    public void DragLeft(Vector2 from, Vector2 to)
+    {
+        _UnhandledInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, Position = from });
+        _UnhandledInput(new InputEventMouseMotion { Position = to });
+        _UnhandledInput(new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, Position = to });
+    }
+
+    /// <summary>P8-36 verification read: how many clicks IssueOrder has
+    /// resolved, whichever button and scheme sent them.</summary>
+    public int OrderResolutionsForTest => _orderResolutions;
+
     /// <summary>P8-1 (inputgate): the Commands a gesture has queued and the
     /// next tick has not yet drained. Read where they sit, because once a tick
     /// takes them they are gone, and a check of WHAT the gesture asked for has
@@ -7576,11 +7825,18 @@ public partial class SkirmishLive : Node3D
         return slots;
     }
 
-    /// <summary>The right click. `force` is decision D23's force-attack
-    /// modifier (Ctrl or Cmd on the click): it changes the order only over a
-    /// neutral bridge span, which nothing else attacks.</summary>
+    private int _orderResolutions;
+
+    /// <summary>The ordering click: the right click under the modern scheme,
+    /// the left click that lands on nothing of the player's own under the
+    /// classic one (P8-36), and the same method for both. `force` is decision
+    /// D23's force-attack modifier (Ctrl or Cmd on the click): it changes the
+    /// order only over a neutral bridge span, which nothing else attacks.</summary>
     public void IssueOrder(Vector2 screen, bool queued, bool force = false)
     {
+        // P8-36: counted, so the harness can prove both schemes resolve their
+        // orders HERE (one path, no copy of this method to drift).
+        _orderResolutions++;
         if (_selection.Count == 0) return;
         var gp = GroundPoint(screen);
         if (gp is not { } p) return;

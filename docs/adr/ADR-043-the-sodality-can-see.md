@@ -121,6 +121,12 @@ number.
   `dish` child already spins under `ScanRig` and reads as a sensor. It is a 1x1
   building wearing a 2x2 model, which is visibly wrong rather than invisibly
   wrong. Bespoke model and icon owed.
+  Note, 2026-10-10 (P8-45): the icon is delivered. P8-45 rendered
+  `game/ui/icons/sod_watch_post.png` from the Watch Post's own Blender mesh
+  (`art/3d/icons.py`), and its sidebar button wears it. The bespoke model came
+  first, with P7-31: an unarmed scaffold tower sized to its single cell
+  (`art/3d/builder.py`, `sod_watch_post`), so the 2x2 model on a 1x1 building
+  is gone too. Nothing this bullet names is still owed.
 - **The AI never builds one.** The commander's ladder yields seven common types
   and has never reached a faction building; a Sodality commander will therefore
   be blind to cloak exactly as it was. That matters more here than for most

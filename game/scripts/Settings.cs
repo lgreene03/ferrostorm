@@ -46,6 +46,15 @@ public static class AudioBuses
 }
 
 /// <summary>
+/// P8-36, decision D22 (GDD s10, doc 11): the two mouse schemes, both offered
+/// at first launch and in the settings page. MODERN is doc 11's Scheme B, left
+/// click selects and right click orders. CLASSIC is its Scheme A, left click
+/// selects what is the player's own and orders anywhere else, right click
+/// deselects. Both issue every order through SkirmishLive.IssueOrder.
+/// </summary>
+public enum ControlScheme { Modern = 0, Classic = 1 }
+
+/// <summary>
 /// TICKET-P5-SET-01: player preferences, persisted to user://settings.cfg via
 /// ConfigFile, and the one place that applies them.
 ///
@@ -65,7 +74,13 @@ public static class AudioBuses
 /// </summary>
 public static class Settings
 {
-    private const string ConfigPath = "user://settings.cfg";
+    private const string DefaultConfigPath = "user://settings.cfg";
+    /// <summary>Verification seam (P8-36, CampaignProgress.PathOverrideForTest's
+    /// precedent): while set, Load and Save use this file, so the harness can
+    /// prove a choice survives a reload without touching the player's own
+    /// settings. Null in every played game; nothing in the client sets it.</summary>
+    public static string? PathOverrideForTest;
+    private static string ConfigPath => PathOverrideForTest ?? DefaultConfigPath;
 
     // ---- audio: linear 0..1, one per bus ----
     public static float MasterVolume = 0.9f;
@@ -92,6 +107,33 @@ public static class Settings
     {
         ("50%", 0.5f), ("75%", 0.75f), ("100%", 1.0f),
     };
+
+    // ---- interface ----
+    /// <summary>P8-45: the match clock on the battle's status panel, a
+    /// developer's reading rather than a player's, so OFF by default and
+    /// switched on from the settings page. It was always on.</summary>
+    public static bool ShowTickCounter;
+
+    // ---- P8-36: the control scheme ----
+    /// <summary>The mouse scheme in force. MODERN as shipped (doc 11 names it
+    /// the default candidate), until the player chooses.</summary>
+    public static ControlScheme Scheme = ControlScheme.Modern;
+    /// <summary>Has the player chosen a scheme? False until the first-launch
+    /// choice or the settings page sets one, and that is what makes the main
+    /// menu ask: a settings file written before this row has no scheme in it,
+    /// so a returning player is asked once too.</summary>
+    public static bool SchemeChosen;
+
+    /// <summary>Set the scheme, mark it chosen, save, and tell anything showing
+    /// the controls (the CONTROLS page and the help overlay show the mouse
+    /// rows of the scheme in force) to read them again.</summary>
+    public static void SetScheme(ControlScheme scheme)
+    {
+        Scheme = scheme;
+        SchemeChosen = true;
+        Save();
+        BindsChanged?.Invoke();
+    }
 
     /// <summary>The rebindable surface, in the order the settings scene lists
     /// it. Every literal keycode SkirmishLive and RtsCamera used to match is
@@ -132,6 +174,13 @@ public static class Settings
         // (GDD s7 line 85's "jump-to-event key"). Space, which the [input]
         // block had free.
         ("jump_to_event", "JUMP TO EVENT"),
+        // P8-45: the help overlay, which replaced the key strip along the
+        // bottom of the battle. Default F10, NOT the F1 the row named: F1 to
+        // F4 are the camera bookmarks (GDD s10, doc 11's shared bindings,
+        // both above the tracker), and a key holds one action. F10 is clear
+        // of the four bookmark keys, so a slip off a bookmark recall cannot
+        // open it. Reverses if the GDD moves the bookmarks off F1.
+        ("help", "HELP"),
         ("pause_menu", "OPERATIONS MENU"),
         ("cancel", "CANCEL / BACK"),
         ("camera_left", "CAMERA LEFT"),
@@ -228,6 +277,13 @@ public static class Settings
         MsaaIndex = Mathf.Clamp((int)cfg.GetValue("video", "msaa", MsaaIndex), 0, MsaaOptions.Length - 1);
         RenderScaleIndex = Mathf.Clamp((int)cfg.GetValue("video", "render_scale", RenderScaleIndex),
             0, RenderScaleOptions.Length - 1);
+        ShowTickCounter = (bool)cfg.GetValue("interface", "tick_counter", ShowTickCounter);
+        if (cfg.HasSectionKey("controls", "scheme"))
+        {
+            Scheme = (int)cfg.GetValue("controls", "scheme") == (int)ControlScheme.Classic
+                ? ControlScheme.Classic : ControlScheme.Modern;
+            SchemeChosen = true;
+        }
 
         foreach (var (action, _) in Bindable)
         {
@@ -256,6 +312,10 @@ public static class Settings
         cfg.SetValue("video", "vsync", VSync);
         cfg.SetValue("video", "msaa", MsaaIndex);
         cfg.SetValue("video", "render_scale", RenderScaleIndex);
+        cfg.SetValue("interface", "tick_counter", ShowTickCounter);
+        // P8-36: written only once chosen, so a file saved before the choice
+        // (a volume dragged on the settings page) cannot pass as a choice.
+        if (SchemeChosen) cfg.SetValue("controls", "scheme", (int)Scheme);
         // Only rebound actions are written. A settings file that restates every
         // default is a settings file that silently pins them: change a default
         // in project.godot and every existing player keeps the old one forever.
@@ -370,6 +430,10 @@ public static class Settings
         MsaaIndex = System.Array.FindIndex(MsaaOptions, o => o.Value == _defaultMsaa);
         if (MsaaIndex < 0) MsaaIndex = 2;
         RenderScaleIndex = System.Array.FindIndex(RenderScaleOptions, o => o.Value == 1.0f);
+        ShowTickCounter = false;
+        // P8-36: the shipped scheme. SchemeChosen is left as it is: a player
+        // who has chosen has been asked, and a reset is not a reason to ask again.
+        Scheme = ControlScheme.Modern;
         _binds.Clear();
         foreach (var kv in _defaultBinds) _binds[kv.Key] = kv.Value;
         ApplyAll();

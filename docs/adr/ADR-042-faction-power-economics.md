@@ -148,6 +148,14 @@ above. No save format change; teams and factions are match setup.
   lists, and would bury this row's diff. Filed as tidy-up.
 - **No art.** The generator wears the plant's model and icon, as the Bastion
   wears the turret's. A 1x1 building rendered as a 2x2 plant is owed work.
+  Note, 2026-10-10 (P8-45): the icon is delivered. P8-45 rendered
+  `game/ui/icons/sod_generator.png` from the generator's own Blender mesh
+  (`art/3d/icons.py`), and its sidebar button wears it. The model came first:
+  P7-31 built a bespoke one, a fuel drum on a pallet sized to its single cell
+  (`art/3d/builder.py`, `sod_generator`), and P7-32 made it reachable by struct
+  type (`ModelLibrary.StructModel`). Nothing this bullet names is still owed,
+  and the Bastion it compares with has its own model (P7-31) and icon (P8-45)
+  as well.
 - **The AI does not exploit the difference.** A Sodality commander builds
   generators instead of a plant and is otherwise the same commander. It does not
   spread them, and it does not raid a Directorate plant knowing that one kill

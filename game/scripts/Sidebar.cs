@@ -61,42 +61,21 @@ public partial class Sidebar : PanelContainer
     /// which is the same discipline every other number on this panel follows.
     ///
     /// The icon name is the id, the convention every icon in ui/icons follows and
-    /// the one the units already use; MakeButton's Exists guard tolerates a
-    /// sprite that has not been cut yet. The exceptions are in PlaceholderIcon
-    /// below and are art debt rather than identity.
+    /// the one the units already use. P8-45 rendered the twenty-two that were
+    /// missing from the Blender meshes (art/3d/icons.py), so every button has an
+    /// icon of its own. Before that, four buildings wore another building's icon
+    /// and eighteen buttons (ten units, eight buildings) had none at all; the
+    /// substitution table that did the dressing is gone, and three of its seven
+    /// entries had pointed at com_wall_straight.png, which no commit ever held,
+    /// so those three were among the eighteen. MakeButton's Exists guard stays, so a
+    /// building added without an icon still gets its button; the harness's
+    /// hudgate/icons stage is what refuses it.
     /// </summary>
     private static BuildItem StructItem(int typeId)
     {
         string id = StructureCatalogue.IdOf(typeId);
-        return new BuildItem(DataLoader.DisplayNameFromId(id), typeId, PlaceholderIcon(id));
+        return new BuildItem(DataLoader.DisplayNameFromId(id), typeId, id);
     }
-
-    /// <summary>Buildings still wearing another building's art, and the only
-    /// reason this is a list rather than a rule: the bespoke PNG has not been cut
-    /// (all six are owed to art-pipeline, the ADR-019 interim precedent). Keyed
-    /// by /data id so a renumbering cannot re-point one, and deliberately NOT
-    /// part of the decision about which buttons exist - a building missing from
-    /// here gets no icon, which MakeButton already tolerates, rather than no
-    /// button. Each entry disappears the day its own sprite lands.</summary>
-    private static string PlaceholderIcon(string id) => id switch
-    {
-        // The anti-infantry hardpoint and the Directorate's defence both wear
-        // the turret's model for now.
-        "com_emplacement" => "dir_turret",
-        "dir_bastion" => "dir_turret",
-        // The Sodality's nest wears the veil's.
-        "sod_shroud_nest" => "sod_veil_projector",
-        // ADR-028's airfield wears the factory's.
-        "com_airfield" => "com_factory",
-        // The barrier segment, and the mine after it: a low slab that reads as
-        // something laid on the ground.
-        "com_wall" => "com_wall_straight",
-        "com_mine" => "com_wall_straight",
-        // P7-10's gate wears the wall's slab too, which is honest enough for a
-        // segment of wall that moves. Its own sprite is owed to art-pipeline.
-        "com_gate" => "com_wall_straight",
-        _ => id,
-    };
 
     /// <summary>Which page a building's authored tab names, or null for a
     /// building that carries no button at all. BuildTab.None is the three
@@ -849,6 +828,16 @@ public partial class Sidebar : PanelContainer
     /// texture? The Exists guard in MakeButton flips on its own when the PNG
     /// lands, and this is the read that proves it flipped.</summary>
     public bool StructButtonHasIcon(int typeId) => _structButtons.TryGetValue(typeId, out var b) && b.Icon != null;
+    /// <summary>P8-45: the resource path of the icon each button actually
+    /// carries ("" for none), every built button, so a check can ask whether a
+    /// button wears its OWN icon rather than merely one.</summary>
+    public List<(int Type, bool Unit, string IconPath)> ButtonIconsForTest()
+    {
+        var l = new List<(int, bool, string)>();
+        foreach (var (t, b) in _structButtons) l.Add((t, false, b.Icon?.ResourcePath ?? ""));
+        foreach (var (t, b) in _unitButtons) l.Add((t, true, b.Icon?.ResourcePath ?? ""));
+        return l;
+    }
     public string UnitButtonText(int typeId) => _unitButtons.TryGetValue(typeId, out var b) ? b.Text : "";
     /// <summary>TICKET-P6-FACTION-01: the unit-side twin of StructButtonVisible,
     /// for the same reason - visibility IS the faction gate, so it is what a

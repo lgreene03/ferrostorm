@@ -246,7 +246,43 @@ public partial class MainMenu : Control
                 ShowBriefing(e.Path, e.Index, e.Title, e.Structs, e.Units);
             }
         }
+
+        // P8-36, decision D22: the first launch asks which mouse the player
+        // plays with, GDD s10's "both offered at first launch". Last, so it
+        // stands over anything else this menu opened on arrival.
+        if (!Settings.SchemeChosen) ShowSchemeChoice();
     }
+
+    // ---------------- P8-36: the first-launch scheme choice ----------------
+
+    public const string ModernChoiceText = "MODERN: LEFT CLICK SELECTS, RIGHT CLICK ORDERS";
+    public const string ClassicChoiceText = "CLASSIC: LEFT CLICK SELECTS AND ORDERS, RIGHT CLICK DESELECTS";
+
+    /// <summary>Doc 11's two schemes, offered before anything else. The
+    /// choice is saved at once and the overlay does not come back; SETTINGS
+    /// changes it later, and the CONTROLS page shows the one in force.</summary>
+    private void ShowSchemeChoice()
+    {
+        var overlay = FullOverlay();
+        overlay.Name = "SchemeChoice";
+        var v = OverlayBox(overlay, "CHOOSE YOUR CONTROLS", 330, 170);
+        v.AddChild(UplinkUi.Note(
+            "how the mouse gives orders. the keys are the same either way.", 12));
+        void Choose(ControlScheme s)
+        {
+            Settings.SetScheme(s);
+            overlay.QueueFree();
+            _schemeChoice = null;
+        }
+        v.AddChild(MenuButton(ModernChoiceText, () => Choose(ControlScheme.Modern)));
+        v.AddChild(MenuButton(ClassicChoiceText, () => Choose(ControlScheme.Classic)));
+        v.AddChild(UplinkUi.Note("either can be changed at any time under SETTINGS", 11));
+        _schemeChoice = overlay;
+    }
+
+    private Control? _schemeChoice;
+    /// <summary>Verification read: is the first-launch choice standing?</summary>
+    public bool SchemeChoiceShownForTest => _schemeChoice != null && IsInstanceValid(_schemeChoice);
 
     /// <summary>Verification read: the mission whose briefing the menu opened
     /// on arrival (P8-34's NEXT MISSION), or 0.</summary>
