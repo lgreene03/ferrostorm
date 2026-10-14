@@ -103,6 +103,12 @@ else bad; tail -6 $L/balance.txt; fi
 # runs last; CI runs it as the last step of its ubuntu determinism leg.
 run_mode pillargate    "pillargate --bind"
 
+# P8-31: F12's perf half in CI's form. The flow-field proxy binds; the wall bar
+# is printed and not asserted (wall=report), because this machine is usually
+# shared with parallel lanes and its clock then judges the load. Run
+# `longmatchperf` plainly on a calm machine to assert the wall bar as well.
+run_mode longmatchperf "longmatchperf wall=report"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "ci-local: every gate CI runs on this machine is green."
