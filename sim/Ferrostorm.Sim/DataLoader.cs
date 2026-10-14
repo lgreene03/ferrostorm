@@ -358,7 +358,9 @@ public static class DataLoader
         int BeatNumerator, int BeatDenominator,
         int HarvestersPerRefinery, int StartingCreditHandicap, string Notes,
         int AntiAirCap = 0, int AntiAirGarrison = 0,
-        int ProducerCap = 0, int SurplusReserve = 0, int SurplusWindowTicks = 0, int FactionDefenceCap = 0);
+        int ProducerCap = 0, int SurplusReserve = 0, int SurplusWindowTicks = 0, int FactionDefenceCap = 0,
+        int WaveGrowth = 0, int WaveCap = 0, int StagingCells = 0, int AllInPercent = 0, int RushTick = 0,
+        int WallsPerDefence = 0, int RetreatPercent = 0);
 
     /// <summary>The keys each family OWNS. Stated as data rather than as a run
     /// of ContainsKey tests so that a key added to one family is automatically
@@ -367,12 +369,15 @@ public static class DataLoader
     /// defect shape. P8-17 (ADR-072) added the two anti-air keys here, and that
     /// one edit is what refuses them in a rung file. P8-22 (ADR-079) added the
     /// faction defence cap to the personality and the producer cap, the surplus
-    /// reserve and the surplus window to the rung, the same way.</summary>
+    /// reserve and the surplus window to the rung, the same way. P8-23
+    /// (ADR-080) added the wave's six shape keys to the personality and the
+    /// retreat to the rung, the same way again.</summary>
     private static readonly string[] PersonalityKeys =
-        { "act_every_ticks", "wave_size", "anti_air_cap", "anti_air_garrison", "faction_defence_cap" };
+        { "act_every_ticks", "wave_size", "anti_air_cap", "anti_air_garrison", "faction_defence_cap",
+          "wave_growth", "wave_cap", "staging_cells", "all_in_percent", "rush_tick", "walls_per_defence" };
     private static readonly string[] RungKeys =
         { "beat_numerator", "beat_denominator", "harvesters_per_refinery", "starting_credit_handicap",
-          "producer_cap", "surplus_reserve", "surplus_window_ticks" };
+          "producer_cap", "surplus_reserve", "surplus_window_ticks", "retreat_percent" };
 
     /// <summary>
     /// The same flat-YAML and integer-only primitives as ParseUnit and
@@ -410,6 +415,7 @@ public static class DataLoader
         int actEvery = 0, waveSize = 0, numerator = 1, denominator = 1, harvesters = 1, handicap = 0;
         int antiAirCap = 0, antiAirGarrison = 0;
         int producerCap = 0, surplusReserve = 0, surplusWindow = 0, factionDefenceCap = 0;
+        int waveGrowth = 0, waveCap = 0, stagingCells = 0, allInPercent = 0, rushTick = 0, wallsPerDefence = 0, retreatPercent = 0;
         if (isPersonality)
         {
             actEvery = ReqInt(m, "act_every_ticks");
@@ -429,6 +435,23 @@ public static class DataLoader
             // faction defence its ladder buys and none from surplus.
             factionDefenceCap = ReqInt(m, "faction_defence_cap");
             if (factionDefenceCap < 0) throw new FormatException("faction_defence_cap must not be negative");
+            // P8-23 (ADR-080): how the waves go, required like every key in
+            // this family. Each refusal below is also made by registration,
+            // in the same words, so a row offered in code is held to what a
+            // file is.
+            waveGrowth = ReqInt(m, "wave_growth");
+            if (waveGrowth < 0) throw new FormatException("wave_growth must not be negative");
+            waveCap = ReqInt(m, "wave_cap");
+            if (waveCap < waveSize) throw new FormatException("wave_cap must be at least wave_size; the first wave launches at wave_size");
+            stagingCells = ReqInt(m, "staging_cells");
+            if (stagingCells < 0) throw new FormatException("staging_cells must not be negative; 0 gathers a wave at the yard");
+            allInPercent = ReqInt(m, "all_in_percent");
+            if (allInPercent < 0) throw new FormatException("all_in_percent must not be negative; 0 means the commander never goes all-in");
+            rushTick = ReqInt(m, "rush_tick");
+            if (rushTick < 0) throw new FormatException("rush_tick must not be negative; 0 means no early push");
+            wallsPerDefence = ReqInt(m, "walls_per_defence");
+            if (wallsPerDefence < 0 || wallsPerDefence > AiTuning.MaxWallsPerDefence)
+                throw new FormatException($"walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}, the side of a defence's ring that faces the enemy");
         }
         else
         {
@@ -448,6 +471,10 @@ public static class DataLoader
             if (surplusReserve < 0) throw new FormatException("surplus_reserve must not be negative");
             surplusWindow = ReqInt(m, "surplus_window_ticks");
             if (surplusWindow < 0) throw new FormatException("surplus_window_ticks must not be negative");
+            // P8-23 (ADR-080): D7's retreat, a rung key. 0 means a wave is
+            // never called home; 100 would call it home on the first loss.
+            retreatPercent = ReqInt(m, "retreat_percent");
+            if (retreatPercent < 0 || retreatPercent > 100) throw new FormatException("retreat_percent must be from 0 to 100");
         }
 
         return new AiTuningData(
@@ -466,7 +493,14 @@ public static class DataLoader
             ProducerCap: producerCap,
             SurplusReserve: surplusReserve,
             SurplusWindowTicks: surplusWindow,
-            FactionDefenceCap: factionDefenceCap);
+            FactionDefenceCap: factionDefenceCap,
+            WaveGrowth: waveGrowth,
+            WaveCap: waveCap,
+            StagingCells: stagingCells,
+            AllInPercent: allInPercent,
+            RushTick: rushTick,
+            WallsPerDefence: wallsPerDefence,
+            RetreatPercent: retreatPercent);
     }
 
     public static AiTuningData LoadAiTuningFile(string path) => ParseAiTuning(File.ReadAllText(path));
@@ -931,7 +965,8 @@ public static class AiCatalogue
     public static AiTuningDef ToTuningDef(DataLoader.AiTuningData a)
         => new(a.Kind, a.ActEvery, a.WaveSize, a.BeatNumerator, a.BeatDenominator,
                a.HarvestersPerRefinery, a.StartingCreditHandicap, a.AntiAirCap, a.AntiAirGarrison,
-               a.ProducerCap, a.SurplusReserve, a.SurplusWindowTicks, a.FactionDefenceCap);
+               a.ProducerCap, a.SurplusReserve, a.SurplusWindowTicks, a.FactionDefenceCap,
+               a.WaveGrowth, a.WaveCap, a.StagingCells, a.AllInPercent, a.RushTick, a.WallsPerDefence, a.RetreatPercent);
 }
 
 /// <summary>

@@ -21,3 +21,20 @@ anti_air_garrison: 2
 # personality's ground garrison, half of ten. P8-23 owns the Turtle's walls and
 # any further defences beyond this.
 faction_defence_cap: 5
+# P8-23 (ADR-080): how this commander's waves go, on Standard's rules: growth
+# 5 is its ground garrison (half of ten), cap 20 twice its wave, staging 10
+# cells out (ADR-053's arrival bound), all-in at twice the enemy's army, no
+# early push.
+# walls_per_defence 4: once its surplus is sustained and nothing else is due,
+# this commander walls each of its defences on the side that faces the enemy:
+# the two cells of that side of the one-cell ring round the 2x2 footprint, then
+# the two corners beside them, one segment a decision beat, bought outright as
+# a wall always is. A wall never stands in the one-cell apron of any of its
+# other buildings or beside a ferrite field, so it cannot seal a refinery, a
+# producer's exit or a harvester's field.
+wave_growth: 5
+wave_cap: 20
+staging_cells: 10
+all_in_percent: 200
+rush_tick: 0
+walls_per_defence: 4

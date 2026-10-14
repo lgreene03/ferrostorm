@@ -23,3 +23,19 @@ anti_air_garrison: 2
 # P8-22 (ADR-079): faction_defence_cap 2, on Standard's rule: this
 # personality's ground garrison, half of four with the floor of two.
 faction_defence_cap: 2
+# P8-23 (ADR-080): how this commander's waves go, on Standard's rules: growth
+# 2 is its ground garrison (half of four with the floor of two), cap 8 twice
+# its wave, staging 10 cells out (ADR-053's arrival bound), all-in at twice the
+# enemy's army.
+# rush_tick 1350 is the whole addition: 90 seconds into the match, the row's
+# own number, this commander pushes with its infantry, once. The push is not a
+# new size: it leaves once a wave's worth of armed infantry (wave_size, 4)
+# stands and takes at most a wave and its garrison (6), which is the row's
+# "4 to 6 infantry" read off this file's own two numbers. Any wave launched
+# before the push stands makes it moot, and it is never made after one.
+wave_growth: 2
+wave_cap: 8
+staging_cells: 10
+all_in_percent: 200
+rush_tick: 1350
+walls_per_defence: 0

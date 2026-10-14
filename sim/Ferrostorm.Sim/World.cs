@@ -2159,6 +2159,32 @@ public sealed partial class World
         if (def.Kind == AiTuningKind.Personality && def.FactionDefenceCap < 0)
             throw new FormatException(
                 $"AI tuning id {tuningId} has a faction defence cap of {def.FactionDefenceCap}; faction_defence_cap must not be negative");
+        // P8-23 (ADR-080): the loader's wave refusals, in its words, on the
+        // family that owns each key, so a row registered in code is held to
+        // what a file is (ADR-079's condition 1, applied to the new keys).
+        if (def.Kind == AiTuningKind.Personality)
+        {
+            if (def.WaveGrowth < 0)
+                throw new FormatException($"AI tuning id {tuningId} has a wave growth of {def.WaveGrowth}; wave_growth must not be negative");
+            if (def.WaveCap < def.WaveSize)
+                throw new FormatException(
+                    $"AI tuning id {tuningId} has a wave cap of {def.WaveCap}; wave_cap must be at least wave_size; the first wave launches at wave_size");
+            if (def.StagingCells < 0)
+                throw new FormatException(
+                    $"AI tuning id {tuningId} has a staging distance of {def.StagingCells}; staging_cells must not be negative; 0 gathers a wave at the yard");
+            if (def.AllInPercent < 0)
+                throw new FormatException(
+                    $"AI tuning id {tuningId} has an all-in share of {def.AllInPercent}; all_in_percent must not be negative; 0 means the commander never goes all-in");
+            if (def.RushTick < 0)
+                throw new FormatException(
+                    $"AI tuning id {tuningId} has a rush tick of {def.RushTick}; rush_tick must not be negative; 0 means no early push");
+            if (def.WallsPerDefence < 0 || def.WallsPerDefence > AiTuning.MaxWallsPerDefence)
+                throw new FormatException(
+                    $"AI tuning id {tuningId} asks for {def.WallsPerDefence} walls a defence; walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}, the side of a defence's ring that faces the enemy");
+        }
+        else if (def.RetreatPercent < 0 || def.RetreatPercent > 100)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a retreat share of {def.RetreatPercent}; retreat_percent must be from 0 to 100");
         _aiTuning[tuningId] = def;
     }
 
@@ -2340,6 +2366,12 @@ public sealed partial class World
                 // Produce orders a commander issues from its bank, so two
                 // peers holding different files would build different bases.
                 h.Add(d.ProducerCap); h.Add(d.SurplusReserve); h.Add(d.SurplusWindowTicks); h.Add(d.FactionDefenceCap);
+                // P8-23 (ADR-080): how the waves go, on the same argument.
+                // They decide when a commander's AttackMove and PathMove
+                // orders go out, and which walls it places, so two peers
+                // holding different files would launch different waves.
+                h.Add(d.WaveGrowth); h.Add(d.WaveCap); h.Add(d.StagingCells); h.Add(d.AllInPercent);
+                h.Add(d.RushTick); h.Add(d.WallsPerDefence); h.Add(d.RetreatPercent);
             }
             return h.Value;
         }

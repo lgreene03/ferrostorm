@@ -50,3 +50,6 @@ starting_credit_handicap: 0
 producer_cap: 1
 surplus_reserve: 4500
 surplus_window_ticks: 4500
+# P8-23 (ADR-080): retreat_percent 0. D7 gives the retreat to Hard and Brutal
+# only, so an Easy wave fights to the last unit.
+retreat_percent: 0

@@ -6774,6 +6774,16 @@ int AiTuningGate()
             return Fail(Drift("surplus_window_ticks", got.SurplusWindowTicks, want.SurplusWindowTicks));
         if (got.FactionDefenceCap != want.FactionDefenceCap)
             return Fail(Drift("faction_defence_cap", got.FactionDefenceCap, want.FactionDefenceCap));
+        // P8-23 (ADR-080): how the waves go, six personality numbers and one
+        // rung number.
+        if (got.WaveGrowth != want.WaveGrowth) return Fail(Drift("wave_growth", got.WaveGrowth, want.WaveGrowth));
+        if (got.WaveCap != want.WaveCap) return Fail(Drift("wave_cap", got.WaveCap, want.WaveCap));
+        if (got.StagingCells != want.StagingCells) return Fail(Drift("staging_cells", got.StagingCells, want.StagingCells));
+        if (got.AllInPercent != want.AllInPercent) return Fail(Drift("all_in_percent", got.AllInPercent, want.AllInPercent));
+        if (got.RushTick != want.RushTick) return Fail(Drift("rush_tick", got.RushTick, want.RushTick));
+        if (got.WallsPerDefence != want.WallsPerDefence)
+            return Fail(Drift("walls_per_defence", got.WallsPerDefence, want.WallsPerDefence));
+        if (got.RetreatPercent != want.RetreatPercent) return Fail(Drift("retreat_percent", got.RetreatPercent, want.RetreatPercent));
     }
 
     // --- 2. The runtime reads the REGISTERED table, not the compiled one.
@@ -6790,7 +6800,7 @@ int AiTuningGate()
     int WaveOrders(ulong seed, bool poison, bool registerFromData)
     {
         var w = new World(seed, 96, 96, players: 2);
-        if (poison) w.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { WaveSize = 40 });
+        if (poison) w.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { WaveSize = 40, WaveCap = 40 });
         if (registerFromData) CatalogueFiles.RegisterAiTuning(w, aiDir);
         w.SpawnConstructionYard(0, 40, 40);
         w.SpawnConstructionYard(1, 5, 5);      // the wave's target, far from home
@@ -7207,6 +7217,14 @@ int AiTuningGate()
         ("surplus_reserve", AiTuning.Normal with { SurplusReserve = AiTuning.Normal.SurplusReserve + 1 }, AiTuning.NormalId),
         ("surplus_window_ticks", AiTuning.Normal with { SurplusWindowTicks = AiTuning.Normal.SurplusWindowTicks + 1 }, AiTuning.NormalId),
         ("faction_defence_cap", AiTuning.Standard with { FactionDefenceCap = AiTuning.Standard.FactionDefenceCap + 1 }, AiTuning.StandardId),
+        // P8-23 (ADR-080): and how the waves go, each by one.
+        ("wave_growth", AiTuning.Standard with { WaveGrowth = AiTuning.Standard.WaveGrowth + 1 }, AiTuning.StandardId),
+        ("wave_cap", AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveCap + 1 }, AiTuning.StandardId),
+        ("staging_cells", AiTuning.Standard with { StagingCells = AiTuning.Standard.StagingCells + 1 }, AiTuning.StandardId),
+        ("all_in_percent", AiTuning.Standard with { AllInPercent = AiTuning.Standard.AllInPercent + 1 }, AiTuning.StandardId),
+        ("rush_tick", AiTuning.Rusher with { RushTick = AiTuning.Rusher.RushTick + 1 }, AiTuning.RusherId),
+        ("walls_per_defence", AiTuning.Turtle with { WallsPerDefence = AiTuning.Turtle.WallsPerDefence - 1 }, AiTuning.TurtleId),
+        ("retreat_percent", AiTuning.Hard with { RetreatPercent = AiTuning.Hard.RetreatPercent + 1 }, AiTuning.HardId),
     };
     foreach (var (key, def, id) in spendBumps)
     {
@@ -7260,6 +7278,48 @@ int AiTuningGate()
         }
         if (w.GetAiTuning(id) != zero)
             return Fail($"aituning control: the row with a {key} of 0 did not register");
+    }
+    //        P8-23 (ADR-080): and the wave numbers the loader refuses are
+    //        refused by registration too, each in the loader's words and each
+    //        beside a control at the edge the loader accepts.
+    var waveRefusals = new (string Key, int Id, AiTuningDef Bad, AiTuningDef Edge, string Words)[]
+    {
+        ("wave_growth", AiTuning.StandardId, AiTuning.Standard with { WaveGrowth = -1 }, AiTuning.Standard with { WaveGrowth = 0 },
+            "wave_growth must not be negative"),
+        ("wave_cap", AiTuning.StandardId, AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize - 1 },
+            AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize }, "wave_cap must be at least wave_size"),
+        ("staging_cells", AiTuning.StandardId, AiTuning.Standard with { StagingCells = -1 }, AiTuning.Standard with { StagingCells = 0 },
+            "staging_cells must not be negative"),
+        ("all_in_percent", AiTuning.StandardId, AiTuning.Standard with { AllInPercent = -1 }, AiTuning.Standard with { AllInPercent = 0 },
+            "all_in_percent must not be negative"),
+        ("rush_tick", AiTuning.RusherId, AiTuning.Rusher with { RushTick = -1 }, AiTuning.Rusher with { RushTick = 0 },
+            "rush_tick must not be negative"),
+        ("walls_per_defence", AiTuning.TurtleId, AiTuning.Turtle with { WallsPerDefence = AiTuning.MaxWallsPerDefence + 1 },
+            AiTuning.Turtle with { WallsPerDefence = AiTuning.MaxWallsPerDefence }, $"walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}"),
+        ("walls_per_defence", AiTuning.TurtleId, AiTuning.Turtle with { WallsPerDefence = -1 }, AiTuning.Turtle with { WallsPerDefence = 0 },
+            $"walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}"),
+        ("retreat_percent", AiTuning.HardId, AiTuning.Hard with { RetreatPercent = 101 }, AiTuning.Hard with { RetreatPercent = 100 },
+            "retreat_percent must be from 0 to 100"),
+        ("retreat_percent", AiTuning.HardId, AiTuning.Hard with { RetreatPercent = -1 }, AiTuning.Hard with { RetreatPercent = 0 },
+            "retreat_percent must be from 0 to 100"),
+    };
+    foreach (var (key, id, bad, edge, words) in waveRefusals)
+    {
+        var w = new World(4319);
+        string? refusal = null;
+        try { w.RegisterAiTuning(id, bad); }
+        catch (FormatException e) { refusal = e.Message; }
+        if (refusal is null)
+            return Fail($"aituning: registering a row with an out-of-range {key} must be refused, as data/ai's loader refuses it");
+        if (!refusal.Contains(words))
+            return Fail($"aituning: the refusal of an out-of-range {key} must say '{words}', in the loader's words, and it said: {refusal}");
+        try { w.RegisterAiTuning(id, edge); }
+        catch (FormatException e)
+        {
+            return Fail($"aituning control: the {key} at the edge the loader accepts must register, and it was refused: {e.Message}");
+        }
+        if (w.GetAiTuning(id) != edge)
+            return Fail($"aituning control: the row with its {key} at the edge the loader accepts did not register");
     }
 
     // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
@@ -7325,11 +7385,14 @@ int AiTuningGate()
                       + $"reserve test does not wrap; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
-                      + "faction_defence_cap, in the loader's words, while 0 registers; and the catalogue checksum sits at "
+                      + "faction_defence_cap, and any of the wave numbers out of the range the loader takes, each in the "
+                      + "loader's words, while the edge it accepts registers; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
-                      + "handicap, one unit of either anti-air number or one unit of any of the four spending numbers "
-                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap), which is what stops "
-                      + "two LAN peers playing different commanders and calling it agreement");
+                      + "handicap, one unit of either anti-air number, one unit of any of the four spending numbers "
+                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap) or one unit of any of "
+                      + "the seven wave numbers (wave_growth, wave_cap, staging_cells, all_in_percent, rush_tick, "
+                      + "walls_per_defence, retreat_percent), which is what stops two LAN peers playing different "
+                      + "commanders and calling it agreement");
     return 0;
 }
 

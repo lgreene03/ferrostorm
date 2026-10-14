@@ -35,3 +35,7 @@ starting_credit_handicap: 5000
 producer_cap: 3
 surplus_reserve: 4500
 surplus_window_ticks: 4500
+# P8-23 (ADR-080, decision D7): retreat_percent 30 is D7's number for Brutal,
+# as for Hard: a wave below 30 per cent of the hit points it launched with
+# comes home to its staging point, unless it was sent all-in.
+retreat_percent: 30
