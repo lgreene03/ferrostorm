@@ -50,10 +50,11 @@ faction_defence_cap: 3
 # wave gathers that far out from its own yard, towards its target, which is
 # where an enemy's wave would count as having arrived, and leaves from there
 # as one body rather than as a stream.
-# all_in_percent 200: once its fighting army is at least twice the enemy's,
-# the commander commits everything, its garrison included, and that wave never
-# turns back. Twice is the Lanchester reading of "outnumbered": a fight between
-# even armies is a coin toss, and one between armies two to one is not.
+# all_in_percent 200: once the hit points of its fighting army are at least
+# twice those of the enemy's army and armed defences together, the commander
+# commits everything, its garrison included, and that wave never turns back.
+# Twice is the Lanchester reading of "outnumbered": a fight between even armies
+# is a coin toss, and one between armies two to one is not.
 # rush_tick 0: no early push (the Rusher's is its own).
 # walls_per_defence 0: no walls (the Turtle's are its own).
 wave_growth: 3
