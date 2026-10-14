@@ -39,8 +39,9 @@ commander starts the window again, exactly as it relearns what air it has
 seen (ADR-072).
 
 **The reserve is 4500**, the superweapon rung's own credit test and the
-dearest in the ladder, so nothing bought out of surplus can starve a rung.
-It equals that test by transcription, not by reference: the rung reads a
+dearest in the ladder. No surplus purchase is ordered on credits the reserve
+keeps, but a beat can still end below the reserve (section 2). The reserve
+equals that test by transcription, not by reference: the rung reads a
 literal 4500 in `SkirmishAI.cs`, and the reserve is a copy of it in data/ai,
 so a row that moves either re-reads the other.
 
@@ -177,10 +178,22 @@ patience are macro; how many guns guard a base is taste). Each has a schema
 entry in `data/schema.ai.json`; a compiled reference in `AiTuning` that the
 files reproduce (`aituninggate` stage 1); a loader that demands it in its
 family and refuses it in the other, through the one key table per family;
-registration that refuses a rung producer cap below 1; and a place in
+registration that refuses what the loader refuses, a rung producer cap below
+1, a negative `surplus_reserve` or `surplus_window_ticks` on a rung and a
+negative `faction_defence_cap` on a personality, the last three in the
+loader's words while 0 still registers (the Architect's condition 1,
+`aituninggate` stage 4, each refusal beside its control at 0); and a place in
 `World.CatalogueChecksum`, which moves on one unit of each (`aituninggate`
 stage 3), because two LAN peers holding different files would build different
-bases from the same bank (ADR-032 clause 2). **`aituninggate` stage 2d proves
+bases from the same bank (ADR-032 clause 2). The surplus building's reserve
+test compares in `long`, as the treasury is held, `(long)_surplusReserve +
+extraCost`, so a reserve near the top of `int` plus a building's price cannot
+wrap negative and buy while ignoring the reserve (also condition 1).
+`aituninggate` holds it in stage 2e beside a control: a reserve of
+`int.MaxValue` keeps a treasury half a Bastion above it off the Bastion, and a
+reserve of `int.MaxValue` less the Bastion's price buys one. In the Architect's
+own build, dropping the cast fails the gate on "a reserve of int.MaxValue must
+keep a treasury of 2147484347 off the Bastion". **`aituninggate` stage 2d proves
 the data wins over the compiled default**: every run registers data/ai from the
 files first, and then moves one number on the row the files registered. A
 finished Directorate base orders a second factory at the authored producer cap
@@ -547,7 +560,13 @@ four and leaves the judgement there.
   base's, or if the balance gate's mirror self-check fails.
 - **The harvester rebuy is reverted alone** (commit f0c9b74, its own) if P8-23
   or P8-24 finds that F6's window share cannot reach 70 per cent with it and can
-  without it, measured at that row's head.
+  without it, measured at that row's head. In behaviour, reverting it changes
+  one term, the harvester's guard in `SkirmishAI.cs`: the commander orders a
+  harvester on the shortest factory line while that line has room
+  (`shortestDepth < 2`), and the reversal returns it to an empty line
+  (`shortestDepth == 0`), the guard the MCV beside it keeps. A squash merge
+  leaves neither f0c9b74 nor its cherry-pick 8e2308d reachable from main, so
+  the clause is carried out by that change, whatever the merge style.
 - **A cross-platform golden mismatch in CI** stops it before merge, as it would
   any golden move.
 

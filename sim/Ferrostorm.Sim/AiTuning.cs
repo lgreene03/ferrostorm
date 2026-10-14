@@ -114,7 +114,8 @@ public static class AiTuning
     // as many signature guns as it keeps fighters at home. A rung's producer
     // cap is decision D7's (Easy 1, Normal 2, Hard 3, Brutal 3); its reserve is
     // 4500, the superweapon rung's own credit test and the dearest in the
-    // ladder, so spending surplus never starves a rung; and its window is 4500
+    // ladder (no surplus purchase is ordered on credits the reserve keeps, but
+    // a beat can still end below it, ADR-079 section 2); and its window is 4500
     // ticks, the far edge of the measured gap between a passing bank and a
     // sustained one (spendprobe at the base: of 423 stretches at or above 4500
     // that ended before their match, one lasted between two and five minutes;

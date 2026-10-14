@@ -954,8 +954,9 @@ public sealed class SkirmishAI
             // mix is kept rather than topped up with whatever has room. The
             // first order of a beat is placed exactly as the one order always
             // was, on its own price; every order after it only while the
-            // beat's orders so far still leave the rung's reserve, so spending
-            // a bank never starves the ladder's dearest rung.
+            // beat's orders so far still leave the rung's reserve, so no order
+            // after the first is placed on credits the reserve keeps; the beat
+            // can still end below the reserve (ADR-079 section 2).
             for (bool first = true; ; first = false)
             {
                 int unitType;
