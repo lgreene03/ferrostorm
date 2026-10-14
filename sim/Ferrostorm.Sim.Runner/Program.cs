@@ -68,6 +68,9 @@ using Ferrostorm.Sim;
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
 //                        rebaseline=1 prints the proxy budget lines for the matches as they play now
+//   flowparity         - P8-31, D28: every field the sim's FlowFieldBuilder makes, on every shipped map and five synthetic grids, for a
+//                        target of each class and footprints of sizes 1 to 4, equals the pre-P8-31 build's in every cell's distance and
+//                        direction and in its relaxation count (in match; full=1 every cell and anchor, live=1 longmatchperf's matches too)
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. aiairgate and cheesegate run in match (P8-17)
 //                        and pillargate --bind in CI (P8-72); the rest are in none of golden, match, determinism or CI.
@@ -15485,6 +15488,10 @@ int Match(ulong seed)
     // open, which ML-01 found they could not.
     int dockFace = DockFaceGate();
     if (dockFace != 0) return dockFace;
+    // P8-31: and every route those walks follow is the field the pre-P8-31
+    // build would have made, cell for cell, on every shipped map.
+    int flowParity = Measured(FlowParity);
+    if (flowParity != 0) return flowParity;
     // P8-17: and the commander answers air (F3, ADR-072) and the cheap cheeses,
     // which bind from that row. Run here, at their defaults, so a regression
     // turns CI red rather than waiting for somebody to run the mode by hand.
@@ -19508,10 +19515,12 @@ int FieldSurvivalGate()
 /// <summary>P8-30: nearest-rank percentile of an ascending array (q of 0.999 is p999).</summary>
 T Percentile<T>(T[] sorted, double q) => sorted.Length == 0 ? default! : sorted[Math.Max(0, (int)Math.Ceiling(q * sorted.Length) - 1)];
 
-LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
+// The match longmatchperf times, set up; P8-31's flowparity live=1 plays the
+// same one, so the setup is written once.
+World LongMatchWorld(string root, string name, out int seats, out SkirmishAI[] ais)
 {
     var map = LoadMeasureMap(root, name, false);
-    int seats = map.Starts.Count;
+    seats = map.Starts.Count;
     var w = map.BuildWorld(2026, players: seats, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
     for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
     map.PlaceSkirmishStart(w, 8000);
@@ -19520,13 +19529,19 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
     // grant is zero at Normal today (data/ai/ai_normal.yaml), so it changes no
     // figure, but it is here so that a tuning change reaches this run exactly
     // as it reaches every other P8-13 measurement rather than being skipped.
-    var ais = new SkirmishAI[seats];
+    ais = new SkirmishAI[seats];
     for (int p = 0; p < seats; p++) ais[p] = MeasureCommander(p, AiDifficulty.Normal, 0, w);
     for (int p = 0; p < seats; p++)
     {
         long handicap = SkirmishAI.StartingCreditHandicap(AiDifficulty.Normal, w);
         if (handicap > 0) w.GrantCredits(p, handicap);
     }
+    return w;
+}
+
+LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
+{
+    var w = LongMatchWorld(root, name, out int seats, out var ais);
     var ms = new List<double>(ticks);
     var builds = new List<int>(ticks);
     var relaxed = new List<long>(ticks);
@@ -19545,7 +19560,7 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
         builds.Add((int)(w.FlowFieldBuilds - b0));
         relaxed.Add(w.FlowCellsRelaxed - r0);
     }
-    return new LongMatchPerf(name, map.Width, map.Height, seats, w.Tick, w.Winner, ms.ToArray(), builds.ToArray(), relaxed.ToArray());
+    return new LongMatchPerf(name, w.Map.Width, w.Map.Height, seats, w.Tick, w.Winner, ms.ToArray(), builds.ToArray(), relaxed.ToArray());
 }
 
 int LongMatchPerfGate()
@@ -19666,6 +19681,477 @@ int LongMatchPerfGate()
         string.Create(ic, $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds."));
 }
 
+// ---------------- P8-31: flow-field parity ----------------
+//
+// D28 lets FlowField's build be replaced (Dial's algorithm over ordered
+// buckets, its arrays pooled) only if the replacement is PARITY-PROVEN: every
+// cell of every field it builds must hold the distance and the direction the
+// old build gave it, and the build must report the same count of
+// relaxations, because the goldens, every replay and longmatchperf's proxy
+// rest on those. This stage is that proof, run rather than argued. It builds
+// each field twice, once with the sim's FlowFieldBuilder and once with the
+// pre-P8-31 build kept verbatim inside this function, compares the two cell
+// by cell, and fails on the first difference with the grid, the goal, the
+// cell and both values named.
+//
+// THE OLD BUILD is a set of local functions nested in FlowParity, so the
+// compiler refuses a call to it from anywhere else in the runner, and the sim
+// cannot see it at all: it is the reference, never a fallback.
+//
+// THE SWEEP. Every shipped map (data/maps and data/missions) on the grid a
+// match starts from: terrain, the authored structures and, on a map with
+// starts, every seat's opening hand. Then five synthetic grids that make
+// every class below occur at least once: open ground (the most ties), a
+// seeded scatter of blocked cells (the most corner-cutting refusals and
+// pockets), a walled pocket beside a solid block (a pocket, and a sealed
+// footprint at every size), a one-row strip and a single cell. On each grid:
+//   - single-target fields (Build) with the target in each class: blocked, in
+//     a pocket the grid's first open cell cannot reach, a map corner, a map
+//     edge, beside an obstacle, in open ground;
+//   - footprint fields (BuildToFootprint), sizes 1 to 4: every structure on
+//     the grid at its own anchor and size, then anchors whose one-cell ring is
+//     sealed (no source at all), crosses the map edge, is partly blocked or
+//     is open all round.
+// By default each class is sampled at up to SampleGoals goals spread evenly
+// through the grid in cell order, a few seconds' work that `match` runs.
+// full=1 builds EVERY cell as a target and every anchor at every size, which
+// takes minutes on ten threads. live=1 also plays longmatchperf's matches and,
+// at the start and every LiveEveryTicks ticks, rebuilds every live
+// structure's footprint and every moving entity's flow target on the grid the
+// match has made by then.
+//
+// A class that no grid produced fails the stage (P8-13's rule: a stage that
+// measured nothing fails), so a sweep that quietly stopped covering pockets
+// or sealed rings cannot pass.
+int FlowParity()
+{
+    string root = MeasureRoot();
+    var o = MeasureOptions("flowparity", false, "full", "live", "jobs");
+    bool Flag(string key) => o.GetValueOrDefault(key) switch
+    {
+        null or "0" => false,
+        "1" => true,
+        var v => throw new FormatException($"{key}={v}: expected 1 or 0"),
+    };
+    bool full = Flag("full"), live = Flag("live");
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    const int SampleGoals = 6, LiveEveryTicks = 1500, ChunkGoals = 24;
+    var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+    // ---- The pre-P8-31 build, verbatim from sim/Ferrostorm.Sim/Map.cs at
+    // 9670e04: FlowField.Build, FlowField.BuildToFootprint and FlowField.Relax.
+    // Two changes, both of form only: each returns its target cell,
+    // distances, directions and relaxation count instead of a FlowField
+    // (whose constructor the runner cannot reach), and the direction tables
+    // are this function's locals rather than the class's statics.
+    int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
+    int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
+    byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+    const byte Unreachable = 255, AtGoal = 254;
+
+    (int Target, int[] Dist, byte[] Next, int Relaxed) OldBuild(Map map, int targetCx, int targetCy)
+    {
+        int n = map.Width * map.Height;
+        var dist = new int[n];
+        var next = new byte[n];
+        Array.Fill(dist, int.MaxValue);
+        Array.Fill(next, Unreachable);
+
+        int target = map.CellIndex(targetCx, targetCy);
+        dist[target] = 0;
+
+        int relaxed = OldRelax(map, dist, next, new List<(int D, int C)> { (0, target) });
+        return (target, dist, next, relaxed);
+    }
+
+    (int Target, int[] Dist, byte[] Next, int Relaxed) OldBuildToFootprint(Map map, int ax, int ay, int size)
+    {
+        int n = map.Width * map.Height;
+        var dist = new int[n];
+        var next = new byte[n];
+        Array.Fill(dist, int.MaxValue);
+        Array.Fill(next, Unreachable);
+
+        var heap = new List<(int D, int C)>();
+        for (int y = ay - 1; y <= ay + size; y++)
+            for (int x = ax - 1; x <= ax + size; x++)
+            {
+                bool inside = x >= ax && x < ax + size && y >= ay && y < ay + size;
+                if (inside || !map.InBounds(x, y) || map.IsBlocked(x, y)) continue;
+                int c = map.CellIndex(x, y);
+                dist[c] = 0;
+                next[c] = AtGoal;
+                heap.Add((0, c));
+            }
+
+        int relaxed = OldRelax(map, dist, next, heap);
+        return (map.CellIndex(ax, ay), dist, next, relaxed);
+    }
+
+    int OldRelax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
+    {
+        int relaxed = 0;
+        // Array binary min-heap of (dist, cell); ties broken by lower cell index.
+        void Push((int, int) item)
+        {
+            heap.Add(item);
+            int i = heap.Count - 1;
+            while (i > 0)
+            {
+                int p = (i - 1) >> 1;
+                if (Less(heap[i], heap[p])) { (heap[i], heap[p]) = (heap[p], heap[i]); i = p; }
+                else break;
+            }
+        }
+        (int, int) Pop()
+        {
+            var top = heap[0];
+            heap[0] = heap[^1];
+            heap.RemoveAt(heap.Count - 1);
+            int i = 0;
+            while (true)
+            {
+                int l = 2 * i + 1, r = l + 1, m = i;
+                if (l < heap.Count && Less(heap[l], heap[m])) m = l;
+                if (r < heap.Count && Less(heap[r], heap[m])) m = r;
+                if (m == i) break;
+                (heap[i], heap[m]) = (heap[m], heap[i]); i = m;
+            }
+            return top;
+        }
+        static bool Less((int D, int C) a, (int D, int C) b)
+            => a.D != b.D ? a.D < b.D : a.C < b.C;
+
+        while (heap.Count > 0)
+        {
+            var (d, c) = Pop();
+            if (d > dist[c]) continue; // stale entry
+            int cx = c % map.Width, cy = c / map.Width;
+            for (int k = 0; k < 8; k++)
+            {
+                int nx = cx + Dx[k], ny = cy + Dy[k];
+                if (!map.InBounds(nx, ny) || map.IsBlocked(nx, ny)) continue;
+                if (k >= 4) // no corner cutting
+                {
+                    if (map.IsBlocked(cx + Dx[k], cy) || map.IsBlocked(cx, cy + Dy[k])) continue;
+                }
+                int nc = map.CellIndex(nx, ny);
+                int nd = d + Cost[k];
+                if (nd < dist[nc])
+                {
+                    dist[nc] = nd;
+                    // Direction FROM neighbour TOWARD c is the opposite of k.
+                    next[nc] = Opposite[k];
+                    Push((nd, nc));
+                    relaxed++;
+                }
+            }
+        }
+        return relaxed;
+    }
+    // ---- End of the pre-P8-31 build.
+
+    string[] targetClass = { "blocked", "pocket", "corner", "edge", "beside an obstacle", "open" };
+    string[] footClass = { "structure", "sealed ring", "ring past the edge", "ring partly blocked", "ring open" };
+
+    IEnumerable<int> Sample(List<int> cells) => full || cells.Count <= SampleGoals ? cells
+        : Enumerable.Range(0, SampleGoals).Select(i => cells[(int)((long)i * cells.Count / SampleGoals)]);
+
+    // Every structure on a world's grid, at its own anchor and size, in entity order.
+    List<(int Ax, int Ay, int Size)> StructuresOf(World w)
+    {
+        var list = new List<(int Ax, int Ay, int Size)>();
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && World.IsStructure(e.Kind))
+                list.Add((w.AnchorOf(e.X, e.StructType), w.AnchorOf(e.Y, e.StructType), w.FootprintOf(e.StructType)));
+        }
+        return list;
+    }
+
+    // The fields to build on one grid: a target is Size 0 with Class indexing
+    // targetClass, a footprint is Size 1 to 4 with Class indexing footClass.
+    List<(int X, int Y, int Size, int Class)> GoalsOf(Map m, List<(int Ax, int Ay, int Size)> structures)
+    {
+        int w = m.Width, h = m.Height, n = w * h;
+        var goals = new List<(int X, int Y, int Size, int Class)>();
+        // A pocket is passable ground out of reach of the grid's first open
+        // cell, read off the OLD build's distances, which are the reference.
+        int first = -1;
+        for (int c = 0; c < n && first < 0; c++) if (!m.IsBlocked(c % w, c / w)) first = c;
+        int[]? reach = first < 0 ? null : OldBuild(m, first % w, first / w).Dist;
+        var byClass = targetClass.Select(_ => new List<int>()).ToArray();
+        for (int c = 0; c < n; c++)
+        {
+            int x = c % w, y = c / w, k;
+            if (m.IsBlocked(x, y)) k = 0;
+            else if (reach![c] == int.MaxValue) k = 1;
+            else if ((x == 0 || x == w - 1) && (y == 0 || y == h - 1)) k = 2;
+            else if (x == 0 || x == w - 1 || y == 0 || y == h - 1) k = 3;
+            else
+            {
+                bool beside = false;
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        beside |= (dx != 0 || dy != 0) && m.IsBlocked(x + dx, y + dy);
+                k = beside ? 4 : 5;
+            }
+            byClass[k].Add(c);
+        }
+        for (int k = 0; k < byClass.Length; k++)
+            foreach (int c in Sample(byClass[k])) goals.Add((c % w, c / w, 0, k));
+        var seen = new HashSet<(int, int, int)>();
+        foreach (var s in structures)
+            if (seen.Add(s)) goals.Add((s.Ax, s.Ay, s.Size, 0));
+        for (int size = 1; size <= 4; size++)
+        {
+            var ring = footClass.Select(_ => new List<int>()).ToArray();
+            for (int ay = 0; ay + size <= h; ay++)
+                for (int ax = 0; ax + size <= w; ax++)
+                {
+                    int open = 0, blocked = 0, outside = 0;
+                    for (int y = ay - 1; y <= ay + size; y++)
+                        for (int x = ax - 1; x <= ax + size; x++)
+                        {
+                            if (x >= ax && x < ax + size && y >= ay && y < ay + size) continue;
+                            if (!m.InBounds(x, y)) outside++;
+                            else if (m.IsBlocked(x, y)) blocked++;
+                            else open++;
+                        }
+                    ring[open == 0 ? 1 : outside > 0 ? 2 : blocked > 0 ? 3 : 4].Add(m.CellIndex(ax, ay));
+                }
+            for (int k = 1; k < ring.Length; k++)
+                foreach (int c in Sample(ring[k]))
+                    if (seen.Add((c % w, c / w, size))) goals.Add((c % w, c / w, size, k));
+        }
+        return goals;
+    }
+
+    string Dist(int d) => d == int.MaxValue ? "unreachable" : d.ToString(ic);
+
+    // One field built both ways and compared: null when every cell's distance
+    // and direction, the target cell and the relaxation count are equal,
+    // otherwise the first difference by name. Distance is compared before
+    // direction in each cell, cells in index order, the count last.
+    string? Check(string at, Map m, int x, int y, int size, FlowFieldBuilder nb, Stopwatch oldSw, Stopwatch newSw,
+                  out long cells, out int relaxed)
+    {
+        cells = 0;
+        oldSw.Start();
+        var old = size == 0 ? OldBuild(m, x, y) : OldBuildToFootprint(m, x, y, size);
+        oldSw.Stop();
+        newSw.Start();
+        var f = size == 0 ? nb.Build(m, x, y, out relaxed) : nb.BuildToFootprint(m, x, y, size, out relaxed);
+        newSw.Stop();
+        if (f.TargetCell != old.Target) return $"{at}: TargetCell is {f.TargetCell}, the old build's {old.Target}";
+        ReadOnlySpan<int> dist = nb.Distances;
+        ReadOnlySpan<byte> dir = f.Directions;
+        if (dist.Length != old.Dist.Length || dir.Length != old.Next.Length)
+            return $"{at}: {dist.Length} distances and {dir.Length} directions, the old build {old.Dist.Length} and {old.Next.Length}";
+        for (int c = 0; c < old.Dist.Length; c++)
+        {
+            if (dist[c] != old.Dist[c])
+                return $"{at}: cell ({c % m.Width},{c / m.Width}) has distance {Dist(dist[c])}, the old build's {Dist(old.Dist[c])}";
+            if (dir[c] != old.Next[c])
+                return $"{at}: cell ({c % m.Width},{c / m.Width}) has direction {dir[c]}, the old build's {old.Next[c]}";
+        }
+        if (relaxed != old.Relaxed) return $"{at}: the build relaxed {relaxed} cells, the old build {old.Relaxed}";
+        cells = old.Dist.Length;
+        return null;
+    }
+
+    string Goal(int x, int y, int size, string cls) => size == 0
+        ? $"target ({x},{y}), {cls}" : $"{size}x{size} footprint at ({x},{y}), {cls}";
+
+    // ---- The grids: every shipped map as a match starts it, then the synthetic ones.
+    var sw = Stopwatch.StartNew();
+    var grids = new List<(string Name, Map Map, List<(int X, int Y, int Size, int Class)> Goals)>();
+    var files = Directory.GetFiles(Path.Combine(root, "data", "maps"), "*.fmap")
+        .Concat(Directory.GetFiles(Path.Combine(root, "data", "missions"), "*.fmap"))
+        .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')).ToArray();
+    Array.Sort(files, StringComparer.Ordinal);
+    foreach (var rel in files)
+    {
+        var md = MapData.Load(Path.Combine(root, rel));
+        int seats = md.Starts.Count;
+        var w = md.BuildWorld(2026, players: Math.Max(2, seats), out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
+        if (seats >= 2)
+        {
+            for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
+            md.PlaceSkirmishStart(w, 8000);
+        }
+        string name = $"{Path.GetFileNameWithoutExtension(rel)} {md.Width}x{md.Height}" + (seats >= 2 ? $", {seats} opening hands" : ", as authored");
+        grids.Add((name, w.Map, GoalsOf(w.Map, StructuresOf(w))));
+    }
+    if (grids.Count == 0) return Fail("flowparity: no shipped map found under data/maps or data/missions");
+    Map Synthetic(int w, int h, Func<int, int, bool> blocked)
+    {
+        var m = new Map(w, h);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                if (blocked(x, y)) m.SetBlocked(x, y, true);
+        return m;
+    }
+    var scatterRng = new DeterministicRandom(31);
+    var scatter = new bool[48 * 32];
+    for (int c = 0; c < scatter.Length; c++) scatter[c] = scatterRng.NextInt(4) == 0;
+    var none = new List<(int Ax, int Ay, int Size)>();
+    foreach (var (name, m) in new[]
+    {
+        ("synthetic open 48x32", Synthetic(48, 32, (x, y) => false)),
+        ("synthetic scatter 48x32, a quarter blocked (seed 31)", Synthetic(48, 32, (x, y) => scatter[y * 48 + x])),
+        // A wall two cells thick round a 5x5 pocket, and a solid 6x6 block in
+        // which a footprint of every size from 1 to 4 has a sealed ring.
+        ("synthetic pocket and solid block 32x24", Synthetic(32, 24, (x, y) =>
+            (x >= 4 && x <= 12 && y >= 4 && y <= 12 && !(x >= 6 && x <= 10 && y >= 6 && y <= 10))
+            || (x >= 18 && x <= 23 && y >= 4 && y <= 9))),
+        ("synthetic strip 17x1, cut in the middle", Synthetic(17, 1, (x, y) => x == 8)),
+        ("synthetic single cell 1x1", Synthetic(1, 1, (x, y) => false)),
+    })
+        grids.Add((name, m, GoalsOf(m, none)));
+
+    var chunks = new List<(int Grid, int From, int To)>();
+    for (int g = 0; g < grids.Count; g++)
+        for (int i = 0; i < grids[g].Goals.Count; i += ChunkGoals)
+            chunks.Add((g, i, Math.Min(i + ChunkGoals, grids[g].Goals.Count)));
+    Console.WriteLine(string.Create(ic, $"flowparity: {grids.Count} grids, {chunks.Sum(c => c.To - c.From)} fields, each built by the sim's "
+        + $"FlowFieldBuilder and by the pre-P8-31 build and compared cell by cell (distance, direction), with the target cell and the "
+        + $"relaxation count; {(full ? "EVERY cell as a target and every anchor at every footprint size" : $"up to {SampleGoals} goals per class")}"
+        + $"{(live ? $", then longmatchperf's matches every {LiveEveryTicks} ticks" : "")}."));
+
+    int stop = 0;
+    (int Grid, int[] T, int[] F, long Cells, long Relaxed, double OldMs, double NewMs, string? Failure) RunChunk(int i)
+    {
+        var (g, from, to) = chunks[i];
+        var t = new int[targetClass.Length];
+        var fp = new int[footClass.Length];
+        if (Volatile.Read(ref stop) != 0) return (g, t, fp, 0, 0, 0, 0, null);
+        var (name, m, goals) = grids[g];
+        var nb = new FlowFieldBuilder();
+        var oldSw = new Stopwatch();
+        var newSw = new Stopwatch();
+        long cells = 0, relaxed = 0;
+        for (int j = from; j < to; j++)
+        {
+            var (x, y, size, cls) = goals[j];
+            string? fail = Check($"{name}, {Goal(x, y, size, size == 0 ? targetClass[cls] : footClass[cls])}",
+                m, x, y, size, nb, oldSw, newSw, out long c, out int r);
+            if (fail != null)
+            {
+                Interlocked.Exchange(ref stop, 1);
+                return (g, t, fp, cells, relaxed, oldSw.Elapsed.TotalMilliseconds, newSw.Elapsed.TotalMilliseconds, fail);
+            }
+            if (size == 0) t[cls]++; else fp[cls]++;
+            cells += c;
+            relaxed += r;
+        }
+        return (g, t, fp, cells, relaxed, oldSw.Elapsed.TotalMilliseconds, newSw.Elapsed.TotalMilliseconds, null);
+    }
+
+    var tTotal = new long[targetClass.Length];
+    var fTotal = new long[footClass.Length];
+    var gT = new int[targetClass.Length];
+    var gF = new int[footClass.Length];
+    long gCells = 0, gRelaxed = 0, fields = 0, cellsAll = 0, relaxedAll = 0;
+    double gOld = 0, gNew = 0, oldAll = 0, newAll = 0;
+    string? firstFailure = null;
+    string Tally(int[] counts, string[] names) => string.Join(", ", names.Select((s, k) => $"{s} {counts[k]}"));
+    RunOrdered(chunks.Count, jobs, RunChunk, (i, r) =>
+    {
+        if (r.Failure != null && firstFailure == null) firstFailure = r.Failure;
+        for (int k = 0; k < gT.Length; k++) gT[k] += r.T[k];
+        for (int k = 0; k < gF.Length; k++) gF[k] += r.F[k];
+        gCells += r.Cells; gRelaxed += r.Relaxed; gOld += r.OldMs; gNew += r.NewMs;
+        if (chunks[i].To != grids[r.Grid].Goals.Count) return;
+        if (firstFailure == null)
+            Console.WriteLine(string.Create(ic, $"  {grids[r.Grid].Name}: {gT.Sum()} targets ({Tally(gT, targetClass)}); "
+                + $"{gF.Sum()} footprints ({Tally(gF, footClass)}); {gCells} cells and {gRelaxed} relaxations equal; "
+                + $"old {gOld:F0} ms, new {gNew:F0} ms"));
+        for (int k = 0; k < gT.Length; k++) { tTotal[k] += gT[k]; gT[k] = 0; }
+        for (int k = 0; k < gF.Length; k++) { fTotal[k] += gF[k]; gF[k] = 0; }
+        cellsAll += gCells; relaxedAll += gRelaxed; oldAll += gOld; newAll += gNew;
+        gCells = gRelaxed = 0; gOld = gNew = 0;
+    });
+    fields = tTotal.Sum() + fTotal.Sum();
+
+    // ---- live=1: the grids longmatchperf's matches make as they play.
+    (string Line, int Fields, long Cells, string? Failure) LiveRun(string name)
+    {
+        var w = LongMatchWorld(root, name, out int seats, out var ais);
+        var nb = new FlowFieldBuilder();
+        var oldSw = new Stopwatch();
+        var newSw = new Stopwatch();
+        var cmds = new List<Command>();
+        int footprints = 0, targets = 0, checks = 0;
+        long cells = 0;
+        while (true)
+        {
+            bool end = w.Tick >= MeasurementHarness.WindowCloseTicks || MatchOver(w);
+            if (w.Tick % LiveEveryTicks == 0 || end)
+            {
+                checks++;
+                var seen = new HashSet<(int, int, int)>();
+                foreach (var s in StructuresOf(w))
+                {
+                    if (!seen.Add(s)) continue;
+                    string? fail = Check($"{name} live at t={w.Tick}, {Goal(s.Ax, s.Ay, s.Size, "a structure")}",
+                        w.Map, s.Ax, s.Ay, s.Size, nb, oldSw, newSw, out long c, out _);
+                    if (fail != null) return ("", footprints + targets, cells, fail);
+                    footprints++;
+                    cells += c;
+                }
+                for (int i = 0; i < w.EntityCount; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive || !e.Moving || !e.UseFlow) continue;
+                    int tx = Map.CellOf(e.TargetX), ty = Map.CellOf(e.TargetY);
+                    if (!w.Map.InBounds(tx, ty) || !seen.Add((tx, ty, 0))) continue;
+                    string? fail = Check($"{name} live at t={w.Tick}, {Goal(tx, ty, 0, $"the flow target of entity {i}")}",
+                        w.Map, tx, ty, 0, nb, oldSw, newSw, out long c, out _);
+                    if (fail != null) return ("", footprints + targets, cells, fail);
+                    targets++;
+                    cells += c;
+                }
+            }
+            if (end) break;
+            cmds.Clear();
+            for (int p = 0; p < seats; p++) ais[p].Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        string ended = w.Winner >= 0 ? $"seat {w.Winner} wins at t={w.Tick}" : $"no result at t={w.Tick}";
+        return (string.Create(ic, $"  {name} live, {ended}: {checks} checks, {footprints} structure footprints and {targets} "
+            + $"flow targets, {cells} cells equal; old {oldSw.Elapsed.TotalMilliseconds:F0} ms, new {newSw.Elapsed.TotalMilliseconds:F0} ms"),
+            footprints + targets, cells, null);
+    }
+    long liveFields = 0;
+    if (live && firstFailure == null)
+    {
+        var liveMaps = MeasureMaps(root, "07,08,09");
+        RunOrdered(liveMaps.Length, jobs, i => LiveRun(liveMaps[i]), (_, r) =>
+        {
+            if (r.Failure != null) { firstFailure ??= r.Failure; return; }
+            if (firstFailure == null) Console.WriteLine(r.Line);
+            liveFields += r.Fields;
+            cellsAll += r.Cells;
+        });
+    }
+    sw.Stop();
+
+    if (firstFailure != null) return Fail($"flowparity: the replacement differs from the pre-P8-31 build. First difference: {firstFailure}");
+    var unseen = targetClass.Where((_, k) => tTotal[k] == 0).Select(s => $"target {s}")
+        .Concat(footClass.Where((_, k) => fTotal[k] == 0).Select(s => $"footprint {s}")).ToArray();
+    if (unseen.Length > 0)
+        return Fail($"flowparity: no grid in the sweep gave a goal of class {string.Join(", ", unseen)}, so the stage did not test it");
+    Console.WriteLine(string.Create(ic, $"flowparity: targets by class {Tally(tTotal.Select(v => (int)v).ToArray(), targetClass)}; "
+        + $"footprints by class {Tally(fTotal.Select(v => (int)v).ToArray(), footClass)}"));
+    Console.WriteLine(string.Create(ic, $"flowparity: PASS. {fields + liveFields} fields, {cellsAll} cells: every distance and direction, "
+        + $"every target cell and every relaxation count ({relaxedAll} on the sweep) equal to the pre-P8-31 build's. "
+        + $"Build time on the sweep, old {oldAll:F0} ms against new {newAll:F0} ms; elapsed {sw.Elapsed.TotalSeconds:F1} s on {jobs} thread(s)."));
+    return 0;
+}
+
 return args.Length == 0
     ? SelfTest() | Determinism(2026) | Match(2026) | Lan(5)
     : args[0] switch
@@ -19766,6 +20252,8 @@ return args.Length == 0
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         // P8-30: F12's large-map perf run, the same conventions.
         "longmatchperf" => Measured(LongMatchPerfGate),
+        // P8-31: the flow-field replacement's parity proof (also in match).
+        "flowparity" => Measured(FlowParity),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),

@@ -33,25 +33,30 @@ public sealed class Map
 /// (BuildToFootprint): many sources rather than one, seeded at every passable
 /// cell of the one-cell ring round the footprint, so a building is reachable
 /// from whichever face is open. The single-target field is unchanged.
+///
+/// P8-31: the build itself lives in <see cref="FlowFieldBuilder"/>, which owns
+/// the scratch a build needs so that a cache's builds reuse it. The static
+/// Build and BuildToFootprint below keep their signatures for callers outside
+/// a cache and use a builder of their own per call.
 /// </summary>
 public sealed class FlowField
 {
     // 8 neighbours: E, W, N, S, NE, NW, SE, SW. Index 255 = unreachable/target.
-    private static readonly int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
-    private static readonly int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
-    private static readonly int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
-    private static readonly byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+    internal static readonly int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
+    internal static readonly int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    internal static readonly int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
+    internal static readonly byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
 
-    private const byte Unreachable = 255;
+    internal const byte Unreachable = 255;
     /// <summary>ADR-071: a goal cell of a footprint field, one of its sources.
     /// Only BuildToFootprint writes it, so a single-target field never holds it
     /// and NextCell answers exactly as it always has for those.</summary>
-    private const byte AtGoal = 254;
+    internal const byte AtGoal = 254;
 
     public readonly int TargetCell;
     private readonly byte[] _next; // per cell: neighbour index toward target
 
-    private FlowField(int targetCell, byte[] next) { TargetCell = targetCell; _next = next; }
+    internal FlowField(int targetCell, byte[] next) { TargetCell = targetCell; _next = next; }
 
     /// <summary>Next cell index on the route from (cx,cy), or -1 if at target/goal/unreachable.</summary>
     public int NextCell(Map map, int cx, int cy)
@@ -69,25 +74,20 @@ public sealed class FlowField
     /// footprint fields only: a single-target field marks its own target 255.</summary>
     public bool Reaches(Map map, int cx, int cy) => _next[map.CellIndex(cx, cy)] != Unreachable;
 
+    /// <summary>P8-31: the raw direction every cell holds, in cell index
+    /// order: 0 to 7 a neighbour (E, W, N, S, NE, NW, SE, SW), 254 a footprint
+    /// goal, 255 unreachable or the single target. Read only by the runner's
+    /// `flowparity` stage, which compares it byte for byte with what the
+    /// pre-P8-31 build gives; nothing in the sim reads it.</summary>
+    public ReadOnlySpan<byte> Directions => _next;
+
     public static FlowField Build(Map map, int targetCx, int targetCy) => Build(map, targetCx, targetCy, out _);
 
     /// <summary>P8-30: Build, also reporting how many cells the relaxation
-    /// lowered (see Relax). The field is the same field; the count is only an
-    /// observation of the work done to make it.</summary>
+    /// lowered (see FlowFieldBuilder). The field is the same field; the count
+    /// is only an observation of the work done to make it.</summary>
     public static FlowField Build(Map map, int targetCx, int targetCy, out int relaxed)
-    {
-        int n = map.Width * map.Height;
-        var dist = new int[n];
-        var next = new byte[n];
-        Array.Fill(dist, int.MaxValue);
-        Array.Fill(next, Unreachable);
-
-        int target = map.CellIndex(targetCx, targetCy);
-        dist[target] = 0;
-
-        relaxed = Relax(map, dist, next, new List<(int D, int C)> { (0, target) });
-        return new FlowField(target, next);
-    }
+        => new FlowFieldBuilder().Build(map, targetCx, targetCy, out relaxed);
 
     /// <summary>
     /// ADR-071: a field toward a size x size footprint anchored at (ax,ay). The
@@ -97,23 +97,68 @@ public sealed class FlowField
     /// expand into that cell's own open neighbours: for a 2x2 building, the
     /// cells east, south and south-east of its bottom-right cell, so blocking
     /// those three made the whole building unreachable from every side (ML-01).
-    ///
+    /// </summary>
+    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size) => BuildToFootprint(map, ax, ay, size, out _);
+
+    /// <summary>P8-30: BuildToFootprint, also reporting the relaxation count, as Build does.</summary>
+    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size, out int relaxed)
+        => new FlowFieldBuilder().BuildToFootprint(map, ax, ay, size, out relaxed);
+}
+
+/// <summary>
+/// P8-31 (D28): builds flow fields of both shapes, owning the scratch a build
+/// needs so that a cache's builds reuse it instead of allocating it each time.
+/// One builder serves one caller at a time: a FlowFieldCache holds its own, so
+/// each World, stepped on one thread, has its own. Nothing in the scratch
+/// outlives a build (each build resets every cell it will read), so which
+/// builder made a field cannot change the field. The only allocations per
+/// build are the field and its direction array, which the cache keeps.
+/// </summary>
+public sealed class FlowFieldBuilder
+{
+    // Per-cell distance to the nearest source, valid for the last build only.
+    private int[] _dist = Array.Empty<int>();
+    private int _cells;
+
+    /// <summary>The distance every cell had at the end of the last build, in
+    /// cell index order (int.MaxValue where unreachable). Read only by the
+    /// runner's `flowparity` stage; nothing in the sim reads it.</summary>
+    public ReadOnlySpan<int> Distances => _dist.AsSpan(0, _cells);
+
+    // Sized to the map and reset for one build: every cell unreachable.
+    private int[] Reset(Map map, out byte[] next)
+    {
+        int n = map.Width * map.Height;
+        if (_dist.Length < n) _dist = new int[n];
+        _cells = n;
+        Array.Fill(_dist, int.MaxValue, 0, n);
+        next = new byte[n];
+        Array.Fill(next, FlowField.Unreachable);
+        return _dist;
+    }
+
+    /// <summary>A field toward one target cell, reporting the relaxation count (see Relax).</summary>
+    public FlowField Build(Map map, int targetCx, int targetCy, out int relaxed)
+    {
+        var dist = Reset(map, out var next);
+        int target = map.CellIndex(targetCx, targetCy);
+        dist[target] = 0;
+
+        relaxed = Relax(map, dist, next, new List<(int D, int C)> { (0, target) });
+        return new FlowField(target, next);
+    }
+
+    /// <summary>
+    /// ADR-071: a field toward a size x size footprint anchored at (ax,ay).
     /// The ring is walked row by row, y then x, which is ascending cell index:
     /// a fixed, sorted seed order, and an ascending list is already a valid
     /// min-heap. No dictionary or set is enumerated anywhere in the build.
     /// Relaxation never overwrites a source (it has distance 0 and every step
     /// costs at least 2), so a goal cell keeps its mark.
     /// </summary>
-    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size) => BuildToFootprint(map, ax, ay, size, out _);
-
-    /// <summary>P8-30: BuildToFootprint, also reporting the relaxation count, as Build does.</summary>
-    public static FlowField BuildToFootprint(Map map, int ax, int ay, int size, out int relaxed)
+    public FlowField BuildToFootprint(Map map, int ax, int ay, int size, out int relaxed)
     {
-        int n = map.Width * map.Height;
-        var dist = new int[n];
-        var next = new byte[n];
-        Array.Fill(dist, int.MaxValue);
-        Array.Fill(next, Unreachable);
+        var dist = Reset(map, out var next);
 
         var heap = new List<(int D, int C)>();
         for (int y = ay - 1; y <= ay + size; y++)
@@ -123,7 +168,7 @@ public sealed class FlowField
                 if (inside || !map.InBounds(x, y) || map.IsBlocked(x, y)) continue;
                 int c = map.CellIndex(x, y);
                 dist[c] = 0;
-                next[c] = AtGoal;
+                next[c] = FlowField.AtGoal;
                 heap.Add((0, c));
             }
 
@@ -143,6 +188,7 @@ public sealed class FlowField
     /// relaxation reads it.</summary>
     private static int Relax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
     {
+        var Dx = FlowField.Dx; var Dy = FlowField.Dy; var Cost = FlowField.Cost; var Opposite = FlowField.Opposite;
         int relaxed = 0;
         // Array binary min-heap of (dist, cell); ties broken by lower cell index.
         void Push((int, int) item)
@@ -211,6 +257,8 @@ public sealed class FlowFieldCache
     // ADR-071: footprint fields, keyed by anchor cell and size. A separate
     // dictionary so a footprint key can never collide with a target-cell key.
     private readonly Dictionary<int, FlowField> _footprints = new();
+    // P8-31: every build this cache makes shares one builder's pooled scratch.
+    private readonly FlowFieldBuilder _builder = new();
 
     /// <summary>
     /// P8-30: how many fields this cache has built, of either shape, and how
@@ -227,7 +275,7 @@ public sealed class FlowFieldCache
     /// describes this process's work rather than the match's state.
     /// </summary>
     public long Builds { get; private set; }
-    /// <summary>P8-30: the relaxations behind <see cref="Builds"/> (FlowField.Relax's unit of work).</summary>
+    /// <summary>P8-30: the relaxations behind <see cref="Builds"/> (FlowFieldBuilder.Relax's unit of work).</summary>
     public long CellsRelaxed { get; private set; }
 
     public FlowField Get(Map map, int targetCx, int targetCy)
@@ -235,7 +283,7 @@ public sealed class FlowFieldCache
         int key = map.CellIndex(targetCx, targetCy);
         if (!_fields.TryGetValue(key, out var f))
         {
-            f = FlowField.Build(map, targetCx, targetCy, out int relaxed);
+            f = _builder.Build(map, targetCx, targetCy, out int relaxed);
             _fields[key] = f;
             Builds++;
             CellsRelaxed += relaxed;
@@ -250,7 +298,7 @@ public sealed class FlowFieldCache
         int key = map.CellIndex(ax, ay) * 8 + size;
         if (!_footprints.TryGetValue(key, out var f))
         {
-            f = FlowField.BuildToFootprint(map, ax, ay, size, out int relaxed);
+            f = _builder.BuildToFootprint(map, ax, ay, size, out int relaxed);
             _footprints[key] = f;
             Builds++;
             CellsRelaxed += relaxed;
