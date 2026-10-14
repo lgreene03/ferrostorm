@@ -6942,7 +6942,8 @@ public partial class SkirmishLive : Node3D
     /// detector changed nothing on screen. Detection is TEAM-wide, as D24
     /// rules: the enemy counts as detected when any seat on the local seat's
     /// team has its bit in DetectedMask. Firing (RevealTicks) uncloaks for
-    /// everyone, which is the sim's own CanTarget rule.
+    /// everyone. Both are the sim's own CanTarget rule, team-wide since P8-55
+    /// (ADR-081).
     /// </summary>
     private bool DrawnForLocalSeat(in SnapshotInterpolator.ViewEntity v) =>
         ShownToLocalSeat(v.PlayerId, (int)v.X, (int)v.Y, v.Stealth || v.FieldCloaked, v.RevealTicks > 0, v.DetectedMask);
@@ -6952,28 +6953,11 @@ public partial class SkirmishLive : Node3D
         || (_world.IsVisible(LocalPlayerId, cx, cy) && (!cloaked || revealed || (detectedMask & LocalTeamMask()) != 0));
 
     /// <summary>P8-6 (D24): one bit per seat on the local seat's team, its own
-    /// included, in DetectedMask's layout (bit n is seat n).</summary>
-    private int LocalTeamMask()
-    {
-        int mask = 0, team = _world.TeamOf(LocalPlayerId);
-        for (int p = 0; p < _world.PlayerCount; p++)
-            if (_world.TeamOf(p) == team) mask |= 1 << p;
-        return mask;
-    }
-
-    /// <summary>
-    /// P8-6: can the local seat's units actually shoot this? The sim's own
-    /// CanTarget, asked for the local seat: uncloaked, revealed by firing, or
-    /// detected by THIS seat. It is narrower than drawing on purpose. D24 draws
-    /// an enemy any teammate detects, but the sim lets a seat engage only what
-    /// its own detectors found (World.CanTarget reads the attacker's bit
-    /// alone), so an Attack on an enemy only an ally has found is dropped by
-    /// CombatSystem the tick it lands. The pick asks this as well, so the cursor
-    /// never offers an attack the sim would refuse: an ally-detected enemy is
-    /// shown, tinted, and is a move target until this seat detects it too.
-    /// </summary>
-    private bool LocalSeatCanTarget(in SnapshotInterpolator.ViewEntity v) =>
-        !(v.Stealth || v.FieldCloaked) || v.RevealTicks > 0 || (v.DetectedMask & (1 << LocalPlayerId)) != 0;
+    /// included, in DetectedMask's layout (bit n is seat n). P8-55 (ADR-081):
+    /// asked of the sim, whose CanTarget reads the same mask, rather than
+    /// rebuilt here, so what is drawn and what the sim lets this seat shoot are
+    /// one rule.</summary>
+    private int LocalTeamMask() => _world.TeamDetectionMask(LocalPlayerId);
 
     /// <summary>P8-4: the enemy under the cursor, the ONE pick the attack
     /// cursor and the right click both ask, so the cursor cannot promise an
@@ -6989,11 +6973,17 @@ public partial class SkirmishLive : Node3D
     /// the cursor reads Move and the click is a move.
     ///
     /// P8-6: an undetected cloaked enemy is not drawn, so it is not picked
-    /// either, and a drawn one is picked only if this seat can engage it (see
-    /// LocalSeatCanTarget for the one case those two differ).</summary>
+    /// either.
+    ///
+    /// P8-55 (ADR-081): and a drawn one is always pickable. P8-6 carried a
+    /// second, narrower rule here (the local seat's own detection bit) because
+    /// the sim's CanTarget read the attacker's bit alone, so an enemy only an
+    /// ally had detected was drawn but would have been an Attack the sim
+    /// dropped. CanTarget now reads the team, the same mask drawing reads, so
+    /// that rule is gone and the cursor offers the attack the sim will hold.</summary>
     private int PickHostile(Vector2 screen) =>
         PickEntity(screen, 0.8f, v => IsHostileSeat(v.PlayerId) && v.Kind != EntityKind.FerriteField
-                                      && DrawnForLocalSeat(v) && LocalSeatCanTarget(v));
+                                      && DrawnForLocalSeat(v));
 
     /// <summary>Verification read: would the client draw this entity for the
     /// local seat? Reads the SIM's own position rather than the per-frame view

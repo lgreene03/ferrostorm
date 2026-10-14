@@ -6217,15 +6217,15 @@ public partial class VerifyRunner : Node
     /// seat 2): a cloaked enemy counts as DETECTED when any seat on my team has
     /// it in DetectedMask, so an ally's Sentinel Scout puts it on my screen.
     ///
-    /// The half D24 could not deliver without a sim change is asserted too,
-    /// because the cursor must not lie about it. The sim's CanTarget reads the
-    /// attacker's OWN bit alone, so an Attack on an enemy only my ally has
-    /// found is dropped the tick it lands. Drawn, tinted, and a move target
-    /// until a detector of mine finds it; then attackable.
+    /// P8-55 (ADR-081, D24b) delivered the half P8-6 could not: the sim's
+    /// CanTarget reads my whole team's detection, so the pick dropped its
+    /// local-seat rule. The enemy only my ally has found is drawn, tinted, and
+    /// the cursor over it offers Attack; the right click sends it and the sim
+    /// holds it and fires, with no detector of mine anywhere near.
     /// </summary>
     private void RunTeamStealthChecks(SkirmishLive teamed)
     {
-        GD.Print("  --    inputgate (P8-6): team detection, decision D24");
+        GD.Print("  --    inputgate (P8-6, P8-55): team detection, decisions D24 and D24b");
         var lw = teamed.LiveWorld;
         int me = teamed.LocalPlayerId;
         const int ally = 3, enemy = 2;
@@ -6268,30 +6268,19 @@ public partial class VerifyRunner : Node
         bool selRifle = teamed.SelectionCount == 1 && teamed.IsSelected(rifle);
         teamed.FocusCameraOn(px, pz, 22f);
         string overAllyFound = teamed.CursorNameAt(teamed.ScreenOf(px, pz));
-        Gate(selRifle && overAllyFound == "Move", "stealth-team",
-             $"...but the cursor over it offers {overAllyFound}: the pick still asks the local seat's own detection, "
-             + "which P8-55's client half drops now that the sim's CanTarget is team-wide");
-        // P8-55 (ADR-081): the sim's half, measured rather than read. The same
-        // Attack sent past the cursor is HELD, because CombatSystem now asks
-        // CanTarget for seat 1's whole team, and seat 3 is on it.
-        teamed.QueueCommandForTest(CommandType.Attack, rifle, phantom);
-        teamed.StepTicks(1);
-        Check(lw.Entities[rifle].ExplicitTarget == phantom && (lw.Entities[phantom].DetectedMask & (1 << me)) == 0,
-              "inputgate/stealth-team: ...and the sim holds an Attack sent past the cursor on the ally-detected Phantom "
-              + $"Tank, with no detector of mine near it (ADR-081; target now {lw.Entities[rifle].ExplicitTarget})");
-
-        SpawnOfType(lw, me, scoutType, s.X + 2, s.Y - 2);         // and now one of my own
-        Settle();
-        teamed.FocusCameraOn(px, pz, 22f);
-        string overMineFound = teamed.CursorNameAt(teamed.ScreenOf(px, pz));
         teamed.PressRightClick(teamed.ScreenOf(px, pz));
         int attacks = 0;
         foreach (var c in teamed.PendingForTest) if (c.Type == CommandType.Attack && c.AuxId == phantom) attacks++;
+        int hp0 = lw.Entities[phantom].Hp;
         teamed.StepTicks(1);
-        Gate((lw.Entities[phantom].DetectedMask & (1 << me)) != 0 && overMineFound == "Attack" && attacks == 1
-             && lw.Entities[rifle].ExplicitTarget == phantom, "stealth-team",
-             $"once my own Sentinel Scout detects it too, it is attackable: cursor {overMineFound}, {attacks} Attack queued, "
-             + "and the sim holds it as the squad's target");
+        bool held = lw.Entities[rifle].ExplicitTarget == phantom;
+        teamed.StepTicks(30);
+        int taken = hp0 - lw.Entities[phantom].Hp;
+        Gate(selRifle && overAllyFound == "Attack" && attacks == 1 && held && taken > 0
+             && (lw.Entities[phantom].DetectedMask & (1 << me)) == 0, "stealth-team",
+             $"D24b (P8-55, ADR-081): with no detector of mine near it, the cursor over the ally-detected tank offers "
+             + $"{overAllyFound}, a right click queues {attacks} Attack, the sim {(held ? "holds" : "drops")} it as the "
+             + $"squad's target and the tank takes {taken} in 30 ticks");
         teamed.ClearSelectionForTest();
     }
 
