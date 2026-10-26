@@ -43,6 +43,18 @@ public enum AiTuningKind
 /// <see cref="AntiAirGarrison"/> is how many of them it holds at home rather
 /// than sending out as harvester escorts. A rung row leaves both at 0, which is
 /// not a number anything reads, exactly as it leaves the wave size.
+///
+/// P8-22 (ADR-079) appends what the commander SPENDS, split between the two
+/// families by DR-14's rule. How much production a commander runs and how
+/// patiently it turns a bank into more of it is macro, so the RUNG owns
+/// <see cref="ProducerCap"/> (the most barracks, and separately the most
+/// factories, it holds at once; decision D7's caps), <see cref="SurplusReserve"/>
+/// (the credits it keeps back from everything it buys out of surplus) and
+/// <see cref="SurplusWindowTicks"/> (how long its treasury must have stood at
+/// or above that reserve, unbroken, before the surplus counts as sustained).
+/// How many faction defences guard a base is a commander's taste, beside the
+/// home guard the wave size already sets, so the PERSONALITY owns
+/// <see cref="FactionDefenceCap"/>. Each family leaves the other's at 0.
 /// </summary>
 public readonly record struct AiTuningDef(
     AiTuningKind Kind,
@@ -53,7 +65,11 @@ public readonly record struct AiTuningDef(
     int HarvestersPerRefinery,
     int StartingCreditHandicap,
     int AntiAirCap = 0,
-    int AntiAirGarrison = 0);
+    int AntiAirGarrison = 0,
+    int ProducerCap = 0,
+    int SurplusReserve = 0,
+    int SurplusWindowTicks = 0,
+    int FactionDefenceCap = 0);
 
 /// <summary>
 /// The compiled reference table for the skirmish commander's tuning: the values
@@ -93,13 +109,24 @@ public static class AiTuning
     // cap and its anti-air garrison. The cap is the personality's own wave size,
     // so no commander ever holds more anti-air than one wave's worth of army;
     // the garrison is 2, the floor the ground garrison already keeps.
-    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2);    // ai_standard
-    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2);      // ai_rusher
-    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2);    // ai_turtle
-    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0);               // ai_easy
-    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0);             // ai_normal
-    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0);               // ai_hard
-    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000);          // ai_brutal
+    // P8-22 (ADR-079): a personality's faction defence cap is its own ground
+    // garrison, half its wave with a floor of 2 (3, 2 and 5), so a base keeps
+    // as many signature guns as it keeps fighters at home. A rung's producer
+    // cap is decision D7's (Easy 1, Normal 2, Hard 3, Brutal 3); its reserve is
+    // 4500, the superweapon rung's own credit test and the dearest in the
+    // ladder (no surplus purchase is ordered on credits the reserve keeps, but
+    // a beat can still end below it, ADR-079 section 2); and its window is 4500
+    // ticks, the far edge of the measured gap between a passing bank and a
+    // sustained one (spendprobe at the base: of 423 stretches at or above 4500
+    // that ended before their match, one lasted between two and five minutes;
+    // the near edge, 1800, failed F8's launch half in pillargate).
+    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2, FactionDefenceCap: 3);   // ai_standard
+    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2, FactionDefenceCap: 2);     // ai_rusher
+    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2, FactionDefenceCap: 5);   // ai_turtle
+    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0, ProducerCap: 1, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_easy
+    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0, ProducerCap: 2, SurplusReserve: 4500, SurplusWindowTicks: 4500);     // ai_normal
+    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_hard
+    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500); // ai_brutal
 
     /// <summary>The compiled reference row for an id. Throws rather than
     /// defaulting, and that is deliberate: a weapon id can be 0 for "unarmed",

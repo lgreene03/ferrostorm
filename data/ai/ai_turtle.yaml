@@ -17,3 +17,7 @@ wave_size: 10
 # the most flyers it has seen at once; the garrison keeps the floor of two.
 anti_air_cap: 10
 anti_air_garrison: 2
+# P8-22 (ADR-079): faction_defence_cap 5, on Standard's rule: this
+# personality's ground garrison, half of ten. P8-23 owns the Turtle's walls and
+# any further defences beyond this.
+faction_defence_cap: 5

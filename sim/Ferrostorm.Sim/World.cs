@@ -2141,6 +2141,24 @@ public sealed partial class World
         if (def.BeatDenominator < 1)
             throw new FormatException(
                 $"AI tuning id {tuningId} has a beat denominator of {def.BeatDenominator}; the commander divides by it");
+        // P8-22 (ADR-079): a rung's producer cap counts the ladder's own first
+        // barracks and factory, so a rung row below 1 would describe a
+        // commander forbidden the producers its ladder builds.
+        if (def.Kind == AiTuningKind.Rung && def.ProducerCap < 1)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a producer cap of {def.ProducerCap}; the ladder's own barracks and factory are the first of each");
+        // P8-22 (ADR-079, condition 1): the loader's other three spending
+        // refusals, in its words, so a row registered in code is held to what
+        // a file is. 0 stays allowed for each, as it is in the loader.
+        if (def.Kind == AiTuningKind.Rung && def.SurplusReserve < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a surplus reserve of {def.SurplusReserve}; surplus_reserve must not be negative");
+        if (def.Kind == AiTuningKind.Rung && def.SurplusWindowTicks < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a surplus window of {def.SurplusWindowTicks}; surplus_window_ticks must not be negative");
+        if (def.Kind == AiTuningKind.Personality && def.FactionDefenceCap < 0)
+            throw new FormatException(
+                $"AI tuning id {tuningId} has a faction defence cap of {def.FactionDefenceCap}; faction_defence_cap must not be negative");
         _aiTuning[tuningId] = def;
     }
 
@@ -2316,6 +2334,12 @@ public sealed partial class World
                 // two LAN peers holding different files would fight the same air
                 // raid with different armies while every def matched.
                 h.Add(d.AntiAirCap); h.Add(d.AntiAirGarrison);
+                // P8-22 (ADR-079): what the commander spends, on the same
+                // argument. The producer cap, the surplus reserve and window
+                // and the faction defence cap decide which BuildStructure and
+                // Produce orders a commander issues from its bank, so two
+                // peers holding different files would build different bases.
+                h.Add(d.ProducerCap); h.Add(d.SurplusReserve); h.Add(d.SurplusWindowTicks); h.Add(d.FactionDefenceCap);
             }
             return h.Value;
         }

@@ -58,6 +58,8 @@ using Ferrostorm.Sim;
 //   mirrorprobe        - P8-21, ADR-075: a Normal mirror on each two-seat map, compared after every step with the 180-degree rotation of itself, printing the first tick and the first thing that breaks the mirror (not a gate; nothing asserts);
 //                        seats=4 (P8-66, ADR-078) plays the four-seat maps with every seat, seat 0 against each other seat under the reflection or half turn relating their starts, then each seat's income to t=9000
 //   endgate            - P8-13, F6: no shipped-setup match reaches 27000 ticks without a result or the stalemate rule (non-binding until P8-24)
+//   spendprobe         - P8-22, ADR-079: what the commander banks and for how long, and how many barracks and factories it holds, in rung mirrors
+//                        (Normal and Hard by default) on every shipped map in the four faction pairings (not a gate; nothing asserts)
 //   cheesegate         - P8-13 (AI-12): a flyer raid on the base, a ground harvester raid and tower creep are each answered (binding since P8-17)
 //   pillarprobe        - P8-13, F6 and F8: the shipped-setup sweep (every map, 4 faction pairings, both start orientations, Normal) with end ticks, the 15 to 30 minute share and superweapon timing (not a gate; nothing asserts)
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
@@ -2012,6 +2014,129 @@ ulong ScenarioAirAnswer(ulong seed, Action<int, ulong>? cp = null, Action<string
     return world.ComputeStateHash();
 }
 
+ulong ScenarioAiSpend(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-079, Architect condition 3: the golden that puts the commander's
+    // spending under the cross-platform gate. Every LAN peer runs its AI seats
+    // itself (ADR-033), yet until this scenario no golden reached a second
+    // producer: skirmish stops at 5000 ticks, the LAN modes end before the
+    // surplus window, and aisuper reaches the surplus branch only for its
+    // second Bastion. So the routing over two lines and the surplus factory
+    // and barracks ran on one machine at a time and were compared nowhere.
+    //
+    // A Normal Standard commander holds a finished Directorate base (plant,
+    // two refineries, barracks, factory, turret, radar and one Bastion, a
+    // harvester per refinery on a rich field) and a purse that keeps its
+    // treasury above the reserve for the whole window. The rival yard is
+    // sealed behind a blocked column, as aisuper's is, so the subject is the
+    // spending and not the ground war. A bare World plays the compiled
+    // catalogue and the compiled AI tuning, as every golden does. The plant's
+    // supply is raised so the ladder never asks for another (it asks while
+    // supply is under draw plus 40), which keeps the yard free for the
+    // surplus. The scenario asserts it reaches all three of:
+    //   - one seat holding two factories and two barracks at once;
+    //   - its orders routed over both lines of one kind;
+    //   - a later order placed on a beat (a second army order in one beat,
+    //     which stands only while the beat's orders so far leave the reserve).
+    // A later row that stops reaching any of them fails here rather than
+    // silently losing the coverage.
+    //
+    // Appended LAST to the golden list, so the lines above it are untouched by
+    // construction and the cross-platform diff gains exactly one line.
+    var world = new World(seed, 96, 64, players: 2);
+    world.GrantCredits(0, 40000);
+    world.SpawnConstructionYard(0, 8, 30);
+    world.SpawnPowerPlant(0, 13, 30, supply: 2000);
+    world.SpawnRefinery(0, 8, 24);
+    world.SpawnRefinery(0, 13, 24);
+    world.SpawnBarracks(0, 18, 30);
+    world.SpawnFactory(0, 8, 36);
+    world.SpawnTurret(0, 18, 24);
+    world.SpawnRadarUplink(0, 13, 36);
+    world.SpawnFactionDefence(0, world.BuildableFactionDefence(0), 18, 36);
+    world.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(70, y, true);
+    world.SpawnConstructionYard(1, 86, 30);
+    var ai = SkirmishAI.Standard(0);
+    var cmds = new List<Command>();
+
+    // The window is read off the compiled Normal rung the commander plays, so
+    // the horizon follows it if it moves. MEASURED at P8-22's head: the
+    // second factory is placed about 300 ticks after the window, and the
+    // second barracks only about 1700 after it, because the barracks line is
+    // empty as each beat opens while the factory's is not, so the yard first
+    // buys the two further Bastions the faction defence cap allows and then
+    // the ladder's superweapon once its charge has elapsed (D33). 3000 ticks
+    // past the window leaves room for that chain to slip by more than a
+    // thousand ticks before the assertion below fails it.
+    int window = AiTuning.Get(AiTuning.NormalId).SurplusWindowTicks;
+    int ticks = window + 3000;
+    var orderedAt = new Dictionary<EntityKind, SortedSet<int>>
+    {
+        [EntityKind.Factory] = new SortedSet<int>(),
+        [EntityKind.Barracks] = new SortedSet<int>(),
+    };
+    int mostFactories = 0, mostBarracks = 0, bothHeldAt = -1, routedAt = -1, laterOrderAt = -1;
+    EntityKind routedKind = EntityKind.Factory;
+    for (int t = 0; t < ticks; t++)
+    {
+        ai.Act(world, cmds);
+        // The harvester rebuy and the expansion's MCV are ordered outside the
+        // army loop, so they are not army orders. No outpost stands and no
+        // flyer is seen, so no engineer or anti-air order is placed either.
+        int armyOrders = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type != CommandType.Produce || c.PlayerId != 0) continue;
+            if (c.AuxId != World.HarvesterUnitType && c.AuxId != World.McvUnitType) armyOrders++;
+            var kind = world.Entities[c.EntityId].Kind;
+            if (orderedAt.TryGetValue(kind, out var set)) set.Add(c.EntityId);
+        }
+        if (armyOrders >= 2 && laterOrderAt < 0) laterOrderAt = world.Tick;
+        if (routedAt < 0)
+            foreach (var kind in new[] { EntityKind.Factory, EntityKind.Barracks })
+                if (orderedAt[kind].Count >= 2) { routedAt = world.Tick; routedKind = kind; break; }
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        bool placed = false;
+        foreach (var ev in world.Events)
+            if (ev.Type == GameEventType.StructurePlaced && world.Entities[ev.A].PlayerId == 0) placed = true;
+        if (placed)
+        {
+            int factories = 0, barracks = 0;
+            for (int i = 0; i < world.EntityCount; i++)
+            {
+                var e = world.Entities[i];
+                if (!e.Alive || e.PlayerId != 0) continue;
+                if (e.Kind == EntityKind.Factory) factories++;
+                if (e.Kind == EntityKind.Barracks) barracks++;
+            }
+            if (factories > mostFactories) mostFactories = factories;
+            if (barracks > mostBarracks) mostBarracks = barracks;
+            if (factories >= 2 && barracks >= 2 && bothHeldAt < 0) bothHeldAt = world.Tick;
+        }
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (bothHeldAt < 0)
+        throw new Exception($"aispend: seat 0 never held two factories and two barracks at once in {ticks} ticks (most "
+                            + $"{mostFactories} and {mostBarracks}), so the surplus producers are not under the golden gate");
+    if (routedAt < 0)
+        throw new Exception($"aispend: no kind had orders routed over two of its lines in {ticks} ticks (factories ordered "
+                            + $"{orderedAt[EntityKind.Factory].Count}, barracks {orderedAt[EntityKind.Barracks].Count}), so the "
+                            + "shortest-line routing is not under the golden gate");
+    if (laterOrderAt < 0)
+        throw new Exception($"aispend: no beat in {ticks} ticks placed a second army order, so the later orders above the "
+                            + "reserve are not under the golden gate");
+    report?.Invoke($"aispend: a Normal commander placed a later army order on a beat at t={laterOrderAt}, held two factories "
+                   + $"and two barracks at once from t={bothHeldAt} (window {window}), and had routed orders over both of its "
+                   + $"{(routedKind == EntityKind.Factory ? "factory" : "barracks")} lines by t={routedAt}; most held "
+                   + $"{mostFactories} factories and {mostBarracks} barracks, treasury {world.Credits(0)} at t={ticks} "
+                   + "(ADR-079 condition 3, the spending under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -2039,6 +2164,7 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("depot", (s, cp) => ScenarioDepot(s, cp)),
     ("walls", (s, cp) => ScenarioWalls(s, cp)),
     ("airanswer", (s, cp) => ScenarioAirAnswer(s, cp)),
+    ("aispend", (s, cp) => ScenarioAiSpend(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -6628,6 +6754,14 @@ int AiTuningGate()
         if (got.AntiAirCap != want.AntiAirCap) return Fail(Drift("anti_air_cap", got.AntiAirCap, want.AntiAirCap));
         if (got.AntiAirGarrison != want.AntiAirGarrison)
             return Fail(Drift("anti_air_garrison", got.AntiAirGarrison, want.AntiAirGarrison));
+        // P8-22 (ADR-079): what the commander spends, three rung numbers and
+        // one personality number.
+        if (got.ProducerCap != want.ProducerCap) return Fail(Drift("producer_cap", got.ProducerCap, want.ProducerCap));
+        if (got.SurplusReserve != want.SurplusReserve) return Fail(Drift("surplus_reserve", got.SurplusReserve, want.SurplusReserve));
+        if (got.SurplusWindowTicks != want.SurplusWindowTicks)
+            return Fail(Drift("surplus_window_ticks", got.SurplusWindowTicks, want.SurplusWindowTicks));
+        if (got.FactionDefenceCap != want.FactionDefenceCap)
+            return Fail(Drift("faction_defence_cap", got.FactionDefenceCap, want.FactionDefenceCap));
     }
 
     // --- 2. The runtime reads the REGISTERED table, not the compiled one.
@@ -6781,6 +6915,249 @@ int AiTuningGate()
                     + $"escorts, guarding the refinery with no harvester alive ({escortAir.ToRefinery} did, "
                     + $"{escortAir.AtFlyer} went for the flyer) - the commander is reading the compiled garrison");
 
+    //        2d, P8-22's four spending numbers (ADR-079), each moved away from
+    //        its AUTHORED value and measured as orders. Every run registers
+    //        data/ai from the files first, so the authored side of each pair is
+    //        the file's own number rather than the compiled reference's, and the
+    //        other side changes that one number on the row the files
+    //        registered: the data wins, and what the data says is what the
+    //        commander does. The base is a Directorate one the ladder has
+    //        finished (a plant, two refineries, a barracks, a factory, the
+    //        turret, the radar and one Bastion, with a harvester per refinery
+    //        on a rich field beside home), so at tick 15 the yard wants nothing
+    //        and anything it orders is the surplus's.
+    //          producer_cap: the factory busy and the window moved to 0, the
+    //            authored Normal cap of 2 orders a second factory and a cap of
+    //            1 orders none;
+    //          faction_defence_cap: both producers idle and the window at 0,
+    //            the authored Standard cap of 3 orders a second Bastion and a
+    //            cap of 1 orders none;
+    //          surplus_window_ticks: the same idle base acting at tick 15 and
+    //            again at tick 45, the authored window orders nothing on the
+    //            second beat and a window of 30 orders the Bastion there;
+    //          surplus_reserve: 3000 credits, below the authored reserve, the
+    //            authored rung places one army order on the beat and a reserve
+    //            of 0 places two.
+    //        Stage 2e reuses this fixture, and for it the fixture also takes
+    //        how many harvesters stand (2d always has two) and reports every
+    //        building ordered and the treasury the beat read.
+    (int Factories, int Defences, int Army, int Built, long Treasury) SpendOrders(Func<AiTuningDef, AiTuningDef> rung,
+        Func<AiTuningDef, AiTuningDef> shape, long credits, bool factoryBusy, int secondBeatAfter = 0, int harvesters = 2)
+    {
+        var w = new World(4317, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(AiTuning.NormalId, rung(w.GetAiTuning(AiTuning.NormalId)));
+        w.RegisterAiTuning(AiTuning.StandardId, shape(w.GetAiTuning(AiTuning.StandardId)));
+        w.SpawnConstructionYard(1, 86, 30);                  // a distant foe: never the fire-sale branch
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 13, 30, supply: 2000);
+        w.SpawnRefinery(0, 8, 24);
+        w.SpawnRefinery(0, 13, 24);
+        w.SpawnBarracks(0, 18, 30);
+        int factory = w.SpawnFactory(0, 8, 36);
+        w.SpawnTurret(0, 18, 24);
+        w.SpawnRadarUplink(0, 13, 36);
+        int bastion = w.BuildableFactionDefence(0);
+        w.SpawnFactionDefence(0, bastion, 18, 36);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);    // home is not thin, so no expansion
+        if (harvesters > 0) w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        if (harvesters > 1) w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));   // one per refinery: no harvester order
+        w.GrantCredits(0, credits);
+        var opening = new List<Command>();
+        if (factoryBusy)   // a cannon tank on the factory's line, so the factory is the bottleneck
+            opening.Add(new Command(0, 0, CommandType.Produce, factory, Fix64.Zero, Fix64.Zero, 1));
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(opening));
+        for (int t = 1; t < 15; t++) w.Step(default);
+        if (w.QueueLength(factory) != (factoryBusy ? 1 : 0))
+            throw new InvalidOperationException($"the factory's line holds {w.QueueLength(factory)} at tick 15");
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        long treasury = w.Credits(0);
+        ai.Act(w, cmds);
+        if (secondBeatAfter > 0)
+        {
+            // The first beat's orders are dropped on purpose, so the second
+            // beat reads the same base and differs only in how long the
+            // treasury has stood above the reserve.
+            for (int t = 0; t < secondBeatAfter; t++) w.Step(default);
+            cmds.Clear();
+            treasury = w.Credits(0);
+            ai.Act(w, cmds);
+        }
+        int factories = 0, defences = 0, army = 0, built = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type == CommandType.BuildStructure && c.AuxId == World.FactoryStructType) factories++;
+            if (c.Type == CommandType.BuildStructure && c.AuxId == bastion) defences++;
+            if (c.Type == CommandType.BuildStructure) built++;
+            if (c.Type == CommandType.Produce) army++;
+        }
+        return (factories, defences, army, built, treasury);
+    }
+    AiTuningDef Authored(AiTuningDef d) => d;
+    AiTuningDef NoWindow(AiTuningDef d) => d with { SurplusWindowTicks = 0 };
+    (int Factories, int Defences, int Army, int Built, long Treasury) capAuthored, capOne, defAuthored, defOne, winAuthored,
+        winThirty, resAuthored, resZero;
+    try
+    {
+        capAuthored = SpendOrders(NoWindow, Authored, 20000, factoryBusy: true);
+        capOne = SpendOrders(d => NoWindow(d) with { ProducerCap = 1 }, Authored, 20000, factoryBusy: true);
+        defAuthored = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false);
+        defOne = SpendOrders(NoWindow, d => d with { FactionDefenceCap = 1 }, 20000, factoryBusy: false);
+        winAuthored = SpendOrders(Authored, Authored, 20000, factoryBusy: false, secondBeatAfter: 30);
+        winThirty = SpendOrders(d => d with { SurplusWindowTicks = 30 }, Authored, 20000, factoryBusy: false, secondBeatAfter: 30);
+        resAuthored = SpendOrders(Authored, Authored, 3000, factoryBusy: false);
+        resZero = SpendOrders(d => d with { SurplusReserve = 0 }, Authored, 3000, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    if (capAuthored.Factories != 1)
+        return Fail($"aituning control: at the authored producer_cap of 2, a finished base whose one factory is busy "
+                    + $"and whose surplus counts at once must order a second factory, and it ordered {capAuthored.Factories}");
+    if (capOne.Factories != 0)
+        return Fail($"aituning: a Normal rung at producer_cap 1 must order no second factory, and it ordered "
+                    + $"{capOne.Factories} - the commander is reading the compiled cap rather than the registered one");
+    if (defAuthored.Defences != 1)
+        return Fail($"aituning control: at the authored faction_defence_cap of 3, a finished base with one Bastion, idle "
+                    + $"producers and a surplus that counts at once must order a second Bastion, and it ordered {defAuthored.Defences}");
+    if (defOne.Defences != 0)
+        return Fail($"aituning: a Standard personality at faction_defence_cap 1 must order no second Bastion, and it "
+                    + $"ordered {defOne.Defences} - the commander is reading the compiled cap rather than the registered one");
+    if (winThirty.Defences != 1)
+        return Fail($"aituning control: at a surplus_window_ticks of 30, a finished base whose treasury has stood above "
+                    + $"the reserve from tick 15 to tick 45 must order a Bastion at tick 45, and it ordered {winThirty.Defences}");
+    if (winAuthored.Defences != 0)
+        return Fail($"aituning: at the authored surplus_window_ticks the same base must order nothing at tick 45, 30 ticks "
+                    + $"into its window, and it ordered {winAuthored.Defences} Bastion(s) - the commander is reading the "
+                    + "compiled window, or none at all");
+    if (resAuthored.Army != 1)
+        return Fail($"aituning control: with 3000 credits, below the authored surplus_reserve, the commander must place "
+                    + $"exactly one army order on the beat (the first, on its own price), and it placed {resAuthored.Army}");
+    if (resZero.Army != 2)
+        return Fail($"aituning: a Normal rung at surplus_reserve 0 must place a second army order on the same beat with "
+                    + $"3000 credits, filling the barracks' line of two, and it placed {resZero.Army} - the commander is "
+                    + "reading the compiled reserve rather than the registered one");
+
+    //        2e, the four conditions the commander's spending rests on that 2d
+    //        does not reach (ADR-079, condition 2), each on 2d's fixture and
+    //        each beside a control that differs from it only in what the
+    //        condition reads, so a check that passes for the wrong reason
+    //        fails its control instead. The reserve is the authored Normal
+    //        one, read from the registered files. No wave stands, so the
+    //        Directorate cycle alternates a rifle squad and a rocket squad,
+    //        both at the one barracks: a beat's first order is a rifle and
+    //        its second a rocket.
+    //          (a) no surplus building while nothing is mining. Window 0 and
+    //              both producers idle: the base with its two harvesters
+    //              orders the second Bastion, and with none it orders no
+    //              building at all;
+    //          (b) the surplus building's own reserve test. The factory busy
+    //              and the window 0: a treasury of the reserve plus a
+    //              factory's price orders the factory, one credit less none;
+    //          (d) the first order's price counts. The authored window, so no
+    //              surplus building on the beat: the reserve plus the rifle
+    //              and the rocket places both, and the reserve plus the rocket
+    //              alone places only the rifle;
+    //          (c) the surplus building's price counts. Window 0 and a beat
+    //              that buys the Bastion: the reserve plus the Bastion, the
+    //              rifle and the rocket places both squads, one credit less
+    //              only the rifle.
+    //        (d) is checked before (c) on purpose: (c)'s later order reads the
+    //        same commitments (d) does, so it would also catch (d)'s removal,
+    //        and in this order each removal fails on its own check first.
+    int reserve = beatWorld.GetAiTuning(AiTuning.NormalId).SurplusReserve;
+    long rifleCost, rocketCost, factoryCost, bastionCost;
+    {
+        var cw = new World(4317, 96, 64, players: 2);
+        rifleCost = cw.GetUnitType(2).Cost;
+        rocketCost = cw.GetUnitType(3).Cost;
+        factoryCost = cw.GetStructureType(World.FactoryStructType).Cost;
+        bastionCost = cw.GetStructureType(cw.BuildableFactionDefence(0)).Cost;
+    }
+    (int Factories, int Defences, int Army, int Built, long Treasury) mined, dry, factoryAt, factoryUnder,
+        firstBoth, firstOne, buildingBoth, buildingOne;
+    try
+    {
+        mined = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false);
+        dry = SpendOrders(NoWindow, Authored, 20000, factoryBusy: false, harvesters: 0);
+        // The busy factory draws its cannon tank's price as it builds, so the
+        // treasury at the beat is measured once and the grant set from it.
+        long drain = reserve + factoryCost - SpendOrders(NoWindow, Authored, reserve + factoryCost, factoryBusy: true).Treasury;
+        factoryAt = SpendOrders(NoWindow, Authored, reserve + factoryCost + drain, factoryBusy: true);
+        factoryUnder = SpendOrders(NoWindow, Authored, reserve + factoryCost + drain - 1, factoryBusy: true);
+        firstBoth = SpendOrders(Authored, Authored, reserve + rifleCost + rocketCost, factoryBusy: false);
+        firstOne = SpendOrders(Authored, Authored, reserve + rocketCost, factoryBusy: false);
+        buildingBoth = SpendOrders(NoWindow, Authored, reserve + bastionCost + rifleCost + rocketCost, factoryBusy: false);
+        buildingOne = SpendOrders(NoWindow, Authored, reserve + bastionCost + rifleCost + rocketCost - 1, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    // (a)
+    if (mined.Defences != 1)
+        return Fail($"aituning 2e(a) control: a finished base with two harvesters, idle producers and the window at 0 must "
+                    + $"order the second Bastion, and it ordered {mined.Defences}");
+    if (dry.Built != 0)
+        return Fail($"aituning 2e(a): no surplus building while no harvester is alive - the same base with none ordered "
+                    + $"{dry.Built} building(s), so the surplus branch has lost its harvesters test, and the ladder's "
+                    + "silence that means 'save for a harvester' is being spent");
+    // (b)
+    if (factoryAt.Treasury != reserve + factoryCost || factoryUnder.Treasury != reserve + factoryCost - 1)
+        return Fail($"aituning 2e(b): the treasuries at the beat were {factoryAt.Treasury} and {factoryUnder.Treasury}, not "
+                    + $"the reserve plus a factory's price ({reserve + factoryCost}) and one credit less, so the check proves nothing");
+    if (factoryAt.Factories != 1)
+        return Fail($"aituning 2e(b) control: with the factory busy, the window at 0 and a treasury of the reserve plus a "
+                    + $"factory's price, the commander must order the second factory, and it ordered {factoryAt.Factories}");
+    if (factoryUnder.Factories != 0)
+        return Fail($"aituning 2e(b): no factory when the treasury exceeds the reserve by less than a factory's price - one "
+                    + $"credit short it ordered {factoryUnder.Factories}, so the surplus building's own reserve test is gone");
+    // (d)
+    if (firstBoth.Built != 0 || firstOne.Built != 0)
+        return Fail("aituning 2e(d): the authored window must keep a surplus building off these beats, and one was ordered, "
+                    + "so the check would read the building's price rather than the first order's");
+    if (firstBoth.Army != 2)
+        return Fail($"aituning 2e(d) control: a treasury of the reserve plus a rifle squad and a rocket squad must place both "
+                    + $"on the beat, and it placed {firstBoth.Army}");
+    if (firstOne.Army != 1)
+        return Fail($"aituning 2e(d): at credits of the reserve plus the second unit's price the second order must be refused "
+                    + $"because the first order's price is counted, and the beat placed {firstOne.Army} - the later-order "
+                    + "test has stopped counting what the beat already committed");
+    // (c)
+    if (buildingBoth.Defences != 1 || buildingOne.Defences != 1)
+        return Fail($"aituning 2e(c): both beats must buy the second Bastion ({buildingBoth.Defences} and {buildingOne.Defences} "
+                    + "did), or the check reads no building's price at all");
+    if (buildingBoth.Army != 2)
+        return Fail($"aituning 2e(c) control: on a beat that buys the Bastion, a treasury of the reserve plus the Bastion, "
+                    + $"the rifle squad and the rocket squad must place both squads, and it placed {buildingBoth.Army}");
+    if (buildingOne.Army != 1)
+        return Fail($"aituning 2e(c): after a surplus building, no later army order once the reserve would be breached - one "
+                    + $"credit short the beat placed {buildingOne.Army}, so the building's price no longer joins the beat's "
+                    + "commitments");
+
+    //        And the wrap (ADR-079, condition 1), on the same fixture. The
+    //        surplus building's reserve test adds a reserve and a price; in
+    //        int, a reserve at the top of int plus the Bastion's price wraps
+    //        negative and the test passes on any treasury. The treasury here
+    //        stands half a Bastion above int.MaxValue: a reserve of int.MaxValue
+    //        leaves less than the price, so no Bastion, and the control's
+    //        reserve of int.MaxValue less the price leaves exactly the price,
+    //        so one Bastion. The window is 0 in both, so the surplus counts at
+    //        once. After 2e(b) on purpose: removing the whole reserve test
+    //        fails this too, and (b) is the check that names that removal.
+    long wrapCredits = int.MaxValue + bastionCost / 2;
+    (int Factories, int Defences, int Army, int Built, long Treasury) wrapAtTop, wrapControl;
+    try
+    {
+        wrapAtTop = SpendOrders(d => NoWindow(d) with { SurplusReserve = int.MaxValue }, Authored, wrapCredits, factoryBusy: false);
+        wrapControl = SpendOrders(d => NoWindow(d) with { SurplusReserve = int.MaxValue - (int)bastionCost }, Authored,
+                                  wrapCredits, factoryBusy: false);
+    }
+    catch (InvalidOperationException e) { return Fail($"aituning: the spending fixture is not the base it describes: {e.Message}"); }
+    if (wrapControl.Defences != 1)
+        return Fail($"aituning control: a treasury of {wrapCredits} against a reserve of int.MaxValue less the Bastion's price "
+                    + $"must buy the second Bastion, and it ordered {wrapControl.Defences}, so the wrap check below proves nothing");
+    if (wrapAtTop.Defences != 0)
+        return Fail($"aituning: a reserve of int.MaxValue must keep a treasury of {wrapCredits} off the Bastion, which costs "
+                    + $"{bastionCost}, and it ordered {wrapAtTop.Defences} - the surplus building's reserve test is adding in "
+                    + "int and wrapping");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -6811,6 +7188,22 @@ int AiTuningGate()
     if (bumpedCap.CatalogueChecksum == stock1 || bumpedGarrison.CatalogueChecksum == stock1)
         return Fail("aituning: a one-unit change to a personality's anti_air_cap or anti_air_garrison must change the "
                     + "catalogue checksum, or two peers can answer the same air raid with different armies");
+    // P8-22 (ADR-079): and what the commander spends, each by one.
+    var spendBumps = new (string Key, AiTuningDef Def, int Id)[]
+    {
+        ("producer_cap", AiTuning.Normal with { ProducerCap = AiTuning.Normal.ProducerCap + 1 }, AiTuning.NormalId),
+        ("surplus_reserve", AiTuning.Normal with { SurplusReserve = AiTuning.Normal.SurplusReserve + 1 }, AiTuning.NormalId),
+        ("surplus_window_ticks", AiTuning.Normal with { SurplusWindowTicks = AiTuning.Normal.SurplusWindowTicks + 1 }, AiTuning.NormalId),
+        ("faction_defence_cap", AiTuning.Standard with { FactionDefenceCap = AiTuning.Standard.FactionDefenceCap + 1 }, AiTuning.StandardId),
+    };
+    foreach (var (key, def, id) in spendBumps)
+    {
+        var bumped = new World(4316);
+        bumped.RegisterAiTuning(id, def);
+        if (bumped.CatalogueChecksum == stock1)
+            return Fail($"aituning: a one-unit change to {key} must change the catalogue checksum, or two peers can spend "
+                        + "the same bank on different bases and call it agreement");
+    }
 
     // --- 4. Registration after tick 0 is refused, matching units, structures
     //        and weapons. A commander re-tuned mid-match is a silent replay
@@ -6823,6 +7216,38 @@ int AiTuningGate()
         catch (InvalidOperationException) { refused = true; }
         if (!refused)
             return Fail("aituning: registering AI tuning after tick 0 must be refused, as it is for units, structures and weapons");
+    }
+    //        And P8-22's three spending numbers that the loader refuses below
+    //        zero are refused by registration too (ADR-079, condition 1), so a
+    //        row offered in code is held to what a file is. Each beside its
+    //        control: the same row at 0, which the loader also accepts,
+    //        registers, so the guard is not refusing the key outright.
+    var spendRefusals = new (string Key, int Id, AiTuningDef Negative, AiTuningDef Zero)[]
+    {
+        ("surplus_reserve", AiTuning.NormalId, AiTuning.Normal with { SurplusReserve = -1 }, AiTuning.Normal with { SurplusReserve = 0 }),
+        ("surplus_window_ticks", AiTuning.NormalId, AiTuning.Normal with { SurplusWindowTicks = -1 },
+            AiTuning.Normal with { SurplusWindowTicks = 0 }),
+        ("faction_defence_cap", AiTuning.StandardId, AiTuning.Standard with { FactionDefenceCap = -1 },
+            AiTuning.Standard with { FactionDefenceCap = 0 }),
+    };
+    foreach (var (key, id, negative, zero) in spendRefusals)
+    {
+        var w = new World(4318);
+        string? refusal = null;
+        try { w.RegisterAiTuning(id, negative); }
+        catch (FormatException e) { refusal = e.Message; }
+        if (refusal is null)
+            return Fail($"aituning: registering a row with a {key} of -1 must be refused, as data/ai's loader refuses it, "
+                        + "or a def registered in code passes what a file cannot");
+        if (!refusal.Contains($"{key} must not be negative"))
+            return Fail($"aituning: the refusal of a negative {key} must say so in the loader's words, and it said: {refusal}");
+        try { w.RegisterAiTuning(id, zero); }
+        catch (FormatException e)
+        {
+            return Fail($"aituning control: a {key} of 0 is allowed, as the loader allows it, and registration refused it: {e.Message}");
+        }
+        if (w.GetAiTuning(id) != zero)
+            return Fail($"aituning control: the row with a {key} of 0 did not register");
     }
 
     // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
@@ -6873,12 +7298,26 @@ int AiTuningGate()
                       + $"a flyer orders {authoredAir.Flak} Flak Track at the authored anti_air_cap and {cappedAir.Flak} "
                       + $"at a registered 0, and its two idle Flak Tracks go for the flyer ({garrisonAir.AtFlyer}) at the "
                       + $"authored anti_air_garrison of 2 and guard the refinery ({escortAir.ToRefinery}) at a registered "
-                      + "0; Brutal's 2/3 still "
+                      + $"0; a finished base orders {capAuthored.Factories} second factory at the authored producer_cap and "
+                      + $"{capOne.Factories} at 1, {defAuthored.Defences} second Bastion at the authored faction_defence_cap and "
+                      + $"{defOne.Defences} at 1, {winAuthored.Defences} Bastion 30 ticks into the authored surplus window and "
+                      + $"{winThirty.Defences} with a window of 30, and {resAuthored.Army} army order on 3000 credits under the "
+                      + $"authored surplus_reserve against {resZero.Army} at a reserve of 0; with no harvester "
+                      + $"alive the base orders {dry.Built} surplus building where two harvesters order {mined.Defences}, a "
+                      + $"treasury one credit short of the reserve plus a factory orders {factoryUnder.Factories} factory where "
+                      + $"the full price orders {factoryAt.Factories}, the reserve plus the second unit's price places "
+                      + $"{firstOne.Army} order where the reserve plus both places {firstBoth.Army}, and on a beat that buys a "
+                      + $"Bastion one credit short places {buildingOne.Army} order where the full sum places "
+                      + $"{buildingBoth.Army}; a reserve of int.MaxValue orders {wrapAtTop.Defences} Bastion from a treasury "
+                      + $"half a Bastion above it, where int.MaxValue less the price orders {wrapControl.Defences}, so the "
+                      + $"reserve test does not wrap; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
-                      + "registration after tick 0 is refused; and the catalogue checksum sits at "
+                      + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
+                      + "faction_defence_cap, in the loader's words, while 0 registers; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
-                      + "handicap or one unit of either anti-air number, which is what stops two LAN peers playing "
-                      + "different commanders and calling it agreement");
+                      + "handicap, one unit of either anti-air number or one unit of any of the four spending numbers "
+                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap), which is what stops "
+                      + "two LAN peers playing different commanders and calling it agreement");
     return 0;
 }
 
@@ -14913,6 +15352,7 @@ int Match(ulong seed)
     ScenarioDepot(seed, null, Console.WriteLine);
     ScenarioWalls(seed, null, Console.WriteLine);
     ScenarioAirAnswer(seed, null, Console.WriteLine);
+    ScenarioAiSpend(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
     // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as
@@ -18349,6 +18789,193 @@ int EndGate()
         $"All {results.Length} matches ended with a result before {MeasurementHarness.WindowCloseTicks} ticks.");
 }
 
+int SpendProbe()
+{
+    // P8-22 (ADR-079, AI-03, ML-04, OJ-04, D6): WHAT THE COMMANDER BANKS, AND
+    // FOR HOW LONG. D6 records a Hard commander holding 16401 credits at 540 s
+    // on one factory, and P8-22 is the row that spends it, so this is the
+    // measurement it is judged by. Rung mirrors (Normal against Normal and Hard
+    // against Hard by default) on every shipped map in all four faction
+    // pairings, from the authored starts, in the shipped setup (PlayMeasured),
+    // to 27000 ticks or a result. Each seat's treasury is read once a second
+    // (every 15 ticks, the commander's beat at both rungs): its mean, its mean
+    // in each five-minute window, its peak, the share of seconds at or above
+    // three levels and the longest unbroken stretch at each, how many barracks
+    // and factories it held at once, and what its producers delivered.
+    //
+    // A probe by ADR-061's rule: the observer only reads the world, so each
+    // match plays exactly as it would unobserved, and it prints and asserts
+    // nothing. "Banked credit over time" is the pooled mean, every sampled
+    // second of every seat of a rung and faction weighed alike, so a match that
+    // runs long counts for more of the time it banked.
+    //
+    // The three levels are numbers the commander already reads: 1500, the
+    // margin its radar and faction-defence rungs keep; 4500, its superweapon
+    // rung's threshold, the dearest credit test in its ladder; and 6500, that
+    // threshold plus one factory. Every unbroken stretch at or above a level
+    // that ENDED before its match did is also binned by length, which is what
+    // tells a surplus that lasts from one a single delivery made.
+    const int SampleTicks = 15, WindowTicks = 4500;
+    int[] levels = { 1500, 4500, 6500 };
+    int[] FieldedByTicks = { 4500, MeasurementHarness.IncomeWindowTicks };   // units fielded by 5 and 10 minutes
+    int[] bins = { 30, 60, 120, 180, 240, 300, 600 };   // seconds; a run shorter than the first, ..., at least the last
+    string root = MeasureRoot();
+    var o = MeasureOptions("spendprobe", false, "maps", "pairs", "rungs", "orient", "ticks", "seed", "jobs");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var rungs = MeasureRungs(o.GetValueOrDefault("rungs") ?? "NN,HH");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "0");
+    int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    ulong seed = OptSeed(o);
+    var specs = new List<MatchSpec>();
+    foreach (var map in maps)
+        foreach (var (f0, f1, _) in pairs)
+            foreach (var (a, b) in rungs)
+                foreach (bool swap in orients)
+                    specs.Add(new MatchSpec(map, swap, f0, f1, a, b, 0, 0, seed, ticks));
+    int windows = (ticks + WindowTicks - 1) / WindowTicks;
+    Console.WriteLine($"spendprobe: {specs.Count} matches ({maps.Length} maps x {pairs.Length} faction pairings x {rungs.Length} rung "
+        + $"pairings x {orients.Length} orientation(s)), cap {ticks} ticks, seed {seed}; each seat's treasury read every "
+        + $"{SampleTicks} ticks. A probe: nothing asserts.");
+    var sw = Stopwatch.StartNew();
+    var seats = new SpendSeat[specs.Count][];
+    string Seat(MatchSpec s, int p, SpendSeat d)
+    {
+        var win = new List<string>();
+        for (int k = 0; k < windows; k++) win.Add(d.WinN[k] == 0 ? "-" : $"{d.WinSum[k] / d.WinN[k]}");
+        var at = new List<string>();
+        for (int k = 0; k < levels.Length; k++)
+            at.Add($">={levels[k]} {Pct(d.AtOrAbove[k], d.Samples)}% (longest {d.Longest[k] * SampleTicks / World.TicksPerSecond} s"
+                   + (d.Longest[k] > 0 ? $" from t={d.LongestFrom[k]})" : ")"));
+        return $"      seat {p} ({FactionName(p == 0 ? s.F0 : s.F1)} {(p == 0 ? s.D0 : s.D1)}): mean banked {(d.Samples == 0 ? 0 : d.Sum / d.Samples)}, "
+             + $"by 5-minute window {string.Join("/", win)}, peak {d.Peak} at t={d.PeakTick}; {string.Join(", ", at)}; "
+             + $"most barracks {d.MaxBarracks} (second at t={d.SecondBarracks}), most factories {d.MaxFactories} (second at t={d.SecondFactory}), "
+             + $"units fielded by t={FieldedByTicks[0]} {d.UnitsBy[0]} and by t={FieldedByTicks[1]} {d.UnitsBy[1]}, "
+             + $"units {d.Units} and harvesters {d.Harvesters} delivered worth {d.Delivered}";
+    }
+    string Pct(long n, long of) => of == 0 ? "0" : $"{n * 100 / of}";
+    var results = RunOrdered(specs.Count, jobs, i =>
+    {
+        var d = new[] { new SpendSeat(windows, levels.Length, bins.Length + 1, FieldedByTicks.Length), new SpendSeat(windows, levels.Length, bins.Length + 1, FieldedByTicks.Length) };
+        var r = PlayMeasured(root, specs[i], w =>
+        {
+            foreach (var ev in w.Events)
+            {
+                if (ev.Type != GameEventType.ProductionComplete || ev.A < 0 || ev.A >= w.EntityCount || ev.A == ev.C) continue;
+                var made = w.Entities[ev.A];
+                if (made.PlayerId is not (0 or 1)) continue;
+                if (made.Kind == EntityKind.Unit) d[made.PlayerId].Units++;
+                else if (made.Kind == EntityKind.Harvester) d[made.PlayerId].Harvesters++;
+                else continue;
+                d[made.PlayerId].Delivered += w.GetUnitType(ev.B).Cost;
+                // What a seat FIELDS by a fixed time, which a match that ends
+                // sooner cannot flatter the way a whole-match total does.
+                if (made.Kind == EntityKind.Unit && w.Tick <= FieldedByTicks[^1])
+                    for (int k = 0; k < FieldedByTicks.Length; k++)
+                        if (w.Tick <= FieldedByTicks[k]) d[made.PlayerId].UnitsBy[k]++;
+            }
+            if (w.Tick % SampleTicks != 0) return;
+            for (int p = 0; p < 2; p++)
+            {
+                var s = d[p];
+                long credits = w.Credits(p);
+                s.Samples++;
+                s.Sum += credits;
+                int k = Math.Min((w.Tick - 1) / WindowTicks, windows - 1);
+                s.WinSum[k] += credits;
+                s.WinN[k]++;
+                if (credits > s.Peak) { s.Peak = credits; s.PeakTick = w.Tick; }
+                for (int l = 0; l < levels.Length; l++)
+                {
+                    if (credits >= levels[l])
+                    {
+                        if (s.Run[l] == 0) s.RunFrom[l] = w.Tick;
+                        s.AtOrAbove[l]++;
+                        if (++s.Run[l] > s.Longest[l]) { s.Longest[l] = s.Run[l]; s.LongestFrom[l] = s.RunFrom[l]; }
+                    }
+                    else if (s.Run[l] > 0)
+                    {
+                        int seconds = s.Run[l] * SampleTicks / World.TicksPerSecond, b = 0;
+                        while (b < bins.Length && seconds >= bins[b]) b++;
+                        s.Ended[l * (bins.Length + 1) + b]++;
+                        s.Run[l] = 0;
+                    }
+                }
+                int barracksNow = CountOwned(w, p, e => e.Kind == EntityKind.Barracks);
+                int factoriesNow = CountOwned(w, p, e => e.Kind == EntityKind.Factory);
+                s.MaxBarracks = Math.Max(s.MaxBarracks, barracksNow);
+                s.MaxFactories = Math.Max(s.MaxFactories, factoriesNow);
+                if (barracksNow > 1 && s.SecondBarracks < 0) s.SecondBarracks = w.Tick;
+                if (factoriesNow > 1 && s.SecondFactory < 0) s.SecondFactory = w.Tick;
+            }
+        });
+        seats[i] = d;
+        return r;
+    }, (i, r) =>
+    {
+        var s = r.Spec;
+        string result = r.Winner >= 0 ? $"seat {r.Winner} won at {r.EndTick}" : $"no result at {r.EndTick}";
+        Console.WriteLine($"  {s.Map} {FactionLetter(s.F0)}{FactionLetter(s.F1)} {s.D0}/{s.D1} o{(s.Swap ? 1 : 0)}: {result}");
+        Console.WriteLine(Seat(s, 0, seats[i][0]));
+        Console.WriteLine(Seat(s, 1, seats[i][1]));
+    });
+    sw.Stop();
+    Console.WriteLine("spendprobe: pooled over every seat of a rung and side (every sampled second weighed alike):");
+    var rungSet = new List<AiDifficulty>();
+    foreach (var (a, b) in rungs) { if (!rungSet.Contains(a)) rungSet.Add(a); if (!rungSet.Contains(b)) rungSet.Add(b); }
+    foreach (var rung in rungSet)
+        foreach (int faction in new[] { World.FactionDirectorate, World.FactionSodality })
+        {
+            var pool = new List<SpendSeat>();
+            for (int i = 0; i < specs.Count; i++)
+                for (int p = 0; p < 2; p++)
+                    if ((p == 0 ? specs[i].D0 : specs[i].D1) == rung && (p == 0 ? specs[i].F0 : specs[i].F1) == faction)
+                        pool.Add(seats[i][p]);
+            if (pool.Count == 0) continue;
+            long samples = pool.Sum(x => (long)x.Samples), sum = pool.Sum(x => x.Sum);
+            var win = new List<string>();
+            for (int k = 0; k < windows; k++)
+            {
+                long n = pool.Sum(x => (long)x.WinN[k]), t = pool.Sum(x => x.WinSum[k]);
+                win.Add(n == 0 ? "-" : $"{t / n}");
+            }
+            var at = new List<string>();
+            for (int l = 0; l < levels.Length; l++)
+            {
+                var runs = pool.Select(x => (double)x.Longest[l] * SampleTicks / World.TicksPerSecond).ToList();
+                var ended = new List<string>();
+                for (int b = 0; b <= bins.Length; b++)
+                {
+                    string label = b == 0 ? $"<{bins[0]}" : b == bins.Length ? $">={bins[^1]}" : $"{bins[b - 1]}-{bins[b]}";
+                    ended.Add($"{label} s {pool.Sum(x => x.Ended[l * (bins.Length + 1) + b])}");
+                }
+                at.Add($">={levels[l]} {Pct(pool.Sum(x => (long)x.AtOrAbove[l]), samples)}% of seconds (longest run: median {MedianOf(runs):F0} s, "
+                       + $"most {runs.Max():F0} s; runs that ended, by length: {string.Join(", ", ended)})");
+            }
+            var peaks = pool.Select(x => (double)x.Peak).ToList();
+            string Second(Func<SpendSeat, int> at)
+            {
+                var ticksAt = pool.Where(x => at(x) >= 0).Select(x => (double)at(x)).ToList();
+                return ticksAt.Count == 0 ? "never" : $"median t={MedianOf(ticksAt):F0} ({ticksAt.Count} seats)";
+            }
+            var fielded = new List<string>();
+            for (int k = 0; k < FieldedByTicks.Length; k++)
+                fielded.Add($"by t={FieldedByTicks[k]} {pool.Sum(x => (long)x.UnitsBy[k]) / pool.Count}");
+            Console.WriteLine($"  {rung} {FactionName(faction)} ({pool.Count} seats): mean banked {(samples == 0 ? 0 : sum / samples)}, "
+                + $"by 5-minute window {string.Join("/", win)}; peak median {MedianOf(peaks):F0}, most {peaks.Max():F0}; {string.Join("; ", at)}; "
+                + $"most barracks {pool.Max(x => x.MaxBarracks)}, most factories {pool.Max(x => x.MaxFactories)} "
+                + $"(seats holding more than one of either: {pool.Count(x => x.MaxBarracks > 1 || x.MaxFactories > 1)}; second barracks "
+                + $"{Second(x => x.SecondBarracks)}, second factory {Second(x => x.SecondFactory)}); "
+                + $"mean units fielded per seat {string.Join(", ", fielded)}; "
+                + $"mean per seat {pool.Sum(x => (long)x.Units) / pool.Count} units and {pool.Sum(x => (long)x.Harvesters) / pool.Count} harvesters "
+                + $"delivered worth {pool.Sum(x => x.Delivered) / pool.Count} over the whole match");
+        }
+    int decided = results.Count(r => r.Winner >= 0);
+    Console.WriteLine($"spendprobe: {decided} of {results.Length} matches decided; elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
 int SeatFairGate()
 {
     // P8-13, F5 (AI-04, ML-01, BAL-01): "start position does not decide the
@@ -19131,6 +19758,7 @@ return args.Length == 0
         "seatfairgate" => Measured(SeatFairGate),
         "mirrorprobe" => Measured(MirrorProbe),
         "endgate" => Measured(EndGate),
+        "spendprobe" => Measured(SpendProbe),
         "cheesegate" => Measured(CheeseGate),
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
@@ -19206,10 +19834,12 @@ static class MeasurementHarness
     public const int LongMatchSkipTicks = 30;
     /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
     /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-66 landed
-    /// (ADR-078: a walker whose step a separation push exactly undoes
-    /// sidesteps to the side its sector picks, which moves every match with
-    /// such a tie; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
+    /// F12's wall bar uses. Each figure is the one MEASURED with P8-22 landed
+    /// (ADR-079: the commander spends, with more producers, several orders a
+    /// beat and the harvester rebuy on the shortest line, which moves every
+    /// commander match that banks; with P8-66 landed, ADR-078's sidestep for
+    /// a walker whose step a separation push exactly undoes, they read
+    /// 313148, 54894 and 87023; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
     /// produced units exit in the producer's own frame, which moves every
     /// match with a producer past the map centre, they read 223650, 54910 and
     /// 138277; with P8-53 landed, ADR-077's multiplication truncating
@@ -19245,9 +19875,9 @@ static class MeasurementHarness
     /// replacement must reproduce these figures exactly.</summary>
     public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
     {
-        ("skirmish-07", 313148),
-        ("skirmish-08", 54894),
-        ("skirmish-09", 87023),
+        ("skirmish-07", 357451),
+        ("skirmish-08", 65757),
+        ("skirmish-09", 171729),
     };
 }
 
@@ -19278,6 +19908,33 @@ sealed class MeasuredMatch
     /// Construction Yard died, and whether a superweapon impact killed it.</summary>
     public readonly int[] LastYardDeath = { -1, -1 };
     public readonly bool[] LastYardBySuperweapon = new bool[2];
+}
+
+/// <summary>P8-22 (ADR-079): what spendprobe reads of one seat over one match.
+/// Samples are taken every 15 ticks; WinSum and WinN hold one entry per
+/// five-minute window; the level arrays one entry per treasury level, Longest
+/// and Run counted in samples. Delivered is the catalogue cost of every unit
+/// and harvester its producers completed.</summary>
+sealed class SpendSeat
+{
+    public SpendSeat(int windows, int levels, int bins, int fieldedBy)
+    {
+        WinSum = new long[windows]; WinN = new int[windows];
+        AtOrAbove = new int[levels]; Longest = new int[levels]; LongestFrom = new int[levels];
+        Run = new int[levels]; RunFrom = new int[levels]; Ended = new int[levels * bins];
+        UnitsBy = new int[fieldedBy];
+    }
+    public long Sum, Peak, Delivered;
+    public int Samples, PeakTick, MaxBarracks, MaxFactories, Units, Harvesters;
+    /// <summary>The first sampled tick the seat held a second barracks, or a
+    /// second factory; -1 for never.</summary>
+    public int SecondBarracks = -1, SecondFactory = -1;
+    /// <summary>Units completed by each of spendprobe's fixed ticks.</summary>
+    public readonly int[] UnitsBy;
+    public readonly long[] WinSum;
+    /// <summary>Ended[level * bins + bin]: stretches at or above a level that
+    /// ended before the match did, by length bin.</summary>
+    public readonly int[] WinN, AtOrAbove, Longest, LongestFrom, Run, RunFrom, Ended;
 }
 
 /// <summary>P8-13: how one cheese raid ended (aiairgate, cheesegate).</summary>
