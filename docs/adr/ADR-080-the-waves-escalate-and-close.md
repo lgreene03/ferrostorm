@@ -443,7 +443,12 @@ harvesters), and fail `aiairgate`, a binding gate, in three of four cells. This
 row does not enact it: turning F3's binding gate red is the orchestrator's
 call, not a commander row's, and the reading is filed as P8-82 with these
 figures. `aiairgate` passes as it stands, every last flyer down by t=5022 with
-a harvester alive.
+a harvester alive. **Decided 2026-10-27** (Architect condition 7, recorded in
+D32's entry): the orchestrator enacts the reversal through P8-82 as a
+reported, non-binding end-of-window half of `aiairgate`, binding in P8-26, and
+reopens F3's aftermath clause until then, because the Hard Sodality control
+that ends early is a won match holding seven harvesters, which strengthens the
+reversal's premise. This ADR's pull request does not change `aiairgate`.
 
 **The binding gates** (all green at the head): `pillargate --bind` both halves,
 median first launch 11536, launching in 56 of 72 matches at the base and 42 of
@@ -742,7 +747,9 @@ with its owner:
 - **F4 has one failing half** at the head, Hard over Normal from seat 1 at
   69.4 per cent. P8-26 inherits D7's retreat, authored here, to judge and bind
   with the rest of the rung shape.
-- **D32's reversal is met on its letter** and not enacted: P8-82.
+- **D32's reversal is met on its letter**, and enacted through P8-82 as a
+  reported, non-binding end-of-window half of `aiairgate` that binds in P8-26;
+  F3's aftermath clause is reopened until then (D32, decided 2026-10-27).
 - **16 frozen walkers**, all the attack-move's own completion and hunt rules:
   P8-80. The skirmish-03 harvester freeze is a candidate witness for P8-75.
 - **P8-29** narrows `IsGroundFighter`'s enemy count, with the target picks, to
