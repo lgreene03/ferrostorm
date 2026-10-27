@@ -5886,14 +5886,14 @@ public partial class VerifyRunner : Node
         // host, still commanding in the same match, is the control.
         string spectatorHeading = ControlsPage.SpectatorMouseHeading(Settings.Scheme);
         join.PressKey(Settings.BindOf("help"));
-        var (helpOk, helpDetail) = ViewerPageVerdict(join.HelpPageShown, spectatorHeading);
+        var (helpOk, helpDetail) = ViewerPageVerdict(join.HelpPageShown, spectatorHeading, "SPECTAT");
         Check(join.SpectatingForTest && helpOk,
               $"lanspectate/help-viewer: the spectating joiner's help overlay, from seat {js}, {helpDetail}");
         join.PressKey(Settings.BindOf("help"));
         join.PressKey(Settings.BindOf("pause_menu"));
         var jpm = join.PauseMenuView;
         bool jpressed = jpm != null && jpm.PressForTest("CONTROLS");
-        var (ctlOk, ctlDetail) = ViewerPageVerdict(jpm?.ControlsShown, spectatorHeading);
+        var (ctlOk, ctlDetail) = ViewerPageVerdict(jpm?.ControlsShown, spectatorHeading, "SPECTAT");
         Check(jpressed && ctlOk,
               $"lanspectate/controls-viewer: ...and its pause menu's CONTROLS page (pressed {jpressed}) {ctlDetail}");
         join.PressKey(Settings.BindOf("cancel"));   // shuts the menu; the notice's way out is tested below
@@ -9854,7 +9854,7 @@ public partial class VerifyRunner : Node
                 string s = scheme == ControlScheme.Classic ? "CLASSIC" : "MODERN";
                 Settings.Scheme = scheme;
                 p.PressKey(Settings.BindOf("help"));
-                var (ok, detail) = ViewerPageVerdict(p.HelpPageShown, ControlsPage.MouseHeading(scheme, replay: true));
+                var (ok, detail) = ViewerPageVerdict(p.HelpPageShown, ControlsPage.MouseHeading(scheme, replay: true), "REPLAY");
                 HudGate(p.IsReplay && ok, "help-replay",
                         $"under {s}, the help overlay opened during a replay from seat {p.LocalPlayerId} (replay {p.IsReplay}) {detail}");
                 p.PressKey(Settings.BindOf("help"));
@@ -9864,7 +9864,7 @@ public partial class VerifyRunner : Node
                 p.PressKey(Settings.BindOf("pause_menu"));
                 var pm = p.PauseMenuView;
                 bool pressed = pm != null && pm.PressForTest("CONTROLS");
-                var (pok, pdetail) = ViewerPageVerdict(pm?.ControlsShown, ControlsPage.MouseHeading(scheme, replay: true));
+                var (pok, pdetail) = ViewerPageVerdict(pm?.ControlsShown, ControlsPage.MouseHeading(scheme, replay: true), "REPLAY");
                 HudGate(p.IsReplay && pressed && pok, "controls-replay",
                         $"under {s}, the pause menu's CONTROLS page opened during a replay from seat {p.LocalPlayerId} "
                         + $"(pressed {pressed}) {pdetail}");
@@ -9906,8 +9906,18 @@ public partial class VerifyRunner : Node
     /// filter that lets an order through cannot pass by agreeing with itself;
     /// and what a viewer must still be told is listed too, so an empty page
     /// cannot pass either.
+    ///
+    /// The heading is held twice for the same reason. <paramref name="wantHeading"/>
+    /// comes from ControlsPage, the code under test, so on its own a wrong
+    /// heading passes by agreeing with itself (the integration's review found
+    /// exactly that: both viewer headings collapsed to the live "MOUSE: MODERN
+    /// SCHEME" and every viewer check still passed). <paramref name="viewerWord"/>
+    /// is this check's own transcript of the word that tells the viewer page
+    /// from the live one: "REPLAY" for a replay's copy, as P8-45's review held,
+    /// and "SPECTAT" for a spectator's ("SPECTATING" or "SPECTATOR" alike). The
+    /// live heading carries neither.
     /// </summary>
-    private (bool Ok, string Detail) ViewerPageVerdict(ControlsPage? page, string wantHeading)
+    private (bool Ok, string Detail) ViewerPageVerdict(ControlsPage? page, string wantHeading, string viewerWord)
     {
         // The verbs an ordering mouse row names, and the Bindable keys that
         // give an order or work the sidebar a viewer does not have.
@@ -9935,9 +9945,12 @@ public partial class VerifyRunner : Node
         bool selects = mouse.Exists(r => r.Does.StartsWith("SELECT"));
         bool camera = mouse.Exists(r => r.Does == "MOVE THE CAMERA");
         string diff = page == null ? "no page opened" : RowsDiff(keys, wantKeys);
-        bool ok = page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0 && heading == wantHeading;
+        bool namesViewer = heading.Contains(viewerWord, System.StringComparison.Ordinal);
+        bool ok = page != null && bad.Count == 0 && missing.Count == 0 && selects && camera && diff.Length == 0
+                  && heading == wantHeading && namesViewer;
         string detail = $"lists no ordering gesture or key ({bad.Count} found{(bad.Count > 0 ? $": {string.Join("; ", bad)}" : "")}), "
-                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (wanted \"{wantHeading}\"; selecting "
+                        + $"only what a viewer can do: {mouse.Count} mouse rows under \"{heading}\" (wanted \"{wantHeading}\", "
+                        + $"naming the viewer with \"{viewerWord}\": {namesViewer}; selecting "
                         + $"{selects}, the camera {camera}) and {keys.Count} of the {Settings.Bindable.Length} Bindable keys, generated "
                         + $"from the same table in its order{(diff.Length > 0 ? $" (but {diff})" : "")}"
                         + $"{(missing.Count > 0 ? $", missing {string.Join(", ", missing)}" : "")}";

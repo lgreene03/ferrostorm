@@ -111,6 +111,25 @@ acquires and keeps a cloaked enemy its ally has detected. So:
   rather than being refused up front, because neither the catalogue checksum nor
   the hello carries the rules (Q024 asks for a rules epoch).
 
+**The LAN handshake, read (2026-10-27, the team integration).** Two builds
+either side of this ADR are NOT refused at join. The relay's hello compares one
+number, `World.CatalogueChecksum` (`Wire.Check`, ADR-006), which folds the
+registered /data defs and nothing of the code. The host's setup blob is refused
+only on a different `MatchSetupBlob.Version`, which counts the setup's layout and
+is bumped only when a setup field is added, not when a rule changes. No build,
+protocol or rules version travels anywhere (sim/Ferrostorm.Net/Lockstep.cs,
+game/scripts/Lan.cs). This ADR moves none of them, so a mixed-build EVEN SIDES
+pair passes the lobby, starts, and desyncs at the first engagement on a cloaked
+enemy only a teammate has detected; the relay's state-hash comparison detects
+and announces it within `HashInterval` (30 ticks), and the match is lost. Row
+P8-84 (owner: netcode) asks the hello to refuse a peer whose build differs.
+
+**Decision, the orchestrator's, recorded under D24b:** the break is accepted,
+because no build of the game has shipped to players and replay compatibility
+across builds is not yet a promise. Q024 (the rules epoch) is the remedy for the
+day it becomes one. This ADR moves no golden, so CLAUDE.md does not require the
+Architect's sign-off for it; the Architect may review it at any time.
+
 ## Proof
 
 `teamdetectgate` (a standalone runner mode and a `match` battery stage, after
