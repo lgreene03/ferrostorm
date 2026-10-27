@@ -402,6 +402,18 @@ verifier, under load averages of 25 to 50, read 40.8, 17.1 and 22.8 ms on
 skirmish-07, 08 and 09, so whether F12 also fails on skirmish-08 is
 **unsettled**; P8-31 settles it on a calm machine.
 
+**Forward pointer (2026-10-27): settled by P8-31's integration onto main after
+this row.** F12 does not fail on skirmish-08; the 17.1 ms above was the load.
+`longmatchperf` on one thread of an Apple M4 with ten cores, runs interleaved,
+one-minute load average 2.6 to 3.0. At this row's head as merged (main 4076626,
+the heap build) the p999 read 24.331 and 24.305 ms on skirmish-07, 4.452 and
+4.417 on skirmish-08, and 12.090 and 12.726 on skirmish-09, so skirmish-07 and
+09 fail there and skirmish-08 does not. With P8-31's build on the same matches
+they read 4.318, 0.898 and 2.874 ms, then 4.305, 0.862 and 2.699 (`wall=report`),
+and a plain run asserting the wall bar read 4.318, 0.889 and 2.689 and passed.
+The proxy read 357451, 65757 and 171729 at both, as the replacement's parity
+requires. Row P8-31 has the full readings.
+
 **The catalogue checksum** moves `0x1255012DCF3D3A68` to `0x35327CDBF04A326F`
 over this row (`0xB1AFE8990A02ABBB` at the commit that authored the numbers with
 a two-minute window). Row P8-61 also moves it; the integrator re-measures on
@@ -583,7 +595,11 @@ end with a result. What it leaves, each recorded with its owner:
   to look, then P8-24.
 - **F12's wall bar now fails on skirmish-09** as well as skirmish-07, from the
   extra field builds of a larger army, and skirmish-08's reading is unsettled
-  (P8-31, on a calm machine).
+  (P8-31, on a calm machine). Forward pointer (2026-10-27): P8-31's
+  integration settled it at a one-minute load average of 2.6 to 3.0.
+  skirmish-08's p999 read 4.452 and 4.417 ms at this head, so it does not
+  fail; with P8-31's build all three maps pass, skirmish-07, 08 and 09 reading
+  4.305 to 4.318, 0.862 to 0.898 and 2.689 to 2.874 ms (row P8-31).
 - **D32's reversal is not met**: two Hard cells end the control with no
   harvester (P8-23's waves, P8-26's ladder).
 - **P8-26 inherits the producer caps already authored** (D7's numbers, its row's
@@ -724,6 +740,7 @@ The checksum move is that mechanism doing its job: old replays, saves and mixed-
    - **`frozenprobe`.** The head's two frozen harvesters are not the base's. Name harvester #208 as above, unattributed. Note that P8-75's witness, skirmish-08's #59, is gone at the head. Add #208 to row P8-75's cell as a candidate second witness for its detector.
    - **The faction war.** Section 5 gains the balance tool's faction war at the base and the head, as tabled above. The seat split is read as chaotic at six cells, and `seatfairgate` stays the measure of seat fairness.
    - **Wall time.** The wall-time figures name their machine. skirmish-08's F12 reading is unsettled, and P8-31 settles it on a calm machine.
+     - Forward pointer (2026-10-27): settled by P8-31's integration, on one thread of an Apple M4 with ten cores at a one-minute load average of 2.6 to 3.0. skirmish-08's p999 read 4.452 and 4.417 ms at this row's head and 0.862 to 0.898 with P8-31's build, so F12 does not fail there. Row P8-31 has the readings.
    - **The held yard.** "What it measured" gains this risk. A finished surplus building that cannot be placed holds the yard through the `ready` path, so the ladder could never rebuild. The Architect's scratch probe read 0 holds of 450 or more ticks at the base and at the head over `pillargate`'s sweep, with a positive control. The risk grows with every structure a base holds.
 5. **Records and seams (docs only).**
    - ADR-072 gains forward pointers at "Fixing the harvester rebuy here" and at "The harvester rebuy starves", naming ADR-079 section 6 and f0c9b74.
