@@ -1,5 +1,5 @@
 # ADR-080: the waves escalate and close: a wave gathers at a staging point and launches at a threshold that grows, a beaten wave comes home on the rungs that retreat, and an army that outnumbers the enemy's goes all-in
-- Status: Proposed, 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079, pull request 175), because origin/main carries no ADR-079 yet; every base figure below is measured at 1ad6cb1. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined, all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. Drafted by the implementer agent.
+- Status: **Ratified under D41** of docs/tickets/P8-formidable-tracker.md, 2026-10-27, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with nine conditions of 2026-10-27 (section "Architect sign-off" below, its date confirmed), every condition met in the pull request from branch `claude/p8-23-attack-waves` into main (pull request number recorded when it opens). Proposed 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079), while pull request 175 was open; that pull request has since squash-merged as 4076626, whose tree equals 1ad6cb1's, and this row was rebased onto it byte for byte. Every base figure below is measured at 1ad6cb1, and so holds for main at 4076626. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined, all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. After the Architect's sign-off, one commit follows for each of its conditions 1 to 7 and one for 8 and 9. Drafted by the implementer agent.
 - Date: 2026-10-14
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s9 line 76 (Normal "competent build orders", Hard "strong macro"); GDD pillar 2 (matches of 15 to 30 minutes); TDD s1 ("determinism is the product"); criteria F3, F4, F5 (its split by start), F6 and F8 of the P8 tracker; decisions D6, D7, D9, D12 and D32; ADR-005 (walls bought as they land), ADR-032 (the AI's tuning is authored data), ADR-053 (the wave arrives, and its arrival bound), ADR-056 (nothing is stranded), ADR-075, ADR-076 and ADR-078 (the frame, the half turn and the reflections the commander must stay exact under), ADR-079 (the commander that spends, whose harvester rebuy's reversal this ADR reads)
@@ -779,3 +779,176 @@ with its owner:
   counter-composition will move `airetreat`; P8-29 inherits `IsGroundFighter`
   as the place to narrow the all-in's count; P8-31 inherits the third
   consecutive re-baseline of `longmatchperf`'s proxy.
+
+## Architect sign-off
+
+- Date: 2026-10-27.
+- Reviewer: Systems Architect (A3).
+- Pull request: the P8-23 pull request from branch `worktree-wf_0cca15af-a25-1` into main. It is not yet pushed or opened, and its number is recorded here when it opens. I reviewed its five commits, ec7202e, c1b2bf3, 8d7a389, 700c8c1 and 0b51678, on 1ad6cb1, the head of P8-22's branch before the squash. Pull request 175 has since squash-merged as 4076626, whose tree is identical to 1ad6cb1's. A determinism audit and an adversarial verifier each reviewed the range independently.
+- Verdict: **signed off with conditions.** The design is approved:
+  - the staging point at ADR-053's arrival bound, inside `idleprobe`'s home bound;
+  - the growing threshold with its two fallbacks;
+  - the wave in flight as a membership-only set, every member re-aimed on the cadence;
+  - the retreat as a rung key at D7's values;
+  - the all-in in hit points, counting the enemy's armed defences;
+  - the field defending its base;
+  - the Rusher's opening and hold;
+  - the Turtle's walls from surplus, with `faction_defence_cap` not retuned;
+  - the split of the seven numbers between personality and rung under DR-14.
+
+  The four golden moves, `skirmish`, `aisuper`, `mission` and `aispend`, are approved as attributed. So is the catalogue checksum move, `0x652D8C7E6D1C847D` to `0x64E6ED1AC64F2076`. The pull request merges once conditions 1 to 9 below are met in it.
+
+**Reproduced, on macOS only.** Most figures come from the audit's and the verifier's builds, each in a tree of its own. The four below I measured myself, in trees exported from 0b51678.
+
+- **Goldens.** `golden 2026` at the head matches the committed `sim/golden-hashes.txt` in an ordered diff. Against 1ad6cb1, exactly `skirmish`, `aisuper`, `mission` and `aispend` move.
+- **ADR-079 condition 3's coverage survives the move of `aispend`.** I made `Route` take the first producer at this head. The other 25 lines stay at the head's values, and `aispend` fails by name: "no kind had orders routed over two of its lines in 7500 ticks (factories ordered 1, barracks 1)". `aispend` is still the routing's cross-platform coverage, and it still asserts all three of its states (t=0, 4815 and 6181).
+- **The retreat and the walls are outside the golden gate.** With the retreat forced off and the wall branch disabled together, all 26 lines are byte-identical to the committed file.
+- **Integration.** `git merge-tree --write-tree --merge-base=1ad6cb1 origin/main 0b51678` gives ab49c6d, identical to the head's tree. A plain merge conflicts in 16 files.
+
+From the verifier, each reproduced:
+- `tools/ci-local.sh` is green on 20 of 20 steps, ending with `pillargate --bind`.
+- The isolation holds: c1b2bf3 alone, and the head with 8d7a389 reverted, each give the base's 26 lines.
+- The first divergences hold, from traced command streams: t=2580, 1800, 675 and 525. The other 22 scenarios have identical streams.
+- `aituninggate` stage 2f bites 7 of 7 numbers by name.
+- `mirrorprobe` breaks are unmoved, and the reflection test finds 70660 twin staging pairs and 960 twin wall calls, with no non-twins.
+
+Windows and Linux are left to CI.
+
+**The break is justified.** D6 names staging, escalation and closing at Normal, and says the commander goldens regenerate under each AI row's ADR. D7 names the retreat. The row's own measure says the stream is gone:
+
+| `waveprobe`, 144 seats | base | head |
+|---|---|---|
+| launches per seat, median | 21.5 | 8.5 |
+| launch size, median | 4 | 9 |
+| broke in, lost (per cent) | 34, 24 | 44, 15 |
+| Rusher first launch | median t=2580, a stream of 3 | t=1350 in all 144 seats, 5 to 6 |
+| Turtle seats walling | 0 | 102 |
+
+The checksum move is the mechanism working: old replays, saves and mixed-build LAN games are refused, not desynced.
+
+**The design holds.**
+- **Determinism.** Everything new in `/sim` is integer or Fix64 arithmetic over the commander's own counts, hit points and positions. Every product that could overflow is computed in `long`. `_wave` is only asked Contains, Add, Remove, Clear and Count; every walk over it is a walk over the entity list in index order. Entity indices are only appended, so wave ids stay stable. The new state is AI state, like `_surplusFrom`: never hashed and never saved. That is safe across peers, because LAN commanders attach only at tick 0 and replays carry the commands.
+- **Mirror exactness.** The staging offset is a product and a quotient, both truncating toward zero (ADR-077), so twins negate exactly. The boundary rule takes the home side. The wall cells use `TryFindPlacement`'s canonical frame. The one tie in each is a centre exactly on the map's centre line, as in ADR-075. The positive controls bite.
+- **Data.** Each of the seven keys has a schema entry, a compiled reference, a refusal in the other family through one key table, refusals in the loader matched by registration, and a fold into `CatalogueChecksum` inside the sorted-id loop. Stage 2f proves that the authored value wins, which is the standard ADR-032 asks for.
+- **Isolation.** The measurement, the data and the re-baseline commits are goldens neutral, and only the behaviour commit moves goldens.
+
+**What is wrong.**
+- **The retreat and the walls run on LAN peers and nothing cross-platform sees them.** I confirmed this above. ADR-079 closed the same gap for the routing.
+- **Two live guards are tested by nothing.** One is the launch when a threshold has stood ungathered for a cadence. The other is the wall's exclusion from the apron and from the field. The second is the safety property section 8 states, and its reversal clause names a `frozenprobe` argument the tool refuses.
+- **`staging_cells` has no ceiling.** A huge value hangs every commander, on both peers alike. And a `rush_tick` past the end of a match silently disarms one, because the hold waits for it.
+- **The record is wrong or silent in several places.**
+  - The stalled-field launch's stated reason, the `mission` golden, no longer holds at the head. Only `skirmish` moves without it.
+  - The effects of a resume are under-recorded. A resume mid-wave refills the garrison from units in flight, which brings back the defect section 1 fixed.
+  - The wall's credit test ignores what the beat has already committed.
+  - The wall branch's comment says it is inert in "every golden", but `mission03` runs a Turtle.
+  - Section 6 says the field defends its own base; the code answers any allied base.
+  - Order precedence within one beat is unstated.
+- **D32's reversal is met on its letter and not enacted.** That is a decision for the orchestrator, and it is due before merge.
+- **Records lag.** ADR-079's D32, rebuy, F6 and ladder lines do not point here. D7 and D33 are not re-read at this head; D33's launching margin is now six matches. Downstream pending cells do not say what they inherit. PR 175's squash merge has made three sentences stale.
+
+**Conditions before merge.**
+
+1. **Cross-platform coverage of the retreat and the walls** (code; comes back to me).
+   - Append one golden scenario, or two, after `aispend`.
+   - It must reach a wave called home by the retreat on a rung whose `retreat_percent` is above 0, and a wall placed by `TryFindWallCell`. It asserts both states, so a later row that stops reaching them fails by name.
+   - The existing 26 lines stay byte-identical and in order.
+   - Switching off the retreat alone, and the walls alone, each fails the new scenario by name.
+   - Stage 2f's fixtures may be the starting point. The map, horizon and rung are the implementer's choice. If it uses the shipped Hard rung, P8-26's cell records that its counter-composition will move this line.
+   - "Golden hashes" records the line without writing a count into prose.
+2. **Bite the two unguarded guards** (goldens neutral; comes back to me). Add an `aituninggate` stage with one check and one control for each, failing by name when its guard is removed:
+   - the launch when a threshold has stood ungathered for a wave cadence;
+   - the wall's exclusion from the apron and the field: a defence whose enemy-facing cells all lie in another building's apron, or beside a ferrite field, gets no wall there, and the same defence clear of them gets one.
+
+   If either check cannot be built through the public surface, ADR-080 names that guard as unguarded and says why.
+3. **A runnable wall-sealing clause** (runner only, goldens neutral; comes back to me). Do one of these, then run it at the head with Turtle mirrors and record the reading as the clause's baseline:
+   - extend `frozenprobe` to take `p0=` and `p1=` as `waveprobe` does, and to report a walker with no route whose route exists once its own side's walls are treated as open; or
+   - reword the clause to a measure an existing tool prints.
+4. **Bound `staging_cells`** (goldens neutral; comes back to me).
+   - The loader, registration and schema refuse a `staging_cells` above a ceiling derived from a number already in the game. I suggest `idleprobe`'s 20-cell home bound (ADR-056): it is the property section 1 claims, and stage 2f's moved value already sits on it.
+   - Registration refuses in the loader's words, and stage 4 shows both the refusal and that the edge registers.
+   - The `rush_tick` description states the hold.
+5. **Correct the record** in ADR-080, and wherever the tracker row, the schema descriptions or the `SkirmishAI.cs` comments repeat it:
+   - **The stalled-field launch.** Its reason was measured on an earlier build. At the head it moves `skirmish` (to 0xB888EA387D513752), not `mission`.
+   - **Resume.** Compatibility lists every effect: the garrison refills from wave members in flight; idle former members are re-staged; the threshold resets; the all-in flag and the launch hit points are lost; a Rusher resumed after its tick restarts its opening and may push again; a launch is due on the first beat.
+   - **The wall's credit test** ignores committed credits, the class ADR-079 recorded. Section 8 and the `surplus_reserve` description list it.
+   - **The wall branch's comment.** `mission03` runs `SkirmishAI.Turtle(0)`. It stays quiet only because its surplus window cannot complete within its horizon, so a change to either moves that golden.
+   - **Section 6.** The field answers an intruder at its team's base. Record that with the reason; any narrowing is a later row's behaviour change.
+   - **Order precedence within one beat.** A base-defence order followed by a staging order, where the defence waits up to one 60-tick cadence. A retreat followed by an all-in.
+6. **Records and seams** (docs only).
+   - ADR-079 gains forward pointers in four places: at its D32 consequence; at the rebuy clause (read at P8-23's head, not met, 22 and 26 of 72); at its F6 consequence (27 to 22, and 3 to 6 unresolved); and at its ladder sentence (one half below 70 per cent at this head).
+   - D7 and D33 record their reversals as read at this head and not met: no inversion; a median of 11536; 42 of 72 launching against 36.
+   - The pending cells of P8-24, P8-25, P8-26, P8-27, P8-29 and P8-31 say what each inherits from ADR-080.
+   - A row is filed, owned by the sim engineer, for commander state in the save. That state is now the wave in flight, the launch count, the push, the all-in flag, `_surplusFrom` and `_airSeen`.
+7. **D32** (the orchestrator, before merge).
+   - The orchestrator records a decision on P8-82. D32's entry records the reading at this head, and F3's status reflects it.
+   - My recommendation is to enact the reading through P8-82 as a reported, non-binding end-of-window half of `aiairgate` that binds in a named commander row, and to reopen F3's aftermath clause until then.
+   - "The letter does not apply" is the weaker reading. The Hard Sodality control that ends early is a won match holding seven harvesters, which strengthens the reversal's premise.
+   - This pull request does not change `aiairgate`.
+8. **Status and ratification.**
+   - The orchestrator ratifies ADR-080 under a new decision.
+   - Its status, its open-queue entry and row P8-23 stop calling it Proposed, and cite this section and the pull request's number.
+   - This date is confirmed or corrected in the same commit.
+9. **Integration, CI and hygiene.**
+   - Run `git rebase --onto origin/main 1ad6cb1`. The tree must equal ab49c6d.
+   - If main has moved past 4076626, re-measure: the 22 unmoved goldens equal main's, the four moved values reproduce, and the checksum is recorded. Any other difference comes back to me.
+   - Fix "pull request 175 being unmerged" in row P8-23 and the open queue, and "origin/main carries no ADR-079 yet" in ADR-080's status.
+   - All three CI jobs are green. The determinism job reproduces the four moved hashes and condition 1's line on Windows and Linux, and `pillargate --bind` passes in the ubuntu leg.
+   - `tools/ci-local.sh` is run again at the final head.
+   - Nothing under `.claude/agent-memory` is committed, no attribution trailer is added, and no em or en dash is introduced.
+   - Conditions 1 to 4 come back to me for a check. So does any other commit beyond these conditions, and any golden other than those named.
+
+**Carried.**
+- **The wave doctrine should be extracted** into a unit of its own that holds its own state, behind a narrow surface. Three rows will read or extend the launch decision: P8-25's scan before a wave and jam during a push, P8-26's first-attack tick and wave scale, and P8-27's jitter. The first of them to touch it extracts it first, in a goldens-neutral commit proven byte-identical.
+- **F6, F4 and D33.**
+  - F6 moves away from its bar (22 of 72, 6 unresolved): P8-24 and P8-81.
+  - F4 has one failing half: P8-26 judges it with D7's retreat.
+  - The next commander row that thins launching reads D33 first.
+- **`longmatchperf`.** It was re-baselined for the third consecutive commander row. My carry on P8-31 stands: set the budget from a stated reason.
+- **Seat fairness, non-binding.**
+  - `seatfairgate`'s income clause falls from 25 to 22 of 32.
+  - `mirrorprobe seats=4`'s Sodality gap widens from 9.9 to 23.2 per cent.
+
+  Both are chaotic at their sample sizes, and both go to F5's owner.
+- **Frozen walkers.** The 16 units go to P8-80. The skirmish-03 harvester pair is a candidate witness for P8-75.
+- **Q024** is settled before the first published build.
+
+### Ratification record (D41)
+
+- **Date confirmed: 2026-10-27.** The section names pull request 175's
+  squash merge, 4076626, committed at 23:53 UTC on 2026-10-26 (00:53 on
+  2026-10-27 in the owner's time zone), so it was given after that, on the
+  date it carries. The five commits it reviewed are dated 2026-10-14.
+- **The pull request.** The section above names the branch the lane was built
+  on, `worktree-wf_0cca15af-a25-1`. Under condition 9 its five commits were
+  rebased onto main from 1ad6cb1, with main at 4076626 (pull request 175's
+  squash merge, whose tree equals 1ad6cb1's), as branch
+  `claude/p8-23-attack-waves`; the rebased head's tree was ab49c6d, equal to
+  the reviewed head's. The pull request number is recorded when it opens.
+- **Conditions 1 to 9**, one commit each for 1 to 7 and one for 8 and 9:
+  1. `airetreat` and `aiwalls`, appended after `aispend` ("Golden hashes"),
+     each failing by name with its branch switched off alone, every line above
+     unchanged; P8-26's row records that its counter-composition will move
+     `airetreat`.
+  2. `aituninggate` stage 2g (section 9), each removal failing its own check by
+     name.
+  3. `frozenprobe` takes `p0=` and `p1=` and reports a walker with no route whose
+     route exists once its own side's walls are open; with Turtle mirrors it
+     reads 0 in 0 of 72 matches, recorded as the clause's baseline ("What
+     reverses it").
+  4. `staging_cells` bounded at 20, `idleprobe`'s home bound, in the loader,
+     registration and schema, with stage 4 showing the refusal and the edge;
+     the `rush_tick` description states the hold.
+  5. The record corrected: section 2's stalled-field reason, Compatibility's
+     resume effects, section 8's credit test and `mission03`, section 6's team
+     base, and section 11's order precedence.
+  6. ADR-079's four forward pointers; D7 and D33 read at this head; the pending
+     cells of P8-24, P8-25, P8-26, P8-27, P8-29 and P8-31; row P8-87.
+  7. D32 decided by the orchestrator: enacted through P8-82 as a reported,
+     non-binding end-of-window half of `aiairgate` that binds in P8-26, with
+     F3's aftermath clause reopened meanwhile; `aiairgate` is unchanged.
+  8. Ratified under D41; this status line, the open-queue entry and row P8-23
+     no longer say Proposed.
+  9. The stale wording PR 175's squash merge left ("pull request 175 being
+     unmerged", "origin/main carries no ADR-079 yet") is gone; CI's three jobs
+     and the re-run of `tools/ci-local.sh` at the final head are the pull
+     request's own.
