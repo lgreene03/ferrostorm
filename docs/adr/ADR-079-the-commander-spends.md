@@ -579,6 +579,9 @@ four and leaves the judgement there.
   (`shortestDepth == 0`), the guard the MCV beside it keeps. A squash merge
   leaves neither f0c9b74 nor its cherry-pick 8e2308d reachable from main, so
   the clause is carried out by that change, whatever the merge style.
+  **Read at P8-23's head** (ADR-080, "What it measured"): not met. F6's window
+  share is 22 of 72 with the rebuy and 26 of 72 with it reverted alone, and
+  neither reaches 70 per cent, so the rebuy stays; P8-24 reads it again.
 - **A cross-platform golden mismatch in CI** stops it before merge, as it would
   any golden move.
 
@@ -587,12 +590,16 @@ four and leaves the judgement there.
 The commander now builds the production its income can pay for, and the ladder
 separates: at the head every rung beats the rung below in more than 70 per cent
 of decided games from both seats, which is F4's ladder clause (P8-26 binds it).
+(At P8-23's head, ADR-080, one half falls below it: Hard over Normal from seat
+1, at 69.4 per cent.)
 Matches resolve: 69 of 72 rung mirrors and 69 of the 72 shipped-setup matches
 end with a result. What it leaves, each recorded with its owner:
 
 - **F6's window share is 38 per cent** at the head, 42 of 72 matches ending
   before minute 15. P8-23's staging and growing threshold are the first place
-  to look, then P8-24.
+  to look, then P8-24. (At P8-23's head, ADR-080, it moves from 27 to 22 of 72
+  in the window, and the matches with no result from 3 to 6; P8-24 inherits
+  both.)
 - **F12's wall bar now fails on skirmish-09** as well as skirmish-07, from the
   extra field builds of a larger army, and skirmish-08's reading is unsettled
   (P8-31, on a calm machine). Forward pointer (2026-10-27): P8-31's
@@ -601,7 +608,9 @@ end with a result. What it leaves, each recorded with its owner:
   fail; with P8-31's build all three maps pass, skirmish-07, 08 and 09 reading
   4.305 to 4.318, 0.862 to 0.898 and 2.689 to 2.874 ms (row P8-31).
 - **D32's reversal is not met**: two Hard cells end the control with no
-  harvester (P8-23's waves, P8-26's ladder).
+  harvester (P8-23's waves, P8-26's ladder). (At P8-23's head, ADR-080, it is
+  met on its letter, the control keeping 5, 3, 4 and 7 harvesters; D32's entry
+  records the decision taken on it, through P8-82.)
 - **P8-26 inherits the producer caps already authored** (D7's numbers, its row's
   "rung producer caps"), so it judges them rather than adding them, and owns
   any per-rung reserve or window.

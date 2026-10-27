@@ -758,4 +758,17 @@ with its owner:
   scale multiplies the threshold.
 - The commander's wave state is not saved, the same class as `_surplusFrom`
   and `_airSeen`; if commander state ever enters the save, the wave in flight,
-  the launch count and the push join it.
+  the launch count and the push join it. **Row P8-87**, owned by the sim
+  engineer, now carries commander state in the save (Architect condition 6):
+  the wave in flight, the launch count, the push, the all-in flag, the surplus
+  window and the air census. The effects of a resume are listed under
+  Compatibility.
+- **Seams to the rows that follow** (Architect condition 6), each recorded in
+  that row's cell of the tracker: P8-24 inherits the six unresolved matches
+  and f0c9b74's reversal; P8-25, P8-26 and P8-27 read or extend the launch
+  decision, and the first of them to touch it extracts the wave doctrine into
+  a unit of its own first, in a goldens-neutral commit proven byte-identical;
+  P8-26 inherits the retreat and the failing `laddergate` half, and its
+  counter-composition will move `airetreat`; P8-29 inherits `IsGroundFighter`
+  as the place to narrow the all-in's count; P8-31 inherits the third
+  consecutive re-baseline of `longmatchperf`'s proxy.
