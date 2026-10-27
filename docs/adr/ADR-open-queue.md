@@ -347,7 +347,7 @@ the same commit.
   cadence; a beaten wave comes home below the rung's retreat_percent (D7:
   Hard and Brutal 30, Easy and Normal 0); the commander goes all-in, garrison
   included, once its army's hit points are twice those of the enemy's army
-  and armed defences; the gathering field defends its own base; the Rusher
+  and armed defences; the gathering field defends its team's base; the Rusher
   pushes at 90 seconds with 4 to 6 infantry, its barracks filled for the push
   and every other launch held to it; the Turtle walls its defences from
   surplus, and its faction_defence_cap stays at 5, with the reason. Seven

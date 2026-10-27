@@ -575,9 +575,11 @@ public sealed class SkirmishAI
         // without this a beat could promise the same credits twice). ONLY the
         // army's orders after the beat's first read `committed`. The surplus
         // building's own test reads the treasury alone, so it does not count
-        // an engineer ordered earlier in the beat; the engineer and anti-air
-        // orders test their own price, the MCV a floor of 3500 and the
-        // harvester none; and the first army order stands on its own price.
+        // an engineer ordered earlier in the beat, and since P8-23 the
+        // Turtle's wall test reads it alone too (ADR-080 section 8); the
+        // engineer and anti-air orders test their own price, the MCV a floor
+        // of 3500 and the harvester none; and the first army order stands on
+        // its own price.
         // So a beat that opens at or above the reserve can end below it by
         // that first army order's price, plus any engineer, anti-air answer
         // or harvester it also ordered (ADR-079, sections 2 and 4).
@@ -858,8 +860,17 @@ public sealed class SkirmishAI
             // has nothing else to buy (no producer the cap allows, no defence
             // under the cap), so a wall never jumps a gun; one segment a beat,
             // bought outright as a wall always is, on the reserve's own test.
+            // That test, like the surplus building's above, reads the treasury
+            // alone and ignores what the beat has already committed (an
+            // engineer or harvester ordered earlier in it), the class ADR-079
+            // recorded for the surplus building (ADR-080 section 8).
             // Inert for a personality that asks for none, which is every
-            // personality but the Turtle and so every golden.
+            // personality but the Turtle. mission03 runs a Turtle
+            // (SkirmishAI.Turtle(0)) and is quiet here only because its
+            // surplus window cannot complete inside its 5000-tick horizon from
+            // the mission's 4000-credit opening, so a change to either moves
+            // that golden; aiwalls is the golden that reaches this branch
+            // (ADR-080, Architect condition 1).
             else if (extra == 0 && _wallsPerDefence > 0 && enemyStructure >= 0)
             {
                 int wall = PlaceableWall(w);
@@ -1221,12 +1232,23 @@ public sealed class SkirmishAI
             var threat = w.Entities[intruder];
             for (int g = 0; g < garrisonCount; g++)
                 output.Add(new Command(w.Tick, _player, CommandType.AttackMove, garrison[g], threat.X, threat.Y));
-            // P8-23 (ADR-080): THE FIELD DEFENDS ITS OWN BASE. A wave gathering
-            // at home is home, so when an enemy stands among my buildings the
-            // fighters gathering for the next wave answer it with the
-            // garrison. Only at the base: an intruder found at a harvester out
-            // in the field still draws the garrison alone, so a harasser cannot
-            // pull the gathering wave across the map (TICKET-AI-05's reason).
+            // P8-23 (ADR-080): THE FIELD DEFENDS ITS TEAM'S BASE. A wave
+            // gathering at home is home, so when an enemy stands among my
+            // team's buildings the fighters gathering for the next wave answer
+            // it with the garrison. My TEAM'S, because the census above asks
+            // IsAlliedTo (P7-8i) and the field reads the census rather than a
+            // narrower test of its own; with the default team map that is my
+            // own base alone (ADR-080 section 6, where narrowing it is left to
+            // a later row as a behaviour change). Only at the base: an
+            // intruder found at a harvester out in the field still draws the
+            // garrison alone, so a harasser cannot pull the gathering wave
+            // across the map (TICKET-AI-05's reason).
+            //
+            // ORDER PRECEDENCE (ADR-080 section 11): the later order in a
+            // beat wins. The staging step below tests Moving as the unit stood
+            // before the beat, so an idle field fighter outside the leash that
+            // is told to defend here can be sent to stage on the same beat,
+            // and its defence then waits up to one defence cadence.
             if (intruderAtBase)
                 for (int i = 0; i < w.Entities.Count; i++)
                 {
@@ -1389,9 +1411,14 @@ public sealed class SkirmishAI
         // A field that has stopped growing (no new high for a whole wave
         // cadence) has reached the army this commander can field now, so it
         // goes at wave_size rather than waiting for a threshold it cannot
-        // reach. MEASURED, the reason this exists: in the mission golden a
-        // Rusher whose harvester had died held four fighters below its grown
-        // threshold of six for the rest of the match and never took the camp.
+        // reach. It was added for a measurement on an earlier build of P8-23,
+        // in which the mission golden's Rusher, its harvester dead, held four
+        // fighters below its grown threshold of six and never took the camp.
+        // At ADR-080's head that reason no longer holds: switched off, the
+        // mission golden is byte-identical and only skirmish moves (to
+        // 0xB888EA387D513752). The fallback is live and is kept for the
+        // property it states, that a commander whose army cannot grow still
+        // attacks, not for that golden (ADR-080 section 2).
         if (fieldCount > _fieldPeak) { _fieldPeak = fieldCount; _fieldPeakFrom = w.Tick; }
         bool fieldStalled = fieldCount >= _waveSize && w.Tick - _fieldPeakFrom >= WaveCadenceTicks;
         bool launchDue = targetId >= 0 && w.Tick - _lastWaveTick >= WaveCadenceTicks;
@@ -1403,7 +1430,10 @@ public sealed class SkirmishAI
 
         // 3. THE ALL-IN: an army at least the personality's share of the
         // enemy's, and at least a wave of it, sends everything, the garrison
-        // too, without waiting for the threshold, and it never retreats.
+        // too, without waiting for the threshold, and it never retreats. A
+        // retreat earlier in this beat leaves its survivors as field, so an
+        // all-in on the same beat sends them back at the enemy, its order
+        // the later and so the one that stands (ADR-080 section 11).
         bool allIn = launchDue && !beforePush && _allInPercent > 0 && fighters >= _waveSize
                      && fightersHp * 100 >= _allInPercent * enemyHp;
         // 4. THE RUSHER'S PUSH: from its tick, once a wave's worth of armed

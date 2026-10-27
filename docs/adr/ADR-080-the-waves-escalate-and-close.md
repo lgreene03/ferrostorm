@@ -85,11 +85,16 @@ has stood a whole wave cadence (300 ticks) launches however it stands, so a
 staging point no fighter can reach never holds a wave back. A field of at
 least `wave_size` that has made no new high for a wave cadence launches below
 the threshold: it has reached the army this commander can field now. That
-second one is measured, not reasoned: without it the `mission` golden's
-Rusher, its harvester dead and its income gone, held four fighters below a
-grown threshold of six for the rest of the match and never took the camp the
-scenario asserts it takes. Launches keep the 300-tick spacing the stream
-always had. `wave_growth` is the personality's own ground garrison (half its
+second one was added for a measurement on an earlier build of this row, in
+which the `mission` golden's Rusher, its harvester dead and its income gone,
+held four fighters below a grown threshold of six for the rest of the match
+and never took the camp the scenario asserts it takes. **That reason does not
+hold at this head** (Architect condition 5, corrected): with the stalled-field
+launch switched off, `mission` is byte-identical and only `skirmish` moves, to
+0xB888EA387D513752 (the verifier's measurement, reproduced). The fallback is
+live, and it is kept for the property it states, that a commander whose army
+cannot grow still attacks, not for that golden. Launches keep the 300-tick
+spacing the stream always had. `wave_growth` is the personality's own ground garrison (half its
 wave, floor 2: 3, 2 and 5) and `wave_cap` twice its wave (12, 8 and 20), each
 transcribed from that rule rather than derived when loaded, as ADR-079 did for
 `faction_defence_cap`.
@@ -136,15 +141,28 @@ coin toss. The enemy is counted as this commander already counts the enemy's
 buildings, through fog; P8-29 (D9) narrows the count, with the target picks, to
 what it may see, and `IsGroundFighter` is the one place to do it for units.
 
-### 6. The gathering field defends its own base
+### 6. The gathering field defends its team's base
 
-When the intruder census finds an enemy among this commander's buildings (the
-base guard, not a harvester's), the field answers it with the garrison, on the
+When the intruder census finds an enemy among its team's buildings (the base
+guard, not a harvester's), the field answers it with the garrison, on the
 garrison's cadence. A wave gathering at home is home, and before staging the
 field stood among the buildings anyway; staged 10 cells out it would otherwise
 idle while the base beside it burned. An intruder found only at a harvester
 still draws the garrison alone, so a harasser cannot pull the gathering wave
 across the map (TICKET-AI-05's reason, kept).
+
+**Its team's, not its own alone** (Architect condition 5, corrected: this
+section first said "its own base"). The census asks `IsAlliedTo`, P7-8i's team
+widening, and the field reads the census rather than a narrower test of its
+own, so an enemy nearest to an ally's yard, plant, refinery, factory or turret
+draws this commander's gathering field as well as its garrison. The reason it
+stands: the garrison already answers at an ally's base by P7-8i's design, and
+a field that stayed home while its garrison went would split the defence
+rather than narrow it; with the default team map every seat is its own team,
+so a two-seat match is unaffected. The harasser reason above still holds,
+because an intruder nearest to a harvester draws the garrison alone. Narrowing
+the field to this commander's own buildings would be a later row's behaviour
+change, measured as one.
 
 ### 7. The Rusher pushes at 90 seconds
 
@@ -172,7 +190,21 @@ target (the side whose axis carries the larger offset, ties to the x side):
 that side's two cells, then the corner before and the corner after it. A wall
 is bought outright as it lands (ADR-005 clause 3), one a beat, only from a
 sustained surplus (ADR-079's reserve and window) and only once the surplus has
-nothing else to buy, so a wall never jumps a producer or a gun. A cell is taken
+nothing else to buy, so a wall never jumps a producer or a gun. **Its credit
+test reads the treasury alone** (Architect condition 5, recorded): the
+treasury must hold the reserve plus the wall's price, and what the beat has
+already committed (an engineer or a harvester ordered earlier in it) is not
+counted, the same class ADR-079 section 2 recorded for the surplus building.
+The wall's price does join the beat's commitments, so no army order after it
+promises the same credits again; a beat that walls can still end below the
+reserve by what it committed before the wall, as ADR-079's beat can, and the
+`surplus_reserve` description in `data/schema.ai.json` lists the wall's test
+beside the building's. **`mission03` runs a Turtle** (`SkirmishAI.Turtle(0)`),
+and the wall branch is quiet there only because the surplus window cannot
+complete inside that scenario's 5000-tick horizon from the mission's
+4000-credit opening, so a change to either moves that golden (Architect
+condition 5 corrected the code comment that called the branch inert in every
+golden); `aiwalls` is the golden that reaches it. A cell is taken
 only where a wall may legally stand (`World.ValidPlacement`), outside the
 one-cell apron of every other building of the commander's and not beside a
 ferrite field, so a wall never seals a refinery, a producer's exit or a
@@ -279,6 +311,31 @@ what it can see (below): no first break moves. The `skirmish` golden's first
 divergence is itself a twin pair: both seats, on one beat, send a fighter to
 (17.5, 14.5) and (78.5, 49.5), each the half turn of the other on its 96 by 64
 map.
+
+### 11. Order precedence within one beat
+
+Recorded under Architect condition 5 from the determinism audit's finding 8.
+One beat can give a unit two orders, and **the later order in the beat's list
+wins**, because the sim applies a beat's commands in order and each replaces
+the unit's order. Two cases are known, both deterministic and both the same on
+every peer:
+
+- **A base defence, then a staging order.** The field's answer to an intruder
+  at its team's base (section 6) is an AttackMove; the staging step later in
+  the same beat sends an idle field fighter outside the leash to the staging
+  point by PathMove, and it tests `Moving` as the unit stood before the beat,
+  so a fighter that has just been told to defend still reads as idle and is
+  sent to stage instead. The defence waits for the next defence beat, up to
+  one 60-tick cadence. This happens only on a beat on which both cadences fall
+  and only for a field fighter outside the leash.
+- **A retreat, then an all-in.** The retreat (section 4) orders the wave in
+  flight home by PathMove and empties it; its survivors are field again, so an
+  all-in later in the same beat sends them back at the enemy, its AttackMove
+  winning, and the wave is then all-in and never retreats. A launch whose
+  threshold stands on that beat would send them likewise.
+
+Neither is changed here. Choosing which order should win is a behaviour change
+for a later row, measured as one.
 
 ## What it measured (seed 2026, macOS)
 
@@ -538,10 +595,32 @@ the command change alone would not have diverged one; the refusal is the
 data's. **Saves made before this ADR are refused** on the same checksum. No
 save field, version or format changes, and nothing of the commander is saved:
 a loaded match's commander starts with no wave in flight, a launch count of 0
-and its push unmade, as it starts ADR-079's surplus window again. So on a
-resume an idle fighter of a wave in flight is called back to gather, the
-threshold starts again from `wave_size`, and a Rusher loaded after its rush
-tick may push once more. **A mixed-build LAN game is refused at the hello.**
+and its push unmade, as it starts ADR-079's surplus window again. **Every
+effect of a resume mid-match** (Architect condition 5, completed from the
+determinism audit's finding 3):
+
+- **The garrison refills from wave members in flight.** With the wave in
+  flight empty, the garrison is chosen again from the lowest ids among all
+  eligible fighters, which can be units out on the attack; the next intruder
+  then pulls them home out of the fight, and an idle one is called home from
+  across the map. This brings back, for that save, the defect section 1
+  fixed.
+- **Idle former members are sent back to stage**: they are field again, so
+  the staging step walks them to the staging point.
+- **The threshold resets** to `wave_size`, since the launch count is 0.
+- **The all-in flag and the launch hit points are lost**, so a beaten Hard or
+  Brutal wave is not recalled (its launch hit points read 0).
+- **A Rusher resumed after its rush tick restarts its opening** (its barracks
+  filled with rifle squads again) **and may push again**, up to a wave and its
+  garrison of infantry.
+- **A launch is due on the first beat**, since the last launch tick starts
+  far in the past.
+
+None of this is a lockstep, replay or hash break: LAN cannot save, commanders
+attach only at tick 0, replays carry the commands and run no commander, and a
+given save always resumes the same way. `saveload` replays recorded streams
+after loading, so it cannot see any of it. Row P8-87 owns commander state in
+the save. **A mixed-build LAN game is refused at the hello.**
 Q024's open question stands for a later change to the commander's logic that
 moves no data: it would pass the hello and desync, and the relay's state-hash
 comparison would catch it.
