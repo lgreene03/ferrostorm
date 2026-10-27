@@ -2149,6 +2149,7 @@ ulong ScenarioAiSpend(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     return world.ComputeStateHash();
 }
 
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -19446,15 +19447,27 @@ int FrozenProbe()
     // window. It reads the world only (World.ExactTiesThisTick is an
     // observation), so the sweep plays exactly as pillargate's does. A probe
     // by ADR-061's rule: it prints and asserts nothing.
+    //
+    // P8-23 (ADR-080, Architect condition 3): p0= and p1= set the two seats'
+    // personalities as waveprobe's do (standard, rusher or turtle; standard by
+    // default, so a run without them plays pillargate's sweep as before), and
+    // every walker with no route from its cell is asked once more whether its
+    // route exists once its OWN side's walls are treated as open: the map is
+    // copied, each living wall of the walker's seat is unblocked on the copy,
+    // and the route the cause was read from is asked again. A yes is a walker
+    // its own side's walls have sealed in, which ADR-080's reversal clause for
+    // the Turtle's walls reads with p0=turtle p1=turtle.
     const int FrozenTicks = 450;
     string root = MeasureRoot();
-    var o = MeasureOptions("frozenprobe", false, "maps", "pairs", "orient", "jobs");
+    var o = MeasureOptions("frozenprobe", false, "maps", "pairs", "orient", "p0", "p1", "jobs");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
     var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
     var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int p0 = MeasurePersonality("p0", o.GetValueOrDefault("p0")), p1 = MeasurePersonality("p1", o.GetValueOrDefault("p1"));
     int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
-    var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
-    Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), walkers reporting Moving and standing "
+    var specs = PillarSpecs(maps, pairs, orients, p0, p1, 2026, MeasurementHarness.WindowCloseTicks);
+    Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), personalities "
+        + $"{o.GetValueOrDefault("p0") ?? "standard"}/{o.GetValueOrDefault("p1") ?? "standard"}, walkers reporting Moving and standing "
         + $"at one position for {FrozenTicks} or more consecutive ticks. A probe: nothing asserts.");
     string[] causes = { "held by an exact cancellation, sidestepped", "held by an exact cancellation left on a line",
                         "at its target", "no route from its cell", "other" };
@@ -19480,6 +19493,59 @@ int FrozenProbe()
         return FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, cx, cy) < 0 ? causes[3] : causes[4];
     }
 
+    // ADR-080, Architect condition 3: for a walker CauseOf found with no
+    // route, whether the same route exists on a copy of the map on which every
+    // living wall of the walker's own seat is open. False when its seat has no
+    // wall, so a run with no Turtle reads zero by construction.
+    bool RoutedWithOwnWallsOpen(World w, in Entity e)
+    {
+        var open = new Map(w.Map.Width, w.Map.Height);
+        for (int y = 0; y < w.Map.Height; y++)
+            for (int x = 0; x < w.Map.Width; x++)
+                if (w.Map.IsBlocked(x, y)) open.SetBlocked(x, y, true);
+        bool walled = false;
+        for (int k = 0; k < w.EntityCount; k++)
+        {
+            var b = w.Entities[k];
+            if (!b.Alive || b.Kind != EntityKind.Wall || b.PlayerId != e.PlayerId) continue;
+            int s = w.FootprintOf(b.StructType), bx = w.AnchorOf(b.X, b.StructType), by = w.AnchorOf(b.Y, b.StructType);
+            for (int dy = 0; dy < s; dy++)
+                for (int dx = 0; dx < s; dx++)
+                    if (open.InBounds(bx + dx, by + dy)) { open.SetBlocked(bx + dx, by + dy, false); walled = true; }
+        }
+        if (!walled) return false;
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y), tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
+        if (e.Kind == EntityKind.Harvester && e.HState == HarvestState.ToRefinery && e.RefineryId >= 0 && e.RefineryId < w.EntityCount)
+        {
+            var r = w.Entities[e.RefineryId];
+            if (r.Alive && r.X == e.TargetX && r.Y == e.TargetY && w.Map.IsBlocked(tcx, tcy))
+            {
+                var dock = FlowField.BuildToFootprint(open, w.AnchorOf(r.X, r.StructType), w.AnchorOf(r.Y, r.StructType), w.FootprintOf(r.StructType));
+                return dock.IsGoal(open, cx, cy) || dock.NextCell(open, cx, cy) >= 0;
+            }
+        }
+        return FlowField.Build(open, tcx, tcy).NextCell(open, cx, cy) >= 0;
+    }
+    // Its two controls, printed beside the reading so that a zero means none
+    // was sealed in rather than a check that cannot say yes: a walker ringed
+    // by its own seat's walls, its target outside the ring, has a route once
+    // they are open; the same walker ringed by the other seat's walls has none.
+    bool RingedControl(int wallSeat)
+    {
+        var cw = new World(1, 16, 16, players: 2);
+        for (int x = 3; x <= 7; x++) { cw.SpawnWall(wallSeat, x, 3); cw.SpawnWall(wallSeat, x, 7); }
+        for (int y = 4; y <= 6; y++) { cw.SpawnWall(wallSeat, 3, y); cw.SpawnWall(wallSeat, 7, y); }
+        var d = cw.GetUnitType(1);
+        var e = cw.Entities[cw.SpawnUnit(0, Fix64.FromInt(5) + Fix64.Half, Fix64.FromInt(5) + Fix64.Half, d.Speed, d.Hp, d.Armour,
+                                         d.WeaponId, unitType: 1)];
+        e.TargetX = Fix64.FromInt(12) + Fix64.Half;
+        e.TargetY = Fix64.FromInt(12) + Fix64.Half;
+        return RoutedWithOwnWallsOpen(cw, in e);
+    }
+    Console.WriteLine($"frozenprobe: the walls-open check's controls: a walker ringed by its own side's walls has a route once they "
+        + $"are open ({(RingedControl(0) ? "yes" : "NO")}), and one ringed by the other side's walls does not "
+        + $"({(RingedControl(1) ? "IT DOES" : "no")})");
+
     var sw = Stopwatch.StartNew();
     var lines = new List<string>[specs.Count];
     var harvesters = new int[specs.Count];
@@ -19493,10 +19559,12 @@ int FrozenProbe()
     var mostWhat = new string[specs.Count];
     var longest = new int[specs.Count];
     var longestWhat = new string[specs.Count];
+    var sealedIn = new int[specs.Count];
     RunOrdered(specs.Count, jobs, i =>
     {
         var s = specs[i];
         var found = new List<string>();
+        int sealedHere = 0;
         var still = new Dictionary<int, (Fix64 X, Fix64 Y, int Since, bool InTie, bool OnLine)>();
         var counted = new HashSet<int>();
         var run = new Dictionary<int, int>();
@@ -19567,11 +19635,15 @@ int FrozenProbe()
                 if (e.Kind == EntityKind.Harvester) h++; else u++;
                 string cause = CauseOf(w, in e, st.InTie, st.OnLine);
                 byCause[i, Array.IndexOf(causes, cause)]++;
+                bool walledIn = cause == causes[3] && RoutedWithOwnWallsOpen(w, in e);
+                if (walledIn) sealedHere++;
                 found.Add($"    seat {e.PlayerId} (start {StartOf(s, e.PlayerId)}) {e.Kind} #{k} at ({e.X},{e.Y}), {e.HState}, target "
-                          + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}");
+                          + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}"
+                          + (walledIn ? ", and its route exists once its own side's walls are open" : ""));
             }
         });
         lines[i] = found;
+        sealedIn[i] = sealedHere;
         harvesters[i] = h;
         units[i] = u;
         tieHeld[i] = held;
@@ -19614,6 +19686,9 @@ int FrozenProbe()
     Console.WriteLine($"  held by an exact cancellation: {causeSum[0] + causeSum[1]}");
     for (int c = 0; c < causes.Length; c++)
         Console.WriteLine($"  {(c < 2 ? "  " : "")}{causes[c]}: {causeSum[c]}");
+    // ADR-080's reversal clause for the Turtle's walls reads this line.
+    Console.WriteLine($"frozenprobe: walkers with no route from their cell whose route exists once their own side's walls are "
+        + $"open: {sealedIn.Sum()} (in {sealedIn.Count(n => n > 0)} of {specs.Count} matches)");
     Console.WriteLine($"frozenprobe: walkers in an exact cancellation on {FrozenTicks} or more "
         + $"consecutive ticks: {tieHeld.Sum()}; in a cycle (on half the ticks of some {FrozenTicks}-tick window): {cycling.Sum()}; "
         + $"on {FrozenTicks} or more ticks of one match in all: {recurrent.Sum()}; exact ties in all: {ties.Sum()}, "

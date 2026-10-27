@@ -592,9 +592,21 @@ on both.
   puts the median first launch more than one wave cadence (300 ticks) from
   `rush_tick`, or its sizes outside a wave to a wave and its garrison.
 - **The Turtle's walls are not built** if fewer than half the Turtle seats in
-  `waveprobe p0=turtle p1=turtle` place any, or **they seal a base** if a
-  `frozenprobe` run with Turtle personalities finds a walker with no route from
-  a cell a Turtle wall closed.
+  `waveprobe p0=turtle p1=turtle` place any, or **they seal a base** if
+  `frozenprobe p0=turtle p1=turtle` reports any walker with no route from its
+  cell whose route exists once its own side's walls are open (its line
+  "walkers with no route from their cell whose route exists once their own
+  side's walls are open"). Reworded under Architect condition 3, because the
+  clause as first written named arguments `frozenprobe` refused: the probe now
+  takes `p0=` and `p1=` as `waveprobe` does, and asks that question of every
+  walker it finds with no route, on a copy of the map with the walker's own
+  side's walls unblocked, beside two printed controls (a walker ringed by its
+  own side's walls has a route once they are open, and one ringed by the
+  other side's has none). **Baseline at this head: 0, in 0 of 72 matches**;
+  the Turtle mirrors freeze 6 units (2 at their target, 2 with no route, 2
+  other) and no harvester, and both controls answer as they should. The
+  default sweep, `p0=` and `p1=` unset, still reads 2 harvesters and 16 units
+  frozen and 0 sealed.
 - **A walker is held** if `frozenprobe` reads any walker in an exact
   cancellation (it reads 0), or more than the 16 units it finds frozen at this
   head; P8-80 owns those 16.
