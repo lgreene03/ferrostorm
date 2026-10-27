@@ -70,7 +70,8 @@ using Ferrostorm.Sim;
 //                        rule derives (binding since P8-31; wall=report, as CI's ubuntu leg runs it, prints the wall bar without asserting it)
 //   flowparity         - P8-31, D28: every field the sim's FlowFieldBuilder makes, on every shipped map and five synthetic grids, for a
 //                        target of each class and footprints of sizes 1 to 4, equals the pre-P8-31 build's in every cell's distance and
-//                        direction and in its relaxation count (in match; full=1 every cell and anchor, live=1 longmatchperf's matches too)
+//                        direction and in its relaxation count, and FlowFieldCache counts exactly those builds and relaxations on
+//                        both paths (in match; full=1 every cell and anchor, live=1 longmatchperf's matches too)
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. aiairgate and cheesegate run in match (P8-17)
 //                        and pillargate --bind and longmatchperf wall=report in CI (P8-72, P8-31); the rest are in none of golden,
@@ -19667,7 +19668,9 @@ int LongMatchPerfGate()
         // build count let an unwired relaxation count PASS, which the P8-30
         // audit found. The build count is guarded as well, because the build
         // columns and the over-budget attribution above read it. P8-13's
-        // rule: a stage that measured nothing fails.
+        // rule: a stage that measured nothing fails. A count unwired on only
+        // one of the cache's two paths reads low rather than zero, which
+        // this guard cannot see; flowparity's CheckCache, in `match`, fails it.
         if (rxTotal == 0)
             failures.Add(string.Create(ic, $"{r.Map} recorded no flow-field cell relaxed in {n} ticks, so the proxy the budget reads measured nothing"));
         if (built == 0)
@@ -19975,6 +19978,34 @@ int FlowParity()
         return null;
     }
 
+    // P8-31's integration closes a gap P8-30 left: the cache's accounting,
+    // recounted. longmatchperf's proxy reads World.FlowCellsRelaxed, which is
+    // FlowFieldCache.CellsRelaxed, a sum the cache adds to on each of its two
+    // build paths. The budget is an upper bound whose only other guard is a
+    // total of zero, so an increment unwired on ONE path (the footprint
+    // path's, say) lowered every reading and still passed. Here each goal the
+    // sweep builds is also asked of a FlowFieldCache, twice. The first ask
+    // must add exactly one build and exactly the relaxations the builder has
+    // just reported, which Check has already proved equal to the old build's;
+    // the second must return the same field and add nothing. A miscount fails
+    // by name, with the path that miscounted.
+    string? CheckCache(string at, FlowFieldCache cache, Map m, int x, int y, int size, int relaxed,
+                       ref long builds, ref long cellsRelaxed)
+    {
+        string path = size == 0 ? "Get" : "GetFootprint";
+        var f = size == 0 ? cache.Get(m, x, y) : cache.GetFootprint(m, x, y, size);
+        builds++;
+        cellsRelaxed += relaxed;
+        if (cache.Builds != builds || cache.CellsRelaxed != cellsRelaxed)
+            return $"{at}: after FlowFieldCache.{path} built it, the cache counts {cache.Builds} builds and {cache.CellsRelaxed} "
+                + $"relaxations, the builds themselves {builds} and {cellsRelaxed}, so the count longmatchperf's proxy reads is wrong";
+        var again = size == 0 ? cache.Get(m, x, y) : cache.GetFootprint(m, x, y, size);
+        if (!ReferenceEquals(again, f) || cache.Builds != builds || cache.CellsRelaxed != cellsRelaxed)
+            return $"{at}: a second FlowFieldCache.{path} for the same goal built again or moved the counts "
+                + $"({cache.Builds} builds and {cache.CellsRelaxed} relaxations, expected {builds} and {cellsRelaxed})";
+        return null;
+    }
+
     string Goal(int x, int y, int size, string cls) => size == 0
         ? $"target ({x},{y}), {cls}" : $"{size}x{size} footprint at ({x},{y}), {cls}";
 
@@ -20043,14 +20074,20 @@ int FlowParity()
         if (Volatile.Read(ref stop) != 0) return (g, t, fp, 0, 0, 0, 0, null);
         var (name, m, goals) = grids[g];
         var nb = new FlowFieldBuilder();
+        // The goals on a grid are distinct (each cell is in one target class,
+        // and footprints are deduplicated by anchor and size), so every first
+        // ask of this cache is a build.
+        var cache = new FlowFieldCache();
+        long cacheBuilds = 0, cacheRelaxed = 0;
         var oldSw = new Stopwatch();
         var newSw = new Stopwatch();
         long cells = 0, relaxed = 0;
         for (int j = from; j < to; j++)
         {
             var (x, y, size, cls) = goals[j];
-            string? fail = Check($"{name}, {Goal(x, y, size, size == 0 ? targetClass[cls] : footClass[cls])}",
-                m, x, y, size, nb, oldSw, newSw, out long c, out int r);
+            string at = $"{name}, {Goal(x, y, size, size == 0 ? targetClass[cls] : footClass[cls])}";
+            string? fail = Check(at, m, x, y, size, nb, oldSw, newSw, out long c, out int r)
+                ?? CheckCache(at, cache, m, x, y, size, r, ref cacheBuilds, ref cacheRelaxed);
             if (fail != null)
             {
                 Interlocked.Exchange(ref stop, 1);
@@ -20152,7 +20189,7 @@ int FlowParity()
     }
     sw.Stop();
 
-    if (firstFailure != null) return Fail($"flowparity: the replacement differs from the pre-P8-31 build. First difference: {firstFailure}");
+    if (firstFailure != null) return Fail($"flowparity: a field, or the count of the work behind one, differs from the pre-P8-31 build's. First difference: {firstFailure}");
     var unseen = targetClass.Where((_, k) => tTotal[k] == 0).Select(s => $"target {s}")
         .Concat(footClass.Where((_, k) => fTotal[k] == 0).Select(s => $"footprint {s}")).ToArray();
     if (unseen.Length > 0)
@@ -20160,7 +20197,8 @@ int FlowParity()
     Console.WriteLine(string.Create(ic, $"flowparity: targets by class {Tally(tTotal.Select(v => (int)v).ToArray(), targetClass)}; "
         + $"footprints by class {Tally(fTotal.Select(v => (int)v).ToArray(), footClass)}"));
     Console.WriteLine(string.Create(ic, $"flowparity: PASS. {fields + liveFields} fields, {cellsAll} cells: every distance and direction, "
-        + $"every target cell and every relaxation count ({relaxedAll} on the sweep) equal to the pre-P8-31 build's. "
+        + $"every target cell and every relaxation count ({relaxedAll} on the sweep) equal to the pre-P8-31 build's, and a FlowFieldCache "
+        + $"asked for each sweep goal counted exactly those builds and relaxations on both of its paths. "
         + $"Build time on the sweep, old {oldAll:F0} ms against new {newAll:F0} ms; elapsed {sw.Elapsed.TotalSeconds:F1} s on {jobs} thread(s)."));
     return 0;
 }
