@@ -243,6 +243,24 @@ check. The all-in is checked first, because the growth fixtures switch it off
 by registration and a commander reading the compiled share would otherwise
 fail them under the wrong name.
 
+**`aituninggate` stage 2g bites the two live guards nothing else did
+(Architect condition 2).** Each check stands beside a control that differs
+from it only in what the guard reads. The launch for a threshold that has
+stood ungathered for a wave cadence: six fighters sealed in a pocket behind
+the yard, with no route to the staging point, are held to t=300 (the control)
+and sent, seven of them with one that joined at t=210 as a new high, on the
+beat the threshold has stood a whole cadence, t=315; the new high keeps the
+stalled-field launch from falling due before t=510, so nothing else can send
+them. The wall's exclusion: on stage 2f's Turtle base the wall goes beside the
+turret, at (20, 24), when its enemy-facing side is clear (the control), and
+past it to the Bastion's side, at (20, 37), when a power plant's one-cell apron
+covers that side (the apron check) or ferrite fields' neighbouring cells cover
+it (the field check). Removing the stood launch fails "aituning 2g(a)" with
+none of the seven sent; removing the apron exclusion alone fails "aituning
+2g(b) apron", and the field exclusion alone "aituning 2g(b) field", each with
+the wall at (20, 24). Every check before stage 2g stays green under each
+removal, which is the gap the condition named.
+
 ### 10. Mirror-exact by construction
 
 Every new choice reads this commander's own state: counts and hit points of

@@ -7437,6 +7437,119 @@ int AiTuningGate()
         return Fail($"aituning 2f: at a REGISTERED retreat_percent of 0 the same wave must fight on, and {retreatNone.Home} were "
                     + "called home - the commander is reading the compiled retreat");
 
+    //        2g, ADR-080's two live guards that no golden and no check above
+    //        bit (Architect condition 2), each beside a control that differs
+    //        from it only in what the guard reads, on 2f's terms: every world
+    //        registers data/ai first and the all-in is switched off.
+    //          (a) THE LAUNCH WHEN A THRESHOLD HAS STOOD UNGATHERED FOR A WAVE
+    //              CADENCE. Six fighters stand sealed in a pocket behind the
+    //              yard, further than the home leash from the staging point and
+    //              with no route to it, so they can never gather. The field
+    //              stands at the threshold from the first beat (t=15). A
+    //              seventh fighter joins the pocket at t=210, a new high, so the
+    //              stalled-field launch cannot fall due before t=510 and the
+    //              only launch that can come sooner is this guard's. The
+    //              control: nothing is sent while the threshold has stood less
+    //              than a cadence (to t=300). The check: all seven are sent on
+    //              the beat it has stood a whole cadence (t=315).
+    //          (b) THE WALL'S EXCLUSION FROM THE ONE-CELL APRON OF THE
+    //              COMMANDER'S OTHER BUILDINGS AND FROM THE CELLS BESIDE A
+    //              FERRITE FIELD, the property ADR-080 section 8 states ("a
+    //              wall never seals a refinery, a producer's exit or a
+    //              harvester's field"). On 2f's Turtle base the oldest defence
+    //              is the turret anchored at (18, 24), whose enemy-facing side
+    //              is the column x 20, rows 23 to 26 for four walls. The
+    //              control: with that column clear, the beat's wall goes there.
+    //              The checks: with a power plant anchored at (21, 24), whose
+    //              apron covers the whole column, or with two ferrite fields
+    //              at cells (21, 24) and (21, 26), whose neighbouring cells
+    //              cover it, no wall goes beside the turret and the walk moves
+    //              on to the Bastion's side. Each half is a check of its own,
+    //              so removing either fails by its own name.
+    (int Held, int Sent, int Launched) StoodLaunch()
+    {
+        var w = WaveWorld(4326, AiTuning.StandardId, NoAllIn, Same, AiTuning.NormalId);
+        for (int k = 0; k < 3; k++) Tank(w, 0, 10 + k, 34);                 // the garrison, at home
+        // The pocket: cells x 2 to 4 and y 28 to 33, ringed by blocked cells.
+        for (int x = 1; x <= 5; x++) { w.Map.SetBlocked(x, 27, true); w.Map.SetBlocked(x, 34, true); }
+        for (int y = 27; y <= 34; y++) { w.Map.SetBlocked(1, y, true); w.Map.SetBlocked(5, y, true); }
+        var pocket = new List<int>();
+        for (int k = 0; k < 6; k++) pocket.Add(Tank(w, 0, 2 + k % 3, 29 + 2 * (k / 3)));
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        int held = Beats(w, ai, 209).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        pocket.Add(Tank(w, 0, 3, 32));                                       // a new high at t=210
+        held += Beats(w, ai, 300).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        int sent = Beats(w, ai, 315).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        return (held, sent, ai.WavesLaunched);
+    }
+    var stood = StoodLaunch();
+    if (stood.Held != 0)
+        return Fail($"aituning 2g(a) control: a field at its threshold that cannot gather must be held until the threshold has stood "
+                    + $"a whole wave cadence, and {stood.Held} order(s) went to it before t=315, so the check below proves nothing");
+    if (stood.Sent != 7 || stood.Launched != 1)
+        return Fail($"aituning 2g(a): a threshold that has stood ungathered for a wave cadence must launch however it stands, so all "
+                    + $"seven sealed fighters must be sent at t=315, and {stood.Sent} were ({stood.Launched} launches) - the "
+                    + "launch for a threshold that has stood a cadence is gone, and a staging point no fighter can reach "
+                    + "holds the wave back");
+    // blocker: 0 none, 1 a power plant whose apron covers the turret's
+    // enemy-facing column, 2 two ferrite fields beside it.
+    (int X, int Y, int Walls) WallCell(int blocker)
+    {
+        var w = new World(4327, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(AiTuning.NormalId, w.GetAiTuning(AiTuning.NormalId) with { SurplusWindowTicks = 0 });
+        w.RegisterAiTuning(AiTuning.TurtleId, w.GetAiTuning(AiTuning.TurtleId) with { FactionDefenceCap = 1 });
+        w.SpawnConstructionYard(1, 86, 30);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 13, 30, supply: 2000);
+        w.SpawnRefinery(0, 8, 24);
+        w.SpawnRefinery(0, 13, 24);
+        w.SpawnBarracks(0, 18, 30);
+        w.SpawnFactory(0, 8, 36);
+        w.SpawnTurret(0, 18, 24);
+        w.SpawnRadarUplink(0, 13, 36);
+        w.SpawnFactionDefence(0, w.BuildableFactionDefence(0), 18, 36);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+        if (blocker == 1) w.SpawnPowerPlant(0, 21, 24);
+        if (blocker == 2)
+        {
+            w.SpawnFerriteField(Fix64.FromInt(21) + Fix64.Half, Fix64.FromInt(24) + Fix64.Half, 4000);
+            w.SpawnFerriteField(Fix64.FromInt(21) + Fix64.Half, Fix64.FromInt(26) + Fix64.Half, 4000);
+        }
+        w.GrantCredits(0, 20000);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var ai = SkirmishAI.Turtle(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        int x = -1, y = -1, walls = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type != CommandType.PlaceStructure || w.GetStructureType(c.AuxId).Kind != EntityKind.Wall) continue;
+            if (walls++ == 0) { x = c.X.ToIntFloor(); y = c.Y.ToIntFloor(); }
+        }
+        return (x, y, walls);
+    }
+    bool BesideTurret((int X, int Y, int Walls) c) => c.X == 20 && c.Y >= 23 && c.Y <= 26;
+    var wallClear = WallCell(0);
+    var wallApron = WallCell(1);
+    var wallField = WallCell(2);
+    if (wallClear.Walls != 1 || !BesideTurret(wallClear))
+        return Fail($"aituning 2g(b) control: with the turret's enemy-facing column clear, the Turtle's wall must go beside the turret "
+                    + $"(x 20, rows 23 to 26), and it placed {wallClear.Walls} wall(s), the first at ({wallClear.X}, {wallClear.Y})");
+    if (wallApron.Walls != 1 || BesideTurret(wallApron))
+        return Fail($"aituning 2g(b) apron: with a power plant's one-cell apron covering the turret's enemy-facing column, no wall may go "
+                    + $"there and the walk must move on to the Bastion, and it placed {wallApron.Walls} wall(s), the first at "
+                    + $"({wallApron.X}, {wallApron.Y}) - the wall's exclusion from the apron of the commander's other buildings is "
+                    + "gone, so a wall can seal a refinery or a producer's exit");
+    if (wallField.Walls != 1 || BesideTurret(wallField))
+        return Fail($"aituning 2g(b) field: with ferrite fields beside every cell of the turret's enemy-facing column, no wall may go "
+                    + $"there and the walk must move on to the Bastion, and it placed {wallField.Walls} wall(s), the first at "
+                    + $"({wallField.X}, {wallField.Y}) - the wall's exclusion from the cells beside a ferrite field is gone, so a "
+                    + "wall can seal a harvester's field");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -7675,7 +7788,11 @@ int AiTuningGate()
                       + $"rush_tick and {pushEarly} at a rush tick of 15; a Turtle places {wallsAuthored.Walls} wall on the "
                       + $"enemy's side of a defence at the authored walls_per_defence and {wallsNone.Walls} at 0; and a Hard wave "
                       + $"down to one hit point a unit is called home, {retreatAuthored.Home} of 6 at the authored retreat_percent "
-                      + $"and {retreatNone.Home} at 0; Brutal's 2/3 still "
+                      + $"and {retreatNone.Home} at 0; a threshold that has stood ungathered for a wave cadence sends "
+                      + $"{stood.Sent} sealed fighters at t=315 after holding them ({stood.Held} sent before), and a Turtle's wall "
+                      + $"goes beside a turret whose enemy-facing side is clear, at ({wallClear.X}, {wallClear.Y}), and past it, to "
+                      + $"({wallApron.X}, {wallApron.Y}) and ({wallField.X}, {wallField.Y}), when another building's apron or a "
+                      + $"ferrite field's neighbours cover that side; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
                       + "faction_defence_cap, and any of the wave numbers out of the range the loader takes, each in the "
