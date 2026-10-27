@@ -2149,6 +2149,178 @@ ulong ScenarioAiSpend(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     return world.ComputeStateHash();
 }
 
+ulong ScenarioAiRetreat(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-080, Architect condition 1: the golden that puts the RETREAT under
+    // the cross-platform gate. Every LAN peer runs its AI seats itself
+    // (ADR-033), yet every golden commander until this one played the Normal
+    // rung, whose retreat_percent is 0, so a Hard or Brutal wave called home
+    // ran on one machine at a time and was compared nowhere.
+    //
+    // A Hard Standard commander (the shipped rung, whose retreat is decision
+    // D7's 30 per cent) holds a yard, its garrison of three cannon tanks at
+    // home and a wave of six already gathered at its staging point, and no
+    // credits, so nothing is bought and the beat's only orders are the wave's.
+    // The rival holds a yard ringed by four Bastions on a powered grid and no
+    // army. Those Bastions hold more than half the hit points of the
+    // commander's whole army, so it is never all-in and its wave may retreat.
+    // The wave launches on the first beat, is beaten on the Bastions and,
+    // below 30 per cent of the hit points it was sent with, is called home to
+    // the staging point. The scenario asserts it reaches both states: the
+    // launch, and a wave called home with a living member ordered back. A
+    // bare World plays the compiled catalogue and AI tuning, as every golden
+    // does. Appended after aispend, so the lines above it are untouched by
+    // construction.
+    //
+    // P8-26 owns the Hard rung's counter-composition (D7) and will move this
+    // line when it lands, under its own ADR.
+    if (AiTuning.Get(AiTuning.HardId).RetreatPercent <= 0)
+        throw new Exception("airetreat: the compiled Hard rung no longer retreats, so this golden cannot reach a retreat on a "
+                            + "rung that has one");
+    var world = new World(seed, 96, 64, players: 2);
+    world.SpawnConstructionYard(0, 8, 30);
+    var tank = world.GetUnitType(1);
+    int Tank(int x, int y) => world.SpawnUnit(0, Fix64.FromInt(x), Fix64.FromInt(y), tank.Speed, tank.Hp, tank.Armour, tank.WeaponId,
+                                              tank.SightCells, veterancy: false, unitType: 1);
+    for (int k = 0; k < 3; k++) Tank(10 + k, 34);     // the garrison, at home
+    for (int k = 0; k < 6; k++) Tank(16 + k, 31);     // gathered at the staging point, (18.5, 31.5)
+    world.SpawnConstructionYard(1, 40, 30);
+    world.SpawnPowerPlant(1, 44, 30, supply: 2000);
+    int bastion = world.BuildableFactionDefence(1);
+    world.SpawnFactionDefence(1, bastion, 35, 27);
+    world.SpawnFactionDefence(1, bastion, 35, 34);
+    world.SpawnFactionDefence(1, bastion, 38, 25);
+    world.SpawnFactionDefence(1, bastion, 38, 36);
+    var ai = SkirmishAI.Standard(0, AiDifficulty.Hard);
+    var cmds = new List<Command>();
+    const int Ticks = 1800;
+    var sent = new HashSet<int>();
+    int launchedAt = -1, recalledAt = -1, recalled = 0, sentCount = 0;
+    for (int t = 0; t < Ticks; t++)
+    {
+        int launchedBefore = ai.WavesLaunched, inFlightBefore = ai.WaveInFlight;
+        ai.Act(world, cmds);
+        if (ai.WavesLaunched > launchedBefore && launchedAt < 0)
+        {
+            launchedAt = world.Tick;
+            foreach (var c in cmds)
+                if (c.Type == CommandType.AttackMove && c.PlayerId == 0) sent.Add(c.EntityId);
+            sentCount = sent.Count;
+        }
+        // Called home: the wave in flight is emptied on a beat that orders a
+        // living member of it back by PathMove. A wave that dies to the last
+        // unit empties with no such order, and the re-aim is an AttackMove.
+        if (recalledAt < 0 && inFlightBefore > 0 && ai.WaveInFlight == 0)
+        {
+            int back = 0;
+            foreach (var c in cmds)
+                if (c.Type == CommandType.PathMove && sent.Contains(c.EntityId) && world.Entities[c.EntityId].Alive) back++;
+            if (back > 0) { recalledAt = world.Tick; recalled = back; }
+        }
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (launchedAt < 0)
+        throw new Exception($"airetreat: the Hard commander launched no wave in {Ticks} ticks, so the retreat is not under the golden gate");
+    if (recalledAt < 0)
+        throw new Exception($"airetreat: the wave launched at t={launchedAt} ({sentCount} fighters) was never called home in {Ticks} "
+                            + "ticks, so a wave beaten below the Hard rung's retreat_percent is not under the golden gate");
+    int bastionsLeft = 0;
+    for (int i = 0; i < world.EntityCount; i++)
+        if (world.Entities[i].Alive && world.Entities[i].PlayerId == 1 && world.Entities[i].StructType == bastion) bastionsLeft++;
+    report?.Invoke($"airetreat: a Hard commander launched a wave of {sentCount} at t={launchedAt}, and at t={recalledAt}, beaten "
+                   + $"below its rung's retreat_percent of {AiTuning.Get(AiTuning.HardId).RetreatPercent}, called it home, {recalled} "
+                   + $"living member(s) ordered back to the staging point; {bastionsLeft} of 4 Bastions standing at t={Ticks} "
+                   + "(ADR-080 condition 1, the retreat under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
+
+ulong ScenarioAiWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-080, Architect condition 1: the golden that puts the TURTLE'S WALLS
+    // under the cross-platform gate. mission03 runs a Turtle, but its surplus
+    // window cannot complete inside its horizon from its opening credits, so
+    // until this scenario no golden reached TryFindWallCell, and the wall
+    // cells a Turtle picks on a LAN peer were compared nowhere.
+    //
+    // A Normal Turtle holds a finished Directorate base already at every cap
+    // its surplus reads: two factories and two barracks (the Normal rung's
+    // producer_cap) and five Bastions (the Turtle's faction_defence_cap), with
+    // the turret, the radar, two refineries and a harvester for each on a
+    // rich field, a plant whose supply keeps the ladder from asking for
+    // another, and a purse that keeps the treasury above the reserve for the
+    // whole window. So once the window has run, the surplus has nothing else
+    // to buy and its walls are next. The rival yard is sealed behind a
+    // blocked column, as in aisuper and aispend, so the subject is the walls
+    // and not the ground war. The scenario asserts it reaches a wall placed
+    // by the commander on the enemy-facing side of one of its defences. A
+    // bare World plays the compiled catalogue and AI tuning, as every golden
+    // does. Appended after airetreat.
+    var world = new World(seed, 96, 64, players: 2);
+    world.GrantCredits(0, 200000);
+    world.SpawnConstructionYard(0, 8, 30);
+    world.SpawnPowerPlant(0, 13, 30, supply: 4000);
+    world.SpawnRefinery(0, 8, 24);
+    world.SpawnRefinery(0, 13, 24);
+    world.SpawnBarracks(0, 18, 30);
+    world.SpawnBarracks(0, 13, 42);
+    world.SpawnFactory(0, 8, 36);
+    world.SpawnFactory(0, 8, 42);
+    world.SpawnTurret(0, 18, 24);
+    world.SpawnRadarUplink(0, 13, 36);
+    int bastion = world.BuildableFactionDefence(0);
+    foreach (var (bx, by) in new[] { (18, 36), (18, 18), (18, 42), (13, 18), (8, 18) })
+        world.SpawnFactionDefence(0, bastion, bx, by);
+    world.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(70, y, true);
+    world.SpawnConstructionYard(1, 86, 30);
+    var ai = SkirmishAI.Turtle(0);
+    var cmds = new List<Command>();
+    // The horizon is read off the compiled Normal rung's window, so it
+    // follows the window if that moves.
+    int window = AiTuning.Get(AiTuning.NormalId).SurplusWindowTicks;
+    int ticks = window + 1500;
+    int firstWallAt = -1, walls = 0, wallsBeside = 0;
+    (int X, int Y) firstWall = (-1, -1);
+    for (int t = 0; t < ticks; t++)
+    {
+        ai.Act(world, cmds);
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        foreach (var ev in world.Events)
+        {
+            if (ev.Type != GameEventType.StructurePlaced) continue;
+            var placed = world.Entities[ev.A];
+            if (placed.PlayerId != 0 || placed.Kind != EntityKind.Wall) continue;
+            walls++;
+            int wx = world.AnchorOf(placed.X, placed.StructType), wy = world.AnchorOf(placed.Y, placed.StructType);
+            if (firstWallAt < 0) { firstWallAt = world.Tick; firstWall = (wx, wy); }
+            // On the enemy's side: the enemy lies due east, so the column just
+            // east of a defence's footprint, its two cells and two corners.
+            for (int i = 0; i < world.EntityCount; i++)
+            {
+                var d = world.Entities[i];
+                if (!d.Alive || d.PlayerId != 0 || d.Kind is not (EntityKind.Turret or EntityKind.Bastion)) continue;
+                int s = world.FootprintOf(d.StructType), ax = world.AnchorOf(d.X, d.StructType), ay = world.AnchorOf(d.Y, d.StructType);
+                if (wx == ax + s && wy >= ay - 1 && wy <= ay + s) { wallsBeside++; break; }
+            }
+        }
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (firstWallAt < 0)
+        throw new Exception($"aiwalls: the Turtle placed no wall in {ticks} ticks (window {window}), so the walls TryFindWallCell "
+                            + "picks are not under the golden gate");
+    if (wallsBeside != walls)
+        throw new Exception($"aiwalls: {walls - wallsBeside} of the Turtle's {walls} walls stand off the enemy-facing side of every "
+                            + "defence, which is not where ADR-080 section 8 puts them");
+    report?.Invoke($"aiwalls: a Normal Turtle at every cap its surplus reads placed its first wall at t={firstWallAt} (window {window}), "
+                   + $"at ({firstWall.X}, {firstWall.Y}), and {walls} by t={ticks}, every one on a defence's enemy-facing side "
+                   + "(ADR-080 condition 1, the walls under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
 
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
@@ -2178,6 +2350,8 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("walls", (s, cp) => ScenarioWalls(s, cp)),
     ("airanswer", (s, cp) => ScenarioAirAnswer(s, cp)),
     ("aispend", (s, cp) => ScenarioAiSpend(s, cp)),
+    ("airetreat", (s, cp) => ScenarioAiRetreat(s, cp)),
+    ("aiwalls", (s, cp) => ScenarioAiWalls(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -16091,6 +16265,8 @@ int Match(ulong seed)
     ScenarioWalls(seed, null, Console.WriteLine);
     ScenarioAirAnswer(seed, null, Console.WriteLine);
     ScenarioAiSpend(seed, null, Console.WriteLine);
+    ScenarioAiRetreat(seed, null, Console.WriteLine);
+    ScenarioAiWalls(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
     // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as

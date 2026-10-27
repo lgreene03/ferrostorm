@@ -473,6 +473,41 @@ command streams are identical to the base's to the last command.
   routed over both factory lines by t=4815, and two factories and two barracks
   held at once from t=6181.
 
+**Two lines appended after `aispend` (Architect condition 1).** The retreat
+and the walls run on every LAN peer that hosts an AI seat (ADR-033), and no
+golden reached either: every golden commander played the Normal rung, whose
+retreat is 0, and `mission03`'s Turtle never completes its surplus window. So
+two scenarios are appended, each asserting the state it exists to reach, so
+that a later row which stops reaching it fails by name. Every line above them
+stays byte-identical and in order.
+
+- `airetreat` **0xD73E853E831C4494**. A Hard Standard commander (the shipped
+  rung, whose `retreat_percent` is D7's 30) holds a yard, its garrison of
+  three cannon tanks at home and a wave of six gathered at its staging point,
+  and no credits, so the beat's only orders are the wave's. The rival's yard
+  is ringed by four Bastions on a powered grid, holding more than half the
+  hit points of the commander's whole army, so it is never all-in. The wave
+  launches at t=0, is beaten on the Bastions and, below 30 per cent of the hit
+  points it was sent with, is called home at t=480, three living members
+  ordered back to the staging point. The scenario asserts the launch and the
+  recall. **With the retreat switched off alone** it fails by name,
+  "airetreat: the wave launched at t=0 (6 fighters) was never called home in
+  1800 ticks", with every line above it unchanged. It plays the shipped Hard
+  rung, so P8-26's counter-composition (D7) will move this line under its own
+  ADR, which P8-26's row records.
+- `aiwalls` **0x49A974BFD74F4497**. A Normal Turtle holds a finished
+  Directorate base already at every cap its surplus reads (two factories and
+  two barracks, the Normal `producer_cap`, and five Bastions, the Turtle's
+  `faction_defence_cap`), its rival sealed behind a blocked column as in
+  `aispend`. Its surplus window runs out at t=4500 and its first wall lands at
+  t=4501, at (20, 24), on the enemy's side of its turret; the horizon is read
+  off the compiled Normal window plus 1500 ticks. The scenario asserts a wall
+  placed by the commander and that every wall it places stands on a defence's
+  enemy-facing side (24 by t=6000, four round each of its six defences).
+  **With the wall branch switched off alone** it fails by name, "aiwalls: the
+  Turtle placed no wall in 6000 ticks (window 4500)", with every line above
+  it, `airetreat`'s included, unchanged.
+
 **The isolating measurement.** The two goldens-neutral commits before the
 behaviour (the measurement, and the data: every number, schema entry, loader
 and registration rule and checksum fold) give all 26 of the base's lines in
