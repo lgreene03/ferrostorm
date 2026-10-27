@@ -444,7 +444,8 @@ public static class DataLoader
             waveCap = ReqInt(m, "wave_cap");
             if (waveCap < waveSize) throw new FormatException("wave_cap must be at least wave_size; the first wave launches at wave_size");
             stagingCells = ReqInt(m, "staging_cells");
-            if (stagingCells < 0) throw new FormatException("staging_cells must not be negative; 0 gathers a wave at the yard");
+            if (stagingCells < 0 || stagingCells > AiTuning.MaxStagingCells)
+                throw new FormatException($"staging_cells must be from 0 to {AiTuning.MaxStagingCells}, idleprobe's home bound (ADR-056); 0 gathers a wave at the yard");
             allInPercent = ReqInt(m, "all_in_percent");
             if (allInPercent < 0) throw new FormatException("all_in_percent must not be negative; 0 means the commander never goes all-in");
             rushTick = ReqInt(m, "rush_tick");

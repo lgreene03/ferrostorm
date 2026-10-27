@@ -2169,9 +2169,9 @@ public sealed partial class World
             if (def.WaveCap < def.WaveSize)
                 throw new FormatException(
                     $"AI tuning id {tuningId} has a wave cap of {def.WaveCap}; wave_cap must be at least wave_size; the first wave launches at wave_size");
-            if (def.StagingCells < 0)
+            if (def.StagingCells < 0 || def.StagingCells > AiTuning.MaxStagingCells)
                 throw new FormatException(
-                    $"AI tuning id {tuningId} has a staging distance of {def.StagingCells}; staging_cells must not be negative; 0 gathers a wave at the yard");
+                    $"AI tuning id {tuningId} has a staging distance of {def.StagingCells}; staging_cells must be from 0 to {AiTuning.MaxStagingCells}, idleprobe's home bound (ADR-056); 0 gathers a wave at the yard");
             if (def.AllInPercent < 0)
                 throw new FormatException(
                     $"AI tuning id {tuningId} has an all-in share of {def.AllInPercent}; all_in_percent must not be negative; 0 means the commander never goes all-in");

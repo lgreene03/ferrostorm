@@ -200,13 +200,30 @@ beaten wave is saved is strength). Each has a schema entry in
 `data/schema.ai.json`; a compiled reference in `AiTuning` that the files
 reproduce (`aituninggate` stage 1); a loader that demands it in its family,
 refuses it in the other through the one key table per family, and refuses an
-out-of-range value (a negative growth, staging distance, all-in share or rush
-tick, a cap below the wave, walls outside 0 to 4, a retreat outside 0 to 100);
+out-of-range value (a negative growth, all-in share or rush tick, a staging
+distance outside 0 to 20, a cap below the wave, walls outside 0 to 4, a retreat
+outside 0 to 100);
 registration that refuses what the loader refuses, in its words, while the edge
-it accepts registers (`aituninggate` stage 4); and a place in
+it accepts registers (`aituninggate` stage 4, which also has the loader refuse
+a staging distance of 21 read from the shipped Standard file and load 20); and
+a place in
 `World.CatalogueChecksum`, which moves on one unit of each (`aituninggate` stage
 3), because two LAN peers holding different files would launch different waves
 (ADR-032 clause 2).
+
+**`staging_cells` is bounded above (Architect condition 4).** Its ceiling is 20
+(`AiTuning.MaxStagingCells`), `idleprobe`'s home bound (ADR-056), the number
+already in the game for the property section 1 claims: beyond 20 cells from
+its yard an idle unit reads as stranded rather than home. It also bounds the
+commander's own work, because `StagingPoint` walks from `staging_cells` down
+to 1 on every beat, and an unbounded value would hang every commander, on both
+peers alike. Read on the larger axis, as `staging_cells` is, a point at the
+ceiling can lie up to about 28 cells out on a diagonal, past the bound's
+straight-line 20; the authored 10 lies within about 14 on any line. Stage 2f's
+moved value, 20, sits on the ceiling. **`rush_tick` holds every other launch**:
+while the push is unmade, every launch, the all-in included, waits for it, so a
+`rush_tick` past the end of a match disarms the commander, which never launches
+at all; the schema's description says so.
 
 **`aituninggate` stage 2f proves the data wins over the compiled default.**
 Every world registers data/ai from the files first and then moves one number

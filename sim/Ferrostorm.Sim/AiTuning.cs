@@ -176,6 +176,20 @@ public static class AiTuning
     /// registration guard and the commander all read this.</summary>
     public const int MaxWallsPerDefence = 4;
 
+    /// <summary>P8-23 (ADR-080, Architect condition 4): the farthest a
+    /// personality may stage its waves from its yard, in cells, and the one
+    /// place the number lives; the loader, the registration guard and the
+    /// schema all refuse more. It is idleprobe's home bound (ADR-056): a unit
+    /// idling further than 20 cells from its own yard reads as stranded
+    /// rather than at home, and ADR-080 section 1 claims that a gathering wave
+    /// reads as home. It also bounds the commander's own work: StagingPoint
+    /// walks from staging_cells down to 1 on every beat, so an unbounded value
+    /// would hang every commander, on both peers alike. staging_cells is read
+    /// on the larger axis and idleprobe's bound in a straight line, so on a
+    /// diagonal a point at the ceiling can lie up to about 28 cells out; the
+    /// authored 10 lies within about 14 on any line.</summary>
+    public const int MaxStagingCells = 20;
+
     /// <summary>The compiled reference row for an id. Throws rather than
     /// defaulting, and that is deliberate: a weapon id can be 0 for "unarmed",
     /// but there is no such thing as an unspecified commander, and a quiet

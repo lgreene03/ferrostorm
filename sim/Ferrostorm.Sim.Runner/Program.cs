@@ -7545,8 +7545,12 @@ int AiTuningGate()
             "wave_growth must not be negative"),
         ("wave_cap", AiTuning.StandardId, AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize - 1 },
             AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize }, "wave_cap must be at least wave_size"),
+        // Architect condition 4: staging_cells is bounded above by idleprobe's
+        // home bound (AiTuning.MaxStagingCells, ADR-056) as well as below.
+        ("staging_cells", AiTuning.StandardId, AiTuning.Standard with { StagingCells = AiTuning.MaxStagingCells + 1 },
+            AiTuning.Standard with { StagingCells = AiTuning.MaxStagingCells }, $"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"),
         ("staging_cells", AiTuning.StandardId, AiTuning.Standard with { StagingCells = -1 }, AiTuning.Standard with { StagingCells = 0 },
-            "staging_cells must not be negative"),
+            $"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"),
         ("all_in_percent", AiTuning.StandardId, AiTuning.Standard with { AllInPercent = -1 }, AiTuning.Standard with { AllInPercent = 0 },
             "all_in_percent must not be negative"),
         ("rush_tick", AiTuning.RusherId, AiTuning.Rusher with { RushTick = -1 }, AiTuning.Rusher with { RushTick = 0 },
@@ -7577,6 +7581,29 @@ int AiTuningGate()
         }
         if (w.GetAiTuning(id) != edge)
             return Fail($"aituning control: the row with its {key} at the edge the loader accepts did not register");
+    }
+    //        Architect condition 4 on ADR-080: and the LOADER refuses a
+    //        staging_cells above the ceiling, read from the shipped Standard
+    //        file with that one line changed, while the ceiling itself loads.
+    //        Registration's words above are the loader's, so a file and a row
+    //        offered in code are held to one bound.
+    {
+        string standardText = File.ReadAllText(Path.Combine(aiDir, "ai_standard.yaml"));
+        var stagingLine = new System.Text.RegularExpressions.Regex(@"(?m)^staging_cells:[ \t]*[0-9]+[ \t]*$");
+        if (stagingLine.Matches(standardText).Count != 1)
+            return Fail("aituning: ai_standard.yaml no longer authors the one staging_cells line this check edits, so it proves nothing");
+        string Staged(int cells) => stagingLine.Replace(standardText, $"staging_cells: {cells}");
+        string? loaderRefusal = null;
+        try { DataLoader.ParseAiTuning(Staged(AiTuning.MaxStagingCells + 1)); }
+        catch (FormatException e) { loaderRefusal = e.Message; }
+        if (loaderRefusal is null || !loaderRefusal.Contains($"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"))
+            return Fail($"aituning: the loader must refuse a staging_cells of {AiTuning.MaxStagingCells + 1}, above idleprobe's home "
+                        + $"bound, in the words registration uses, and it said: {loaderRefusal ?? "nothing (it loaded)"}");
+        int loadedEdge;
+        try { loadedEdge = DataLoader.ParseAiTuning(Staged(AiTuning.MaxStagingCells)).StagingCells; }
+        catch (FormatException e) { return Fail($"aituning control: a staging_cells of {AiTuning.MaxStagingCells} must load, and it was refused: {e.Message}"); }
+        if (loadedEdge != AiTuning.MaxStagingCells)
+            return Fail($"aituning control: a staging_cells of {AiTuning.MaxStagingCells} loaded as {loadedEdge}");
     }
 
     // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
@@ -7652,7 +7679,8 @@ int AiTuningGate()
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
                       + "faction_defence_cap, and any of the wave numbers out of the range the loader takes, each in the "
-                      + "loader's words, while the edge it accepts registers; and the catalogue checksum sits at "
+                      + "loader's words, while the edge it accepts registers, and the loader itself refuses a staging_cells "
+                      + $"above {AiTuning.MaxStagingCells}, idleprobe's home bound, and loads {AiTuning.MaxStagingCells}; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
                       + "handicap, one unit of either anti-air number, one unit of any of the four spending numbers "
                       + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap) or one unit of any of "
