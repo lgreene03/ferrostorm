@@ -100,7 +100,8 @@ else bad; tail -6 $L/balance.txt; fi
 # launch (ADR-073, D33). P8-64's first landing took the first launch under its
 # bar with every automated signal green, because this gate ran only when
 # someone remembered it. 72 whole AI matches, about 35 s on ten threads, so it
-# runs last; CI runs it as the last step of its ubuntu determinism leg.
+# runs near the end, just before `longmatchperf wall=report` (P8-31), which
+# runs last; CI's ubuntu determinism leg runs the two in the same order.
 run_mode pillargate    "pillargate --bind"
 
 # P8-31: F12's perf half in CI's form. The flow-field proxy binds; the wall bar
