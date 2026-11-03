@@ -1,5 +1,5 @@
 # ADR-080: the waves escalate and close: a wave gathers at a staging point and launches at a threshold that grows, a beaten wave comes home on the rungs that retreat, and an army that outnumbers the enemy's goes all-in
-- Status: **Ratified under D41** of docs/tickets/P8-formidable-tracker.md, 2026-10-27, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with nine conditions of 2026-10-27 (section "Architect sign-off" below, its date confirmed), every condition met in the pull request from branch `claude/p8-23-attack-waves` into main (pull request number recorded when it opens). Proposed 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079), while pull request 175 was open; that pull request has since squash-merged as 4076626, whose tree equals 1ad6cb1's, and this row was rebased onto it byte for byte. Every base figure below is measured at 1ad6cb1, and so holds for main at 4076626. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined, all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. After the Architect's sign-off, one commit follows for each of its conditions 1 to 7 and one for 8 and 9. Drafted by the implementer agent.
+- Status: **Ratified under D41** of docs/tickets/P8-formidable-tracker.md, 2026-10-27, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with nine conditions of 2026-10-27 (section "Architect sign-off" below, its date confirmed), every condition met in the pull request from branch `claude/p8-23-attack-waves` into main (pull request number recorded when it opens). Proposed 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079), while pull request 175 was open; that pull request has since squash-merged as 4076626, whose tree equals 1ad6cb1's, and this row was rebased onto it byte for byte. Every base figure below is measured at 1ad6cb1, and so holds for main at 4076626. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined (dropped when the branch was rebased onto P8-31's rule, the Architect's integration condition 5), all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. After the Architect's sign-off, one commit follows for each of its conditions 1 to 7 and one for 8 and 9. Drafted by the implementer agent.
 - Date: 2026-10-14
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s9 line 76 (Normal "competent build orders", Hard "strong macro"); GDD pillar 2 (matches of 15 to 30 minutes); TDD s1 ("determinism is the product"); criteria F3, F4, F5 (its split by start), F6 and F8 of the P8 tracker; decisions D6, D7, D9, D12 and D32; ADR-005 (walls bought as they land), ADR-032 (the AI's tuning is authored data), ADR-053 (the wave arrives, and its arrival bound), ADR-056 (nothing is stranded), ADR-075, ADR-076 and ADR-078 (the frame, the half turn and the reflections the commander must stay exact under), ADR-079 (the commander that spends, whose harvester rebuy's reversal this ADR reads)
@@ -500,6 +500,37 @@ stands: the budget should be set from a stated reason rather than re-baselined
 to each row's reading, and this row re-baselines it again because the comment
 says to. The wall-time p999 read 40.2, 11.1 and 19.8 ms on a shared, loaded
 machine, so whether F12 moves is unsettled; P8-31 settles it on a calm one.
+**On the merged tree** (2026-11-03, the Architect's integration condition 5),
+beside the figures above rather than over them: the re-baseline is dropped
+from code and the budget is P8-31's rule, 384615 cells relaxed for every map.
+The binding `longmatchperf` reads a p999 of **313409, 54865 and 172228** cells
+relaxed per tick on skirmish-07, 08 and 09, the branch's own figures, because
+P8-31's build relaxes the same cells; that is 81.5, 14.3 and 44.8 per cent of
+the rule. Run plainly, asserting the wall bar as well, it printed PASS
+(binding) with a wall p999 of 4.846, 0.794 and 2.893 ms (one-minute load
+average 4.36); under `wall=report` in `tools/ci-local.sh` it read 5.341, 1.244
+and 3.924 ms.
+
+**Re-read on the merged tree** (2026-11-03, the Architect's integration
+conditions 1 to 4, 6 and 7). The branch was rebased onto
+`origin/claude/p8-55-team-integration` at 2d34aa3: main at a166cc6 (P8-31 and
+main's two client commits) plus P8-55, P8-49 and P8-79 under ADR-081, the tree
+pull request 177's squash merge gives main. `git range-diff` shows every
+commit equal except the conflict resolutions, which are the `longmatchperf`
+block of the runner (the hand re-baseline dropped, and its commit with it), the
+tracker and the open queue; P8-31's rewording of the runner's header beside
+the measurement commit shows as context only. `golden 2026` reproduces
+`sim/golden-hashes.txt` in order, every line main holds unchanged but the four
+this row moves; `determinism 2026` double-runs every line identically; `match`
+is green, `airetreat` reporting the launch at t=0 and the recall at t=480 with
+3 members, and `aiwalls` the first wall at t=4501 at (20, 24), 24 by t=6000;
+`aituninggate` is green with stages 2f, 2g and 4, and the catalogue checksum
+reads `0x64E6ED1AC64F2076`. Every sweep reading this ADR rests on is
+unchanged: `pillargate --bind` a median first launch of 11536 with 42 of 72
+launching, `laddergate` Hard over Normal from seat 1 at 69.4 per cent (every
+half as tabled, undecided 5 of 216), `endgate` 6 unresolved (the same six), and
+`aiairgate` in `match` a control of 5, 3, 4 and 7 with the raided end of
+window at 2, 0, 0 and 0.
 
 ## Golden hashes
 
@@ -725,7 +756,12 @@ on both.
   the Turtle mirrors freeze 6 units (2 at their target, 2 with no route, 2
   other) and no harvester, and both controls answer as they should. The
   default sweep, `p0=` and `p1=` unset, still reads 2 harvesters and 16 units
-  frozen and 0 sealed.
+  frozen and 0 sealed. **It reproduces on the merged tree** (2026-11-03, the
+  Architect's integration condition 6), where P8-31 has reimplemented the
+  `FlowField.Build` and `BuildToFootprint` that the walls-open re-query calls:
+  0, in 0 of 72 matches, both controls answering yes and no, and the same 6
+  units frozen (2 at their target, 2 with no route, which are the skirmish-08
+  mirror pair #288, and 2 other) and no harvester.
 - **A walker is held** if `frozenprobe` reads any walker in an exact
   cancellation (it reads 0), or more than the 16 units it finds frozen at this
   head; P8-80 owns those 16.
