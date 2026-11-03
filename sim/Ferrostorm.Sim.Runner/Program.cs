@@ -66,11 +66,16 @@ using Ferrostorm.Sim;
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
 //   frozenprobe        - P8-66, ADR-078: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
-//                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy in budget (non-binding until P8-31);
-//                        rebaseline=1 prints the proxy budget lines for the matches as they play now
+//                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy within the budget P8-31's
+//                        rule derives (binding since P8-31; wall=report, as CI's ubuntu leg runs it, prints the wall bar without asserting it)
+//   flowparity         - P8-31, D28: every field the sim's FlowFieldBuilder makes, on every shipped map and five synthetic grids, for a
+//                        target of each class and footprints of sizes 1 to 4, equals the pre-P8-31 build's in every cell's distance and
+//                        direction and in its relaxation count, and FlowFieldCache counts exactly those builds and relaxations on
+//                        both paths (in match; full=1 every cell and anchor, live=1 longmatchperf's matches too)
 //                        Every P8-13 mode takes key=value options for a short subset (maps=01 orient=0 and so on) and prints
 //                        its elapsed time; the gates take --bind for one binding run. aiairgate and cheesegate run in match (P8-17)
-//                        and pillargate --bind in CI (P8-72); the rest are in none of golden, match, determinism or CI.
+//                        and pillargate --bind and longmatchperf wall=report in CI (P8-72, P8-31); the rest are in none of golden,
+//                        match, determinism or CI.
 //   bench              - Fix64 throughput evidence for ADR-002
 // Exit 0 = pass, nonzero = failure. CI treats nonzero as merge-blocking.
 
@@ -15485,6 +15490,10 @@ int Match(ulong seed)
     // open, which ML-01 found they could not.
     int dockFace = DockFaceGate();
     if (dockFace != 0) return dockFace;
+    // P8-31: and every route those walks follow is the field the pre-P8-31
+    // build would have made, cell for cell, on every shipped map.
+    int flowParity = Measured(FlowParity);
+    if (flowParity != 0) return flowParity;
     // P8-17: and the commander answers air (F3, ADR-072) and the cheap cheeses,
     // which bind from that row. Run here, at their defaults, so a regression
     // turns CI red rather than waiting for somebody to run the mode by hand.
@@ -19481,8 +19490,11 @@ int FieldSurvivalGate()
 // hides exactly what a player feels: the one tick in a thousand that stalls
 // because a structure went up and every cached route on a 256x192 map had to
 // be rebuilt (SP-01, D28). This is the measurement F12 names, registered P8-13
-// style: a gate, NON-BINDING until P8-31 lands the parity-proven FlowField
-// replacement and sets LongMatchPerfBinding in MeasurementHarness.
+// style, and BINDING since P8-31 landed the parity-proven FlowField
+// replacement (flowparity) and set LongMatchPerfBinding with both bars met.
+// CI's ubuntu leg and tools/ci-local.sh run it as `longmatchperf wall=report`:
+// the proxy binds there, and the wall bar binds where the gate is run plainly
+// on the reference machine.
 //
 // THE MATCH: a full AI-versus-AI match in the shipped setup (PlayMeasured's,
 // generalised to every start the map has, so skirmish-09 is four seats), a
@@ -19508,10 +19520,12 @@ int FieldSurvivalGate()
 /// <summary>P8-30: nearest-rank percentile of an ascending array (q of 0.999 is p999).</summary>
 T Percentile<T>(T[] sorted, double q) => sorted.Length == 0 ? default! : sorted[Math.Max(0, (int)Math.Ceiling(q * sorted.Length) - 1)];
 
-LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
+// The match longmatchperf times, set up; P8-31's flowparity live=1 plays the
+// same one, so the setup is written once.
+World LongMatchWorld(string root, string name, out int seats, out SkirmishAI[] ais)
 {
     var map = LoadMeasureMap(root, name, false);
-    int seats = map.Starts.Count;
+    seats = map.Starts.Count;
     var w = map.BuildWorld(2026, players: seats, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
     for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
     map.PlaceSkirmishStart(w, 8000);
@@ -19520,13 +19534,19 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
     // grant is zero at Normal today (data/ai/ai_normal.yaml), so it changes no
     // figure, but it is here so that a tuning change reaches this run exactly
     // as it reaches every other P8-13 measurement rather than being skipped.
-    var ais = new SkirmishAI[seats];
+    ais = new SkirmishAI[seats];
     for (int p = 0; p < seats; p++) ais[p] = MeasureCommander(p, AiDifficulty.Normal, 0, w);
     for (int p = 0; p < seats; p++)
     {
         long handicap = SkirmishAI.StartingCreditHandicap(AiDifficulty.Normal, w);
         if (handicap > 0) w.GrantCredits(p, handicap);
     }
+    return w;
+}
+
+LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
+{
+    var w = LongMatchWorld(root, name, out int seats, out var ais);
     var ms = new List<double>(ticks);
     var builds = new List<int>(ticks);
     var relaxed = new List<long>(ticks);
@@ -19545,23 +19565,37 @@ LongMatchPerf PlayLongMatchPerf(string root, string name, int ticks)
         builds.Add((int)(w.FlowFieldBuilds - b0));
         relaxed.Add(w.FlowCellsRelaxed - r0);
     }
-    return new LongMatchPerf(name, map.Width, map.Height, seats, w.Tick, w.Winner, ms.ToArray(), builds.ToArray(), relaxed.ToArray());
+    return new LongMatchPerf(name, w.Map.Width, w.Map.Height, seats, w.Tick, w.Winner, ms.ToArray(), builds.ToArray(), relaxed.ToArray());
 }
 
 int LongMatchPerfGate()
 {
     string root = MeasureRoot();
-    var o = MeasureOptions("longmatchperf", true, "maps", "ticks", "jobs", "rebaseline");
+    var o = MeasureOptions("longmatchperf", true, "maps", "ticks", "jobs", "wall", "rebaseline");
     bool binding = MeasurementHarness.LongMatchPerfBinding || o.ContainsKey("bind");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps") ?? "07,08,09");
     int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
     int jobs = OptInt(o, "jobs", 1);
-    bool rebaseline = o.GetValueOrDefault("rebaseline") switch
+    // P8-31: wall=report prints the wall bar's verdict without asserting it,
+    // which is how CI and tools/ci-local.sh run this gate. A shared runner's
+    // clock judges the runner rather than the build (the defence load gate
+    // read 5.052 and 11.899 ms on one commit), so there only the proxy, which
+    // is the same on every machine, binds; run plainly on the reference
+    // machine, both bars do.
+    bool wallAsserted = o.GetValueOrDefault("wall") switch
     {
-        null or "0" => false,
-        "1" => true,
-        var v => throw new FormatException($"rebaseline={v}: expected 1 or 0"),
+        null or "bar" => true,
+        "report" => false,
+        var v => throw new FormatException($"wall={v}: expected bar (assert the wall bar, the default) or report (print it only)"),
     };
+    // P8-31 retired re-baselining: the budget is derived from a rule and no
+    // longer follows the matches, so a row that still says to run it is told
+    // why rather than handed an unrecognised-argument error.
+    if (o.ContainsKey("rebaseline"))
+        throw new FormatException("rebaseline: retired by P8-31. The proxy budget is derived from a rule "
+            + "(MeasurementHarness.LongMatchProxyBudget) and no longer follows the matches, so there is nothing to re-baseline; "
+            + "a reading over it is a failure for the change that caused it");
+    long proxyBudget = MeasurementHarness.LongMatchProxyBudget;
     bool fullLength = ticks == MeasurementHarness.WindowCloseTicks;
     // Every number this gate prints or fails on is formatted in the invariant
     // culture, so the table and the verdict read the same on every machine (a
@@ -19570,12 +19604,13 @@ int LongMatchPerfGate()
     string Pct(int part, int whole) => whole == 0 ? "n/a" : string.Create(ic, $"{100.0 * part / whole:F1} per cent");
     Console.WriteLine(string.Create(ic, $"longmatchperf: {maps.Length} map(s), a Normal Standard commander in every seat (Directorate on even seats, "
         + $"Sodality on odd), shipped setup, to {ticks} ticks or a result; the first {MeasurementHarness.LongMatchSkipTicks} ticks "
-        + $"are not recorded. Bar: p999 of the wall time per tick at most {MeasurementHarness.LongMatchTickBudgetMs} ms (F12), "
-        + $"and p999 of the cells relaxed per tick within the proxy budget recorded for the map."));
+        + $"are not recorded. Bar: p999 of the wall time per tick at most {MeasurementHarness.LongMatchTickBudgetMs} ms (F12"
+        + $"{(wallAsserted ? "" : "; wall=report, so printed and not asserted")}), and p999 of the cells relaxed per tick at most "
+        + $"{proxyBudget}, the proxy budget P8-31's rule derives (({MeasurementHarness.LongMatchTickBudgetMs} ms - {MeasurementHarness.LongMatchRestOfTickMs} ms) / "
+        + $"{MeasurementHarness.LongMatchNsPerRelaxation} ns a relaxation)."));
     var sw = Stopwatch.StartNew();
     var failures = new List<string>();
     var rows = new List<string>();
-    var measured = new List<(string Map, long RelaxedP999)>();
     RunOrdered(maps.Length, jobs, i => PlayLongMatchPerf(root, maps[i], ticks), (_, r) =>
     {
         var ms = (double[])r.Ms.Clone();
@@ -19620,7 +19655,11 @@ int LongMatchPerfGate()
             + $"{bu.Average(),7:F4} {Percentile(bu, 0.99),3} {Percentile(bu, 0.999),4} {bu[^1],4}  "
             + $"{rx.Average(),7:F0} {Percentile(rx, 0.99),7} {rxP999,7} {rx[^1],7}"));
         if (msP999 > MeasurementHarness.LongMatchTickBudgetMs)
-            failures.Add(string.Create(ic, $"{r.Map} p999 {msP999:F3} ms/tick exceeds {MeasurementHarness.LongMatchTickBudgetMs} ms ({over} ticks over)"));
+        {
+            string wallFail = string.Create(ic, $"{r.Map} p999 {msP999:F3} ms/tick exceeds {MeasurementHarness.LongMatchTickBudgetMs} ms ({over} ticks over)");
+            if (wallAsserted) failures.Add(wallFail);
+            else Console.WriteLine($"    wall bar: {wallFail}; reported and not asserted (wall=report)");
+        }
         // A full match that never routes anything is impossible, so a zero
         // means a counter has come unwired (a replacement Build that does not
         // report its work, say). The guard reads CELLS RELAXED, the counter
@@ -19629,41 +19668,539 @@ int LongMatchPerfGate()
         // build count let an unwired relaxation count PASS, which the P8-30
         // audit found. The build count is guarded as well, because the build
         // columns and the over-budget attribution above read it. P8-13's
-        // rule: a stage that measured nothing fails.
+        // rule: a stage that measured nothing fails. A count unwired on only
+        // one of the cache's two paths reads low rather than zero, which
+        // this guard cannot see; flowparity's CheckCache, in `match`, fails it.
         if (rxTotal == 0)
             failures.Add(string.Create(ic, $"{r.Map} recorded no flow-field cell relaxed in {n} ticks, so the proxy the budget reads measured nothing"));
         if (built == 0)
             failures.Add(string.Create(ic, $"{r.Map} recorded no flow-field build in {n} ticks, so the build count measured nothing"));
-        // A zero reading is never offered as a budget.
-        if (fullLength && rxTotal > 0) measured.Add((r.Map, rxP999));
-        var budget = Array.Find(MeasurementHarness.LongMatchProxyBudget, x => x.Map == r.Map);
-        if (budget.Map is null)
-            Console.WriteLine(string.Create(ic, $"    proxy budget: none recorded for {r.Map}, so only the wall bar applies"));
-        else if (!fullLength)
-            Console.WriteLine(string.Create(ic, $"    proxy budget: not applied, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run it was measured on"));
+        // P8-31: the one rule-derived budget, the same for every map, applied
+        // to the full-length run F12 names (a shorter run's p999 is a
+        // different percentile of a different match).
+        if (!fullLength)
+            Console.WriteLine(string.Create(ic, $"    proxy budget: not applied, because ticks={ticks} is not F12's {MeasurementHarness.WindowCloseTicks}-tick run"));
         else
         {
-            bool inside = rxP999 <= budget.RelaxedP999;
-            Console.WriteLine(string.Create(ic, $"    proxy budget: p999 relaxed/tick {rxP999} against {budget.RelaxedP999}, {(inside ? "inside" : "OVER")}"));
-            if (!inside) failures.Add(string.Create(ic, $"{r.Map} p999 relaxed/tick {rxP999} exceeds its proxy budget of {budget.RelaxedP999}"));
+            bool inside = rxP999 <= proxyBudget;
+            Console.WriteLine(string.Create(ic, $"    proxy budget: p999 relaxed/tick {rxP999} against {proxyBudget}, {(inside ? "inside" : "OVER")} "
+                + $"({100.0 * rxP999 / proxyBudget:F1} per cent)"));
+            if (!inside) failures.Add(string.Create(ic, $"{r.Map} p999 relaxed/tick {rxP999} exceeds the proxy budget of {proxyBudget}"));
         }
     });
     sw.Stop();
     Console.WriteLine("  map          seats  ms mean     p99    p999      max  builds mean p99 p999  max  relaxed mean     p99    p999     max");
     foreach (var row in rows) Console.WriteLine(row);
     Console.WriteLine(string.Create(ic, $"longmatchperf: elapsed {sw.Elapsed.TotalSeconds:F1} s for {maps.Length} match(es) on {jobs} thread(s)"));
-    // rebaseline=1: the entries MeasurementHarness.LongMatchProxyBudget should
-    // hold for the matches as they play NOW, ready to paste over the old ones.
-    if (rebaseline && !fullLength)
-        Console.WriteLine(string.Create(ic, $"longmatchperf: rebaseline=1 suggests nothing, because ticks={ticks} is not the {MeasurementHarness.WindowCloseTicks}-tick run a budget is measured on"));
-    else if (rebaseline)
+    return MeasureVerdict("longmatchperf", "P8-31", binding, failures, wallAsserted
+        ? string.Create(ic, $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds.")
+        : "Every applied proxy budget holds (the wall bar printed above and not asserted, wall=report).");
+}
+
+// ---------------- P8-31: flow-field parity ----------------
+//
+// D28 lets FlowField's build be replaced (Dial's algorithm over ordered
+// buckets, its arrays pooled) only if the replacement is PARITY-PROVEN: every
+// cell of every field it builds must hold the distance and the direction the
+// old build gave it, and the build must report the same count of
+// relaxations, because the goldens, every replay and longmatchperf's proxy
+// rest on those. This stage is that proof, run rather than argued. It builds
+// each field twice, once with the sim's FlowFieldBuilder and once with the
+// pre-P8-31 build kept verbatim inside this function, compares the two cell
+// by cell, and fails on the first difference with the grid, the goal, the
+// cell and both values named.
+//
+// THE OLD BUILD is a set of local functions nested in FlowParity, so the
+// compiler refuses a call to it from anywhere else in the runner, and the sim
+// cannot see it at all: it is the reference, never a fallback.
+//
+// THE SWEEP. Every shipped map (data/maps and data/missions) on the grid a
+// match starts from: terrain, the authored structures and, on a map with
+// starts, every seat's opening hand. Then five synthetic grids that make
+// every class below occur at least once: open ground (the most ties), a
+// seeded scatter of blocked cells (the most corner-cutting refusals and
+// pockets), a walled pocket beside a solid block (a pocket, and a sealed
+// footprint at every size), a one-row strip and a single cell. On each grid:
+//   - single-target fields (Build) with the target in each class: blocked, in
+//     a pocket the grid's first open cell cannot reach, a map corner, a map
+//     edge, beside an obstacle, in open ground;
+//   - footprint fields (BuildToFootprint), sizes 1 to 4: every structure on
+//     the grid at its own anchor and size, then anchors whose one-cell ring is
+//     sealed (no source at all), crosses the map edge, is partly blocked or
+//     is open all round.
+// By default each class is sampled at up to SampleGoals goals spread evenly
+// through the grid in cell order, a few seconds' work that `match` runs.
+// full=1 builds EVERY cell as a target and every anchor at every size, which
+// takes minutes on ten threads. live=1 also plays longmatchperf's matches and,
+// at the start and every LiveEveryTicks ticks, rebuilds every live
+// structure's footprint and every moving entity's flow target on the grid the
+// match has made by then.
+//
+// A class that no grid produced fails the stage (P8-13's rule: a stage that
+// measured nothing fails), so a sweep that quietly stopped covering pockets
+// or sealed rings cannot pass.
+int FlowParity()
+{
+    string root = MeasureRoot();
+    var o = MeasureOptions("flowparity", false, "full", "live", "jobs");
+    bool Flag(string key) => o.GetValueOrDefault(key) switch
     {
-        Console.WriteLine("longmatchperf: suggested MeasurementHarness.LongMatchProxyBudget entries (p999 cells relaxed per tick on this run; "
-            + "a map whose relaxed counter read zero is left out):");
-        foreach (var (map, p999) in measured) Console.WriteLine(string.Create(ic, $"        (\"{map}\", {p999}),"));
+        null or "0" => false,
+        "1" => true,
+        var v => throw new FormatException($"{key}={v}: expected 1 or 0"),
+    };
+    bool full = Flag("full"), live = Flag("live");
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    const int SampleGoals = 6, LiveEveryTicks = 1500, ChunkGoals = 24;
+    var ic = System.Globalization.CultureInfo.InvariantCulture;
+
+    // ---- The pre-P8-31 build, verbatim from sim/Ferrostorm.Sim/Map.cs at
+    // 9670e04: FlowField.Build, FlowField.BuildToFootprint and FlowField.Relax.
+    // Two changes, both of form only: each returns its target cell,
+    // distances, directions and relaxation count instead of a FlowField
+    // (whose constructor the runner cannot reach), and the direction tables
+    // are this function's locals rather than the class's statics.
+    int[] Dx = { 1, -1, 0, 0, 1, -1, 1, -1 };
+    int[] Dy = { 0, 0, -1, 1, -1, -1, 1, 1 };
+    int[] Cost = { 2, 2, 2, 2, 3, 3, 3, 3 };
+    byte[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+    const byte Unreachable = 255, AtGoal = 254;
+
+    (int Target, int[] Dist, byte[] Next, int Relaxed) OldBuild(Map map, int targetCx, int targetCy)
+    {
+        int n = map.Width * map.Height;
+        var dist = new int[n];
+        var next = new byte[n];
+        Array.Fill(dist, int.MaxValue);
+        Array.Fill(next, Unreachable);
+
+        int target = map.CellIndex(targetCx, targetCy);
+        dist[target] = 0;
+
+        int relaxed = OldRelax(map, dist, next, new List<(int D, int C)> { (0, target) });
+        return (target, dist, next, relaxed);
     }
-    return MeasureVerdict("longmatchperf", "P8-31", binding, failures,
-        string.Create(ic, $"Every map's p999 tick is within {MeasurementHarness.LongMatchTickBudgetMs} ms and every applied proxy budget holds."));
+
+    (int Target, int[] Dist, byte[] Next, int Relaxed) OldBuildToFootprint(Map map, int ax, int ay, int size)
+    {
+        int n = map.Width * map.Height;
+        var dist = new int[n];
+        var next = new byte[n];
+        Array.Fill(dist, int.MaxValue);
+        Array.Fill(next, Unreachable);
+
+        var heap = new List<(int D, int C)>();
+        for (int y = ay - 1; y <= ay + size; y++)
+            for (int x = ax - 1; x <= ax + size; x++)
+            {
+                bool inside = x >= ax && x < ax + size && y >= ay && y < ay + size;
+                if (inside || !map.InBounds(x, y) || map.IsBlocked(x, y)) continue;
+                int c = map.CellIndex(x, y);
+                dist[c] = 0;
+                next[c] = AtGoal;
+                heap.Add((0, c));
+            }
+
+        int relaxed = OldRelax(map, dist, next, heap);
+        return (map.CellIndex(ax, ay), dist, next, relaxed);
+    }
+
+    int OldRelax(Map map, int[] dist, byte[] next, List<(int D, int C)> heap)
+    {
+        int relaxed = 0;
+        // Array binary min-heap of (dist, cell); ties broken by lower cell index.
+        void Push((int, int) item)
+        {
+            heap.Add(item);
+            int i = heap.Count - 1;
+            while (i > 0)
+            {
+                int p = (i - 1) >> 1;
+                if (Less(heap[i], heap[p])) { (heap[i], heap[p]) = (heap[p], heap[i]); i = p; }
+                else break;
+            }
+        }
+        (int, int) Pop()
+        {
+            var top = heap[0];
+            heap[0] = heap[^1];
+            heap.RemoveAt(heap.Count - 1);
+            int i = 0;
+            while (true)
+            {
+                int l = 2 * i + 1, r = l + 1, m = i;
+                if (l < heap.Count && Less(heap[l], heap[m])) m = l;
+                if (r < heap.Count && Less(heap[r], heap[m])) m = r;
+                if (m == i) break;
+                (heap[i], heap[m]) = (heap[m], heap[i]); i = m;
+            }
+            return top;
+        }
+        static bool Less((int D, int C) a, (int D, int C) b)
+            => a.D != b.D ? a.D < b.D : a.C < b.C;
+
+        while (heap.Count > 0)
+        {
+            var (d, c) = Pop();
+            if (d > dist[c]) continue; // stale entry
+            int cx = c % map.Width, cy = c / map.Width;
+            for (int k = 0; k < 8; k++)
+            {
+                int nx = cx + Dx[k], ny = cy + Dy[k];
+                if (!map.InBounds(nx, ny) || map.IsBlocked(nx, ny)) continue;
+                if (k >= 4) // no corner cutting
+                {
+                    if (map.IsBlocked(cx + Dx[k], cy) || map.IsBlocked(cx, cy + Dy[k])) continue;
+                }
+                int nc = map.CellIndex(nx, ny);
+                int nd = d + Cost[k];
+                if (nd < dist[nc])
+                {
+                    dist[nc] = nd;
+                    // Direction FROM neighbour TOWARD c is the opposite of k.
+                    next[nc] = Opposite[k];
+                    Push((nd, nc));
+                    relaxed++;
+                }
+            }
+        }
+        return relaxed;
+    }
+    // ---- End of the pre-P8-31 build.
+
+    string[] targetClass = { "blocked", "pocket", "corner", "edge", "beside an obstacle", "open" };
+    string[] footClass = { "structure", "sealed ring", "ring past the edge", "ring partly blocked", "ring open" };
+
+    IEnumerable<int> Sample(List<int> cells) => full || cells.Count <= SampleGoals ? cells
+        : Enumerable.Range(0, SampleGoals).Select(i => cells[(int)((long)i * cells.Count / SampleGoals)]);
+
+    // Every structure on a world's grid, at its own anchor and size, in entity order.
+    List<(int Ax, int Ay, int Size)> StructuresOf(World w)
+    {
+        var list = new List<(int Ax, int Ay, int Size)>();
+        for (int i = 0; i < w.EntityCount; i++)
+        {
+            var e = w.Entities[i];
+            if (e.Alive && World.IsStructure(e.Kind))
+                list.Add((w.AnchorOf(e.X, e.StructType), w.AnchorOf(e.Y, e.StructType), w.FootprintOf(e.StructType)));
+        }
+        return list;
+    }
+
+    // The fields to build on one grid: a target is Size 0 with Class indexing
+    // targetClass, a footprint is Size 1 to 4 with Class indexing footClass.
+    List<(int X, int Y, int Size, int Class)> GoalsOf(Map m, List<(int Ax, int Ay, int Size)> structures)
+    {
+        int w = m.Width, h = m.Height, n = w * h;
+        var goals = new List<(int X, int Y, int Size, int Class)>();
+        // A pocket is passable ground out of reach of the grid's first open
+        // cell, read off the OLD build's distances, which are the reference.
+        int first = -1;
+        for (int c = 0; c < n && first < 0; c++) if (!m.IsBlocked(c % w, c / w)) first = c;
+        int[]? reach = first < 0 ? null : OldBuild(m, first % w, first / w).Dist;
+        var byClass = targetClass.Select(_ => new List<int>()).ToArray();
+        for (int c = 0; c < n; c++)
+        {
+            int x = c % w, y = c / w, k;
+            if (m.IsBlocked(x, y)) k = 0;
+            else if (reach![c] == int.MaxValue) k = 1;
+            else if ((x == 0 || x == w - 1) && (y == 0 || y == h - 1)) k = 2;
+            else if (x == 0 || x == w - 1 || y == 0 || y == h - 1) k = 3;
+            else
+            {
+                bool beside = false;
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        beside |= (dx != 0 || dy != 0) && m.IsBlocked(x + dx, y + dy);
+                k = beside ? 4 : 5;
+            }
+            byClass[k].Add(c);
+        }
+        for (int k = 0; k < byClass.Length; k++)
+            foreach (int c in Sample(byClass[k])) goals.Add((c % w, c / w, 0, k));
+        var seen = new HashSet<(int, int, int)>();
+        foreach (var s in structures)
+            if (seen.Add(s)) goals.Add((s.Ax, s.Ay, s.Size, 0));
+        for (int size = 1; size <= 4; size++)
+        {
+            var ring = footClass.Select(_ => new List<int>()).ToArray();
+            for (int ay = 0; ay + size <= h; ay++)
+                for (int ax = 0; ax + size <= w; ax++)
+                {
+                    int open = 0, blocked = 0, outside = 0;
+                    for (int y = ay - 1; y <= ay + size; y++)
+                        for (int x = ax - 1; x <= ax + size; x++)
+                        {
+                            if (x >= ax && x < ax + size && y >= ay && y < ay + size) continue;
+                            if (!m.InBounds(x, y)) outside++;
+                            else if (m.IsBlocked(x, y)) blocked++;
+                            else open++;
+                        }
+                    ring[open == 0 ? 1 : outside > 0 ? 2 : blocked > 0 ? 3 : 4].Add(m.CellIndex(ax, ay));
+                }
+            for (int k = 1; k < ring.Length; k++)
+                foreach (int c in Sample(ring[k]))
+                    if (seen.Add((c % w, c / w, size))) goals.Add((c % w, c / w, size, k));
+        }
+        return goals;
+    }
+
+    string Dist(int d) => d == int.MaxValue ? "unreachable" : d.ToString(ic);
+
+    // One field built both ways and compared: null when every cell's distance
+    // and direction, the target cell and the relaxation count are equal,
+    // otherwise the first difference by name. Distance is compared before
+    // direction in each cell, cells in index order, the count last.
+    string? Check(string at, Map m, int x, int y, int size, FlowFieldBuilder nb, Stopwatch oldSw, Stopwatch newSw,
+                  out long cells, out int relaxed)
+    {
+        cells = 0;
+        oldSw.Start();
+        var old = size == 0 ? OldBuild(m, x, y) : OldBuildToFootprint(m, x, y, size);
+        oldSw.Stop();
+        newSw.Start();
+        var f = size == 0 ? nb.Build(m, x, y, out relaxed) : nb.BuildToFootprint(m, x, y, size, out relaxed);
+        newSw.Stop();
+        if (f.TargetCell != old.Target) return $"{at}: TargetCell is {f.TargetCell}, the old build's {old.Target}";
+        ReadOnlySpan<int> dist = nb.Distances;
+        ReadOnlySpan<byte> dir = f.Directions;
+        if (dist.Length != old.Dist.Length || dir.Length != old.Next.Length)
+            return $"{at}: {dist.Length} distances and {dir.Length} directions, the old build {old.Dist.Length} and {old.Next.Length}";
+        for (int c = 0; c < old.Dist.Length; c++)
+        {
+            if (dist[c] != old.Dist[c])
+                return $"{at}: cell ({c % m.Width},{c / m.Width}) has distance {Dist(dist[c])}, the old build's {Dist(old.Dist[c])}";
+            if (dir[c] != old.Next[c])
+                return $"{at}: cell ({c % m.Width},{c / m.Width}) has direction {dir[c]}, the old build's {old.Next[c]}";
+        }
+        if (relaxed != old.Relaxed) return $"{at}: the build relaxed {relaxed} cells, the old build {old.Relaxed}";
+        cells = old.Dist.Length;
+        return null;
+    }
+
+    // P8-31's integration closes a gap P8-30 left: the cache's accounting,
+    // recounted. longmatchperf's proxy reads World.FlowCellsRelaxed, which is
+    // FlowFieldCache.CellsRelaxed, a sum the cache adds to on each of its two
+    // build paths. The budget is an upper bound whose only other guard is a
+    // total of zero, so an increment unwired on ONE path (the footprint
+    // path's, say) lowered every reading and still passed. Here each goal the
+    // sweep builds is also asked of a FlowFieldCache, twice. The first ask
+    // must add exactly one build and exactly the relaxations the builder has
+    // just reported, which Check has already proved equal to the old build's;
+    // the second must return the same field and add nothing. A miscount fails
+    // by name, with the path that miscounted.
+    string? CheckCache(string at, FlowFieldCache cache, Map m, int x, int y, int size, int relaxed,
+                       ref long builds, ref long cellsRelaxed)
+    {
+        string path = size == 0 ? "Get" : "GetFootprint";
+        var f = size == 0 ? cache.Get(m, x, y) : cache.GetFootprint(m, x, y, size);
+        builds++;
+        cellsRelaxed += relaxed;
+        if (cache.Builds != builds || cache.CellsRelaxed != cellsRelaxed)
+            return $"{at}: after FlowFieldCache.{path} built it, the cache counts {cache.Builds} builds and {cache.CellsRelaxed} "
+                + $"relaxations, the builds themselves {builds} and {cellsRelaxed}, so the count longmatchperf's proxy reads is wrong";
+        var again = size == 0 ? cache.Get(m, x, y) : cache.GetFootprint(m, x, y, size);
+        if (!ReferenceEquals(again, f) || cache.Builds != builds || cache.CellsRelaxed != cellsRelaxed)
+            return $"{at}: a second FlowFieldCache.{path} for the same goal built again or moved the counts "
+                + $"({cache.Builds} builds and {cache.CellsRelaxed} relaxations, expected {builds} and {cellsRelaxed})";
+        return null;
+    }
+
+    string Goal(int x, int y, int size, string cls) => size == 0
+        ? $"target ({x},{y}), {cls}" : $"{size}x{size} footprint at ({x},{y}), {cls}";
+
+    // ---- The grids: every shipped map as a match starts it, then the synthetic ones.
+    var sw = Stopwatch.StartNew();
+    var grids = new List<(string Name, Map Map, List<(int X, int Y, int Size, int Class)> Goals)>();
+    var files = Directory.GetFiles(Path.Combine(root, "data", "maps"), "*.fmap")
+        .Concat(Directory.GetFiles(Path.Combine(root, "data", "missions"), "*.fmap"))
+        .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/')).ToArray();
+    Array.Sort(files, StringComparer.Ordinal);
+    foreach (var rel in files)
+    {
+        var md = MapData.Load(Path.Combine(root, rel));
+        int seats = md.Starts.Count;
+        var w = md.BuildWorld(2026, players: Math.Max(2, seats), out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
+        if (seats >= 2)
+        {
+            for (int p = 0; p < seats; p++) w.SetFaction(p, p % 2 == 0 ? World.FactionDirectorate : World.FactionSodality);
+            md.PlaceSkirmishStart(w, 8000);
+        }
+        string name = $"{Path.GetFileNameWithoutExtension(rel)} {md.Width}x{md.Height}" + (seats >= 2 ? $", {seats} opening hands" : ", as authored");
+        grids.Add((name, w.Map, GoalsOf(w.Map, StructuresOf(w))));
+    }
+    if (grids.Count == 0) return Fail("flowparity: no shipped map found under data/maps or data/missions");
+    Map Synthetic(int w, int h, Func<int, int, bool> blocked)
+    {
+        var m = new Map(w, h);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                if (blocked(x, y)) m.SetBlocked(x, y, true);
+        return m;
+    }
+    var scatterRng = new DeterministicRandom(31);
+    var scatter = new bool[48 * 32];
+    for (int c = 0; c < scatter.Length; c++) scatter[c] = scatterRng.NextInt(4) == 0;
+    var none = new List<(int Ax, int Ay, int Size)>();
+    foreach (var (name, m) in new[]
+    {
+        ("synthetic open 48x32", Synthetic(48, 32, (x, y) => false)),
+        ("synthetic scatter 48x32, a quarter blocked (seed 31)", Synthetic(48, 32, (x, y) => scatter[y * 48 + x])),
+        // A wall two cells thick round a 5x5 pocket, and a solid 6x6 block in
+        // which a footprint of every size from 1 to 4 has a sealed ring.
+        ("synthetic pocket and solid block 32x24", Synthetic(32, 24, (x, y) =>
+            (x >= 4 && x <= 12 && y >= 4 && y <= 12 && !(x >= 6 && x <= 10 && y >= 6 && y <= 10))
+            || (x >= 18 && x <= 23 && y >= 4 && y <= 9))),
+        ("synthetic strip 17x1, cut in the middle", Synthetic(17, 1, (x, y) => x == 8)),
+        ("synthetic single cell 1x1", Synthetic(1, 1, (x, y) => false)),
+    })
+        grids.Add((name, m, GoalsOf(m, none)));
+
+    var chunks = new List<(int Grid, int From, int To)>();
+    for (int g = 0; g < grids.Count; g++)
+        for (int i = 0; i < grids[g].Goals.Count; i += ChunkGoals)
+            chunks.Add((g, i, Math.Min(i + ChunkGoals, grids[g].Goals.Count)));
+    Console.WriteLine(string.Create(ic, $"flowparity: {grids.Count} grids, {chunks.Sum(c => c.To - c.From)} fields, each built by the sim's "
+        + $"FlowFieldBuilder and by the pre-P8-31 build and compared cell by cell (distance, direction), with the target cell and the "
+        + $"relaxation count; {(full ? "EVERY cell as a target and every anchor at every footprint size" : $"up to {SampleGoals} goals per class")}"
+        + $"{(live ? $", then longmatchperf's matches every {LiveEveryTicks} ticks" : "")}."));
+
+    int stop = 0;
+    (int Grid, int[] T, int[] F, long Cells, long Relaxed, double OldMs, double NewMs, string? Failure) RunChunk(int i)
+    {
+        var (g, from, to) = chunks[i];
+        var t = new int[targetClass.Length];
+        var fp = new int[footClass.Length];
+        if (Volatile.Read(ref stop) != 0) return (g, t, fp, 0, 0, 0, 0, null);
+        var (name, m, goals) = grids[g];
+        var nb = new FlowFieldBuilder();
+        // The goals on a grid are distinct (each cell is in one target class,
+        // and footprints are deduplicated by anchor and size), so every first
+        // ask of this cache is a build.
+        var cache = new FlowFieldCache();
+        long cacheBuilds = 0, cacheRelaxed = 0;
+        var oldSw = new Stopwatch();
+        var newSw = new Stopwatch();
+        long cells = 0, relaxed = 0;
+        for (int j = from; j < to; j++)
+        {
+            var (x, y, size, cls) = goals[j];
+            string at = $"{name}, {Goal(x, y, size, size == 0 ? targetClass[cls] : footClass[cls])}";
+            string? fail = Check(at, m, x, y, size, nb, oldSw, newSw, out long c, out int r)
+                ?? CheckCache(at, cache, m, x, y, size, r, ref cacheBuilds, ref cacheRelaxed);
+            if (fail != null)
+            {
+                Interlocked.Exchange(ref stop, 1);
+                return (g, t, fp, cells, relaxed, oldSw.Elapsed.TotalMilliseconds, newSw.Elapsed.TotalMilliseconds, fail);
+            }
+            if (size == 0) t[cls]++; else fp[cls]++;
+            cells += c;
+            relaxed += r;
+        }
+        return (g, t, fp, cells, relaxed, oldSw.Elapsed.TotalMilliseconds, newSw.Elapsed.TotalMilliseconds, null);
+    }
+
+    var tTotal = new long[targetClass.Length];
+    var fTotal = new long[footClass.Length];
+    var gT = new int[targetClass.Length];
+    var gF = new int[footClass.Length];
+    long gCells = 0, gRelaxed = 0, fields = 0, cellsAll = 0, relaxedAll = 0;
+    double gOld = 0, gNew = 0, oldAll = 0, newAll = 0;
+    string? firstFailure = null;
+    string Tally(int[] counts, string[] names) => string.Join(", ", names.Select((s, k) => $"{s} {counts[k]}"));
+    RunOrdered(chunks.Count, jobs, RunChunk, (i, r) =>
+    {
+        if (r.Failure != null && firstFailure == null) firstFailure = r.Failure;
+        for (int k = 0; k < gT.Length; k++) gT[k] += r.T[k];
+        for (int k = 0; k < gF.Length; k++) gF[k] += r.F[k];
+        gCells += r.Cells; gRelaxed += r.Relaxed; gOld += r.OldMs; gNew += r.NewMs;
+        if (chunks[i].To != grids[r.Grid].Goals.Count) return;
+        if (firstFailure == null)
+            Console.WriteLine(string.Create(ic, $"  {grids[r.Grid].Name}: {gT.Sum()} targets ({Tally(gT, targetClass)}); "
+                + $"{gF.Sum()} footprints ({Tally(gF, footClass)}); {gCells} cells and {gRelaxed} relaxations equal; "
+                + $"old {gOld:F0} ms, new {gNew:F0} ms"));
+        for (int k = 0; k < gT.Length; k++) { tTotal[k] += gT[k]; gT[k] = 0; }
+        for (int k = 0; k < gF.Length; k++) { fTotal[k] += gF[k]; gF[k] = 0; }
+        cellsAll += gCells; relaxedAll += gRelaxed; oldAll += gOld; newAll += gNew;
+        gCells = gRelaxed = 0; gOld = gNew = 0;
+    });
+    fields = tTotal.Sum() + fTotal.Sum();
+
+    // ---- live=1: the grids longmatchperf's matches make as they play.
+    (string Line, int Fields, long Cells, string? Failure) LiveRun(string name)
+    {
+        var w = LongMatchWorld(root, name, out int seats, out var ais);
+        var nb = new FlowFieldBuilder();
+        var oldSw = new Stopwatch();
+        var newSw = new Stopwatch();
+        var cmds = new List<Command>();
+        int footprints = 0, targets = 0, checks = 0;
+        long cells = 0;
+        while (true)
+        {
+            bool end = w.Tick >= MeasurementHarness.WindowCloseTicks || MatchOver(w);
+            if (w.Tick % LiveEveryTicks == 0 || end)
+            {
+                checks++;
+                var seen = new HashSet<(int, int, int)>();
+                foreach (var s in StructuresOf(w))
+                {
+                    if (!seen.Add(s)) continue;
+                    string? fail = Check($"{name} live at t={w.Tick}, {Goal(s.Ax, s.Ay, s.Size, "a structure")}",
+                        w.Map, s.Ax, s.Ay, s.Size, nb, oldSw, newSw, out long c, out _);
+                    if (fail != null) return ("", footprints + targets, cells, fail);
+                    footprints++;
+                    cells += c;
+                }
+                for (int i = 0; i < w.EntityCount; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive || !e.Moving || !e.UseFlow) continue;
+                    int tx = Map.CellOf(e.TargetX), ty = Map.CellOf(e.TargetY);
+                    if (!w.Map.InBounds(tx, ty) || !seen.Add((tx, ty, 0))) continue;
+                    string? fail = Check($"{name} live at t={w.Tick}, {Goal(tx, ty, 0, $"the flow target of entity {i}")}",
+                        w.Map, tx, ty, 0, nb, oldSw, newSw, out long c, out _);
+                    if (fail != null) return ("", footprints + targets, cells, fail);
+                    targets++;
+                    cells += c;
+                }
+            }
+            if (end) break;
+            cmds.Clear();
+            for (int p = 0; p < seats; p++) ais[p].Act(w, cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        string ended = w.Winner >= 0 ? $"seat {w.Winner} wins at t={w.Tick}" : $"no result at t={w.Tick}";
+        return (string.Create(ic, $"  {name} live, {ended}: {checks} checks, {footprints} structure footprints and {targets} "
+            + $"flow targets, {cells} cells equal; old {oldSw.Elapsed.TotalMilliseconds:F0} ms, new {newSw.Elapsed.TotalMilliseconds:F0} ms"),
+            footprints + targets, cells, null);
+    }
+    long liveFields = 0;
+    if (live && firstFailure == null)
+    {
+        var liveMaps = MeasureMaps(root, "07,08,09");
+        RunOrdered(liveMaps.Length, jobs, i => LiveRun(liveMaps[i]), (_, r) =>
+        {
+            if (r.Failure != null) { firstFailure ??= r.Failure; return; }
+            if (firstFailure == null) Console.WriteLine(r.Line);
+            liveFields += r.Fields;
+            cellsAll += r.Cells;
+        });
+    }
+    sw.Stop();
+
+    if (firstFailure != null) return Fail($"flowparity: a field, or the count of the work behind one, differs from the pre-P8-31 build's. First difference: {firstFailure}");
+    var unseen = targetClass.Where((_, k) => tTotal[k] == 0).Select(s => $"target {s}")
+        .Concat(footClass.Where((_, k) => fTotal[k] == 0).Select(s => $"footprint {s}")).ToArray();
+    if (unseen.Length > 0)
+        return Fail($"flowparity: no grid in the sweep gave a goal of class {string.Join(", ", unseen)}, so the stage did not test it");
+    Console.WriteLine(string.Create(ic, $"flowparity: targets by class {Tally(tTotal.Select(v => (int)v).ToArray(), targetClass)}; "
+        + $"footprints by class {Tally(fTotal.Select(v => (int)v).ToArray(), footClass)}"));
+    Console.WriteLine(string.Create(ic, $"flowparity: PASS. {fields + liveFields} fields, {cellsAll} cells: every distance and direction, "
+        + $"every target cell and every relaxation count ({relaxedAll} on the sweep) equal to the pre-P8-31 build's, and a FlowFieldCache "
+        + $"asked for each sweep goal counted exactly those builds and relaxations on both of its paths. "
+        + $"Build time on the sweep, old {oldAll:F0} ms against new {newAll:F0} ms; elapsed {sw.Elapsed.TotalSeconds:F1} s on {jobs} thread(s)."));
+    return 0;
 }
 
 return args.Length == 0
@@ -19766,6 +20303,8 @@ return args.Length == 0
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         // P8-30: F12's large-map perf run, the same conventions.
         "longmatchperf" => Measured(LongMatchPerfGate),
+        // P8-31: the flow-field replacement's parity proof (also in match).
+        "flowparity" => Measured(FlowParity),
         "pinprobe" => PinProbe(),
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
@@ -19826,59 +20365,59 @@ static class MeasurementHarness
     /// this share of the sweep's decided matches.</summary>
     public const int D2YardBySuperweaponPercent = 25;
 
-    public const bool LongMatchPerfBinding = false;     // F12, the perf half: P8-31 sets this
+    public const bool LongMatchPerfBinding = true;      // F12, the perf half: set by P8-31, both bars met
 
     /// <summary>P8-30: TDD s6's per-tick budget, which F12 reads at p999.</summary>
     public const double LongMatchTickBudgetMs = 8.0;
     /// <summary>P8-30: ticks left out of longmatchperf's figures, the JIT's.</summary>
     public const int LongMatchSkipTicks = 30;
-    /// <summary>P8-30: the flow-field proxy's budget per map, the p999 of the
-    /// cells relaxed per tick over the full-length run, read at the percentile
-    /// F12's wall bar uses. Each figure is the one MEASURED with P8-22 landed
-    /// (ADR-079: the commander spends, with more producers, several orders a
-    /// beat and the harvester rebuy on the shortest line, which moves every
-    /// commander match that banks; with P8-66 landed, ADR-078's sidestep for
-    /// a walker whose step a separation push exactly undoes, they read
-    /// 313148, 54894 and 87023; with P8-64 landed, ADR-076 clause 3 re-landed under decision D38:
-    /// produced units exit in the producer's own frame, which moves every
-    /// match with a producer past the map centre, they read 223650, 54910 and
-    /// 138277; with P8-53 landed, ADR-077's multiplication truncating
-    /// toward zero, which moves every match in which a negative product's low
-    /// bits are not zero, they read 313102, 54855 and 155297; with ADR-075's
-    /// frame flipped to the sheltered one, its amendment
-    /// of 2026-10-08 under decision D38, they read 268174, 43896 and 138439;
-    /// with P8-63 landed, ADR-076's free harvester at the corner facing the
-    /// map centre, they read 313482, 65877 and 155083; with P8-62 alone, the opening
-    /// hand a true half turn, they read 268451, 44232 and 120654; on main
-    /// after the P8-21 pull request, ADR-075, they read 269005,
-    /// 44857 and 155592; at 9dd23cd, main after P8-18, they
-    /// read 313713, 77278 and 120756, and the first baseline, at 3633913, read
-    /// 313104, 66271 and 155801), which
-    /// is the value P8-31 must meet or beat: a parity-proven replacement pops
-    /// in the same order, relaxes the same cells and so meets it exactly,
-    /// which makes an unchanged proxy part of the parity evidence, and the
-    /// whole of F12's wall-time gain must then come from each relaxation
-    /// costing less. The figures belong to the matches as they play today,
-    /// so a row that changes those matches (any row moving the commander
-    /// goldens) re-measures them in the same change, as it does its goldens.
+
+    /// <summary>
+    /// P8-31: the flow-field proxy's budget, the p999 of the cells relaxed per
+    /// tick over a full-length run, one figure for every map and DERIVED FROM
+    /// A RULE rather than read off the matches (ADR-078's carry). P8-30 set
+    /// each map's budget to that map's own reading, and every row that moved
+    /// the commander matches re-baselined it to its new reading (skirmish-07's
+    /// anywhere from 223650 to 357451, the last P8-22's; the history is in
+    /// git), so the budget
+    /// could fail only a run that nobody had re-measured, and said nothing
+    /// about F12.
     ///
-    /// RE-BASELINING. This is a hand-maintained list of one day's figures,
-    /// and the rows that change what the AI does will move it: P8-27 (per-seat
-    /// streams, openings and wave jitter), P8-28 (the AI fields the roster)
-    /// and P8-29 (the AI cannot count undetected cloak), and any later row
-    /// that moves the commander goldens. Such a row runs
-    ///   dotnet run --project sim/Ferrostorm.Sim.Runner -c Release -- longmatchperf rebaseline=1
-    /// which prints these entries as measured on that run, pastes them over
-    /// the ones below, and records the old and new figures in its tracker
-    /// evidence. The proxy is deterministic, so any machine and any jobs=
-    /// gives the same lines. P8-31 does NOT re-baseline: a parity-proven
-    /// replacement must reproduce these figures exactly.</summary>
-    public static readonly (string Map, long RelaxedP999)[] LongMatchProxyBudget =
-    {
-        ("skirmish-07", 357451),
-        ("skirmish-08", 65757),
-        ("skirmish-09", 171729),
-    };
+    /// THE RULE: a p999 tick's flow-field work, at what one relaxation costs
+    /// on the reference machine, must fit in what TDD s6's 8 ms tick leaves
+    /// after the rest of the sim has run at TDD s6's own stated load:
+    ///   budget = (LongMatchTickBudgetMs - LongMatchRestOfTickMs) / LongMatchNsPerRelaxation
+    ///          = (8 ms - 3 ms) / 13 ns = 384615 cells relaxed.
+    /// It is F12's wall bar restated in the deterministic unit, so the half of
+    /// F12 a CI runner can judge holds the same bar as the half only the
+    /// reference machine can. It moves only when one of its three inputs
+    /// does, each re-measured by the method its own comment gives, and never
+    /// because the matches changed: a row that moves the commander matches
+    /// does not re-baseline, and if its reading crosses the budget the gate
+    /// fails and that row answers for the flow work it added.
+    /// </summary>
+    public static readonly long LongMatchProxyBudget =
+        (long)((LongMatchTickBudgetMs - LongMatchRestOfTickMs) * 1_000_000 / LongMatchNsPerRelaxation);
+
+    /// <summary>P8-31, the rule's reserve: the rest of the sim's tick at TDD
+    /// s6's load (600 units and 200 structures), as `match`'s defence-load rig
+    /// measures it on the reference machine (an Apple M4, ten cores): 2.240 ms
+    /// a tick at P8-31's head and 2.747 to 2.913 at P8-30's, rounded up to the
+    /// next whole millisecond. Re-measured from `match 2026`'s "defence load"
+    /// line by a row that moves the sim's cost per tick.</summary>
+    public const double LongMatchRestOfTickMs = 3.0;
+
+    /// <summary>P8-31, the rule's unit cost: one relaxation of FlowFieldBuilder
+    /// on the reference machine, a build's whole cost (reset, sorting and
+    /// relaxing) over its relaxations. At P8-31's head `flowparity jobs=1`'s
+    /// skirmish-07 line read 61 ms for 4804927 (12.7 ns), and longmatchperf's
+    /// skirmish-07 ticks that built a field cost 12.2 and 12.3 ns a relaxation
+    /// more than those that built none; rounded up to the next whole
+    /// nanosecond. Re-measured the same way by a row that changes the build.
+    /// The pre-P8-31 heap cost about 70 ns (P8-30; 69.5 and 70.6 at this row's
+    /// base), which under the same rule gives 70422 and puts skirmish-07 and
+    /// skirmish-09 over it.</summary>
+    public const double LongMatchNsPerRelaxation = 13.0;
 }
 
 /// <summary>P8-18: F8's figures over one sweep (pillarprobe prints them,
