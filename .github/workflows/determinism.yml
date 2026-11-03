@@ -159,6 +159,19 @@ jobs:
       - name: F8 superweapon pacing, binding (pillargate --bind, P8-72)
         if: matrix.os == 'ubuntu-latest'
         run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- pillargate --bind
+      # P8-31: F12's perf half, binding. longmatchperf plays three full AI
+      # matches (skirmish-07, -08 and -09) and here asserts the deterministic
+      # half: p999 flow-field cells relaxed per tick within the budget
+      # MeasurementHarness.LongMatchProxyBudget derives from TDD s6's 8 ms tick.
+      # The wall bar is printed and NOT asserted (wall=report), because a shared
+      # runner's clock judges the runner rather than the build (the defence load
+      # gate read 5.052 and 11.899 ms on one commit). ONE leg, because the proxy
+      # is a property of the deterministic sim, which the golden step holds
+      # identical on both platforms. About 8 s on one thread of the machine that
+      # measured it.
+      - name: F12 flow-field proxy, binding (longmatchperf wall=report, P8-31)
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project sim/Ferrostorm.Sim.Runner -c Release --no-build -- longmatchperf wall=report
 
   # The headless CLIENT harness. It boots the REAL battle scene, drives it from
   # the joiner's seat and asserts on what it does; it has caught TEN defects
