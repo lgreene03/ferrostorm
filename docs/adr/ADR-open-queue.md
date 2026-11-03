@@ -361,7 +361,8 @@ the same commit.
   the base's 26. F6 22 of 72 in the window and endgate 6 unresolved, against
   27 and 3 at the base; f0c9b74's reversal read and not met (26 of 72 with
   the rebuy reverted); D32's reversal met on its letter and not enacted
-  (P8-82); rows P8-80 to P8-82 filed. Old replays and saves are refused by
+  by this row (P8-82, through which D32's recorded decision of 2026-10-27
+  enacts it); rows P8-80 to P8-82 filed. Old replays and saves are refused by
   the checksum; Q024 stands for a later logic-only change. Proposed
   2026-10-14. Signed off with nine conditions by the Architect on 2026-10-27
   (the ADR's section "Architect sign-off", its date confirmed), in the pull

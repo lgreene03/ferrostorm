@@ -960,6 +960,19 @@ The checksum move is the mechanism working: old replays, saves and mixed-build L
   squash merge, whose tree equals 1ad6cb1's), as branch
   `claude/p8-23-attack-waves`; the rebased head's tree was ab49c6d, equal to
   the reviewed head's. The pull request number is recorded when it opens.
+- **The final base** (2026-11-03). Main moved past 4076626, so after the
+  Architect's addendum below the branch was rebased again, as
+  `claude/p8-23-waves`, onto `origin/claude/p8-55-team-integration` at
+  2d34aa3: main at a166cc6 (P8-31, pull request 176, and main's two client
+  commits, pull requests 141 and 44) plus P8-55, P8-49 and P8-79 under
+  ADR-081 (pull request 177), the tree that pull request's squash merge gives
+  main. The `longmatchperf` conflict took P8-31's rule, so the re-baseline
+  commit is dropped, and the addendum's integration conditions 1 to 7 are met
+  there ("What it measured", "Re-read on the merged tree").
+- **The addendum's date is corrected to 2026-11-03.** It was drafted with
+  2026-10-27, but its checks ran against origin/main 6559f2b, whose two newest
+  commits are dated 2026-10-29, so it cannot have been given before then; it
+  is dated as appended.
 - **Conditions 1 to 9**, one commit each for 1 to 7 and one for 8 and 9:
   1. `airetreat` and `aiwalls`, appended after `aispend` ("Golden hashes"),
      each failing by name with its branch switched off alone, every line above
@@ -988,3 +1001,30 @@ The checksum move is the mechanism working: old replays, saves and mixed-build L
      unmerged", "origin/main carries no ADR-079 yet") is gone; CI's three jobs
      and the re-run of `tools/ci-local.sh` at the final head are the pull
      request's own.
+
+### Architect addendum, 2026-11-03 (checks run against origin/main 6559f2b): conditions 1 to 4 checked
+
+I checked conditions 1 to 4 on `claude/p8-23-attack-waves` at a940e33, in a detached worktree of my own, against origin/main as fetched when this was written. All four are met, and I confirm the sign-off on them, subject to the integration conditions at the end. That origin/main is 6559f2b, whose two newest commits are dated 2026-10-29, so the date of this addendum is to be confirmed or corrected in the commit that appends it, as condition 8 did for the sign-off.
+
+**Condition 1, the retreat and the walls under the golden gate: met.** `golden 2026` at a940e33 reproduces `sim/golden-hashes.txt` exactly and in order. Against origin/main, every line main holds keeps its name and place. `skirmish`, `aisuper`, `mission` and `aispend` move to the values approved in the sign-off, and two lines follow `aispend`: `airetreat` 0xD73E853E831C4494 and `aiwalls` 0x49A974BFD74F4497. No other line moves. I bit each guard alone in a scratch copy and restored the source after each run. With the retreat forced false, golden stops on "airetreat: the wave launched at t=0 (6 fighters) was never called home in 1800 ticks", and every line above it is identical to the head's. That run also confirms again that no earlier golden reaches the retreat. With the wall branch forced false, golden stops on "aiwalls: the Turtle placed no wall in 6000 ticks (window 4500)", and every line above it, `airetreat`'s included, is identical. `airetreat` refuses to run if the compiled Hard rung stops retreating. `aiwalls` reads its horizon from the compiled Normal window. Each asserts the state it exists to reach, and `aiwalls` also asserts that every wall stands on a defence's enemy-facing column. The Golden hashes section records each line, its cause and its bite without a golden count in prose, and P8-26's cell records that its counter-composition will move `airetreat`.
+
+**Condition 2, the two unguarded guards bitten: met.** Stage 2g(a) separates the launch for a threshold that has stood ungathered from the stalled-field launch: a new high at t=210 pushes the stalled launch out to t=510. Its control holds every order until t=300, and its check sends all seven sealed fighters at t=315. Stage 2g(b) uses one turret: a control with its enemy-facing column clear, and two separately named checks, a power plant's apron and two ferrite fields, each of which moves the wall on to (20, 37). At the head `aituninggate` passes and reports exactly those values. With the stood launch removed alone, the stage fails on "aituning 2g(a): ... 0 were (0 launches)". The re-verifier's bites of the apron and field exclusions agree with what the diff shows.
+
+**Condition 3, the wall-sealing clause runnable: met.** `frozenprobe` now takes `p0=` and `p1=` through the same personality path `waveprobe` uses. For a walker with no route, it asks for the route again on a copy of the map with that walker's own seat's walls open, which answers no by construction for a seat with no wall. Two synthetic controls are printed beside the reading. `frozenprobe p0=turtle p1=turtle` reproduces the clause's baseline at the head: 0 walkers sealed in by their own side's walls, in 0 of 72 matches, both controls answering correctly, and 0 harvesters and 6 units frozen. The two walkers with no route are one mirror pair deep in the enemy's base on skirmish-08, so the zero is a true negative and not a check that cannot say yes. The measure sees only walkers that report Moving, so it is a floor under the safety property rather than a proof of it. The exclusion that stops a wall sealing anything is held by 2g(b).
+
+**Condition 4, staging_cells bounded: met.** `AiTuning.MaxStagingCells`, 20, is the one constant the loader, registration and stage 4 read, and the schema carries a maximum of 20. Registration refuses in the loader's words. The `rush_tick` description states the hold, and that a rush tick past the end of a match disarms the commander. With the registration ceiling removed alone, stage 4 fails on "registering a row with an out-of-range staging_cells must be refused". idleprobe's 20-cell bound is still its own straight-line literal, transcribed rather than read. Because `staging_cells` is measured on the larger axis, a point at the ceiling can lie about 28 cells out on a diagonal. The authored 10 lies within about 14 on any line, so section 1's claim holds for what ships, and a later runner-only row may make idleprobe read the constant.
+
+**Nothing rides beyond the conditions.** origin/main..a940e33 is the five rebased commits of the reviewed range plus eight condition commits. Only the commits for conditions 1 to 5 touch `sim/` or `data/`. Every line condition 5 changes in SkirmishAI.cs is a comment, and its schema change is description text. The catalogue checksum 0x64E6ED1AC64F2076 is the value the reviewed head already recorded, so none of the conditions moved it.
+
+**What must be re-measured after the rebase.** The orchestrator will rebase this branch over P8-31 and P8-55 (ADR-081) as well as main's two client commits. Both rows proved goldens neutral on 9670e04, a base with no `aispend`, `airetreat` or `aiwalls`, and neither has been measured against them. P8-31 reimplements the flow field that every wave, every retreat and the walls-open re-query route through. P8-55 changes targeting and the commander's air census to team detection. Neither should move these lines: the first claims parity, and the second is the commander's own bit when no team is set. Neither claim has been measured against these lines, though. So on the rebased head, before merge:
+
+1. `git range-diff` shows every P8-23 commit equal to its counterpart, except the conflict resolutions in the longmatchperf block, the tracker and the open queue.
+2. `golden 2026` reproduces the four moved lines and both appended lines exactly, and leaves main's lines untouched.
+3. `determinism 2026` and `match` are green.
+4. `aituninggate` is green, and the checksum is re-read.
+5. longmatchperf takes P8-31's rule of 384615, drops the proxy figures this row re-baselined by hand, and is run binding, with the merged proxies recorded beside the branch's figures.
+6. `frozenprobe p0=turtle p1=turtle` reproduces 0 with both controls answering correctly.
+7. `pillargate --bind`, `laddergate`, `endgate` and the aiairgate reading in `match` are re-read, and any change is recorded beside the branch's values.
+8. `tools/ci-local.sh` and `tools/verify-client.sh` pass at the final head, and all three CI jobs are green on the pull request, with Windows and Linux reproducing the moved and the appended lines.
+
+Any of the following comes back to me: a P8-23 golden that differs; a checksum other than 0x64E6ED1AC64F2076; a longmatchperf reading over the rule; a non-zero walls-open reading; a reversal clause that flips; or any difference under `sim/`, `data/` or the goldens beyond those resolutions. The rest of the same pass is a docs tidy that does not come back to me: the stale "not enacted" wording beside D32's decision in rows P8-23 and P8-82 and in the open queue, a forward pointer from ADR-079's reading of "extra defences" to section 8, D41's record of the base, and the pull request number.

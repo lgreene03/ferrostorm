@@ -618,6 +618,10 @@ end with a result. What it leaves, each recorded with its owner:
   defences start from a base that already holds two or three producers and up to
   its personality's cap of faction defences, so "Turtle walls and extra
   defences" means walls and any defence beyond `faction_defence_cap`.
+  (Forward pointer, 2026-11-03: superseded by ADR-080 section 8, which keeps
+  the Turtle's `faction_defence_cap` at 5 and reads "extra defences" as that
+  cap, which this ADR already gave the Turtle, and the walls ADR-080 raises
+  round those defences, not as defences beyond the cap.)
 - The `longmatchperf` proxy budget is a day's figure again (P8-31).
 
 ## Architect sign-off
