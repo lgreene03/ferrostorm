@@ -85,11 +85,14 @@ public partial class PauseMenu : Control
                 : "saving is disabled during replay playback", 11));
     }
 
-    /// <summary>P8-35: the generated CONTROLS page, BACK to the root.</summary>
+    /// <summary>P8-35: the generated CONTROLS page, BACK to the root. P8-79:
+    /// the battle's own copy (SkirmishLive.NewControlsPage), so a replay or a
+    /// spectating seat is shown only what a viewer can do, as the help overlay
+    /// is.</summary>
     private void ShowControls()
     {
         var v = Page("CONTROLS", 320, 300);
-        var page = new ControlsPage();
+        var page = _game.NewControlsPage();
         v.AddChild(page);
         v.AddChild(UplinkUi.MenuButton("BACK", ShowRoot));
         ControlsShown = page;

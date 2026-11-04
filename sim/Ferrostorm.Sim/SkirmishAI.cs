@@ -1395,7 +1395,10 @@ public sealed class SkirmishAI
     ///   2. it is not an undetected cloaked unit, the same rule the sim's own
     ///      targeting applies (World.CanTarget), which is D9's spirit. No flyer
     ///      in the catalogue cloaks today, so this half costs nothing and is
-    ///      written so a cloaked one is not counted the day it exists.
+    ///      written so a cloaked one is not counted the day it exists. Since
+    ///      P8-55 (ADR-081) that rule reads the detection of the commander's
+    ///      whole TEAM, so this asks World.TeamDetectionMask rather than its
+    ///      own bit and stays the same rule.
     /// The caller has already asked hostility; this asks only "a plane I see".
     /// </summary>
     private bool SeesAircraft(World w, in Entity e)
@@ -1404,7 +1407,7 @@ public sealed class SkirmishAI
         int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y);
         if (!w.Map.InBounds(cx, cy) || !w.IsVisible(_player, cx, cy)) return false;
         bool cloaked = e.Stealth || e.FieldCloaked;
-        return !cloaked || e.RevealTicks > 0 || (e.DetectedMask & (1 << _player)) != 0;
+        return !cloaked || e.RevealTicks > 0 || (e.DetectedMask & w.TeamDetectionMask(_player)) != 0;
     }
 
     /// <summary>

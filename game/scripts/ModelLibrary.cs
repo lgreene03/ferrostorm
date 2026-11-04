@@ -149,6 +149,10 @@ public partial class ModelLibrary : Node
         // that would drive it.
         // P7-33: a gate is a wall segment WITH A MOVING PART, and it has to be
         // distinguishable from a plain wall at 40px. Now it is.
+        // P8-49: World.IsGateOpen now drives the open state, by lowering this
+        // model (SkirmishLive.DrawGateOpen). Its leaf is joined to its posts, so
+        // the whole piece goes down; a model whose leaf moves alone is still
+        // owed to art-pipeline.
         { 20, "com_gate" },
     };
 

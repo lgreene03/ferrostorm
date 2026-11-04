@@ -34,6 +34,8 @@ using Ferrostorm.Sim;
 //   minegate           - P7-11c: a mine is ORDERED and placed like any building, detonates on an enemy and not its owner, does NOT block where a wall does, hides until a detector finds it, obeys max_alive, and two going off together are deterministic
 //   wallgategate       - P7-10: a gate is ORDERED and placed like a wall, blocks while shut, opens for an ALLY and shuts 45 ticks after the last one leaves, lets an ENEMY follow them through (the design, not an oversight), does not flutter, and round-trips its remaining delay through a save
 //   teamgate           - P7-8c: every seat starts on its own team so a free-for-all is unchanged by construction; allies are not targets, victory is by TEAM while elimination stays per player, contact effects and detectors respect the alliance, and tech, fog, the veil and splash deliberately do not
+//   teamdetectgate     - P8-55 (ADR-081): on skirmish-09 under even sides a cloaked enemy only a TEAMMATE detected is targetable, by an ordered Attack and by auto-acquire; the same fixture in a free-for-all is not (in match)
+//   gatetrapprobe      - P8-49 (PV-10, D29): MEASUREMENT, non-asserting. A ring of own wall with an own gate traps a unit outside and one inside, and a client waypoint cannot open the gate (a PathMove stops 4 cells short of it, the gate opens at 3); on demand, not in match
 //   aitargetgate       - the commander's wave aims at the NEAREST enemy refinery, not the first in entity order (invisible at 2 players)
 //   dockfacegate       - P8-15, ADR-071: any open face of a refinery docks, a sealed one falls back to the next, a walk onto a building reaches an open face, and the commander keeps its refineries' aprons clear
 //   schemagate         - /data is actually validated against /data/schema.*.json, which nothing had ever done
@@ -9662,6 +9664,243 @@ int TeamGate()
     return 0;
 }
 
+int TeamDetectionGate()
+{
+    // P8-55 (ADR-081, decision D24b): detection is a TEAM asset. CanTarget read
+    // the attacker's own DetectedMask bit alone, so an enemy Phantom Tank that
+    // only an ally's Sentinel Scout had found was drawn on the player's screen
+    // (P8-6) and refused by every gun the player owned. Played on the shipped
+    // four-seat map under EVEN SIDES (seats 0 and 2 against 1 and 3), the
+    // MatchSetup the lobby builds, with the opening hands placed.
+    //
+    // The control is the SAME fixture in a free-for-all, where the scout's seat
+    // is not the attacker's ally: nothing differs but the team map, so the
+    // difference between the two runs IS the assertion. Both of CanTarget's
+    // main readers are measured, an ordered Attack (the explicit-target path)
+    // and a squad left alone (auto-acquire), each counted by its own Fired
+    // events so neither can pass on the other's shots.
+    //
+    // Additive, the teamgate pattern: a standalone mode and a Match battery
+    // stage, never a golden, because no golden calls SetTeam and so every
+    // golden is unchanged by construction (a team of one is the seat).
+    string? root = RepoRoot();
+    if (root == null)
+        return Fail("teamdetectgate: repository root not found, so the shipped four-seat map cannot be loaded");
+    string ninePath = Path.Combine(root, "data", "maps", "skirmish-09.fmap");
+    var nine = MapData.Load(ninePath);
+    if (nine.Starts.Count != 4)
+        return Fail($"teamdetectgate: skirmish-09 declares {nine.Starts.Count} starts, not the four this gate plays");
+    const int Rifle = 2;                 // com_rifle_squad: service rifle, range 3
+    int phantomType = UnitCatalogue.TypeIdOf("sod_phantom_tank");
+    int scoutType = UnitCatalogue.TypeIdOf("dir_sentinel_scout");
+    const int Me = 0, Enemy = 1, Ally = 2;   // under EVEN SIDES seat 2 is seat 0's teammate
+    const int Window = 60;
+
+    (int OrderShots, bool OrderHeld, int AutoShots, int Mask, int HpTaken, int Cx, int Cy) Run(bool teamed)
+    {
+        var w = nine.BuildWorld(4820, players: 4, out _, ww =>
+        {
+            CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data"));
+            if (teamed) for (int p = 0; p < 4; p++) ww.SetTeam(p, p % 2);   // MatchSetup.TeamsEvenSides
+        });
+        nine.PlaceSkirmishStart(w, 8000);
+
+        // Open, quiet ground nearest the map's centre, found by a fixed ring
+        // walk: every fixture cell open, and nothing alive within ten cells, so
+        // no opening hand can reach the fixture or be reached by it.
+        int fx = -1, fy = -1;
+        for (int r = 0; r < 50 && fx < 0; r++)
+            for (int dy = -r; dy <= r && fx < 0; dy++)
+                for (int dx = -r; dx <= r && fx < 0; dx++)
+                {
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
+                    int cx = w.Map.Width / 2 + dx, cy = w.Map.Height / 2 + dy;
+                    bool open = true;
+                    for (int y = cy - 1; y <= cy + 6 && open; y++)
+                        for (int x = cx - 1; x <= cx + 3 && open; x++)
+                            if (!w.Map.InBounds(x, y) || w.Map.IsBlocked(x, y)) open = false;
+                    if (!open) continue;
+                    foreach (var e in w.Entities)
+                        if (e.Alive && Fix64.DistSq(e.X - Map.CellCentre(cx), e.Y - Map.CellCentre(cy)) <= Fix64.FromInt(100))
+                        { open = false; break; }
+                    if (open) { fx = cx; fy = cy; }
+                }
+        if (fx < 0) throw new Exception("teamdetectgate: no open, quiet ground within 50 cells of skirmish-09's centre");
+
+        int Spawn(int player, int type, int cx, int cy, Stance stance)
+        {
+            var d = w.GetUnitType(type);
+            int id = w.SpawnUnit(player, Map.CellCentre(cx), Map.CellCentre(cy), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                                 d.SightCells, d.Stealth, d.Detector, veterancy: false, unitType: type);
+            var e = w.Entities[id];
+            e.Stance = stance;
+            w.SetEntityForTest(id, e);
+            return id;
+        }
+        // The ordered squad holds fire, so only the order can make it shoot;
+        // the other is left Aggressive, so only auto-acquire can. The tank holds
+        // fire too, because a shot of its own would reveal it to everyone
+        // (RevealTicks) and the measurement would be of that instead. The scout
+        // is unarmed, and stands outside both rifles' three-cell reach but well
+        // inside its own seven-cell sight of the tank.
+        int ordered = Spawn(Me, Rifle, fx, fy, Stance.HoldFire);
+        int auto = Spawn(Me, Rifle, fx, fy + 1, Stance.Aggressive);
+        int phantom = Spawn(Enemy, phantomType, fx + 2, fy, Stance.HoldFire);
+        Spawn(Ally, scoutType, fx + 2, fy + 5, Stance.HoldFire);
+        int hp0 = w.Entities[phantom].Hp;
+
+        var order = new List<Command> { new(w.Tick, Me, CommandType.Attack, ordered, Fix64.Zero, Fix64.Zero, phantom) };
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order));
+        int mask = w.Entities[phantom].DetectedMask;
+        bool held = w.Entities[ordered].ExplicitTarget == phantom;
+        int orderShots = 0, autoShots = 0;
+        for (int t = 0; t <= Window; t++)
+        {
+            if (t > 0) w.Step(default);
+            foreach (var ev in w.Events)
+            {
+                if (ev.Type != GameEventType.Fired || ev.B != phantom) continue;
+                if (ev.A == ordered) orderShots++;
+                if (ev.A == auto) autoShots++;
+            }
+        }
+        return (orderShots, held, autoShots, mask, hp0 - w.Entities[phantom].Hp, fx, fy);
+    }
+
+    var teamed = Run(teamed: true);
+    var ffa = Run(teamed: false);
+
+    // The preconditions, stated as measurements: the ally's scout found the
+    // tank and nothing of seat 0's did, in BOTH worlds, so the one thing that
+    // differs between them is whether seat 2 is seat 0's teammate.
+    foreach (var (name, r) in new[] { ("EVEN SIDES", teamed), ("FREE FOR ALL", ffa) })
+        if ((r.Mask & (1 << Ally)) == 0 || (r.Mask & (1 << Me)) != 0)
+            return Fail($"teamdetectgate: under {name} the Phantom Tank's DetectedMask is {r.Mask}, where the fixture "
+                        + $"needs seat {Ally}'s bit set by the scout and seat {Me}'s bit clear, so this run is not "
+                        + "measuring detection by another seat");
+
+    if (!teamed.OrderHeld || teamed.OrderShots == 0)
+        return Fail($"teamdetectgate: CanTarget is not team-wide (ADR-081, D24b). On skirmish-09 under EVEN SIDES an "
+                    + $"enemy Phantom Tank detected only by seat {Ally}, seat {Me}'s TEAMMATE, was ordered attacked by "
+                    + $"seat {Me}'s rifle squad: the order was {(teamed.OrderHeld ? "held" : "dropped the tick it landed")} "
+                    + $"and {teamed.OrderShots} shots were fired in {Window} ticks. The client draws this tank tinted and "
+                    + "offers the attack (P8-6), so a seat-only CanTarget is a target the player's units refuse to shoot");
+    if (teamed.AutoShots == 0)
+        return Fail($"teamdetectgate: CanTarget is not team-wide in AUTO-ACQUIRE (ADR-081, D24b). Seat {Me}'s "
+                    + $"Aggressive rifle squad stood beside an enemy Phantom Tank its teammate's scout had detected "
+                    + $"and fired 0 shots in {Window} ticks");
+    if (teamed.HpTaken <= 0)
+        return Fail($"teamdetectgate: {teamed.OrderShots + teamed.AutoShots} Fired events and the Phantom Tank took no "
+                    + "damage, so the shots counted above were not landing");
+    if (ffa.OrderHeld || ffa.OrderShots != 0 || ffa.AutoShots != 0 || ffa.HpTaken != 0)
+        return Fail($"teamdetectgate: in the FREE FOR ALL control seat {Ally} is NOT seat {Me}'s ally, and seat {Me}'s "
+                    + $"squads still engaged the tank only seat {Ally} detected (order {(ffa.OrderHeld ? "held" : "dropped")}, "
+                    + $"{ffa.OrderShots} ordered and {ffa.AutoShots} unordered shots, {ffa.HpTaken} damage). Detection "
+                    + "is pooled with TEAMMATES, not with every detector in the game; and without this control the "
+                    + "teamed run above cannot tell a team rule from no stealth at all");
+
+    Console.WriteLine($"teamdetectgate: on skirmish-09 (four seats, opening hands placed, fixture at cell "
+                      + $"{teamed.Cx},{teamed.Cy}) an enemy Phantom Tank detected only by seat {Ally}'s Sentinel Scout "
+                      + $"(DetectedMask {teamed.Mask}) is targetable by seat {Me} when the two are TEAMMATES under EVEN "
+                      + $"SIDES: an ordered Attack is held and fires {teamed.OrderShots} shots and a squad left alone "
+                      + $"acquires it and fires {teamed.AutoShots} in {Window} ticks, {teamed.HpTaken} damage in all; the "
+                      + $"same fixture in a FREE FOR ALL, where seat {Ally} is no ally, drops the order and fires "
+                      + $"{ffa.OrderShots} and {ffa.AutoShots} (ADR-081, D24b)");
+    return 0;
+}
+
+int GateTrapProbe()
+{
+    // P8-49 (PV-10, decision D29): MEASUREMENT, non-asserting under ADR-061's
+    // gate-vs-probe rule. D29 ships no fix for the gate trap until a probe
+    // shows the harm, so this is that probe. A player who closes a ring of
+    // their own wall with their own gate in it, and orders a unit across it,
+    // measured in the sim the client's right click feeds (a PathMove, which
+    // `inputgate/PathMove` proves is what the click sends).
+    //
+    // It also measures the fix the row named, "route through an own gate
+    // when the destination is unreachable", before anybody builds it: the
+    // only thing a client can do is send waypoints, and a waypoint walk ends by
+    // the crowd-arrival rule (World.StepToward: a PathMove is complete within
+    // four cells), while a gate opens only for an ally within three
+    // (World.GateOpenRadiusSq). Each line below is one fresh world.
+    const int Rifle = 2;
+    const int Ticks = 600;
+    const int GateX = 20, GateY = 25;
+    (World W, int U, int G) Ring(int ux, int uy)
+    {
+        // An 11 by 11 ring of seat 0's wall, x and y 20 to 30, whose one way
+        // through is seat 0's gate in the west face at (20, 25).
+        var w = new World(4900, 48, 48, players: 2);
+        int gate = -1;
+        for (int x = 20; x <= 30; x++) { w.SpawnWall(0, x, 20); w.SpawnWall(0, x, 30); }
+        for (int y = 21; y <= 29; y++)
+        {
+            if (y == GateY) gate = w.SpawnGate(0, GateX, y); else w.SpawnWall(0, GateX, y);
+            w.SpawnWall(0, 30, y);
+        }
+        var d = w.GetUnitType(Rifle);
+        int u = w.SpawnUnit(0, Map.CellCentre(ux), Map.CellCentre(uy), d.Speed, d.Hp, d.Armour, d.WeaponId,
+                            d.SightCells, veterancy: false, unitType: Rifle);
+        return (w, u, gate);
+    }
+    string Run(int ux, int uy, params (int X, int Y, bool Queued)[] orders) => RunAs(ux, uy, null, orders);
+    string RunAs(int ux, int uy, CommandType[]? types, params (int X, int Y, bool Queued)[] orders)
+    {
+        var (w, u, g) = Ring(ux, uy);
+        var cmds = new List<Command>();
+        for (int k = 0; k < orders.Length; k++)
+        {
+            var o = orders[k];
+            var type = types is null ? CommandType.PathMove : types[k];
+            cmds.Add(new Command(w.Tick, 0, type, u, Map.CellCentre(o.X), Map.CellCentre(o.Y), -1, o.Queued));
+        }
+        Fix64 x0 = w.Entities[u].X, y0 = w.Entities[u].Y;
+        w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        int openedAt = -1;
+        Fix64 nearestSq = Fix64.MaxValue;
+        for (int t = 1; t < Ticks; t++)
+        {
+            w.Step(default);
+            var e = w.Entities[u];
+            var dsq = Fix64.DistSq(e.X - w.Entities[g].X, e.Y - w.Entities[g].Y);
+            if (dsq < nearestSq) nearestSq = dsq;
+            if (openedAt < 0 && w.IsGateOpen(g)) openedAt = w.Tick;
+        }
+        var f = w.Entities[u];
+        bool inside = Map.CellOf(f.X) > 20 && Map.CellOf(f.X) < 30 && Map.CellOf(f.Y) > 20 && Map.CellOf(f.Y) < 30;
+        return $"moved {Fix64.Sqrt(Fix64.DistSq(f.X - x0, f.Y - y0))} cells, ends {(inside ? "INSIDE" : "outside")} the ring, "
+               + $"nearest the gate {Fix64.Sqrt(nearestSq)} cells, gate {(openedAt < 0 ? "never opened" : $"opened at tick {openedAt}")}";
+    }
+
+    Console.WriteLine($"gatetrapprobe: seat 0's 11x11 ring of wall with its own gate at ({GateX},{GateY}); a rifle squad of "
+                      + $"seat 0; each line {Ticks} ticks in a fresh world. The gate opens for an ally within 3 cells "
+                      + "and a PathMove is complete within 4.");
+    Console.WriteLine($"  the trap, in:  from 10 cells out, ordered to the ring's centre       : {Run(10, 25, (25, 25, false))}");
+    Console.WriteLine($"  the trap, out: from the ring's centre, ordered 10 cells out         : {Run(25, 25, (10, 25, false))}");
+    Console.WriteLine($"  the named fix: to the gate's cell, then (queued) to the centre       : {Run(10, 25, (GateX, GateY, false), (25, 25, true))}");
+    Console.WriteLine($"  ...to the cell beside the gate, then (queued) to the centre          : {Run(10, 25, (GateX - 1, GateY, false), (25, 25, true))}");
+    Console.WriteLine($"  control: from 3 cells, ordered to the centre, once                   : {Run(GateX - 3, GateY, (25, 25, false))}");
+    Console.WriteLine($"  control: from 3 cells, beside the gate, then (queued) to the centre  : {Run(GateX - 3, GateY, (GateX - 1, GateY, false), (25, 25, true))}");
+    // The one verb with no crowd arrival is the direct Move (UseFlow false),
+    // which F1 records as superseded and the client never sends. It closes the
+    // last cells exactly, and it is not taken because it does not ask the
+    // passability grid at all, which the last line shows.
+    var pmMovePm = new[] { CommandType.PathMove, CommandType.Move, CommandType.PathMove };
+    Console.WriteLine($"  direct Move: to the gate's cell, Move beside it, then the centre     : "
+                      + $"{RunAs(10, 25, pmMovePm, (GateX, GateY, false), (GateX - 1, GateY, true), (25, 25, true))}");
+    Console.WriteLine($"  direct Move: at the centre across the far face, no gate on the line  : "
+                      + $"{RunAs(25, 10, new[] { CommandType.Move }, (25, 25, false))}");
+    Console.WriteLine("gatetrapprobe: a unit outside a closed ring never moves, and one inside never leaves; a gate opens "
+                      + "only when an ally already stands within 3 cells of it, and a move refused as unreachable is not "
+                      + "retried when it does. A PathMove waypoint at the gate cannot bring a unit within 3 cells: the walk "
+                      + "ends 4 cells short by the crowd-arrival rule. The direct Move closes the gap only because it never "
+                      + "asks the passability grid, and the same verb walks a unit straight through a wall. So the trap is "
+                      + "real, and routing through the gate is not something the client's orders can do safely; it needs "
+                      + "a rule in the sim (P8-49)");
+    return 0;
+}
+
 int CampaignGate()
 {
     // P7-9. The campaign is now six missions and a manifest of magic numbers,
@@ -15554,6 +15793,10 @@ int Match(ulong seed)
     // the free-for-all every golden runs is the default by construction.
     int team = TeamGate();
     if (team != 0) return team;
+    // P8-55 (ADR-081): and detection is pooled with the team, so a cloaked enemy
+    // an ally has found is one the player's own guns will shoot.
+    int teamDetect = TeamDetectionGate();
+    if (teamDetect != 0) return teamDetect;
     // P7-9: six missions the game can open, and the two things missions 04 to
     // 06 added that the earlier three could not have.
     int campaign = CampaignGate();
@@ -20277,6 +20520,8 @@ return args.Length == 0
         "minegate" => MineGate(),
         "wallgategate" => WallGateGate(),
         "teamgate" => TeamGate(),
+        "teamdetectgate" => TeamDetectionGate(),
+        "gatetrapprobe" => GateTrapProbe(),
         "campaigngate" => CampaignGate(),
         "schemagate" => SchemaGate(),
         "harvesterdatagate" => HarvesterDataGate(),

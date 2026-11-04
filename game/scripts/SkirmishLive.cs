@@ -589,6 +589,9 @@ public partial class SkirmishLive : Node3D
         public Vector3 IntakeRest;
         public readonly List<(Node3D Node, Vector3 Home)> Doors = new();
         public Tween? DoorTw;
+        /// <summary>P8-49: a gate's own model, the nodes its glb brought, each
+        /// with its rest position; what the open state lowers.</summary>
+        public readonly List<(Node3D Node, Vector3 Home)> GateBody = new();
         public float PrevSpeed;   // W2-04 hull pitch spring
         public float Pitch;
         public float BobPhase;    // W2-07 infantry stride
@@ -657,6 +660,24 @@ public partial class SkirmishLive : Node3D
         Visible = false,
     };
     private readonly Dictionary<int, (MeshInstance3D P1, MeshInstance3D P2)> _rankPips = new();
+
+    /// <summary>P8-49: how far an open gate's model is lowered, in world units.
+    /// The com_gate mesh is one joined piece (art/3d/builder.py), so its barred
+    /// leaf cannot slide on its own; lowering the whole piece by this much takes
+    /// the leaf (top 0.79) below the posts' caps and leaves the post stubs and
+    /// caps standing, which reads at 40 px as a gap in the wall, the passable
+    /// truth of an open gate. A model with a separate leaf is still owed to
+    /// art-pipeline (ModelLibrary's gate entry).</summary>
+    private const float GateOpenSink = 0.62f;
+
+    /// <summary>P8-49: put a gate's model where its state says, written every
+    /// frame from the sim's read, so it can never disagree with it for longer
+    /// than a frame.</summary>
+    private static void DrawGateOpen(ActorRig rig, bool open)
+    {
+        foreach (var (b, home) in rig.GateBody)
+            b.Position = open ? home - new Vector3(0, GateOpenSink, 0) : home;
+    }
 
     private static void ScanRig(Node n, ActorRig rig)
     {
@@ -1333,6 +1354,9 @@ public partial class SkirmishLive : Node3D
     /// lists only what a viewer can do. A replay takes no orders, so it must
     /// not advertise them (TICKET-P5-SAVE-01), which is why the key strip this
     /// replaced had a replay line of its own.
+    ///
+    /// P8-79: and for an eliminated LAN seat it is the SPECTATOR's copy, the
+    /// same viewer copy, through NewControlsPage.
     /// </summary>
     private void ToggleHelp()
     {
@@ -1341,7 +1365,7 @@ public partial class SkirmishLive : Node3D
         var overlay = UplinkUi.FullOverlay(_hud, 0.78f);
         overlay.Name = "HelpOverlay";
         var v = UplinkUi.OverlayBox(overlay, "CONTROLS", 330, 330);
-        var page = new ControlsPage { Replay = _replay != null };
+        var page = NewControlsPage();
         v.AddChild(page);
         v.AddChild(UplinkUi.Note(
             $"{Settings.KeyName(Settings.BindOf("help"))} or {Settings.KeyName(Settings.BindOf("cancel"))} closes this; "
@@ -1351,6 +1375,19 @@ public partial class SkirmishLive : Node3D
         _helpPage = page;
         _audio.Play("ui_click", -12);
     }
+
+    /// <summary>
+    /// P8-79: the CONTROLS page this battle shows, built in ONE place for the
+    /// help overlay and the pause menu alike. A seat that takes no orders gets
+    /// the viewer copy: a replay (P8-45's review) and an eliminated LAN seat
+    /// spectating (P8-58), whose orders are dropped before they reach the
+    /// relay. The pause menu built `new ControlsPage()` for itself and so
+    /// listed every order during a replay, and the overlay asked about a
+    /// replay alone and so listed them to a spectator; asking here, once, is
+    /// what keeps the two from disagreeing again.
+    /// </summary>
+    public ControlsPage NewControlsPage() =>
+        new ControlsPage { Replay = _replay != null, Spectator = _spectating && _replay == null };
 
     private void CloseHelp()
     {
@@ -4812,6 +4849,16 @@ public partial class SkirmishLive : Node3D
                     node.RotationDegrees = new Vector3(0, yawDeg, 0);
                 }
                 else node = _models.Instantiate((int)v.Kind, v.UnitType, v.StructType);
+                // P8-49: a gate's own model, taken before the dressing below
+                // adds its shadow and team strip, so the open state lowers the
+                // gate and leaves those on the ground.
+                List<(Node3D, Vector3)>? gateBody = null;
+                if (v.Kind == EntityKind.Gate)
+                {
+                    gateBody = new();
+                    foreach (var c in node.GetChildren())
+                        if (c is Node3D b) gateBody.Add((b, b.Position));
+                }
                 node.Position = pos;
                 // V3 (doc 25): presentation up-scale, mobiles only. Set once at
                 // creation and it persists, because the per-frame actor update
@@ -4856,6 +4903,7 @@ public partial class SkirmishLive : Node3D
                 _cloakLook.Remove(v.Id);          // P8-6: a fresh node wears no look yet
                 var newRig = new ActorRig { BobPhase = v.Id * 1.7f };
                 ScanRig(node, newRig);
+                if (gateBody != null) newRig.GateBody.AddRange(gateBody);
                 _rigs[v.Id] = newRig;
                 // A rebuilt segment loses its ring child with its old mesh.
                 if (v.Kind == EntityKind.Wall && _selection.Contains(v.Id)) AddSelRingFor(v.Id);
@@ -4915,6 +4963,13 @@ public partial class SkirmishLive : Node3D
                     if (off) _offlineDimmed.Add(v.Id); else _offlineDimmed.Remove(v.Id);
                 }
             }
+            // P8-49: a gate is drawn open or shut as the sim rules it
+            // (World.IsGateOpen, the sim's own read, so the client keeps no copy
+            // of the rule). It was always drawn shut, so a gate an ally had
+            // opened, which anybody may then walk through, read as a solid wall.
+            // One global state, so it is drawn the same for every seat.
+            if (v.Kind == EntityKind.Gate && _rigs.TryGetValue(v.Id, out var gateRig))
+                DrawGateOpen(gateRig, v.Id >= 0 && v.Id < _world.EntityCount && _world.IsGateOpen(v.Id));
             // TICKET-P5-REP-03: an amber pulsing ground ring on own structures
             // while the sim says they are repairing. Post-Step read of
             // Repairing (the rally precedent); the sim clears the flag itself
@@ -6942,7 +6997,8 @@ public partial class SkirmishLive : Node3D
     /// detector changed nothing on screen. Detection is TEAM-wide, as D24
     /// rules: the enemy counts as detected when any seat on the local seat's
     /// team has its bit in DetectedMask. Firing (RevealTicks) uncloaks for
-    /// everyone, which is the sim's own CanTarget rule.
+    /// everyone. Both are the sim's own CanTarget rule, team-wide since P8-55
+    /// (ADR-081).
     /// </summary>
     private bool DrawnForLocalSeat(in SnapshotInterpolator.ViewEntity v) =>
         ShownToLocalSeat(v.PlayerId, (int)v.X, (int)v.Y, v.Stealth || v.FieldCloaked, v.RevealTicks > 0, v.DetectedMask);
@@ -6952,28 +7008,11 @@ public partial class SkirmishLive : Node3D
         || (_world.IsVisible(LocalPlayerId, cx, cy) && (!cloaked || revealed || (detectedMask & LocalTeamMask()) != 0));
 
     /// <summary>P8-6 (D24): one bit per seat on the local seat's team, its own
-    /// included, in DetectedMask's layout (bit n is seat n).</summary>
-    private int LocalTeamMask()
-    {
-        int mask = 0, team = _world.TeamOf(LocalPlayerId);
-        for (int p = 0; p < _world.PlayerCount; p++)
-            if (_world.TeamOf(p) == team) mask |= 1 << p;
-        return mask;
-    }
-
-    /// <summary>
-    /// P8-6: can the local seat's units actually shoot this? The sim's own
-    /// CanTarget, asked for the local seat: uncloaked, revealed by firing, or
-    /// detected by THIS seat. It is narrower than drawing on purpose. D24 draws
-    /// an enemy any teammate detects, but the sim lets a seat engage only what
-    /// its own detectors found (World.CanTarget reads the attacker's bit
-    /// alone), so an Attack on an enemy only an ally has found is dropped by
-    /// CombatSystem the tick it lands. The pick asks this as well, so the cursor
-    /// never offers an attack the sim would refuse: an ally-detected enemy is
-    /// shown, tinted, and is a move target until this seat detects it too.
-    /// </summary>
-    private bool LocalSeatCanTarget(in SnapshotInterpolator.ViewEntity v) =>
-        !(v.Stealth || v.FieldCloaked) || v.RevealTicks > 0 || (v.DetectedMask & (1 << LocalPlayerId)) != 0;
+    /// included, in DetectedMask's layout (bit n is seat n). P8-55 (ADR-081):
+    /// asked of the sim, whose CanTarget reads the same mask, rather than
+    /// rebuilt here, so what is drawn and what the sim lets this seat shoot are
+    /// one rule.</summary>
+    private int LocalTeamMask() => _world.TeamDetectionMask(LocalPlayerId);
 
     /// <summary>P8-4: the enemy under the cursor, the ONE pick the attack
     /// cursor and the right click both ask, so the cursor cannot promise an
@@ -6989,11 +7028,17 @@ public partial class SkirmishLive : Node3D
     /// the cursor reads Move and the click is a move.
     ///
     /// P8-6: an undetected cloaked enemy is not drawn, so it is not picked
-    /// either, and a drawn one is picked only if this seat can engage it (see
-    /// LocalSeatCanTarget for the one case those two differ).</summary>
+    /// either.
+    ///
+    /// P8-55 (ADR-081): and a drawn one is always pickable. P8-6 carried a
+    /// second, narrower rule here (the local seat's own detection bit) because
+    /// the sim's CanTarget read the attacker's bit alone, so an enemy only an
+    /// ally had detected was drawn but would have been an Attack the sim
+    /// dropped. CanTarget now reads the team, the same mask drawing reads, so
+    /// that rule is gone and the cursor offers the attack the sim will hold.</summary>
     private int PickHostile(Vector2 screen) =>
         PickEntity(screen, 0.8f, v => IsHostileSeat(v.PlayerId) && v.Kind != EntityKind.FerriteField
-                                      && DrawnForLocalSeat(v) && LocalSeatCanTarget(v));
+                                      && DrawnForLocalSeat(v));
 
     /// <summary>Verification read: would the client draw this entity for the
     /// local seat? Reads the SIM's own position rather than the per-frame view
@@ -7308,6 +7353,16 @@ public partial class SkirmishLive : Node3D
     /// node the actor loop last wrote, never recomputed, so a check of the fog
     /// rule reads what the player would actually see.</summary>
     public bool ActorShownForTest(int id) => _actors.TryGetValue(id, out var n) && n.Visible;
+    /// <summary>P8-49: how a gate's model is DRAWN, read off the scene nodes
+    /// themselves: null when the actor has no model nodes to move, else whether
+    /// they stand lowered (open) rather than at rest (shut).</summary>
+    public bool? GateDrawnOpenForTest(int id)
+    {
+        if (!_rigs.TryGetValue(id, out var r) || r.GateBody.Count == 0) return null;
+        foreach (var (b, home) in r.GateBody)
+            if (b.Position.Y > home.Y - GateOpenSink / 2) return false;
+        return true;
+    }
     /// <summary>P8-6: a Command sent PAST the cursor and the click, as a LAN
     /// peer's stream could carry one, so a check can ask what the SIM does with
     /// an order the client declines to offer. Carries LocalPlayerId like every
