@@ -67,6 +67,11 @@ using Ferrostorm.Sim;
 //   fieldsurvivalgate  - P8-13, F7: half of each map's ferrite fields alive at tick 13500 in every pairing, and a field alive at t=9000 in a Sodality mirror (non-binding until P8-19)
 //   pillargate         - P8-18, F8: over pillarprobe's sweep, no seat launches the superweapon more than 5 times per 30 minutes, and the median first launch lies from 10800 to 14400 with at least half the matches launching (both binding, ADR-073, D33); not in match, but --bind runs in tools/ci-local.sh and CI's ubuntu determinism leg (P8-72)
 //   frozenprobe        - P8-66, ADR-078: over pillargate's sweep, units and harvesters that report Moving and stand at one position for 450+ ticks, each with its cause, and the walkers held in an exact cancellation or caught in a cycle of sidesteps (not a gate; nothing asserts)
+//   waveprobe          - P8-23, ADR-080: over pillarprobe's sweep (and its options), every wave each commander launches, read from its orders: when, how big,
+//                        and whether it broke in, arrived, was recalled, stalled or was lost within two minutes (not a gate; nothing asserts)
+//   pathdebug          - a 500-unit flow-field crossing of a walled 64x64 world; with map= (and pairs=, orient=, ticks=, every=) it instead traces a Normal
+//                        mirror on that map as ADR-053 tabled skirmish-07: each seat's army, its nearest unit to an enemy structure, how many are within
+//                        the arrival bound and how many stand idle between the bases (P8-23 re-probes skirmish-04's mirror stall with it; nothing asserts)
 //   longmatchperf      - P8-30, F12: full AI matches on skirmish-07, -08 and -09 (four seats), per-tick wall time and the deterministic flow-field
 //                        proxy (builds and cells relaxed) at mean, p99, p999 and max; p999 at most 8 ms and the proxy within the budget P8-31's
 //                        rule derives (binding since P8-31; wall=report, as CI's ubuntu leg runs it, prints the wall bar without asserting it)
@@ -2144,6 +2149,179 @@ ulong ScenarioAiSpend(ulong seed, Action<int, ulong>? cp = null, Action<string>?
     return world.ComputeStateHash();
 }
 
+ulong ScenarioAiRetreat(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-080, Architect condition 1: the golden that puts the RETREAT under
+    // the cross-platform gate. Every LAN peer runs its AI seats itself
+    // (ADR-033), yet every golden commander until this one played the Normal
+    // rung, whose retreat_percent is 0, so a Hard or Brutal wave called home
+    // ran on one machine at a time and was compared nowhere.
+    //
+    // A Hard Standard commander (the shipped rung, whose retreat is decision
+    // D7's 30 per cent) holds a yard, its garrison of three cannon tanks at
+    // home and a wave of six already gathered at its staging point, and no
+    // credits, so nothing is bought and the beat's only orders are the wave's.
+    // The rival holds a yard ringed by four Bastions on a powered grid and no
+    // army. Those Bastions hold more than half the hit points of the
+    // commander's whole army, so it is never all-in and its wave may retreat.
+    // The wave launches on the first beat, is beaten on the Bastions and,
+    // below 30 per cent of the hit points it was sent with, is called home to
+    // the staging point. The scenario asserts it reaches both states: the
+    // launch, and a wave called home with a living member ordered back. A
+    // bare World plays the compiled catalogue and AI tuning, as every golden
+    // does. Appended after aispend, so the lines above it are untouched by
+    // construction.
+    //
+    // P8-26 owns the Hard rung's counter-composition (D7) and will move this
+    // line when it lands, under its own ADR.
+    if (AiTuning.Get(AiTuning.HardId).RetreatPercent <= 0)
+        throw new Exception("airetreat: the compiled Hard rung no longer retreats, so this golden cannot reach a retreat on a "
+                            + "rung that has one");
+    var world = new World(seed, 96, 64, players: 2);
+    world.SpawnConstructionYard(0, 8, 30);
+    var tank = world.GetUnitType(1);
+    int Tank(int x, int y) => world.SpawnUnit(0, Fix64.FromInt(x), Fix64.FromInt(y), tank.Speed, tank.Hp, tank.Armour, tank.WeaponId,
+                                              tank.SightCells, veterancy: false, unitType: 1);
+    for (int k = 0; k < 3; k++) Tank(10 + k, 34);     // the garrison, at home
+    for (int k = 0; k < 6; k++) Tank(16 + k, 31);     // gathered at the staging point, (18.5, 31.5)
+    world.SpawnConstructionYard(1, 40, 30);
+    world.SpawnPowerPlant(1, 44, 30, supply: 2000);
+    int bastion = world.BuildableFactionDefence(1);
+    world.SpawnFactionDefence(1, bastion, 35, 27);
+    world.SpawnFactionDefence(1, bastion, 35, 34);
+    world.SpawnFactionDefence(1, bastion, 38, 25);
+    world.SpawnFactionDefence(1, bastion, 38, 36);
+    var ai = SkirmishAI.Standard(0, AiDifficulty.Hard);
+    var cmds = new List<Command>();
+    const int Ticks = 1800;
+    var sent = new HashSet<int>();
+    int launchedAt = -1, recalledAt = -1, recalled = 0, sentCount = 0;
+    for (int t = 0; t < Ticks; t++)
+    {
+        int launchedBefore = ai.WavesLaunched, inFlightBefore = ai.WaveInFlight;
+        ai.Act(world, cmds);
+        if (ai.WavesLaunched > launchedBefore && launchedAt < 0)
+        {
+            launchedAt = world.Tick;
+            foreach (var c in cmds)
+                if (c.Type == CommandType.AttackMove && c.PlayerId == 0) sent.Add(c.EntityId);
+            sentCount = sent.Count;
+        }
+        // Called home: the wave in flight is emptied on a beat that orders a
+        // living member of it back by PathMove. A wave that dies to the last
+        // unit empties with no such order, and the re-aim is an AttackMove.
+        if (recalledAt < 0 && inFlightBefore > 0 && ai.WaveInFlight == 0)
+        {
+            int back = 0;
+            foreach (var c in cmds)
+                if (c.Type == CommandType.PathMove && sent.Contains(c.EntityId) && world.Entities[c.EntityId].Alive) back++;
+            if (back > 0) { recalledAt = world.Tick; recalled = back; }
+        }
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (launchedAt < 0)
+        throw new Exception($"airetreat: the Hard commander launched no wave in {Ticks} ticks, so the retreat is not under the golden gate");
+    if (recalledAt < 0)
+        throw new Exception($"airetreat: the wave launched at t={launchedAt} ({sentCount} fighters) was never called home in {Ticks} "
+                            + "ticks, so a wave beaten below the Hard rung's retreat_percent is not under the golden gate");
+    int bastionsLeft = 0;
+    for (int i = 0; i < world.EntityCount; i++)
+        if (world.Entities[i].Alive && world.Entities[i].PlayerId == 1 && world.Entities[i].StructType == bastion) bastionsLeft++;
+    report?.Invoke($"airetreat: a Hard commander launched a wave of {sentCount} at t={launchedAt}, and at t={recalledAt}, beaten "
+                   + $"below its rung's retreat_percent of {AiTuning.Get(AiTuning.HardId).RetreatPercent}, called it home, {recalled} "
+                   + $"living member(s) ordered back to the staging point; {bastionsLeft} of 4 Bastions standing at t={Ticks} "
+                   + "(ADR-080 condition 1, the retreat under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
+
+ulong ScenarioAiWalls(ulong seed, Action<int, ulong>? cp = null, Action<string>? report = null)
+{
+    // ADR-080, Architect condition 1: the golden that puts the TURTLE'S WALLS
+    // under the cross-platform gate. mission03 runs a Turtle, but its surplus
+    // window cannot complete inside its horizon from its opening credits, so
+    // until this scenario no golden reached TryFindWallCell, and the wall
+    // cells a Turtle picks on a LAN peer were compared nowhere.
+    //
+    // A Normal Turtle holds a finished Directorate base already at every cap
+    // its surplus reads: two factories and two barracks (the Normal rung's
+    // producer_cap) and five Bastions (the Turtle's faction_defence_cap), with
+    // the turret, the radar, two refineries and a harvester for each on a
+    // rich field, a plant whose supply keeps the ladder from asking for
+    // another, and a purse that keeps the treasury above the reserve for the
+    // whole window. So once the window has run, the surplus has nothing else
+    // to buy and its walls are next. The rival yard is sealed behind a
+    // blocked column, as in aisuper and aispend, so the subject is the walls
+    // and not the ground war. The scenario asserts it reaches a wall placed
+    // by the commander on the enemy-facing side of one of its defences. A
+    // bare World plays the compiled catalogue and AI tuning, as every golden
+    // does. Appended after airetreat.
+    var world = new World(seed, 96, 64, players: 2);
+    world.GrantCredits(0, 200000);
+    world.SpawnConstructionYard(0, 8, 30);
+    world.SpawnPowerPlant(0, 13, 30, supply: 4000);
+    world.SpawnRefinery(0, 8, 24);
+    world.SpawnRefinery(0, 13, 24);
+    world.SpawnBarracks(0, 18, 30);
+    world.SpawnBarracks(0, 13, 42);
+    world.SpawnFactory(0, 8, 36);
+    world.SpawnFactory(0, 8, 42);
+    world.SpawnTurret(0, 18, 24);
+    world.SpawnRadarUplink(0, 13, 36);
+    int bastion = world.BuildableFactionDefence(0);
+    foreach (var (bx, by) in new[] { (18, 36), (18, 18), (18, 42), (13, 18), (8, 18) })
+        world.SpawnFactionDefence(0, bastion, bx, by);
+    world.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+    world.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+    for (int y = 0; y < 64; y++) world.Map.SetBlocked(70, y, true);
+    world.SpawnConstructionYard(1, 86, 30);
+    var ai = SkirmishAI.Turtle(0);
+    var cmds = new List<Command>();
+    // The horizon is read off the compiled Normal rung's window, so it
+    // follows the window if that moves.
+    int window = AiTuning.Get(AiTuning.NormalId).SurplusWindowTicks;
+    int ticks = window + 1500;
+    int firstWallAt = -1, walls = 0, wallsBeside = 0;
+    (int X, int Y) firstWall = (-1, -1);
+    for (int t = 0; t < ticks; t++)
+    {
+        ai.Act(world, cmds);
+        world.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        cmds.Clear();
+        foreach (var ev in world.Events)
+        {
+            if (ev.Type != GameEventType.StructurePlaced) continue;
+            var placed = world.Entities[ev.A];
+            if (placed.PlayerId != 0 || placed.Kind != EntityKind.Wall) continue;
+            walls++;
+            int wx = world.AnchorOf(placed.X, placed.StructType), wy = world.AnchorOf(placed.Y, placed.StructType);
+            if (firstWallAt < 0) { firstWallAt = world.Tick; firstWall = (wx, wy); }
+            // On the enemy's side: the enemy lies due east, so the column just
+            // east of a defence's footprint, its two cells and two corners.
+            for (int i = 0; i < world.EntityCount; i++)
+            {
+                var d = world.Entities[i];
+                if (!d.Alive || d.PlayerId != 0 || d.Kind is not (EntityKind.Turret or EntityKind.Bastion)) continue;
+                int s = world.FootprintOf(d.StructType), ax = world.AnchorOf(d.X, d.StructType), ay = world.AnchorOf(d.Y, d.StructType);
+                if (wx == ax + s && wy >= ay - 1 && wy <= ay + s) { wallsBeside++; break; }
+            }
+        }
+        if (t % 500 == 499) cp?.Invoke(t + 1, world.ComputeStateHash());
+    }
+    if (firstWallAt < 0)
+        throw new Exception($"aiwalls: the Turtle placed no wall in {ticks} ticks (window {window}), so the walls TryFindWallCell "
+                            + "picks are not under the golden gate");
+    if (wallsBeside != walls)
+        throw new Exception($"aiwalls: {walls - wallsBeside} of the Turtle's {walls} walls stand off the enemy-facing side of every "
+                            + "defence, which is not where ADR-080 section 8 puts them");
+    report?.Invoke($"aiwalls: a Normal Turtle at every cap its surplus reads placed its first wall at t={firstWallAt} (window {window}), "
+                   + $"at ({firstWall.X}, {firstWall.Y}), and {walls} by t={ticks}, every one on a defence's enemy-facing side "
+                   + "(ADR-080 condition 1, the walls under the cross-platform gate)");
+    return world.ComputeStateHash();
+}
+
 var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
 {
     ("movement",   (s, cp) => ScenarioMovement(s, cp)),
@@ -2172,6 +2350,8 @@ var scenarios = new (string Name, Func<ulong, Action<int, ulong>?, ulong> Run)[]
     ("walls", (s, cp) => ScenarioWalls(s, cp)),
     ("airanswer", (s, cp) => ScenarioAirAnswer(s, cp)),
     ("aispend", (s, cp) => ScenarioAiSpend(s, cp)),
+    ("airetreat", (s, cp) => ScenarioAiRetreat(s, cp)),
+    ("aiwalls", (s, cp) => ScenarioAiWalls(s, cp)),
 };
 
 // ---------------- Modes ----------------
@@ -6769,6 +6949,16 @@ int AiTuningGate()
             return Fail(Drift("surplus_window_ticks", got.SurplusWindowTicks, want.SurplusWindowTicks));
         if (got.FactionDefenceCap != want.FactionDefenceCap)
             return Fail(Drift("faction_defence_cap", got.FactionDefenceCap, want.FactionDefenceCap));
+        // P8-23 (ADR-080): how the waves go, six personality numbers and one
+        // rung number.
+        if (got.WaveGrowth != want.WaveGrowth) return Fail(Drift("wave_growth", got.WaveGrowth, want.WaveGrowth));
+        if (got.WaveCap != want.WaveCap) return Fail(Drift("wave_cap", got.WaveCap, want.WaveCap));
+        if (got.StagingCells != want.StagingCells) return Fail(Drift("staging_cells", got.StagingCells, want.StagingCells));
+        if (got.AllInPercent != want.AllInPercent) return Fail(Drift("all_in_percent", got.AllInPercent, want.AllInPercent));
+        if (got.RushTick != want.RushTick) return Fail(Drift("rush_tick", got.RushTick, want.RushTick));
+        if (got.WallsPerDefence != want.WallsPerDefence)
+            return Fail(Drift("walls_per_defence", got.WallsPerDefence, want.WallsPerDefence));
+        if (got.RetreatPercent != want.RetreatPercent) return Fail(Drift("retreat_percent", got.RetreatPercent, want.RetreatPercent));
     }
 
     // --- 2. The runtime reads the REGISTERED table, not the compiled one.
@@ -6782,16 +6972,28 @@ int AiTuningGate()
     //        can issue are the wave itself. A Rusher wants wave_size plus its
     //        two-strong garrison, which six satisfies; poisoned to 40 it wants
     //        46 and stays home.
+    //        P8-23 (ADR-080): the six stand at the commander's STAGING POINT,
+    //        10 cells out from the yard's centre (41, 41) towards the target's
+    //        (6, 6), the cell whose centre is (31.5, 31.5), because a wave now
+    //        launches once its threshold stands gathered there; standing at
+    //        the yard they would be sent to gather first, and the stock
+    //        commander's beat would hold PathMoves rather than the wave.
     int WaveOrders(ulong seed, bool poison, bool registerFromData)
     {
         var w = new World(seed, 96, 96, players: 2);
-        if (poison) w.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { WaveSize = 40 });
+        if (poison) w.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { WaveSize = 40, WaveCap = 40 });
         if (registerFromData) CatalogueFiles.RegisterAiTuning(w, aiDir);
         w.SpawnConstructionYard(0, 40, 40);
         w.SpawnConstructionYard(1, 5, 5);      // the wave's target, far from home
         for (int i = 0; i < 6; i++)
-            w.SpawnUnit(0, Fix64.FromInt(42 + i), Fix64.FromInt(44), Fix64.FromFraction(1, 4),
+            w.SpawnUnit(0, Fix64.FromInt(29 + i), Fix64.FromInt(31), Fix64.FromFraction(1, 4),
                         100, ArmourClass.Light, weaponId: 0, unitType: 2);
+        // P8-23 (ADR-080): and the commander acts at its RUSH TICK, the
+        // compiled Rusher's 1350, which every world here keeps (the poison
+        // moves only the wave). A Rusher holds every launch until then, so its
+        // push is its first wave; these six carry no weapon, so they make no
+        // push and the beat's only launch is the wave_size one under test.
+        for (int t = 0; t < AiTuning.Rusher.RushTick; t++) w.Step(default);
         var ai = SkirmishAI.Rusher(0, AiDifficulty.Normal, w);
         var cmds = new List<Command>();
         ai.Act(w, cmds);
@@ -7165,6 +7367,364 @@ int AiTuningGate()
                     + $"{bastionCost}, and it ordered {wrapAtTop.Defences} - the surplus building's reserve test is adding in "
                     + "int and wrapping");
 
+    //        2f, P8-23's seven wave numbers (ADR-080), each moved away from its
+    //        AUTHORED value and measured as orders, on 2d's terms: every world
+    //        registers data/ai from the files first and then changes that one
+    //        number on the row the files registered. The open world is 96 by
+    //        64 with this commander's yard at (8, 30) and the enemy's at
+    //        (86, 30), so the yards' centres are (9, 31) and (87, 31) and the
+    //        authored staging point, 10 cells out towards the enemy, is the
+    //        cell whose centre is (18.5, 31.5). Cannon tanks are the fighters;
+    //        the first three spawned are the Standard garrison. Unless a check
+    //        is about the all-in, it is switched off (all_in_percent 0) on top
+    //        of the authored row, because an enemy with no army is outnumbered
+    //        by any army and the all-in would send everything whatever the
+    //        threshold said.
+    //          wave_growth: a first wave of six launches from the staging
+    //            point; six more stand there at the next launch beat (t=315),
+    //            the authored growth of 3 holds them for a wave of nine and a
+    //            growth of 0 sends them;
+    //          wave_cap: the same, a cap of 6 sends them where the authored
+    //            cap holds them;
+    //          staging_cells: two fighters standing behind the yard are sent
+    //            to gather at x 18.5 by the authored 10, and at x 28.5 by 20;
+    //          all_in_percent: nine fighters against six enemy tanks of the
+    //            same hit points (150 per cent) launch only the six outside the
+    //            garrison at the authored 200, and all nine, the garrison too,
+    //            at 150;
+    //          rush_tick: a Rusher with four rifle squads at home, its field
+    //            two short of a wave, pushes with all four at t=15 at a rush
+    //            tick of 15 and not at the authored 1350;
+    //          walls_per_defence: a Turtle on 2d's finished base, with nothing
+    //            else for its surplus to buy, places a wall on the enemy's side
+    //            of a defence at the authored 4 and none at 0;
+    //          retreat_percent: a Hard commander whose launched wave of six
+    //            falls to one hit point a unit calls all six home at the
+    //            authored 30 and sends none home at 0.
+    World WaveWorld(ulong seed, int personality, Func<AiTuningDef, AiTuningDef> shape, Func<AiTuningDef, AiTuningDef> rung, int rungId)
+    {
+        var w = new World(seed, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(personality, shape(w.GetAiTuning(personality)));
+        w.RegisterAiTuning(rungId, rung(w.GetAiTuning(rungId)));
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnConstructionYard(1, 86, 30);
+        return w;
+    }
+    int Tank(World w, int seat, int x, int y)
+    {
+        var d = w.GetUnitType(1);
+        return w.SpawnUnit(seat, Fix64.FromInt(x), Fix64.FromInt(y), d.Speed, d.Hp, d.Armour, d.WeaponId, veterancy: false, unitType: 1);
+    }
+    AiTuningDef NoAllIn(AiTuningDef d) => d with { AllInPercent = 0 };
+    AiTuningDef Same(AiTuningDef d) => d;
+    // One beat at a time from the world's tick to `until`, every order applied;
+    // returns the orders of the beats at or after `from`.
+    List<Command> Beats(World w, SkirmishAI ai, int until, int from = 0)
+    {
+        var seen = new List<Command>();
+        var cmds = new List<Command>();
+        while (w.Tick <= until)
+        {
+            cmds.Clear();
+            ai.Act(w, cmds);
+            if (w.Tick >= from) seen.AddRange(cmds);
+            w.Step(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(cmds));
+        }
+        return seen;
+    }
+    // The all-in is checked FIRST: the growth fixtures switch it off by
+    // registration, so a commander that read the compiled share would go
+    // all-in there too and fail the growth check under the wrong name.
+    // all_in_percent: whether the garrison goes too.
+    (int Field, int Garrison) AllInOrders(Func<AiTuningDef, AiTuningDef> shape)
+    {
+        var w = WaveWorld(4322, AiTuning.StandardId, shape, Same, AiTuning.NormalId);
+        var guard = new List<int>();
+        for (int k = 0; k < 3; k++) guard.Add(Tank(w, 0, 10 + k, 34));
+        var field = new List<int>();
+        for (int k = 0; k < 6; k++) field.Add(Tank(w, 0, 16 + k, 31));
+        for (int k = 0; k < 6; k++) Tank(w, 1, 80 + k, 40);                 // the enemy's army, two thirds of mine
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var orders = Beats(w, ai, 15);
+        return (orders.Count(c => c.Type == CommandType.AttackMove && field.Contains(c.EntityId)),
+                orders.Count(c => c.Type == CommandType.AttackMove && guard.Contains(c.EntityId)));
+    }
+    var allInAuthored = AllInOrders(Same);
+    var allInLower = AllInOrders(d => d with { AllInPercent = 150 });
+    if (allInAuthored.Field != 6 || allInAuthored.Garrison != 0)
+        return Fail($"aituning 2f control: nine fighters against an army of two thirds their hit points are not twice it, so at "
+                    + $"the authored all_in_percent the six outside the garrison must launch ({allInAuthored.Field} did) and the "
+                    + $"garrison stay home ({allInAuthored.Garrison} went)");
+    if (allInLower.Field != 6 || allInLower.Garrison != 3)
+        return Fail($"aituning 2f: at a REGISTERED all_in_percent of 150 the same army is all-in, so the garrison must go too "
+                    + $"({allInLower.Garrison} of 3 went, {allInLower.Field} of the field) - the commander is reading the compiled share");
+    // wave_growth and wave_cap: the second wave.
+    (int FirstWave, int SecondWave, int Launched) SecondWave(Func<AiTuningDef, AiTuningDef> shape)
+    {
+        var w = WaveWorld(4320, AiTuning.StandardId, d => NoAllIn(shape(d)), Same, AiTuning.NormalId);
+        for (int k = 0; k < 3; k++) Tank(w, 0, 10 + k, 34);                 // the garrison, at home
+        var first = new List<int>();
+        for (int k = 0; k < 6; k++) first.Add(Tank(w, 0, 16 + k, 31));     // gathered at the staging point
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var opening = Beats(w, ai, 15);
+        int firstWave = opening.Count(c => c.Type == CommandType.AttackMove && first.Contains(c.EntityId));
+        var second = new List<int>();
+        for (int k = 0; k < 6; k++) second.Add(Tank(w, 0, 16 + k, 32));
+        var later = Beats(w, ai, 315, from: 30);
+        int secondWave = later.Count(c => c.Type == CommandType.AttackMove && second.Contains(c.EntityId));
+        return (firstWave, secondWave, ai.WavesLaunched);
+    }
+    var growAuthored = SecondWave(Same);
+    var growZero = SecondWave(d => d with { WaveGrowth = 0 });
+    var capSix = SecondWave(d => d with { WaveCap = d.WaveSize });
+    if (growAuthored.FirstWave != 6 || growZero.FirstWave != 6 || capSix.FirstWave != 6)
+        return Fail($"aituning 2f control: six fighters gathered at the staging point must launch as the first wave, and "
+                    + $"{growAuthored.FirstWave}, {growZero.FirstWave} and {capSix.FirstWave} were sent, so the growth checks prove nothing");
+    if (growAuthored.SecondWave != 0 || growAuthored.Launched != 1)
+        return Fail($"aituning 2f: at the authored wave_growth the six that gathered after the first wave must wait for a wave of "
+                    + $"nine at t=315, and {growAuthored.SecondWave} were sent ({growAuthored.Launched} launches) - the threshold "
+                    + "is not growing");
+    if (growZero.SecondWave != 6)
+        return Fail($"aituning 2f: at a REGISTERED wave_growth of 0 the threshold stays at six, so the six that gathered must "
+                    + $"launch at t=315, and {growZero.SecondWave} were sent - the commander is reading the compiled growth");
+    if (capSix.SecondWave != 6)
+        return Fail($"aituning 2f: at a REGISTERED wave_cap of 6 the grown threshold is capped back to six, so the six that "
+                    + $"gathered must launch at t=315, and {capSix.SecondWave} were sent - the commander is reading the compiled cap");
+    // staging_cells: where the field is sent to gather.
+    Fix64 StagingX(Func<AiTuningDef, AiTuningDef> shape)
+    {
+        var w = WaveWorld(4321, AiTuning.StandardId, d => NoAllIn(shape(d)), Same, AiTuning.NormalId);
+        for (int k = 0; k < 3; k++) Tank(w, 0, 10 + k, 34);
+        var behind = new List<int> { Tank(w, 0, 2, 30), Tank(w, 0, 2, 32) };
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        foreach (var c in Beats(w, ai, 15))
+            if (c.Type == CommandType.PathMove && behind.Contains(c.EntityId)) return c.X;
+        return Fix64.MinValue;
+    }
+    Fix64 stageAuthored = StagingX(Same), stageTwenty = StagingX(d => d with { StagingCells = 20 });
+    if (stageAuthored != Fix64.FromInt(18) + Fix64.Half)
+        return Fail($"aituning 2f control: two fighters behind the yard must be sent to gather at x 18.5, 10 cells out at the "
+                    + $"authored staging_cells, and they were sent to x {stageAuthored}");
+    if (stageTwenty != Fix64.FromInt(28) + Fix64.Half)
+        return Fail($"aituning 2f: at a REGISTERED staging_cells of 20 they must be sent to x 28.5, and they were sent to x "
+                    + $"{stageTwenty} - the commander is reading the compiled staging distance");
+    // rush_tick: the Rusher's push.
+    int Pushed(Func<AiTuningDef, AiTuningDef> shape)
+    {
+        var w = WaveWorld(4323, AiTuning.RusherId, d => NoAllIn(shape(d)), Same, AiTuning.NormalId);
+        var rifle = w.GetUnitType(2);
+        var squads = new List<int>();
+        for (int k = 0; k < 4; k++)
+            squads.Add(w.SpawnUnit(0, Fix64.FromInt(10 + k), Fix64.FromInt(34), rifle.Speed, rifle.Hp, rifle.Armour,
+                                   rifle.WeaponId, veterancy: false, unitType: 2));
+        var ai = SkirmishAI.Rusher(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        return Beats(w, ai, 15).Count(c => c.Type == CommandType.AttackMove && squads.Contains(c.EntityId));
+    }
+    int pushAuthored = Pushed(Same), pushEarly = Pushed(d => d with { RushTick = 15 });
+    if (pushAuthored != 0)
+        return Fail($"aituning 2f control: at the authored rush_tick a Rusher must not push at t=15, and {pushAuthored} squads went");
+    if (pushEarly != 4)
+        return Fail($"aituning 2f: at a REGISTERED rush_tick of 15 a Rusher with four rifle squads, a wave's worth, must push "
+                    + $"with all four at t=15, and {pushEarly} went - the commander is reading the compiled rush tick");
+    // walls_per_defence: the Turtle's wall, on 2d's finished base.
+    (int Walls, int Bad) WallOrders(Func<AiTuningDef, AiTuningDef> shape)
+    {
+        var w = new World(4324, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(AiTuning.NormalId, w.GetAiTuning(AiTuning.NormalId) with { SurplusWindowTicks = 0 });
+        // One faction defence is the Turtle's whole cap here, so the surplus
+        // has nothing else to buy and the wall is next.
+        w.RegisterAiTuning(AiTuning.TurtleId, shape(w.GetAiTuning(AiTuning.TurtleId) with { FactionDefenceCap = 1 }));
+        w.SpawnConstructionYard(1, 86, 30);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 13, 30, supply: 2000);
+        w.SpawnRefinery(0, 8, 24);
+        w.SpawnRefinery(0, 13, 24);
+        w.SpawnBarracks(0, 18, 30);
+        w.SpawnFactory(0, 8, 36);
+        int turret = w.SpawnTurret(0, 18, 24);
+        w.SpawnRadarUplink(0, 13, 36);
+        int bastion = w.SpawnFactionDefence(0, w.BuildableFactionDefence(0), 18, 36);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+        w.GrantCredits(0, 20000);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var ai = SkirmishAI.Turtle(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        int walls = 0, bad = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type != CommandType.PlaceStructure || w.GetStructureType(c.AuxId).Kind != EntityKind.Wall) continue;
+            walls++;
+            // On the enemy's side: the column just east of a defence's 2x2
+            // footprint, the enemy's yard lying due east.
+            int x = Map.CellOf(c.X);
+            bool east = false;
+            foreach (int d in new[] { turret, bastion })
+                east |= x == w.AnchorOf(w.Entities[d].X, w.Entities[d].StructType) + 2;
+            if (!east) bad++;
+        }
+        return (walls, bad);
+    }
+    var wallsAuthored = WallOrders(Same);
+    var wallsNone = WallOrders(d => d with { WallsPerDefence = 0 });
+    if (wallsAuthored.Walls != 1 || wallsAuthored.Bad != 0)
+        return Fail($"aituning 2f control: at the authored walls_per_defence a Turtle with nothing else to buy must place one wall "
+                    + $"on the enemy's side of a defence, and it placed {wallsAuthored.Walls} ({wallsAuthored.Bad} on another side)");
+    if (wallsNone.Walls != 0)
+        return Fail($"aituning 2f: at a REGISTERED walls_per_defence of 0 the Turtle must place no wall, and it placed "
+                    + $"{wallsNone.Walls} - the commander is reading the compiled number");
+    // retreat_percent: the beaten wave comes home.
+    (int Launched, int Home) Retreat(Func<AiTuningDef, AiTuningDef> rung)
+    {
+        var w = WaveWorld(4325, AiTuning.StandardId, NoAllIn, rung, AiTuning.HardId);
+        for (int k = 0; k < 3; k++) Tank(w, 0, 10 + k, 34);
+        var wave = new List<int>();
+        for (int k = 0; k < 6; k++) wave.Add(Tank(w, 0, 16 + k, 31));
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Hard, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        int launched = Beats(w, ai, 15).Count(c => c.Type == CommandType.AttackMove && wave.Contains(c.EntityId));
+        foreach (int id in wave)
+        {
+            var e = w.Entities[id];
+            e.Hp = 1;
+            w.SetEntityForTest(id, in e);
+        }
+        int home = Beats(w, ai, 30, from: 16).Count(c => c.Type == CommandType.PathMove && wave.Contains(c.EntityId));
+        return (launched, home);
+    }
+    var retreatAuthored = Retreat(Same);
+    var retreatNone = Retreat(d => d with { RetreatPercent = 0 });
+    if (retreatAuthored.Launched != 6 || retreatNone.Launched != 6)
+        return Fail($"aituning 2f control: the Hard commander's six gathered fighters must launch first ({retreatAuthored.Launched} "
+                    + $"and {retreatNone.Launched} did), so the retreat check proves nothing");
+    if (retreatAuthored.Home != 6)
+        return Fail($"aituning 2f control: at the authored retreat_percent a launched wave down to one hit point a unit must be "
+                    + $"called home, all six, and {retreatAuthored.Home} were");
+    if (retreatNone.Home != 0)
+        return Fail($"aituning 2f: at a REGISTERED retreat_percent of 0 the same wave must fight on, and {retreatNone.Home} were "
+                    + "called home - the commander is reading the compiled retreat");
+
+    //        2g, ADR-080's two live guards that no golden and no check above
+    //        bit (Architect condition 2), each beside a control that differs
+    //        from it only in what the guard reads, on 2f's terms: every world
+    //        registers data/ai first and the all-in is switched off.
+    //          (a) THE LAUNCH WHEN A THRESHOLD HAS STOOD UNGATHERED FOR A WAVE
+    //              CADENCE. Six fighters stand sealed in a pocket behind the
+    //              yard, further than the home leash from the staging point and
+    //              with no route to it, so they can never gather. The field
+    //              stands at the threshold from the first beat (t=15). A
+    //              seventh fighter joins the pocket at t=210, a new high, so the
+    //              stalled-field launch cannot fall due before t=510 and the
+    //              only launch that can come sooner is this guard's. The
+    //              control: nothing is sent while the threshold has stood less
+    //              than a cadence (to t=300). The check: all seven are sent on
+    //              the beat it has stood a whole cadence (t=315).
+    //          (b) THE WALL'S EXCLUSION FROM THE ONE-CELL APRON OF THE
+    //              COMMANDER'S OTHER BUILDINGS AND FROM THE CELLS BESIDE A
+    //              FERRITE FIELD, the property ADR-080 section 8 states ("a
+    //              wall never seals a refinery, a producer's exit or a
+    //              harvester's field"). On 2f's Turtle base the oldest defence
+    //              is the turret anchored at (18, 24), whose enemy-facing side
+    //              is the column x 20, rows 23 to 26 for four walls. The
+    //              control: with that column clear, the beat's wall goes there.
+    //              The checks: with a power plant anchored at (21, 24), whose
+    //              apron covers the whole column, or with two ferrite fields
+    //              at cells (21, 24) and (21, 26), whose neighbouring cells
+    //              cover it, no wall goes beside the turret and the walk moves
+    //              on to the Bastion's side. Each half is a check of its own,
+    //              so removing either fails by its own name.
+    (int Held, int Sent, int Launched) StoodLaunch()
+    {
+        var w = WaveWorld(4326, AiTuning.StandardId, NoAllIn, Same, AiTuning.NormalId);
+        for (int k = 0; k < 3; k++) Tank(w, 0, 10 + k, 34);                 // the garrison, at home
+        // The pocket: cells x 2 to 4 and y 28 to 33, ringed by blocked cells.
+        for (int x = 1; x <= 5; x++) { w.Map.SetBlocked(x, 27, true); w.Map.SetBlocked(x, 34, true); }
+        for (int y = 27; y <= 34; y++) { w.Map.SetBlocked(1, y, true); w.Map.SetBlocked(5, y, true); }
+        var pocket = new List<int>();
+        for (int k = 0; k < 6; k++) pocket.Add(Tank(w, 0, 2 + k % 3, 29 + 2 * (k / 3)));
+        var ai = SkirmishAI.Standard(0, AiDifficulty.Normal, w);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        int held = Beats(w, ai, 209).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        pocket.Add(Tank(w, 0, 3, 32));                                       // a new high at t=210
+        held += Beats(w, ai, 300).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        int sent = Beats(w, ai, 315).Count(c => c.Type == CommandType.AttackMove && pocket.Contains(c.EntityId));
+        return (held, sent, ai.WavesLaunched);
+    }
+    var stood = StoodLaunch();
+    if (stood.Held != 0)
+        return Fail($"aituning 2g(a) control: a field at its threshold that cannot gather must be held until the threshold has stood "
+                    + $"a whole wave cadence, and {stood.Held} order(s) went to it before t=315, so the check below proves nothing");
+    if (stood.Sent != 7 || stood.Launched != 1)
+        return Fail($"aituning 2g(a): a threshold that has stood ungathered for a wave cadence must launch however it stands, so all "
+                    + $"seven sealed fighters must be sent at t=315, and {stood.Sent} were ({stood.Launched} launches) - the "
+                    + "launch for a threshold that has stood a cadence is gone, and a staging point no fighter can reach "
+                    + "holds the wave back");
+    // blocker: 0 none, 1 a power plant whose apron covers the turret's
+    // enemy-facing column, 2 two ferrite fields beside it.
+    (int X, int Y, int Walls) WallCell(int blocker)
+    {
+        var w = new World(4327, 96, 64, players: 2);
+        CatalogueFiles.RegisterAiTuning(w, aiDir);
+        w.RegisterAiTuning(AiTuning.NormalId, w.GetAiTuning(AiTuning.NormalId) with { SurplusWindowTicks = 0 });
+        w.RegisterAiTuning(AiTuning.TurtleId, w.GetAiTuning(AiTuning.TurtleId) with { FactionDefenceCap = 1 });
+        w.SpawnConstructionYard(1, 86, 30);
+        w.SpawnConstructionYard(0, 8, 30);
+        w.SpawnPowerPlant(0, 13, 30, supply: 2000);
+        w.SpawnRefinery(0, 8, 24);
+        w.SpawnRefinery(0, 13, 24);
+        w.SpawnBarracks(0, 18, 30);
+        w.SpawnFactory(0, 8, 36);
+        w.SpawnTurret(0, 18, 24);
+        w.SpawnRadarUplink(0, 13, 36);
+        w.SpawnFactionDefence(0, w.BuildableFactionDefence(0), 18, 36);
+        w.SpawnFerriteField(Fix64.FromInt(26), Fix64.FromInt(30), 40000);
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(28));
+        w.SpawnHarvester(0, Fix64.FromInt(23), Fix64.FromInt(32));
+        if (blocker == 1) w.SpawnPowerPlant(0, 21, 24);
+        if (blocker == 2)
+        {
+            w.SpawnFerriteField(Fix64.FromInt(21) + Fix64.Half, Fix64.FromInt(24) + Fix64.Half, 4000);
+            w.SpawnFerriteField(Fix64.FromInt(21) + Fix64.Half, Fix64.FromInt(26) + Fix64.Half, 4000);
+        }
+        w.GrantCredits(0, 20000);
+        for (int t = 0; t < 15; t++) w.Step(default);
+        var ai = SkirmishAI.Turtle(0, AiDifficulty.Normal, w);
+        var cmds = new List<Command>();
+        ai.Act(w, cmds);
+        int x = -1, y = -1, walls = 0;
+        foreach (var c in cmds)
+        {
+            if (c.Type != CommandType.PlaceStructure || w.GetStructureType(c.AuxId).Kind != EntityKind.Wall) continue;
+            if (walls++ == 0) { x = c.X.ToIntFloor(); y = c.Y.ToIntFloor(); }
+        }
+        return (x, y, walls);
+    }
+    bool BesideTurret((int X, int Y, int Walls) c) => c.X == 20 && c.Y >= 23 && c.Y <= 26;
+    var wallClear = WallCell(0);
+    var wallApron = WallCell(1);
+    var wallField = WallCell(2);
+    if (wallClear.Walls != 1 || !BesideTurret(wallClear))
+        return Fail($"aituning 2g(b) control: with the turret's enemy-facing column clear, the Turtle's wall must go beside the turret "
+                    + $"(x 20, rows 23 to 26), and it placed {wallClear.Walls} wall(s), the first at ({wallClear.X}, {wallClear.Y})");
+    if (wallApron.Walls != 1 || BesideTurret(wallApron))
+        return Fail($"aituning 2g(b) apron: with a power plant's one-cell apron covering the turret's enemy-facing column, no wall may go "
+                    + $"there and the walk must move on to the Bastion, and it placed {wallApron.Walls} wall(s), the first at "
+                    + $"({wallApron.X}, {wallApron.Y}) - the wall's exclusion from the apron of the commander's other buildings is "
+                    + "gone, so a wall can seal a refinery or a producer's exit");
+    if (wallField.Walls != 1 || BesideTurret(wallField))
+        return Fail($"aituning 2g(b) field: with ferrite fields beside every cell of the turret's enemy-facing column, no wall may go "
+                    + $"there and the walk must move on to the Bastion, and it placed {wallField.Walls} wall(s), the first at "
+                    + $"({wallField.X}, {wallField.Y}) - the wall's exclusion from the cells beside a ferrite field is gone, so a "
+                    + "wall can seal a harvester's field");
+
     // --- 3. THE DESYNC GUARD. A changed AI number moves the catalogue checksum
     //        and an unchanged one leaves it still. Without this, two peers could
     //        hold different data/ai, pass the hello, and drift apart on the AI's
@@ -7202,6 +7762,14 @@ int AiTuningGate()
         ("surplus_reserve", AiTuning.Normal with { SurplusReserve = AiTuning.Normal.SurplusReserve + 1 }, AiTuning.NormalId),
         ("surplus_window_ticks", AiTuning.Normal with { SurplusWindowTicks = AiTuning.Normal.SurplusWindowTicks + 1 }, AiTuning.NormalId),
         ("faction_defence_cap", AiTuning.Standard with { FactionDefenceCap = AiTuning.Standard.FactionDefenceCap + 1 }, AiTuning.StandardId),
+        // P8-23 (ADR-080): and how the waves go, each by one.
+        ("wave_growth", AiTuning.Standard with { WaveGrowth = AiTuning.Standard.WaveGrowth + 1 }, AiTuning.StandardId),
+        ("wave_cap", AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveCap + 1 }, AiTuning.StandardId),
+        ("staging_cells", AiTuning.Standard with { StagingCells = AiTuning.Standard.StagingCells + 1 }, AiTuning.StandardId),
+        ("all_in_percent", AiTuning.Standard with { AllInPercent = AiTuning.Standard.AllInPercent + 1 }, AiTuning.StandardId),
+        ("rush_tick", AiTuning.Rusher with { RushTick = AiTuning.Rusher.RushTick + 1 }, AiTuning.RusherId),
+        ("walls_per_defence", AiTuning.Turtle with { WallsPerDefence = AiTuning.Turtle.WallsPerDefence - 1 }, AiTuning.TurtleId),
+        ("retreat_percent", AiTuning.Hard with { RetreatPercent = AiTuning.Hard.RetreatPercent + 1 }, AiTuning.HardId),
     };
     foreach (var (key, def, id) in spendBumps)
     {
@@ -7255,6 +7823,75 @@ int AiTuningGate()
         }
         if (w.GetAiTuning(id) != zero)
             return Fail($"aituning control: the row with a {key} of 0 did not register");
+    }
+    //        P8-23 (ADR-080): and the wave numbers the loader refuses are
+    //        refused by registration too, each in the loader's words and each
+    //        beside a control at the edge the loader accepts.
+    var waveRefusals = new (string Key, int Id, AiTuningDef Bad, AiTuningDef Edge, string Words)[]
+    {
+        ("wave_growth", AiTuning.StandardId, AiTuning.Standard with { WaveGrowth = -1 }, AiTuning.Standard with { WaveGrowth = 0 },
+            "wave_growth must not be negative"),
+        ("wave_cap", AiTuning.StandardId, AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize - 1 },
+            AiTuning.Standard with { WaveCap = AiTuning.Standard.WaveSize }, "wave_cap must be at least wave_size"),
+        // Architect condition 4: staging_cells is bounded above by idleprobe's
+        // home bound (AiTuning.MaxStagingCells, ADR-056) as well as below.
+        ("staging_cells", AiTuning.StandardId, AiTuning.Standard with { StagingCells = AiTuning.MaxStagingCells + 1 },
+            AiTuning.Standard with { StagingCells = AiTuning.MaxStagingCells }, $"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"),
+        ("staging_cells", AiTuning.StandardId, AiTuning.Standard with { StagingCells = -1 }, AiTuning.Standard with { StagingCells = 0 },
+            $"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"),
+        ("all_in_percent", AiTuning.StandardId, AiTuning.Standard with { AllInPercent = -1 }, AiTuning.Standard with { AllInPercent = 0 },
+            "all_in_percent must not be negative"),
+        ("rush_tick", AiTuning.RusherId, AiTuning.Rusher with { RushTick = -1 }, AiTuning.Rusher with { RushTick = 0 },
+            "rush_tick must not be negative"),
+        ("walls_per_defence", AiTuning.TurtleId, AiTuning.Turtle with { WallsPerDefence = AiTuning.MaxWallsPerDefence + 1 },
+            AiTuning.Turtle with { WallsPerDefence = AiTuning.MaxWallsPerDefence }, $"walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}"),
+        ("walls_per_defence", AiTuning.TurtleId, AiTuning.Turtle with { WallsPerDefence = -1 }, AiTuning.Turtle with { WallsPerDefence = 0 },
+            $"walls_per_defence must be from 0 to {AiTuning.MaxWallsPerDefence}"),
+        ("retreat_percent", AiTuning.HardId, AiTuning.Hard with { RetreatPercent = 101 }, AiTuning.Hard with { RetreatPercent = 100 },
+            "retreat_percent must be from 0 to 100"),
+        ("retreat_percent", AiTuning.HardId, AiTuning.Hard with { RetreatPercent = -1 }, AiTuning.Hard with { RetreatPercent = 0 },
+            "retreat_percent must be from 0 to 100"),
+    };
+    foreach (var (key, id, bad, edge, words) in waveRefusals)
+    {
+        var w = new World(4319);
+        string? refusal = null;
+        try { w.RegisterAiTuning(id, bad); }
+        catch (FormatException e) { refusal = e.Message; }
+        if (refusal is null)
+            return Fail($"aituning: registering a row with an out-of-range {key} must be refused, as data/ai's loader refuses it");
+        if (!refusal.Contains(words))
+            return Fail($"aituning: the refusal of an out-of-range {key} must say '{words}', in the loader's words, and it said: {refusal}");
+        try { w.RegisterAiTuning(id, edge); }
+        catch (FormatException e)
+        {
+            return Fail($"aituning control: the {key} at the edge the loader accepts must register, and it was refused: {e.Message}");
+        }
+        if (w.GetAiTuning(id) != edge)
+            return Fail($"aituning control: the row with its {key} at the edge the loader accepts did not register");
+    }
+    //        Architect condition 4 on ADR-080: and the LOADER refuses a
+    //        staging_cells above the ceiling, read from the shipped Standard
+    //        file with that one line changed, while the ceiling itself loads.
+    //        Registration's words above are the loader's, so a file and a row
+    //        offered in code are held to one bound.
+    {
+        string standardText = File.ReadAllText(Path.Combine(aiDir, "ai_standard.yaml"));
+        var stagingLine = new System.Text.RegularExpressions.Regex(@"(?m)^staging_cells:[ \t]*[0-9]+[ \t]*$");
+        if (stagingLine.Matches(standardText).Count != 1)
+            return Fail("aituning: ai_standard.yaml no longer authors the one staging_cells line this check edits, so it proves nothing");
+        string Staged(int cells) => stagingLine.Replace(standardText, $"staging_cells: {cells}");
+        string? loaderRefusal = null;
+        try { DataLoader.ParseAiTuning(Staged(AiTuning.MaxStagingCells + 1)); }
+        catch (FormatException e) { loaderRefusal = e.Message; }
+        if (loaderRefusal is null || !loaderRefusal.Contains($"staging_cells must be from 0 to {AiTuning.MaxStagingCells}"))
+            return Fail($"aituning: the loader must refuse a staging_cells of {AiTuning.MaxStagingCells + 1}, above idleprobe's home "
+                        + $"bound, in the words registration uses, and it said: {loaderRefusal ?? "nothing (it loaded)"}");
+        int loadedEdge;
+        try { loadedEdge = DataLoader.ParseAiTuning(Staged(AiTuning.MaxStagingCells)).StagingCells; }
+        catch (FormatException e) { return Fail($"aituning control: a staging_cells of {AiTuning.MaxStagingCells} must load, and it was refused: {e.Message}"); }
+        if (loadedEdge != AiTuning.MaxStagingCells)
+            return Fail($"aituning control: a staging_cells of {AiTuning.MaxStagingCells} loaded as {loadedEdge}");
     }
 
     // --- 5. The ratio arithmetic survived the move out of code. Brutal's two
@@ -7317,14 +7954,31 @@ int AiTuningGate()
                       + $"Bastion one credit short places {buildingOne.Army} order where the full sum places "
                       + $"{buildingBoth.Army}; a reserve of int.MaxValue orders {wrapAtTop.Defences} Bastion from a treasury "
                       + $"half a Bastion above it, where int.MaxValue less the price orders {wrapControl.Defences}, so the "
-                      + $"reserve test does not wrap; Brutal's 2/3 still "
+                      + $"reserve test does not wrap; of six fighters gathered after a first wave of {growAuthored.FirstWave}, "
+                      + $"{growAuthored.SecondWave} launch at the authored wave_growth, {growZero.SecondWave} at a growth of 0 and "
+                      + $"{capSix.SecondWave} at a wave_cap of 6; fighters behind the yard are sent to gather at x {stageAuthored} "
+                      + $"at the authored staging_cells and at x {stageTwenty} at 20; against two thirds of its hit points the "
+                      + $"garrison stays home ({allInAuthored.Garrison} sent) at the authored all_in_percent and goes "
+                      + $"({allInLower.Garrison} sent) at 150; a Rusher pushes {pushAuthored} squads at t=15 at the authored "
+                      + $"rush_tick and {pushEarly} at a rush tick of 15; a Turtle places {wallsAuthored.Walls} wall on the "
+                      + $"enemy's side of a defence at the authored walls_per_defence and {wallsNone.Walls} at 0; and a Hard wave "
+                      + $"down to one hit point a unit is called home, {retreatAuthored.Home} of 6 at the authored retreat_percent "
+                      + $"and {retreatNone.Home} at 0; a threshold that has stood ungathered for a wave cadence sends "
+                      + $"{stood.Sent} sealed fighters at t=315 after holding them ({stood.Held} sent before), and a Turtle's wall "
+                      + $"goes beside a turret whose enemy-facing side is clear, at ({wallClear.X}, {wallClear.Y}), and past it, to "
+                      + $"({wallApron.X}, {wallApron.Y}) and ({wallField.X}, {wallField.Y}), when another building's apron or a "
+                      + $"ferrite field's neighbours cover that side; Brutal's 2/3 still "
                       + $"truncates to {brutalBeat} at the authored beat of 15 and a beat of 1 halved still floors to 1; "
                       + "registration after tick 0 is refused, as is a negative surplus_reserve, surplus_window_ticks or "
-                      + "faction_defence_cap, in the loader's words, while 0 registers; and the catalogue checksum sits at "
+                      + "faction_defence_cap, and any of the wave numbers out of the range the loader takes, each in the "
+                      + "loader's words, while the edge it accepts registers, and the loader itself refuses a staging_cells "
+                      + $"above {AiTuning.MaxStagingCells}, idleprobe's home bound, and loads {AiTuning.MaxStagingCells}; and the catalogue checksum sits at "
                       + $"0x{stock1:X16} from both sources and moves on one unit of wave size, one credit of Brutal's "
-                      + "handicap, one unit of either anti-air number or one unit of any of the four spending numbers "
-                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap), which is what stops "
-                      + "two LAN peers playing different commanders and calling it agreement");
+                      + "handicap, one unit of either anti-air number, one unit of any of the four spending numbers "
+                      + "(producer_cap, surplus_reserve, surplus_window_ticks, faction_defence_cap) or one unit of any of "
+                      + "the seven wave numbers (wave_growth, wave_cap, staging_cells, all_in_percent, rush_tick, "
+                      + "walls_per_defence, retreat_percent), which is what stops two LAN peers playing different "
+                      + "commanders and calling it agreement");
     return 0;
 }
 
@@ -9598,6 +10252,13 @@ int TeamGate()
         {
             var w = new World(9303, 96, 96, players: 3);
             if (allied) w.SetTeam(1, 0);          // seat 1 joins seat 0's side
+            // P8-23 (ADR-080): with the all-in switched off. Six tanks against
+            // a lone rifle squad outnumber the enemy, so in the run where seat
+            // 1 is NOT an ally the commander rightly goes all-in at seat 1's
+            // refinery, which stands in the very base this stage watches, and
+            // the order would read as a defence. Off, the only AttackMove the
+            // stage can see is the defence it asks about, as before.
+            w.RegisterAiTuning(AiTuning.StandardId, AiTuning.Standard with { AllInPercent = 0 });
             // Seat 1's base, well away from seat 0's garrison.
             w.SpawnConstructionYard(1, 60, 60);
             w.SpawnRefinery(1, 64, 60);
@@ -10018,7 +10679,14 @@ int CampaignGate()
         // The first pass walked only the six starting units into the gauntlet
         // and lost all six, which measured the mission's difficulty rather
         // than the thing under test.
-        var ai = SkirmishAI.Rusher(0);
+        //
+        // P8-23 (ADR-080): with the Rusher's early push switched off. Its
+        // opening infantry and its push at 90 seconds took the enemy camp
+        // before the column reached the field, so the stage read "the enemy
+        // was wiped out" and proved nothing about arriving. The commander is
+        // here to build; what it attacks is not the thing under test.
+        world.RegisterAiTuning(AiTuning.RusherId, AiTuning.Rusher with { RushTick = 0 });
+        var ai = SkirmishAI.Rusher(0, AiDifficulty.Normal, world);
         var cmds = new List<Command>();
         var missionCmds = new List<Command>();
         Fix64 ex = Map.CellCentre(86), ey = Map.CellCentre(36);
@@ -15597,6 +16265,8 @@ int Match(ulong seed)
     ScenarioWalls(seed, null, Console.WriteLine);
     ScenarioAirAnswer(seed, null, Console.WriteLine);
     ScenarioAiSpend(seed, null, Console.WriteLine);
+    ScenarioAiRetreat(seed, null, Console.WriteLine);
+    ScenarioAiWalls(seed, null, Console.WriteLine);
     int defence = DefenceLoadGate(seed);
     if (defence != 0) return defence;
     // ADR-006: the catalogue-mismatch refuse gate rides the battery exactly as
@@ -17089,6 +17759,69 @@ int ExDebug()
 
 int PathDebug()
 {
+    // P8-23 (ADR-080): with map= this re-probes a mirror STALL rather than
+    // the fixed crossing below. A Normal Standard mirror on that map plays to
+    // ticks= (27000), and every every= ticks (1500) each seat prints ADR-053's
+    // arrival columns: its army, its nearest unit's distance in whole cells to
+    // a standing enemy structure, how many are within the arrival bound
+    // (World.CyBuildRadius + 3), and how many PARK: idle, with no target,
+    // more than that bound from every structure of either side, which is the
+    // stall's signature (an army standing between the bases). Reads only.
+    var po = MeasureOptions("pathdebug", false, "map", "pairs", "orient", "ticks", "every");
+    if (po.Count > 0)
+    {
+        string root = MeasureRoot();
+        if (!po.TryGetValue("map", out var mapSpec)) throw new FormatException("pathdebug: the mirror trace needs map=");
+        var maps = MeasureMaps(root, mapSpec);
+        var pairs = MeasurePairs(po.GetValueOrDefault("pairs"), "DD,SS");
+        var orients = MeasureOrients(po.GetValueOrDefault("orient"), "0");
+        int ticks = OptInt(po, "ticks", MeasurementHarness.WindowCloseTicks);
+        int every = OptInt(po, "every", 1500);
+        int bound = World.CyBuildRadius + 3;
+        Fix64 boundSq = Fix64.FromInt(bound * bound);
+        foreach (var map in maps)
+            foreach (var (f0, f1, name) in pairs)
+                foreach (bool swap in orients)
+                {
+                    var spec = new MatchSpec(map, swap, f0, f1, AiDifficulty.Normal, AiDifficulty.Normal, 0, 0, 2026UL, ticks);
+                    Console.WriteLine($"pathdebug: {map} {name} o{(swap ? 1 : 0)}, Normal Standard mirror to {ticks} ticks");
+                    Console.WriteLine("    tick | seat army nearest within parked | seat army nearest within parked");
+                    var r = PlayMeasured(root, spec, observe: w =>
+                    {
+                        if (w.Tick % every != 0) return;
+                        var line = new System.Text.StringBuilder($"  {w.Tick,6} |");
+                        for (int seat = 0; seat < 2; seat++)
+                        {
+                            int army = 0, within = 0, parked = 0;
+                            Fix64 nearest = Fix64.MaxValue;
+                            for (int i = 0; i < w.EntityCount; i++)
+                            {
+                                var u = w.Entities[i];
+                                if (!u.Alive || u.PlayerId != seat || u.Kind != EntityKind.Unit) continue;
+                                army++;
+                                Fix64 toEnemy = Fix64.MaxValue, toAny = Fix64.MaxValue;
+                                for (int k = 0; k < w.EntityCount; k++)
+                                {
+                                    var e = w.Entities[k];
+                                    if (!e.Alive || !World.IsStructure(e.Kind) || e.PlayerId is not (0 or 1)) continue;
+                                    Fix64 d = Fix64.DistSq(e.X - u.X, e.Y - u.Y);
+                                    if (d < toAny) toAny = d;
+                                    if (e.PlayerId != seat && d < toEnemy) toEnemy = d;
+                                }
+                                if (toEnemy < nearest) nearest = toEnemy;
+                                if (toEnemy <= boundSq) within++;
+                                if (!u.Moving && u.ExplicitTarget < 0 && toAny > boundSq) parked++;
+                            }
+                            string near = nearest == Fix64.MaxValue ? "-" : Fix64.Sqrt(nearest).ToIntFloor().ToString();
+                            line.Append($" {seat,4} {army,4} {near,7} {within,6} {parked,6} |");
+                        }
+                        Console.WriteLine(line.ToString());
+                    });
+                    Console.WriteLine($"  {PillarLine(r)}");
+                }
+        return 0;
+    }
+
     var world = BuildPathingWorld(2026, out int units);
     var target = (X: Fix64.FromInt(60) + Fix64.Half, Y: Fix64.FromInt(32) + Fix64.Half);
     var cmds = new List<Command>();
@@ -17779,8 +18512,11 @@ int CountOwned(World w, int seat, Func<Entity, bool> pred)
 
 // One AI-against-AI match in the shipped setup, to the tick cap or until
 // MatchOver says it is over, recording what the P8-13 modes read. `observe`
-// sees the world after every step, for the traces that need more.
-MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = null)
+// sees the world after every step, for the traces that need more. `orders`
+// (P8-23, waveprobe) sees the commands both commanders issued for a tick,
+// before the step applies them; it reads them only, so a sweep plays exactly
+// as it does without it.
+MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = null, Action<World, List<Command>>? orders = null)
 {
     var map = LoadMeasureMap(root, s.Map, s.Swap);
     var w = map.BuildWorld(s.Seed, players: 2, out _, ww => CatalogueFiles.RegisterAll(ww, Path.Combine(root, "data")));
@@ -17802,6 +18538,7 @@ MeasuredMatch PlayMeasured(string root, MatchSpec s, Action<World>? observe = nu
         cmds.Clear();
         ais[0].Act(w, cmds);
         ais[1].Act(w, cmds);
+        orders?.Invoke(w, cmds);
         // F5's income, OBSERVED rather than inferred from the treasury, which
         // nets deliveries against the per-tick build payments. A harvester
         // that is Unloading with a load and comes out of the step alive, empty
@@ -18652,6 +19389,187 @@ int PillarProbe()
     return 0;
 }
 
+// P8-23 (ADR-080): what a commander's waves DO, read from the orders it gives
+// rather than from inside it, so the same probe measures any commander. A wave
+// order is an AttackMove whose point is exactly the centre of a standing enemy
+// structure (the wave's aim; the garrison aims at a unit and the staging and a
+// retreat are PathMoves). A unit is IN FLIGHT from its first wave order until
+// its commander gives it any other order or it dies. A LAUNCH is the set of
+// units a seat sends on one tick that were not already in flight, so a
+// commander that re-aims every unit in flight every 300 ticks (the base's
+// stream) launches whatever joined since, and one that holds a wave back until
+// it stands launches the whole wave at once.
+//
+// Each launch is followed for WaveHorizonTicks (two minutes) or to the match's
+// end: ARRIVED counts its units that came within ADR-053's arrival bound
+// (World.CyBuildRadius + 3 cells) of a standing enemy structure, read once a
+// second; RAZED counts enemy structures that died in that span, by any cause,
+// so two launches whose spans overlap can each count one death; LOST counts
+// its units dead at the span's end; RECALLED counts its units given another
+// order inside the span. It is then classed: BROKE IN (arrived and razed),
+// ARRIVED (arrived, razed nothing), RECALLED (every unit recalled, none
+// arrived), STALLED (none arrived, at least half alive and not recalled) or
+// LOST (none arrived, most dead).
+const int WaveHorizonTicks = 1800;
+
+int WaveProbe()
+{
+    // A PROBE: it prints and asserts nothing. The defaults are pillarprobe's
+    // sweep (every shipped map, the four faction pairings, both orientations,
+    // Normal against Normal, 27000 ticks, seed 2026) and so are the options.
+    string root = MeasureRoot();
+    var o = MeasureOptions("waveprobe", false, "maps", "pairs", "orient", "p0", "p1", "ticks", "seed", "jobs");
+    var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
+    var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
+    var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int p0 = MeasurePersonality("p0", o.GetValueOrDefault("p0")), p1 = MeasurePersonality("p1", o.GetValueOrDefault("p1"));
+    int ticks = OptInt(o, "ticks", MeasurementHarness.WindowCloseTicks);
+    int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
+    ulong seed = OptSeed(o);
+    var specs = PillarSpecs(maps, pairs, orients, p0, p1, seed, ticks);
+    Console.WriteLine($"waveprobe: {specs.Count} matches ({maps.Length} maps x {pairs.Length} faction pairings x {orients.Length} "
+        + $"orientation(s)), Normal against Normal, personalities {o.GetValueOrDefault("p0") ?? "standard"}/{o.GetValueOrDefault("p1") ?? "standard"}, "
+        + $"cap {ticks} ticks, seed {seed}; each launch followed for {WaveHorizonTicks} ticks. A probe: nothing asserts.");
+    var sw = Stopwatch.StartNew();
+    Fix64 arriveSq = Fix64.FromInt((World.CyBuildRadius + 3) * (World.CyBuildRadius + 3));
+    var results = RunOrdered(specs.Count, jobs, i =>
+    {
+        var s = specs[i];
+        var launches = new List<WaveLaunch>();
+        var inFlight = new[] { new Dictionary<int, WaveLaunch>(), new Dictionary<int, WaveLaunch>() };
+        var open = new List<WaveLaunch>();
+        var walls = new int[2];
+        var r = PlayMeasured(root, s, observe: w =>
+        {
+            foreach (var ev in w.Events)
+            {
+                // The Turtle's walls (ADR-080), counted as they land.
+                if (ev.Type == GameEventType.StructurePlaced && ev.A >= 0 && ev.A < w.EntityCount
+                    && w.Entities[ev.A].Kind == EntityKind.Wall && w.Entities[ev.A].PlayerId is 0 or 1)
+                    walls[w.Entities[ev.A].PlayerId]++;
+                if (ev.Type != GameEventType.Died || ev.A < 0 || ev.A >= w.EntityCount) continue;
+                var dead = w.Entities[ev.A];
+                if (dead.PlayerId is not (0 or 1)) continue;
+                if (World.IsStructure(dead.Kind))
+                {
+                    foreach (var l in open) if (l.Seat != dead.PlayerId) l.Razed++;
+                }
+                else if (dead.Kind == EntityKind.Unit)
+                    foreach (var l in open) if (l.Seat == dead.PlayerId && l.Ids.Contains(ev.A)) l.Lost++;
+            }
+            if (w.Tick % World.TicksPerSecond == 0)
+                foreach (var l in open)
+                    foreach (int id in l.Ids)
+                    {
+                        if (l.Arrived.Contains(id)) continue;
+                        var u = w.Entities[id];
+                        if (!u.Alive) continue;
+                        for (int k = 0; k < w.EntityCount; k++)
+                        {
+                            var e = w.Entities[k];
+                            if (!e.Alive || !World.IsStructure(e.Kind) || e.PlayerId != 1 - l.Seat) continue;
+                            if (Fix64.DistSq(e.X - u.X, e.Y - u.Y) <= arriveSq) { l.Arrived.Add(id); break; }
+                        }
+                    }
+            for (int k = open.Count - 1; k >= 0; k--)
+                if (w.Tick >= open[k].Tick + WaveHorizonTicks) { open[k].Closed = true; open.RemoveAt(k); }
+        }, orders: (w, cmds) =>
+        {
+            for (int seat = 0; seat < 2; seat++)
+            {
+                WaveLaunch? launch = null;
+                foreach (var c in cmds)
+                {
+                    if (c.PlayerId != seat || c.EntityId < 0 || c.EntityId >= w.EntityCount) continue;
+                    var u = w.Entities[c.EntityId];
+                    if (u.Kind != EntityKind.Unit) continue;
+                    bool waveOrder = false;
+                    if (c.Type == CommandType.AttackMove)
+                        for (int k = 0; k < w.EntityCount && !waveOrder; k++)
+                        {
+                            var e = w.Entities[k];
+                            waveOrder = e.Alive && World.IsStructure(e.Kind) && e.PlayerId == 1 - seat && e.X == c.X && e.Y == c.Y;
+                        }
+                    if (waveOrder)
+                    {
+                        if (inFlight[seat].ContainsKey(c.EntityId)) continue;
+                        if (launch is null)
+                        {
+                            launch = new WaveLaunch(seat, w.Tick);
+                            launches.Add(launch);
+                            open.Add(launch);
+                        }
+                        launch.Ids.Add(c.EntityId);
+                        inFlight[seat][c.EntityId] = launch;
+                    }
+                    else if (c.Type is CommandType.PathMove or CommandType.Move or CommandType.AttackMove or CommandType.Attack
+                             && inFlight[seat].Remove(c.EntityId, out var was) && !was.Closed)
+                        was.Recalled++;
+                }
+            }
+            // A unit that died leaves flight, so a later order to a recycled
+            // slot cannot be read as a recall.
+            for (int seat = 0; seat < 2; seat++)
+            {
+                List<int>? gone = null;
+                foreach (var id in inFlight[seat].Keys) if (!w.Entities[id].Alive) (gone ??= new()).Add(id);
+                if (gone != null) foreach (int id in gone) inFlight[seat].Remove(id);
+            }
+        });
+        // A match that ends inside a span closes it at its final tick.
+        foreach (var l in open) l.Closed = true;
+        return (r, launches, walls);
+    }, (_, x) =>
+    {
+        Console.WriteLine(PillarLine(x.r));
+        for (int seat = 0; seat < 2; seat++)
+            Console.WriteLine($"      seat {seat}: {WaveSummary(x.launches.Where(l => l.Seat == seat).ToList())}"
+                              + (x.walls[seat] > 0 ? $"; walls placed {x.walls[seat]}" : ""));
+    });
+    sw.Stop();
+    var all = results.SelectMany(x => x.launches).ToList();
+    var perSeat = results.SelectMany(x => new[] { x.launches.Count(l => l.Seat == 0), x.launches.Count(l => l.Seat == 1) })
+        .Select(n => (double)n).ToList();
+    var firsts = results.SelectMany(x => new[] { 0, 1 }.Select(seat => x.launches.FirstOrDefault(l => l.Seat == seat)))
+        .Where(l => l != null).Select(l => (double)l!.Tick).ToList();
+    var largest = results.SelectMany(x => new[] { 0, 1 }.Select(seat => x.launches.Where(l => l.Seat == seat).Select(l => l.Ids.Count).DefaultIfEmpty(0).Max()))
+        .Select(n => (double)n).ToList();
+    var firstSizes = results.SelectMany(x => new[] { 0, 1 }.Select(seat => x.launches.FirstOrDefault(l => l.Seat == seat)))
+        .Where(l => l != null).Select(l => (double)l!.Ids.Count).ToList();
+    Console.WriteLine($"waveprobe: pooled over {results.Length * 2} seats: {WaveSummary(all)}");
+    Console.WriteLine($"  launches per seat: median {MedianOf(perSeat)}; first launch: median t={MedianOf(firsts)} ({firsts.Count} seats launched), "
+        + $"its size from {(firstSizes.Count == 0 ? 0 : firstSizes.Min())} to {(firstSizes.Count == 0 ? 0 : firstSizes.Max())}, median {MedianOf(firstSizes)}; "
+        + $"largest launch per seat: median {MedianOf(largest)}");
+    int inWindow = results.Count(x => PillarClass(x.r) == "WINDOW"), early = results.Count(x => PillarClass(x.r) == "EARLY");
+    int none = results.Count(x => !x.r.Resolved);
+    Console.WriteLine($"  F6: {inWindow} of {results.Length} in the window ({100.0 * inWindow / results.Length:F0} per cent), {early} early, {none} with no result");
+    var wallsPlaced = results.SelectMany(x => x.walls).Select(n => (double)n).ToList();
+    Console.WriteLine($"  walls placed per seat: median {MedianOf(wallsPlaced)}, most {wallsPlaced.Max()}, seats placing any {wallsPlaced.Count(n => n > 0)} of {wallsPlaced.Count}");
+    Console.WriteLine($"waveprobe: elapsed {sw.Elapsed.TotalSeconds:F1} s for {specs.Count} matches on {jobs} threads");
+    return 0;
+}
+
+string WaveSummary(List<WaveLaunch> ls)
+{
+    if (ls.Count == 0) return "no launch";
+    var sizes = ls.Select(l => (double)l.Ids.Count).ToList();
+    int broke = 0, arrived = 0, recalled = 0, stalled = 0, lost = 0;
+    foreach (var l in ls)
+    {
+        switch (l.Class)
+        {
+            case "BROKE IN": broke++; break;
+            case "ARRIVED": arrived++; break;
+            case "RECALLED": recalled++; break;
+            case "STALLED": stalled++; break;
+            default: lost++; break;
+        }
+    }
+    string Pc(int n) => $"{n} ({100.0 * n / ls.Count:F0}%)";
+    return $"{ls.Count} launches, first at t={ls.Min(l => l.Tick)} (size {ls.OrderBy(l => l.Tick).First().Ids.Count}), size median {MedianOf(sizes)} largest {sizes.Max()}; "
+         + $"broke in {Pc(broke)}, arrived {Pc(arrived)}, recalled {Pc(recalled)}, stalled {Pc(stalled)}, lost {Pc(lost)}";
+}
+
 // P8-66 (ADR-078, the Architect's condition 2): the sector sign movement's
 // tie-break picks its side by, computed by the runner itself from a point and
 // the map's size, so a probe can tell a tie the rule sidestepped from one it
@@ -18705,15 +19623,27 @@ int FrozenProbe()
     // window. It reads the world only (World.ExactTiesThisTick is an
     // observation), so the sweep plays exactly as pillargate's does. A probe
     // by ADR-061's rule: it prints and asserts nothing.
+    //
+    // P8-23 (ADR-080, Architect condition 3): p0= and p1= set the two seats'
+    // personalities as waveprobe's do (standard, rusher or turtle; standard by
+    // default, so a run without them plays pillargate's sweep as before), and
+    // every walker with no route from its cell is asked once more whether its
+    // route exists once its OWN side's walls are treated as open: the map is
+    // copied, each living wall of the walker's seat is unblocked on the copy,
+    // and the route the cause was read from is asked again. A yes is a walker
+    // its own side's walls have sealed in, which ADR-080's reversal clause for
+    // the Turtle's walls reads with p0=turtle p1=turtle.
     const int FrozenTicks = 450;
     string root = MeasureRoot();
-    var o = MeasureOptions("frozenprobe", false, "maps", "pairs", "orient", "jobs");
+    var o = MeasureOptions("frozenprobe", false, "maps", "pairs", "orient", "p0", "p1", "jobs");
     var maps = MeasureMaps(root, o.GetValueOrDefault("maps"));
     var pairs = MeasurePairs(o.GetValueOrDefault("pairs"), "DD,DS,SD,SS");
     var orients = MeasureOrients(o.GetValueOrDefault("orient"), "both");
+    int p0 = MeasurePersonality("p0", o.GetValueOrDefault("p0")), p1 = MeasurePersonality("p1", o.GetValueOrDefault("p1"));
     int jobs = OptInt(o, "jobs", Environment.ProcessorCount);
-    var specs = PillarSpecs(maps, pairs, orients, 0, 0, 2026, MeasurementHarness.WindowCloseTicks);
-    Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), walkers reporting Moving and standing "
+    var specs = PillarSpecs(maps, pairs, orients, p0, p1, 2026, MeasurementHarness.WindowCloseTicks);
+    Console.WriteLine($"frozenprobe: {specs.Count} shipped-setup matches (pillargate's sweep), personalities "
+        + $"{o.GetValueOrDefault("p0") ?? "standard"}/{o.GetValueOrDefault("p1") ?? "standard"}, walkers reporting Moving and standing "
         + $"at one position for {FrozenTicks} or more consecutive ticks. A probe: nothing asserts.");
     string[] causes = { "held by an exact cancellation, sidestepped", "held by an exact cancellation left on a line",
                         "at its target", "no route from its cell", "other" };
@@ -18739,6 +19669,59 @@ int FrozenProbe()
         return FlowField.Build(w.Map, tcx, tcy).NextCell(w.Map, cx, cy) < 0 ? causes[3] : causes[4];
     }
 
+    // ADR-080, Architect condition 3: for a walker CauseOf found with no
+    // route, whether the same route exists on a copy of the map on which every
+    // living wall of the walker's own seat is open. False when its seat has no
+    // wall, so a run with no Turtle reads zero by construction.
+    bool RoutedWithOwnWallsOpen(World w, in Entity e)
+    {
+        var open = new Map(w.Map.Width, w.Map.Height);
+        for (int y = 0; y < w.Map.Height; y++)
+            for (int x = 0; x < w.Map.Width; x++)
+                if (w.Map.IsBlocked(x, y)) open.SetBlocked(x, y, true);
+        bool walled = false;
+        for (int k = 0; k < w.EntityCount; k++)
+        {
+            var b = w.Entities[k];
+            if (!b.Alive || b.Kind != EntityKind.Wall || b.PlayerId != e.PlayerId) continue;
+            int s = w.FootprintOf(b.StructType), bx = w.AnchorOf(b.X, b.StructType), by = w.AnchorOf(b.Y, b.StructType);
+            for (int dy = 0; dy < s; dy++)
+                for (int dx = 0; dx < s; dx++)
+                    if (open.InBounds(bx + dx, by + dy)) { open.SetBlocked(bx + dx, by + dy, false); walled = true; }
+        }
+        if (!walled) return false;
+        int cx = Map.CellOf(e.X), cy = Map.CellOf(e.Y), tcx = Map.CellOf(e.TargetX), tcy = Map.CellOf(e.TargetY);
+        if (e.Kind == EntityKind.Harvester && e.HState == HarvestState.ToRefinery && e.RefineryId >= 0 && e.RefineryId < w.EntityCount)
+        {
+            var r = w.Entities[e.RefineryId];
+            if (r.Alive && r.X == e.TargetX && r.Y == e.TargetY && w.Map.IsBlocked(tcx, tcy))
+            {
+                var dock = FlowField.BuildToFootprint(open, w.AnchorOf(r.X, r.StructType), w.AnchorOf(r.Y, r.StructType), w.FootprintOf(r.StructType));
+                return dock.IsGoal(open, cx, cy) || dock.NextCell(open, cx, cy) >= 0;
+            }
+        }
+        return FlowField.Build(open, tcx, tcy).NextCell(open, cx, cy) >= 0;
+    }
+    // Its two controls, printed beside the reading so that a zero means none
+    // was sealed in rather than a check that cannot say yes: a walker ringed
+    // by its own seat's walls, its target outside the ring, has a route once
+    // they are open; the same walker ringed by the other seat's walls has none.
+    bool RingedControl(int wallSeat)
+    {
+        var cw = new World(1, 16, 16, players: 2);
+        for (int x = 3; x <= 7; x++) { cw.SpawnWall(wallSeat, x, 3); cw.SpawnWall(wallSeat, x, 7); }
+        for (int y = 4; y <= 6; y++) { cw.SpawnWall(wallSeat, 3, y); cw.SpawnWall(wallSeat, 7, y); }
+        var d = cw.GetUnitType(1);
+        var e = cw.Entities[cw.SpawnUnit(0, Fix64.FromInt(5) + Fix64.Half, Fix64.FromInt(5) + Fix64.Half, d.Speed, d.Hp, d.Armour,
+                                         d.WeaponId, unitType: 1)];
+        e.TargetX = Fix64.FromInt(12) + Fix64.Half;
+        e.TargetY = Fix64.FromInt(12) + Fix64.Half;
+        return RoutedWithOwnWallsOpen(cw, in e);
+    }
+    Console.WriteLine($"frozenprobe: the walls-open check's controls: a walker ringed by its own side's walls has a route once they "
+        + $"are open ({(RingedControl(0) ? "yes" : "NO")}), and one ringed by the other side's walls does not "
+        + $"({(RingedControl(1) ? "IT DOES" : "no")})");
+
     var sw = Stopwatch.StartNew();
     var lines = new List<string>[specs.Count];
     var harvesters = new int[specs.Count];
@@ -18752,10 +19735,12 @@ int FrozenProbe()
     var mostWhat = new string[specs.Count];
     var longest = new int[specs.Count];
     var longestWhat = new string[specs.Count];
+    var sealedIn = new int[specs.Count];
     RunOrdered(specs.Count, jobs, i =>
     {
         var s = specs[i];
         var found = new List<string>();
+        int sealedHere = 0;
         var still = new Dictionary<int, (Fix64 X, Fix64 Y, int Since, bool InTie, bool OnLine)>();
         var counted = new HashSet<int>();
         var run = new Dictionary<int, int>();
@@ -18826,11 +19811,15 @@ int FrozenProbe()
                 if (e.Kind == EntityKind.Harvester) h++; else u++;
                 string cause = CauseOf(w, in e, st.InTie, st.OnLine);
                 byCause[i, Array.IndexOf(causes, cause)]++;
+                bool walledIn = cause == causes[3] && RoutedWithOwnWallsOpen(w, in e);
+                if (walledIn) sealedHere++;
                 found.Add($"    seat {e.PlayerId} (start {StartOf(s, e.PlayerId)}) {e.Kind} #{k} at ({e.X},{e.Y}), {e.HState}, target "
-                          + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}");
+                          + $"({e.TargetX},{e.TargetY}){(e.AMove ? ", attack-moving" : "")}, unmoved from t={st.Since}: {cause}"
+                          + (walledIn ? ", and its route exists once its own side's walls are open" : ""));
             }
         });
         lines[i] = found;
+        sealedIn[i] = sealedHere;
         harvesters[i] = h;
         units[i] = u;
         tieHeld[i] = held;
@@ -18873,6 +19862,9 @@ int FrozenProbe()
     Console.WriteLine($"  held by an exact cancellation: {causeSum[0] + causeSum[1]}");
     for (int c = 0; c < causes.Length; c++)
         Console.WriteLine($"  {(c < 2 ? "  " : "")}{causes[c]}: {causeSum[c]}");
+    // ADR-080's reversal clause for the Turtle's walls reads this line.
+    Console.WriteLine($"frozenprobe: walkers with no route from their cell whose route exists once their own side's walls are "
+        + $"open: {sealedIn.Sum()} (in {sealedIn.Count(n => n > 0)} of {specs.Count} matches)");
     Console.WriteLine($"frozenprobe: walkers in an exact cancellation on {FrozenTicks} or more "
         + $"consecutive ticks: {tieHeld.Sum()}; in a cycle (on half the ticks of some {FrozenTicks}-tick window): {cycling.Sum()}; "
         + $"on {FrozenTicks} or more ticks of one match in all: {recurrent.Sum()}; exact ties in all: {ties.Sum()}, "
@@ -20545,6 +21537,7 @@ return args.Length == 0
         "pillarprobe" => Measured(PillarProbe),
         "pillargate" => Measured(PillarGate),
         "frozenprobe" => Measured(FrozenProbe),
+        "waveprobe" => Measured(WaveProbe),
         "fieldsurvivalgate" => Measured(FieldSurvivalGate),
         // P8-30: F12's large-map perf run, the same conventions.
         "longmatchperf" => Measured(LongMatchPerfGate),
@@ -20554,7 +21547,7 @@ return args.Length == 0
         "pintrace" => PinTrace(),
         "lanpoll" => LanPoll(),
         "bench" => Bench(),
-        "pathdebug" => PathDebug(),
+        "pathdebug" => Measured(PathDebug),
         "exdebug" => ExDebug(),
         "stdebug" => StDebug(),
         "facdebug" => FacDebug(),
@@ -20692,6 +21685,24 @@ sealed class MeasuredMatch
     /// Construction Yard died, and whether a superweapon impact killed it.</summary>
     public readonly int[] LastYardDeath = { -1, -1 };
     public readonly bool[] LastYardBySuperweapon = new bool[2];
+}
+
+/// <summary>P8-23 (ADR-080): one launch as waveprobe reads it, from the orders
+/// a commander gives (see WaveHorizonTicks for the definitions). Ids are the
+/// units sent that were not already in flight, in the order they were ordered.</summary>
+sealed class WaveLaunch
+{
+    public WaveLaunch(int seat, int tick) { Seat = seat; Tick = tick; }
+    public int Seat { get; }
+    public int Tick { get; }
+    public readonly List<int> Ids = new();
+    public readonly HashSet<int> Arrived = new();
+    public int Razed, Lost, Recalled;
+    public bool Closed;
+    public string Class
+        => Arrived.Count > 0 ? (Razed > 0 ? "BROKE IN" : "ARRIVED")
+         : Recalled >= Ids.Count ? "RECALLED"
+         : 2 * (Ids.Count - Lost - Recalled) >= Ids.Count ? "STALLED" : "LOST";
 }
 
 /// <summary>P8-22 (ADR-079): what spendprobe reads of one seat over one match.

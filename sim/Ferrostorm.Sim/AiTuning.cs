@@ -55,6 +55,21 @@ public enum AiTuningKind
 /// How many faction defences guard a base is a commander's taste, beside the
 /// home guard the wave size already sets, so the PERSONALITY owns
 /// <see cref="FactionDefenceCap"/>. Each family leaves the other's at 0.
+///
+/// P8-23 (ADR-080) appends how the commander's WAVES go, split by the same
+/// rule. How a wave gathers, grows and commits is a commander's shape, beside
+/// the wave size it grows from, so the PERSONALITY owns
+/// <see cref="WaveGrowth"/> (units the launch threshold grows by with every
+/// wave launched), <see cref="WaveCap"/> (the most it grows to),
+/// <see cref="StagingCells"/> (how far out from its yard, towards the target,
+/// a wave gathers), <see cref="AllInPercent"/> (how far its army must
+/// outnumber the enemy's before it commits everything, garrison included, with
+/// no retreat), <see cref="RushTick"/> (the tick of its one early infantry push,
+/// 0 for none) and <see cref="WallsPerDefence"/> (wall segments it raises on
+/// the enemy's side of each of its defences). Whether a beaten wave is brought
+/// home to fight again is how good a commander is, so the RUNG owns
+/// <see cref="RetreatPercent"/> (decision D7: Hard and Brutal). Each family
+/// leaves the other's at 0.
 /// </summary>
 public readonly record struct AiTuningDef(
     AiTuningKind Kind,
@@ -69,7 +84,14 @@ public readonly record struct AiTuningDef(
     int ProducerCap = 0,
     int SurplusReserve = 0,
     int SurplusWindowTicks = 0,
-    int FactionDefenceCap = 0);
+    int FactionDefenceCap = 0,
+    int WaveGrowth = 0,
+    int WaveCap = 0,
+    int StagingCells = 0,
+    int AllInPercent = 0,
+    int RushTick = 0,
+    int WallsPerDefence = 0,
+    int RetreatPercent = 0);
 
 /// <summary>
 /// The compiled reference table for the skirmish commander's tuning: the values
@@ -120,13 +142,53 @@ public static class AiTuning
     // sustained one (spendprobe at the base: of 423 stretches at or above 4500
     // that ended before their match, one lasted between two and five minutes;
     // the near edge, 1800, failed F8's launch half in pillargate).
-    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2, FactionDefenceCap: 3);   // ai_standard
-    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2, FactionDefenceCap: 2);     // ai_rusher
-    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2, FactionDefenceCap: 5);   // ai_turtle
-    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0, ProducerCap: 1, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_easy
-    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0, ProducerCap: 2, SurplusReserve: 4500, SurplusWindowTicks: 4500);     // ai_normal
-    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500);       // ai_hard
-    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500); // ai_brutal
+    // P8-23 (ADR-080): a personality's wave numbers, each transcribed from a
+    // rule the ADR states rather than chosen, so each file repeats its rule:
+    // the growth is its ground garrison (half its wave, floor 2: 3, 2, 5), so
+    // every wave launched brings one garrison more; the cap is twice its wave
+    // (12, 8, 20); the staging point is 10 cells out, ADR-053's arrival bound
+    // (World.CyBuildRadius + 3), so a wave gathers where an enemy's would
+    // count as having arrived; all-in at 200 per cent, an army twice the
+    // enemy's; the Rusher's push at 1350 ticks (90 seconds, the row's number,
+    // the others none); and four walls a defence for the Turtle (the whole
+    // side of a 2x2 defence that faces the enemy, its two cells and two
+    // corners, the others none). A rung's retreat is D7's 30 per cent for
+    // Hard and Brutal and none for Easy and Normal.
+    public static readonly AiTuningDef Standard = new(AiTuningKind.Personality, 15, 6, 1, 1, 1, 0, 6, 2, FactionDefenceCap: 3,
+        WaveGrowth: 3, WaveCap: 12, StagingCells: 10, AllInPercent: 200);                                                                    // ai_standard
+    public static readonly AiTuningDef Rusher = new(AiTuningKind.Personality, 15, 4, 1, 1, 1, 0, 4, 2, FactionDefenceCap: 2,
+        WaveGrowth: 2, WaveCap: 8, StagingCells: 10, AllInPercent: 200, RushTick: 1350);                                                     // ai_rusher
+    public static readonly AiTuningDef Turtle = new(AiTuningKind.Personality, 15, 10, 1, 1, 1, 0, 10, 2, FactionDefenceCap: 5,
+        WaveGrowth: 5, WaveCap: 20, StagingCells: 10, AllInPercent: 200, WallsPerDefence: 4);                                                // ai_turtle
+    public static readonly AiTuningDef Easy = new(AiTuningKind.Rung, 0, 0, 2, 1, 1, 0, ProducerCap: 1, SurplusReserve: 4500, SurplusWindowTicks: 4500,
+        RetreatPercent: 0);       // ai_easy
+    public static readonly AiTuningDef Normal = new(AiTuningKind.Rung, 0, 0, 1, 1, 1, 0, ProducerCap: 2, SurplusReserve: 4500, SurplusWindowTicks: 4500,
+        RetreatPercent: 0);     // ai_normal
+    public static readonly AiTuningDef Hard = new(AiTuningKind.Rung, 0, 0, 1, 1, 2, 0, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500,
+        RetreatPercent: 30);       // ai_hard
+    public static readonly AiTuningDef Brutal = new(AiTuningKind.Rung, 0, 0, 2, 3, 2, 5000, ProducerCap: 3, SurplusReserve: 4500, SurplusWindowTicks: 4500,
+        RetreatPercent: 30); // ai_brutal
+
+    /// <summary>P8-23 (ADR-080): the most wall segments a personality may ask
+    /// for round each defence, and the one place the number lives. A defence
+    /// is 2x2, so the side of its one-cell ring that faces the enemy is its
+    /// two face cells and the two corners beside them; the loader, the
+    /// registration guard and the commander all read this.</summary>
+    public const int MaxWallsPerDefence = 4;
+
+    /// <summary>P8-23 (ADR-080, Architect condition 4): the farthest a
+    /// personality may stage its waves from its yard, in cells, and the one
+    /// place the number lives; the loader, the registration guard and the
+    /// schema all refuse more. It is idleprobe's home bound (ADR-056): a unit
+    /// idling further than 20 cells from its own yard reads as stranded
+    /// rather than at home, and ADR-080 section 1 claims that a gathering wave
+    /// reads as home. It also bounds the commander's own work: StagingPoint
+    /// walks from staging_cells down to 1 on every beat, so an unbounded value
+    /// would hang every commander, on both peers alike. staging_cells is read
+    /// on the larger axis and idleprobe's bound in a straight line, so on a
+    /// diagonal a point at the ceiling can lie up to about 28 cells out; the
+    /// authored 10 lies within about 14 on any line.</summary>
+    public const int MaxStagingCells = 20;
 
     /// <summary>The compiled reference row for an id. Throws rather than
     /// defaulting, and that is deliberate: a weapon id can be 0 for "unarmed",

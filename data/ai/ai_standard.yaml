@@ -39,3 +39,27 @@ anti_air_garrison: 2
 # window), after any producer the rung's cap still allows. How many guns guard
 # a base is taste, so this is a personality number beside the wave size.
 faction_defence_cap: 3
+# P8-23 (ADR-080): how this commander's waves go. Every number is transcribed
+# from a rule ADR-080 states rather than chosen, so a row that moves wave_size
+# re-reads these copies.
+# wave_growth 3 is this personality's ground garrison, half its wave with a
+# floor of two: every wave launched raises the next wave's launch threshold by
+# one garrison, so the first wave is wave_size and the waves after it grow.
+# wave_cap 12 is twice wave_size: the threshold grows to two waves and stops.
+# staging_cells 10 is ADR-053's arrival bound, World.CyBuildRadius plus 3: a
+# wave gathers that far out from its own yard, towards its target, which is
+# where an enemy's wave would count as having arrived, and leaves from there
+# as one body rather than as a stream.
+# all_in_percent 200: once the hit points of its fighting army are at least
+# twice those of the enemy's army and armed defences together, the commander
+# commits everything, its garrison included, and that wave never turns back.
+# Twice is the Lanchester reading of "outnumbered": a fight between even armies
+# is a coin toss, and one between armies two to one is not.
+# rush_tick 0: no early push (the Rusher's is its own).
+# walls_per_defence 0: no walls (the Turtle's are its own).
+wave_growth: 3
+wave_cap: 12
+staging_cells: 10
+all_in_percent: 200
+rush_tick: 0
+walls_per_defence: 0

@@ -30,3 +30,8 @@ starting_credit_handicap: 0
 producer_cap: 2
 surplus_reserve: 4500
 surplus_window_ticks: 4500
+# P8-23 (ADR-080): retreat_percent 0. D7 gives the retreat to Hard and Brutal
+# only, so a Normal wave fights on; staging, the growing threshold and the
+# all-in, which D6 names as the commander's improvements at every rung, are
+# personality numbers and reach Normal through them.
+retreat_percent: 0

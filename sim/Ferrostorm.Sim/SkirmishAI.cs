@@ -12,7 +12,10 @@ namespace Ferrostorm.Sim;
 /// harvester working; alternate rifle/cannon production, each ROUTED TO ITS
 /// OWN PRODUCER (ADR-009); add a defensive turret, then the radar uplink
 /// (ADR-008); when six combat units stand ready, attack-move the wave at the
-/// nearest enemy structure, and keep the waves coming.
+/// nearest enemy structure, and keep the waves coming. Since P8-23 (ADR-080)
+/// a wave gathers at a staging point and launches as one body at a threshold
+/// that grows with every wave, a beaten wave comes home on the rungs that
+/// retreat, and an army that outnumbers the enemy's goes all-in.
 ///
 /// ADR-009 clause 7, the finding that inverts the intuitive risk: an AI that
 /// does not know about produced_at does not "still build tanks and look
@@ -85,6 +88,35 @@ public sealed class SkirmishAI
     private readonly int _surplusReserve;    // credits kept back from everything bought out of surplus
     private readonly int _surplusWindow;     // ticks the treasury must stand at or above the reserve, unbroken
     private readonly int _factionDefenceCap; // most of its own side's defence it keeps
+    // P8-23 (ADR-080): how its WAVES go. Six from the personality, which owns
+    // shape, and the retreat from the rung (decision D7).
+    private readonly int _waveGrowth;        // the launch threshold grows by this with every wave launched
+    private readonly int _waveCap;           // and stops growing here
+    private readonly int _stagingCells;      // a wave gathers this far out from the yard, towards its target
+    private readonly int _allInPercent;      // its army at this share of the enemy's commits everything (0: never)
+    private readonly int _rushTick;          // its one early infantry push, from this tick (0: none)
+    private readonly int _wallsPerDefence;   // walls on the enemy's side of each of its defences
+    private readonly int _retreatPercent;    // a wave below this share of its launch hit points comes home (0: never)
+
+    /// <summary>P8-23 (ADR-080): THE WAVE IN FLIGHT, as entity ids, used for
+    /// membership only and never enumerated (every walk over it is a walk over
+    /// the entity list in index order that asks Contains), so no order is read
+    /// from a hash set. A unit joins it when it is sent at the enemy and
+    /// leaves it when it dies or the wave is called home; while it is a member
+    /// it is neither garrison nor field. AI-internal like every field here:
+    /// never hashed, never saved, and a loaded match's commander starts with
+    /// no wave in flight, as it starts its surplus window again.</summary>
+    private readonly HashSet<int> _wave = new();
+    private long _waveHp;          // hit points the wave was sent with, joiners included
+    private bool _waveAllIn;       // sent all-in, so it never retreats
+    private int _waveTarget = -1;  // the structure it was last aimed at
+    private int _wavesLaunched;    // launches so far, the growing threshold's count
+    private bool _rushMade;        // the early push is made, or moot
+    private int _fieldReadyFrom = -1;  // the beat the field first stood at the threshold, or -1
+    private int _fieldPeak;            // the most fighters the field has held since the last launch
+    private int _fieldPeakFrom;        // the beat it first held them
+    private int _lastStageTick = -10_000;
+    private int _lastAimTick = -10_000;
 
     /// <summary>P8-22 (ADR-079): the decision beat on which the treasury last
     /// rose to the reserve and has stood at or above it on every beat since,
@@ -121,6 +153,11 @@ public sealed class SkirmishAI
     private const int BaseGuardSq = 196;      // 14 cells round a structure (the intruder census)
     private const int HomeLeashSq = 144;      // 12 cells: an idle garrison further out drifts home
     private const int EscortLeashSq = 9;      // 3 cells: an escort further from its ward closes up
+    /// <summary>The wave cadence, the 300 ticks that have always separated two
+    /// waves, named since P8-23 (ADR-080) reads it in three places: between
+    /// launches, between re-aims of the wave in flight, and as how long a
+    /// threshold may stand ungathered before it launches anyway.</summary>
+    private const int WaveCadenceTicks = 300;
 
     /// <summary>
     /// P7-7a: how many refineries a commander runs per base, from GDD s4's
@@ -192,6 +229,16 @@ public sealed class SkirmishAI
         _surplusReserve = rung.SurplusReserve;
         _surplusWindow = rung.SurplusWindowTicks;
         _factionDefenceCap = shape.FactionDefenceCap;
+        // P8-23 (ADR-080): how a wave gathers, grows and commits is shape,
+        // from the personality; whether a beaten wave comes home is how good
+        // the commander is, from the rung (D7).
+        _waveGrowth = shape.WaveGrowth;
+        _waveCap = shape.WaveCap;
+        _stagingCells = shape.StagingCells;
+        _allInPercent = shape.AllInPercent;
+        _rushTick = shape.RushTick;
+        _wallsPerDefence = shape.WallsPerDefence;
+        _retreatPercent = rung.RetreatPercent;
     }
 
     /// <summary>The tuning row for an id: the world's registered one where a
@@ -220,6 +267,16 @@ public sealed class SkirmishAI
     /// build its list in, which is precisely the kind of unstated convention that
     /// desyncs one peer against the other.</summary>
     public int Seat => _player;
+
+    /// <summary>P8-23 (ADR-080): how many waves this commander has launched,
+    /// and how many of its units are in the wave in flight. Read-only and
+    /// informational in the shape of DecisionBeat and Seat: nothing in Act
+    /// reads them through these properties, so exposing them changes no
+    /// behaviour and moves no hash. They let a gate assert a launch, a growing
+    /// threshold or a retreat as the commander's own count rather than infer
+    /// it from the order stream.</summary>
+    public int WavesLaunched => _wavesLaunched;
+    public int WaveInFlight => _wave.Count;
 
     /// <summary>DR-14: Brutal's declared handicap, in starting credits, applied
     /// by whatever builds the match and NEVER by the AI itself. This is not
@@ -294,6 +351,13 @@ public sealed class SkirmishAI
         // P8-17 (ADR-072): my anti-air units, and the enemy aircraft I can see
         // this beat. Both stay 0 in a ground-only match.
         int antiAir = 0, airSeenNow = 0;
+        // P8-23 (ADR-080): the two strengths the all-in compares, in HIT
+        // POINTS: my ground fighters (IsGroundFighter), and the enemy's ground
+        // fighters by the same rule plus its armed defences, which stand
+        // between my army and its base. Hit points rather than heads, so ten
+        // rifle squads do not read as outnumbering three Bulwarks.
+        int fighters = 0;
+        long fightersHp = 0, enemyHp = 0;
         bool hasSuper = false;
         int readySuper = -1, enemyRefinery = -1;
         int enemyStructure = -1;
@@ -360,6 +424,7 @@ public sealed class SkirmishAI
                 }
                 supply += e.PowerSupply;
                 draw += e.PowerDraw;
+                if (IsGroundFighter(w, in e)) { fighters++; fightersHp += e.Hp; }
             }
             // ADR-009 clause 7: Barracks, RadarUplink and Airfield join the
             // wave-target kinds, or the AI walks straight past the building
@@ -405,6 +470,15 @@ public sealed class SkirmishAI
             else if (w.IsEnemyOf(in e, _player) && SeesAircraft(w, in e))
             {
                 airSeenNow++;
+            }
+            // P8-23 (ADR-080): the enemy's strength, for the all-in: its ground
+            // fighters and its armed defences. Counted as this commander
+            // already counts the enemy's buildings, through fog; P8-29
+            // (decision D9) narrows it, with the target picks, to what it may
+            // see, and IsGroundFighter is the one place to do it for units.
+            else if (w.IsEnemyOf(in e, _player) && (IsGroundFighter(w, in e) || IsArmedDefence(e.Kind)))
+            {
+                enemyHp += e.Hp;
             }
         }
         // A larger raid than any before reopens the build-up (see orderAntiAir).
@@ -501,9 +575,11 @@ public sealed class SkirmishAI
         // without this a beat could promise the same credits twice). ONLY the
         // army's orders after the beat's first read `committed`. The surplus
         // building's own test reads the treasury alone, so it does not count
-        // an engineer ordered earlier in the beat; the engineer and anti-air
-        // orders test their own price, the MCV a floor of 3500 and the
-        // harvester none; and the first army order stands on its own price.
+        // an engineer ordered earlier in the beat, and since P8-23 the
+        // Turtle's wall test reads it alone too (ADR-080 section 8); the
+        // engineer and anti-air orders test their own price, the MCV a floor
+        // of 3500 and the harvester none; and the first army order stands on
+        // its own price.
         // So a beat that opens at or above the reserve can end below it by
         // that first army order's price, plus any engineer, anti-air answer
         // or harvester it also ordered (ADR-079, sections 2 and 4).
@@ -780,6 +856,34 @@ public sealed class SkirmishAI
                     Fix64.Zero, Fix64.Zero, extra));
                 committed += extraCost;
             }
+            // --- P8-23 (ADR-080): THE TURTLE'S WALLS. Only once the surplus
+            // has nothing else to buy (no producer the cap allows, no defence
+            // under the cap), so a wall never jumps a gun; one segment a beat,
+            // bought outright as a wall always is, on the reserve's own test.
+            // That test, like the surplus building's above, reads the treasury
+            // alone and ignores what the beat has already committed (an
+            // engineer or harvester ordered earlier in it), the class ADR-079
+            // recorded for the surplus building (ADR-080 section 8).
+            // Inert for a personality that asks for none, which is every
+            // personality but the Turtle. mission03 runs a Turtle
+            // (SkirmishAI.Turtle(0)) and is quiet here only because its
+            // surplus window cannot complete inside its 5000-tick horizon from
+            // the mission's 4000-credit opening, so a change to either moves
+            // that golden; aiwalls is the golden that reaches this branch
+            // (ADR-080, Architect condition 1).
+            else if (extra == 0 && _wallsPerDefence > 0 && enemyStructure >= 0)
+            {
+                int wall = PlaceableWall(w);
+                int wallCost = wall != 0 ? w.GetStructureType(wall).Cost : 0;
+                var aim = w.Entities[enemyRefinery >= 0 ? enemyRefinery : enemyStructure];
+                if (wall != 0 && w.Credits(_player) >= (long)_surplusReserve + wallCost
+                    && TryFindWallCell(w, wall, aim.X, aim.Y, out int wx, out int wy))
+                {
+                    output.Add(new Command(w.Tick, _player, CommandType.PlaceStructure, cy,
+                        Fix64.FromInt(wx), Fix64.FromInt(wy), wall));
+                    committed += wallCost;
+                }
+            }
         }
 
         // --- DR-13: keep the base standing. A structure the AI could mend but
@@ -931,6 +1035,32 @@ public sealed class SkirmishAI
                 output.Add(new Command(w.Tick, _player, CommandType.Harvest, i, Fix64.Zero, Fix64.Zero, field));
         }
 
+        // --- P8-23 (ADR-080): THE RUSHER'S OPENING. A commander with an early
+        // push keeps its barracks line busy with rifle squads (unit type 2,
+        // the opening cycle's own first unit) from the moment the barracks
+        // stands until a wave and its garrison of armed infantry stand, ahead
+        // of the rest of the ladder, and only until its push has gone.
+        // MEASURED, the reason this exists: the army below waits for the
+        // factory and a finished ladder, so without it a Rusher's fourth
+        // infantry stood at a median t=2648 and the push meant for 90 seconds
+        // (t=1350) was the ordinary first wave. One order a beat, on its own
+        // price, while the line holds fewer than two. Inert for a personality
+        // with no rush tick, which is every golden's but the mission's.
+        if (_rushTick > 0 && !_rushMade && barracks >= 0)
+        {
+            int infantry = QueuedAnywhere(barracksLine, 2);
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                var e = w.Entities[i];
+                if (e.Alive && World.IsOwnedBy(in e, _player) && RushEligible(w, in e) && !_wave.Contains(i)) infantry++;
+            }
+            int line = Route(barracksLine);
+            int garrisonFloor = _waveSize / 2 < 2 ? 2 : _waveSize / 2;
+            if (infantry < _waveSize + garrisonFloor && line >= 0 && Depth(line) < 2
+                && w.Credits(_player) >= w.GetUnitType(2).Cost)
+                Ordered(line, 2);
+        }
+
         // --- Production: alternate the counter pair once the economy stands;
         // stand aside (and save) while an expansion is desired or in transit,
         // or while the yard still wants a structure it cannot yet afford -
@@ -1036,16 +1166,28 @@ public sealed class SkirmishAI
         // threats, so harassers can no longer puppet the field army; and
         // because chasing is now safe, harvesters under attack anywhere get
         // protection again (the counter the shadow war was missing).
+        //
+        // P8-23 (ADR-080): THE WAVE IN FLIGHT IS PRUNED FIRST, and a member is
+        // never garrison. A garrison that died used to be refilled from the
+        // lowest ids standing, which could be a unit halfway across the map,
+        // and the next intruder then pulled it home out of the fight. Its hit
+        // points are summed in the same walk, for the retreat below.
+        long waveHpNow = 0;
+        for (int i = 0; i < w.Entities.Count && _wave.Count > 0; i++)
+        {
+            if (!_wave.Contains(i)) continue;
+            var e = w.Entities[i];
+            if (!e.Alive || !World.IsOwnedBy(in e, _player)) _wave.Remove(i);
+            else waveHpNow += e.Hp;
+        }
+        if (_wave.Count == 0) { _waveHp = 0; _waveAllIn = false; _waveTarget = -1; }
         int garrisonSize = _waveSize / 2 < 2 ? 2 : _waveSize / 2;
         int[] garrison = new int[8];
         int garrisonCount = 0;
         for (int i = 0; i < w.Entities.Count && garrisonCount < garrisonSize && garrisonCount < 8; i++)
         {
             var e = w.Entities[i];
-            if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
-                && e.UnitType != 6 && e.UnitType != World.McvUnitType && e.UnitType != EngineerType
-                && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
-                && !IsAntiAir(w, in e))   // P8-17: anti-air keeps its own garrison, below
+            if (e.Alive && World.IsOwnedBy(in e, _player) && WaveEligible(w, in e) && !_wave.Contains(i))
                 garrison[garrisonCount++] = i;
         }
         bool InGarrison(int id)
@@ -1055,6 +1197,7 @@ public sealed class SkirmishAI
         }
 
         int intruder = -1;
+        bool intruderAtBase = false;
         Fix64 intruderD = Fix64.MaxValue;
         for (int i = 0; i < w.Entities.Count; i++)
         {
@@ -1081,7 +1224,7 @@ public sealed class SkirmishAI
                     or EntityKind.Refinery or EntityKind.Factory or EntityKind.Turret)) continue;
                 Fix64 guard = isEconomy ? Fix64.FromInt(EconomyGuardSq) : Fix64.FromInt(BaseGuardSq);
                 Fix64 d = Fix64.DistSq(hostile.X - own.X, hostile.Y - own.Y);
-                if (d <= guard && d < intruderD) { intruderD = d; intruder = i; }
+                if (d <= guard && d < intruderD) { intruderD = d; intruder = i; intruderAtBase = !isEconomy; }
             }
         }
         if (intruder >= 0 && garrisonCount > 0 && w.Tick - _lastDefendTick >= DefendCadenceTicks)
@@ -1089,6 +1232,30 @@ public sealed class SkirmishAI
             var threat = w.Entities[intruder];
             for (int g = 0; g < garrisonCount; g++)
                 output.Add(new Command(w.Tick, _player, CommandType.AttackMove, garrison[g], threat.X, threat.Y));
+            // P8-23 (ADR-080): THE FIELD DEFENDS ITS TEAM'S BASE. A wave
+            // gathering at home is home, so when an enemy stands among my
+            // team's buildings the fighters gathering for the next wave answer
+            // it with the garrison. My TEAM'S, because the census above asks
+            // IsAlliedTo (P7-8i) and the field reads the census rather than a
+            // narrower test of its own; with the default team map that is my
+            // own base alone (ADR-080 section 6, where narrowing it is left to
+            // a later row as a behaviour change). Only at the base: an
+            // intruder found at a harvester out in the field still draws the
+            // garrison alone, so a harasser cannot pull the gathering wave
+            // across the map (TICKET-AI-05's reason).
+            //
+            // ORDER PRECEDENCE (ADR-080 section 11): the later order in a
+            // beat wins. The staging step below tests Moving as the unit stood
+            // before the beat, so an idle field fighter outside the leash that
+            // is told to defend here can be sent to stage on the same beat,
+            // and its defence then waits up to one defence cadence.
+            if (intruderAtBase)
+                for (int i = 0; i < w.Entities.Count; i++)
+                {
+                    var e = w.Entities[i];
+                    if (!e.Alive || !World.IsOwnedBy(in e, _player) || !WaveEligible(w, in e) || _wave.Contains(i) || InGarrison(i)) continue;
+                    output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, threat.X, threat.Y));
+                }
             _lastDefendTick = w.Tick;
             // The field army carries on: defence no longer preempts offence.
         }
@@ -1118,7 +1285,7 @@ public sealed class SkirmishAI
         // has seen air.
         if (antiAir > 0) AnswerAir(w, output, homeX, homeY);
 
-        // --- Waves: a full wave stands ready, at most one order per 300 ticks ---
+        // --- Waves: see the P8-23 (ADR-080) block at the end of Act ---
         // --- Directorate escort doctrine (TICKET-P3-FAC-07): sentinels
         // shadow the harvesters. Detection travels with the economy, so the
         // shadow war happens in the light. ---
@@ -1173,24 +1340,169 @@ public sealed class SkirmishAI
             }
         }
 
-        if (army >= _waveSize + garrisonCount && enemyStructure >= 0 && w.Tick - _lastWaveTick >= 300)
+        // --- P8-23 (ADR-080): THE WAVES ESCALATE AND CLOSE. Until this row a
+        // wave was a stream: once the army stood at a wave plus the garrison,
+        // every fighter outside the garrison was re-sent at the target every
+        // 300 ticks, so each new unit walked out alone behind the last
+        // (waveprobe at the base: a median launch of 4 units, 21 a seat).
+        // Now a wave GATHERS at a staging point, LAUNCHES as one body once a
+        // threshold that grows with every wave stands there, comes HOME below
+        // the rung's retreat share, and the commander goes ALL-IN, garrison
+        // and all, once its army outnumbers the enemy's. Every choice reads
+        // this commander's own state, counts and the twin-exact staging point,
+        // and walks entities in index order, so a commander and its twin on
+        // the opposite start choose alike.
+        int targetId = enemyRefinery >= 0 ? enemyRefinery : enemyStructure;
+        Fix64 stageX = homeX, stageY = homeY;
+        if (targetId >= 0)
+            (stageX, stageY) = StagingPoint(w, homeX, homeY, w.Entities[targetId].X, w.Entities[targetId].Y);
+        Fix64 gatherSq = Fix64.FromInt(HomeLeashSq);
+
+        // 1. THE WAVE IN FLIGHT. Below the rung's retreat share of the hit
+        // points it was sent with, it is called back to the staging point to
+        // join the next wave; a wave sent all-in never turns back. Otherwise
+        // it is re-aimed, every member, the beat its target changes and on the
+        // wave cadence, as the stream always re-aimed every fighter it had
+        // sent. MEASURED, the reason it is every member: re-aiming only the
+        // idle ones left a member that had hunted a building in sight (an
+        // attack-move closes on the nearest enemy it can see, and a building's
+        // centre is a blocked cell with no route to it) reporting Moving with
+        // no route for the rest of the match, 197 units in 13 of
+        // frozenprobe's 72 matches; a fresh order sends it back to the aim,
+        // whose route is found to an open face.
+        if (_wave.Count > 0)
         {
-            // Strike the economy first: a dead refinery ends wars that a
-            // dead turret only delays. Fall back to the nearest structure.
-            var target = w.Entities[enemyRefinery >= 0 ? enemyRefinery : enemyStructure];
+            bool retreat = !_waveAllIn && _retreatPercent > 0 && waveHpNow * 100 < _retreatPercent * _waveHp;
+            bool retarget = targetId >= 0 && targetId != _waveTarget;
+            bool cadence = w.Tick - _lastAimTick >= WaveCadenceTicks;
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                if (!_wave.Contains(i)) continue;
+                var e = w.Entities[i];
+                if (retreat)
+                    output.Add(new Command(w.Tick, _player, CommandType.PathMove, i, stageX, stageY));
+                else if (targetId >= 0 && (retarget || cadence))
+                    output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i,
+                        w.Entities[targetId].X, w.Entities[targetId].Y));
+            }
+            if (retreat) { _wave.Clear(); _waveHp = 0; _waveTarget = -1; }
+            else
+            {
+                if (retarget) _waveTarget = targetId;
+                if (cadence) _lastAimTick = w.Tick;
+            }
+        }
+
+        // 2. THE FIELD: every fighter neither garrison nor in flight, and how
+        // many of them stand gathered, within the garrison's home leash of the
+        // staging point.
+        int fieldCount = 0, gathered = 0;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var e = w.Entities[i];
+            if (!e.Alive || !World.IsOwnedBy(in e, _player) || !WaveEligible(w, in e) || _wave.Contains(i) || InGarrison(i)) continue;
+            fieldCount++;
+            if (Fix64.DistSq(e.X - stageX, e.Y - stageY) <= gatherSq) gathered++;
+        }
+        long grown = (long)_waveSize + (long)_wavesLaunched * _waveGrowth;
+        int threshold = grown > _waveCap ? _waveCap : (int)grown;
+        if (fieldCount < threshold) _fieldReadyFrom = -1;
+        else if (_fieldReadyFrom < 0) _fieldReadyFrom = w.Tick;
+        // A field that has stopped growing (no new high for a whole wave
+        // cadence) has reached the army this commander can field now, so it
+        // goes at wave_size rather than waiting for a threshold it cannot
+        // reach. It was added for a measurement on an earlier build of P8-23,
+        // in which the mission golden's Rusher, its harvester dead, held four
+        // fighters below its grown threshold of six and never took the camp.
+        // At ADR-080's head that reason no longer holds: switched off, the
+        // mission golden is byte-identical and only skirmish moves (to
+        // 0xB888EA387D513752). The fallback is live and is kept for the
+        // property it states, that a commander whose army cannot grow still
+        // attacks, not for that golden (ADR-080 section 2).
+        if (fieldCount > _fieldPeak) { _fieldPeak = fieldCount; _fieldPeakFrom = w.Tick; }
+        bool fieldStalled = fieldCount >= _waveSize && w.Tick - _fieldPeakFrom >= WaveCadenceTicks;
+        bool launchDue = targetId >= 0 && w.Tick - _lastWaveTick >= WaveCadenceTicks;
+        // A commander with an early push holds every other launch until its
+        // rush tick, so the push is its first wave rather than being made moot
+        // by a wave its opening infantry would otherwise have launched sooner
+        // (measured: a median first launch at t=1035 without this hold).
+        bool beforePush = _rushTick > 0 && !_rushMade && w.Tick < _rushTick;
+
+        // 3. THE ALL-IN: an army at least the personality's share of the
+        // enemy's, and at least a wave of it, sends everything, the garrison
+        // too, without waiting for the threshold, and it never retreats. A
+        // retreat earlier in this beat leaves its survivors as field, so an
+        // all-in on the same beat sends them back at the enemy, its order
+        // the later and so the one that stands (ADR-080 section 11).
+        bool allIn = launchDue && !beforePush && _allInPercent > 0 && fighters >= _waveSize
+                     && fightersHp * 100 >= _allInPercent * enemyHp;
+        // 4. THE RUSHER'S PUSH: from its tick, once a wave's worth of armed
+        // barracks units stands, at most a wave and its garrison of them go,
+        // once. Any launch before it makes it moot.
+        bool rush = !allIn && launchDue && _rushTick > 0 && !_rushMade && w.Tick >= _rushTick;
+        int rushMax = _waveSize + garrisonSize;
+        if (rush)
+        {
+            int infantry = 0;
             for (int i = 0; i < w.Entities.Count; i++)
             {
                 var e = w.Entities[i];
-                // MCVs found bases and sentinels are eyes, not spears: the
-                // wave conscripts fighting units only.
-                if (e.Alive && World.IsOwnedBy(in e, _player) && e.Kind == EntityKind.Unit
-                    && e.UnitType != World.McvUnitType && e.UnitType != 6 && e.UnitType != EngineerType
-                    && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
-                    && !IsAntiAir(w, in e)   // P8-17: anti-air guards home and harvesters, never a wave
-                    && !InGarrison(i))
-                    output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, target.X, target.Y));
+                if (e.Alive && World.IsOwnedBy(in e, _player) && RushEligible(w, in e) && !_wave.Contains(i)) infantry++;
             }
-            _lastWaveTick = w.Tick;
+            rush = infantry >= _waveSize;
+        }
+        // 5. THE LAUNCH: the threshold gathered at the staging point, or the
+        // threshold standing for a whole wave cadence however it stands, so a
+        // point no fighter can reach never holds a wave back; or, below the
+        // threshold, a field of at least wave_size that has stopped growing.
+        bool launch = !allIn && !rush && launchDue && !beforePush
+                      && ((fieldCount >= threshold && (gathered >= threshold || w.Tick - _fieldReadyFrom >= WaveCadenceTicks))
+                          || fieldStalled);
+        if (allIn || rush || launch)
+        {
+            var target = w.Entities[targetId];
+            int sent = 0;
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                var e = w.Entities[i];
+                if (!e.Alive || !World.IsOwnedBy(in e, _player) || _wave.Contains(i)) continue;
+                bool go = rush ? RushEligible(w, in e) && sent < rushMax
+                        : WaveEligible(w, in e) && (allIn || !InGarrison(i));
+                if (!go) continue;
+                output.Add(new Command(w.Tick, _player, CommandType.AttackMove, i, target.X, target.Y));
+                _wave.Add(i);
+                _waveHp += e.Hp;
+                sent++;
+            }
+            // An all-in with nothing left to send still commits the wave in
+            // flight: it stops being one that can be called home.
+            if (allIn && _wave.Count > 0) _waveAllIn = true;
+            if (sent > 0)
+            {
+                _waveTarget = targetId;
+                _wavesLaunched++;
+                _rushMade = true;
+                _lastWaveTick = w.Tick;
+                _lastAimTick = w.Tick;
+                _fieldReadyFrom = -1;
+                _fieldPeak = 0;
+                _fieldPeakFrom = w.Tick;
+            }
+        }
+        else if (targetId >= 0 && w.Tick - _lastStageTick >= DefendCadenceTicks)
+        {
+            // 6. STAGING: an idle fighter of the field, outside the leash,
+            // walks to the staging point, on the garrison's cadence so a
+            // fighter that cannot get closer is not re-ordered every beat.
+            for (int i = 0; i < w.Entities.Count; i++)
+            {
+                var e = w.Entities[i];
+                if (!e.Alive || !World.IsOwnedBy(in e, _player) || !WaveEligible(w, in e) || _wave.Contains(i) || InGarrison(i)) continue;
+                if (e.Moving || e.ExplicitTarget >= 0) continue;
+                if (Fix64.DistSq(e.X - stageX, e.Y - stageY) > gatherSq)
+                    output.Add(new Command(w.Tick, _player, CommandType.PathMove, i, stageX, stageY));
+            }
+            _lastStageTick = w.Tick;
         }
     }
 
@@ -1385,6 +1697,152 @@ public sealed class SkirmishAI
     /// owned before P8-17, which never built anti-air.</summary>
     private static bool IsAntiAir(World w, in Entity e)
         => e.Kind == EntityKind.Unit && e.WeaponId != 0 && w.GetWeaponType(e.WeaponId).AntiAir;
+
+    /// <summary>P8-23 (ADR-080): may this unit of mine be garrison or join a
+    /// wave? The filter the garrison and the wave conscription have always
+    /// shared, stated once now that the staging, the push and the all-in read
+    /// it too. MCVs found bases, sentinels are eyes, engineers capture, the
+    /// Sodality's phantoms hunt harvesters (the shadow war) and anti-air guards
+    /// home and the harvesters; none of them is a spear.</summary>
+    private bool WaveEligible(World w, in Entity e)
+        => e.Kind == EntityKind.Unit && e.UnitType != 6 && e.UnitType != World.McvUnitType && e.UnitType != EngineerType
+           && !(w.FactionOf(_player) == World.FactionSodality && e.UnitType == 9)
+           && !IsAntiAir(w, in e);
+
+    /// <summary>P8-23 (ADR-080): may this unit go on the Rusher's early push?
+    /// An armed fighter its side's barracks produces, which is what infantry
+    /// means here: asked of the unit's own produced_at, never of a type id.</summary>
+    private bool RushEligible(World w, in Entity e)
+        => WaveEligible(w, in e) && e.WeaponId != 0 && w.GetUnitType(e.UnitType).ProducedAt == World.BarracksStructType;
+
+    /// <summary>P8-23 (ADR-080): does this unit count in an ARMY for the
+    /// all-in, on either side? Armed, on the ground and not anti-air, the
+    /// fighters that can take or hold a base. One rule for both armies, so
+    /// "outnumbered" compares like with like; P8-29 (D9) adds the cloak filter
+    /// here for the enemy's.</summary>
+    private static bool IsGroundFighter(World w, in Entity e)
+        => e.Kind == EntityKind.Unit && e.WeaponId != 0 && !w.IsAirborne(in e) && !IsAntiAir(w, in e);
+
+    /// <summary>P8-23 (ADR-080): an armed defence, of the kinds the Turtle
+    /// walls and the all-in weighs on the enemy's side: the common turret, the
+    /// Bastion and the emplacement kind the Shroud Nest shares.</summary>
+    private static bool IsArmedDefence(EntityKind k)
+        => k is EntityKind.Turret or EntityKind.Bastion or EntityKind.Emplacement;
+
+    /// <summary>
+    /// P8-23 (ADR-080): where a wave gathers. A point staging_cells out from
+    /// home along the line to the target, measured as the larger axis distance
+    /// so no square root is taken, snapped to the centre of the cell it falls
+    /// in and walked back towards home, a cell at a time, to the first open
+    /// cell; never at or past the target, and home itself when no cell is open
+    /// or staging_cells is 0. Mirror-exact under the half turn and either
+    /// centre-line reflection: the offset is a product and a quotient, both
+    /// truncating toward zero (ADR-077), so a twin's offset is the exact
+    /// negation of its own; and a point exactly on a cell boundary takes the
+    /// cell on the home side (on the axis the target does not move along, the
+    /// side towards the map centre), so the two twins test twin cells. A home
+    /// exactly on the map's centre line is the one tie, as in TryFindPlacement.
+    /// </summary>
+    private (Fix64 X, Fix64 Y) StagingPoint(World w, Fix64 homeX, Fix64 homeY, Fix64 tx, Fix64 ty)
+    {
+        Fix64 dx = tx - homeX, dy = ty - homeY;
+        Fix64 reach = Fix64.Max(Fix64.Abs(dx), Fix64.Abs(dy));
+        for (int k = _stagingCells; k > 0; k--)
+        {
+            if (Fix64.FromInt(k) >= reach) continue;
+            Fix64 px = homeX + dx * Fix64.FromInt(k) / reach, py = homeY + dy * Fix64.FromInt(k) / reach;
+            int cx = StagingCell(px, dx, homeX, w.Map.Width), cy = StagingCell(py, dy, homeY, w.Map.Height);
+            if (w.Map.InBounds(cx, cy) && !w.Map.IsBlocked(cx, cy)) return (Map.CellCentre(cx), Map.CellCentre(cy));
+        }
+        return (homeX, homeY);
+    }
+
+    private static int StagingCell(Fix64 p, Fix64 d, Fix64 home, int size)
+    {
+        int c = Map.CellOf(p);
+        if (p != Fix64.FromInt(c)) return c;
+        bool lower = d > Fix64.Zero || (d == Fix64.Zero && home + home > Fix64.FromInt(size));
+        return lower ? c - 1 : c;
+    }
+
+    /// <summary>
+    /// P8-23 (ADR-080): the next wall segment the Turtle raises, or false. For
+    /// each of its armed defences (turret, Bastion, emplacement or Shroud Nest),
+    /// oldest first, the side of the one-cell ring round its footprint that
+    /// faces the aim (the side whose axis carries the larger offset, ties to
+    /// the x side): that side's cells in order, then the corner before it and
+    /// the corner after it, the first walls_per_defence of them. Written in the
+    /// canonical frame TryFindPlacement uses and reflected along each axis on
+    /// which the defence stands past the map's centre, so a defence and its
+    /// twin pick twin cells in twin order. A cell is taken only where a wall may
+    /// legally stand (World.ValidPlacement), outside the one-cell apron of
+    /// every other building of mine, and not beside a ferrite field, so a wall
+    /// never seals a refinery, a producer's exit or a harvester's field. A cell
+    /// already walled is not open, so the walk moves past it.
+    /// </summary>
+    private bool TryFindWallCell(World w, int wall, Fix64 aimX, Fix64 aimY, out int wx, out int wy)
+    {
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var d = w.Entities[i];
+            if (!d.Alive || !World.IsOwnedBy(in d, _player)) continue;
+            if (!IsArmedDefence(d.Kind)) continue;
+            int s = w.FootprintOf(d.StructType);
+            int ax = w.AnchorOf(d.X, d.StructType), ay = w.AnchorOf(d.Y, d.StructType);
+            bool flipX = 2 * ax + s > w.Map.Width, flipY = 2 * ay + s > w.Map.Height;
+            Fix64 dx = flipX ? d.X - aimX : aimX - d.X;
+            Fix64 dy = flipY ? d.Y - aimY : aimY - d.Y;
+            bool alongX = Fix64.Abs(dx) >= Fix64.Abs(dy);
+            for (int k = 0; k < s + 2 && k < _wallsPerDefence; k++)
+            {
+                int along = k < s ? k : k == s ? -1 : s;
+                int ox = alongX ? (dx >= Fix64.Zero ? s : -1) : along;
+                int oy = alongX ? along : (dy >= Fix64.Zero ? s : -1);
+                int cx = flipX ? ax + s - 1 - ox : ax + ox;
+                int cy = flipY ? ay + s - 1 - oy : ay + oy;
+                if (WallCellAllowed(w, wall, cx, cy)) { wx = cx; wy = cy; return true; }
+            }
+        }
+        wx = wy = -1;
+        return false;
+    }
+
+    /// <summary>P8-23 (ADR-080): the wall this commander's side may place, or
+    /// 0: the lowest structure type of the Wall kind with a price that its
+    /// faction is allowed. Asked of the catalogue, as every rung asks for its
+    /// building, but not through World.BuildableStructOfKind, whose test of a
+    /// build time excludes a wall: a wall has none, because it is bought
+    /// outright as it lands (ADR-005 clause 3).</summary>
+    private int PlaceableWall(World w)
+    {
+        int faction = w.FactionOf(_player);
+        for (int t = 1; t <= World.MaxStructType; t++)
+        {
+            var d = w.GetStructureType(t);
+            if (d.Kind == EntityKind.Wall && d.Cost > 0 && w.StructureAllowedForFaction(t, faction)) return t;
+        }
+        return 0;
+    }
+
+    private bool WallCellAllowed(World w, int wall, int cx, int cy)
+    {
+        if (!w.ValidPlacement(_player, cx, cy, wall)) return false;
+        for (int i = 0; i < w.Entities.Count; i++)
+        {
+            var o = w.Entities[i];
+            if (!o.Alive) continue;
+            if (o.Kind == EntityKind.FerriteField)
+            {
+                if (Math.Abs(Map.CellOf(o.X) - cx) <= 1 && Math.Abs(Map.CellOf(o.Y) - cy) <= 1) return false;
+                continue;
+            }
+            if (!World.IsOwnedBy(in o, _player) || !World.IsStructure(o.Kind) || World.IsBarrier(o.Kind)) continue;
+            if (IsArmedDefence(o.Kind)) continue;
+            int bs = w.FootprintOf(o.StructType), bx = w.AnchorOf(o.X, o.StructType), by = w.AnchorOf(o.Y, o.StructType);
+            if (cx >= bx - 1 && cx <= bx + bs && cy >= by - 1 && cy <= by + bs) return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// P8-17 (ADR-072): the census rule, stated once. An enemy aircraft counts

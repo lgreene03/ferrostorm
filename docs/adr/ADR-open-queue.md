@@ -336,6 +336,47 @@ the same commit.
   goldens the row does not move equal main's. Ratified under D40, which
   also records ADR-060's overturned refusal and the faction-war evidence;
   the rest of condition 7 is that pull request's CI and merge hygiene.
+- ADR-080: RATIFIED 2026-10-27 - ADR-080-the-waves-escalate-and-close.md (row
+  P8-23, decisions D6 and D7, findings AI-07, AI-06 (2), BAL-11 and ML-04
+  (part)). Number claimed here per the numbering law, in the same commit as
+  the draft; 079 is held by P8-22, so 080 is the next free number. Built on
+  P8-22's branch (claude/p8-22-ai-spends at 1ad6cb1) while pull request 175
+  was open; rebased onto main at 4076626, its squash merge, whose tree
+  equals 1ad6cb1's. A wave gathers at a staging point 10 cells out towards its
+  target and launches as one body at a threshold that grows by a garrison
+  with every wave, to twice the wave; every member is re-aimed on the wave
+  cadence; a beaten wave comes home below the rung's retreat_percent (D7:
+  Hard and Brutal 30, Easy and Normal 0); the commander goes all-in, garrison
+  included, once its army's hit points are twice those of the enemy's army
+  and armed defences; the gathering field defends its team's base; the Rusher
+  pushes at 90 seconds with 4 to 6 infantry, its barracks filled for the push
+  and every other launch held to it; the Turtle walls its defences from
+  surplus, and its faction_defence_cap stays at 5, with the reason. Seven
+  numbers in data/ai with schema entries, compiled references, loader and
+  registration refusals and a place in the catalogue checksum
+  (0x652D8C7E6D1C847D to 0x64E6ED1AC64F2076); aituninggate stage 2f proves
+  each drives the commander and bites by name. Four goldens move at the
+  behaviour commit (skirmish, aisuper, mission, aispend), each with its first
+  divergence by a traced build; the goldens-neutral commits before it give
+  the base's 26. F6 22 of 72 in the window and endgate 6 unresolved, against
+  27 and 3 at the base; f0c9b74's reversal read and not met (26 of 72 with
+  the rebuy reverted); D32's reversal met on its letter and not enacted
+  by this row (P8-82, through which D32's recorded decision of 2026-10-27
+  enacts it); rows P8-80 to P8-82 filed. Old replays and saves are refused by
+  the checksum; Q024 stands for a later logic-only change. Proposed
+  2026-10-14. Signed off with nine conditions by the Architect on 2026-10-27
+  (the ADR's section "Architect sign-off", its date confirmed), in pull
+  request 178 from branch claude/p8-23-waves into main. Conditions 1 to 9 are met in it: the
+  `airetreat` and `aiwalls` goldens, appended after `aispend`, put the Hard
+  retreat and the Turtle's walls under the cross-platform gate; aituninggate
+  stage 2g bites the stood-threshold launch and the wall's apron and field
+  exclusion; frozenprobe takes p0= and p1= and reports walkers sealed by
+  their own walls (0 of 72 with Turtle mirrors); staging_cells is bounded at
+  idleprobe's 20-cell home bound; the record corrected; the seams recorded
+  and P8-87 filed; D32's reversal decided, enacted through P8-82 as a
+  reported, non-binding half of aiairgate that binds in P8-26. Ratified
+  under D41; the rest of condition 9 is that pull request's CI and merge
+  hygiene.
 - ADR-081: RATIFIED 2026-10-14 - ADR-081-detection-is-a-team-asset.md (row
   P8-55, decision D24b). Number claimed here per the numbering law, in the
   same commit as the draft; 080 is being claimed in parallel by P8-23, so 081

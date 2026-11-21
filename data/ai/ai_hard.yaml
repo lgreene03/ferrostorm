@@ -29,3 +29,8 @@ starting_credit_handicap: 0
 producer_cap: 3
 surplus_reserve: 4500
 surplus_window_ticks: 4500
+# P8-23 (ADR-080, decision D7): retreat_percent 30 is D7's number for Hard. A
+# wave whose living units' hit points fall below 30 per cent of what it
+# launched with is called back to its staging point, to join the next wave,
+# rather than fought to the last unit. A wave sent all-in never turns back.
+retreat_percent: 30
