@@ -1,5 +1,5 @@
 # ADR-080: the waves escalate and close: a wave gathers at a staging point and launches at a threshold that grows, a beaten wave comes home on the rungs that retreat, and an army that outnumbers the enemy's goes all-in
-- Status: **Ratified under D41** of docs/tickets/P8-formidable-tracker.md, 2026-10-27, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with nine conditions of 2026-10-27 (section "Architect sign-off" below, its date confirmed), every condition met in the pull request from branch `claude/p8-23-attack-waves` into main (pull request number recorded when it opens). Proposed 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079), while pull request 175 was open; that pull request has since squash-merged as 4076626, whose tree equals 1ad6cb1's, and this row was rebased onto it byte for byte. Every base figure below is measured at 1ad6cb1, and so holds for main at 4076626. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined (dropped when the branch was rebased onto P8-31's rule, the Architect's integration condition 5), all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. After the Architect's sign-off, one commit follows for each of its conditions 1 to 7 and one for 8 and 9. Drafted by the implementer agent.
+- Status: **Ratified under D41** of docs/tickets/P8-formidable-tracker.md, 2026-10-27, by the orchestrator under the owner's standing authority of 2026-10-02, after the Architect's sign-off with nine conditions of 2026-10-27 (section "Architect sign-off" below, its date confirmed), every condition met in pull request 178 from branch `claude/p8-23-waves` into main. Proposed 2026-10-14. Row P8-23 of docs/tickets/P8-formidable-tracker.md (decisions D6 and D7; findings AI-07, AI-06 (2), BAL-11 and ML-04 (part)). Built on P8-22's branch, `claude/p8-22-ai-spends` at 1ad6cb1 (main at 9670e04 plus P8-22 under ADR-079), while pull request 175 was open; that pull request has since squash-merged as 4076626, whose tree equals 1ad6cb1's, and this row was rebased onto it byte for byte. Every base figure below is measured at 1ad6cb1, and so holds for main at 4076626. It moves goldens, which is a replay-compatibility break needing an ADR and the Architect (CLAUDE.md), and it changes what the commander does, so it is the class Q024 asks about; it also moves the catalogue checksum (data/ai). It lands as four commits: the measurement (`waveprobe`, and `pathdebug map=`), the seven numbers in data/ai, the behaviour with its regenerated goldens, and `longmatchperf`'s proxy budget re-baselined (dropped when the branch was rebased onto P8-31's rule, the Architect's integration condition 5), all goldens-neutral but the behaviour; this ADR, its queue entry and the tracker rows follow in one docs commit. After the Architect's sign-off, one commit follows for each of its conditions 1 to 7 and one for 8 and 9; after the Architect's confirmation, the hand re-baseline is dropped in the rebase, one commit records the integration conditions' readings and one the docs tidy, and a last records pull request 178. Drafted by the implementer agent.
 - Date: 2026-10-14
 - Deciders: Architect agent + Luke
 - GDD/TDD feature served: GDD s9 line 76 (Normal "competent build orders", Hard "strong macro"); GDD pillar 2 (matches of 15 to 30 minutes); TDD s1 ("determinism is the product"); criteria F3, F4, F5 (its split by start), F6 and F8 of the P8 tracker; decisions D6, D7, D9, D12 and D32; ADR-005 (walls bought as they land), ADR-032 (the AI's tuning is authored data), ADR-053 (the wave arrives, and its arrival bound), ADR-056 (nothing is stranded), ADR-075, ADR-076 and ADR-078 (the frame, the half turn and the reflections the commander must stay exact under), ADR-079 (the commander that spends, whose harvester rebuy's reversal this ADR reads)
@@ -605,7 +605,8 @@ stays byte-identical and in order.
 behaviour (the measurement, and the data: every number, schema entry, loader
 and registration rule and checksum fold) give all 26 of the base's lines in
 order. The behaviour commit moves these four and nothing else, and the
-re-baseline after it moves nothing.
+re-baseline after it moved nothing (it was dropped in the final rebase, the
+Architect's integration condition 5).
 
 **Gate fixtures whose premise the doctrine changed**, each adjusted at its site
 with the reason, none of them the thing its gate tests: `teamgate`'s
@@ -813,8 +814,10 @@ with its owner:
   a unit of its own first, in a goldens-neutral commit proven byte-identical;
   P8-26 inherits the retreat and the failing `laddergate` half, and its
   counter-composition will move `airetreat`; P8-29 inherits `IsGroundFighter`
-  as the place to narrow the all-in's count; P8-31 inherits the third
-  consecutive re-baseline of `longmatchperf`'s proxy.
+  as the place to narrow the all-in's count. P8-31 was to inherit the third
+  consecutive re-baseline of `longmatchperf`'s proxy; it landed first (pull
+  request 176) and set the budget from a rule, so the re-baseline was dropped
+  and P8-31's DONE cell carries no record from this row.
 
 ## Architect sign-off
 
@@ -959,7 +962,8 @@ The checksum move is the mechanism working: old replays, saves and mixed-build L
   rebased onto main from 1ad6cb1, with main at 4076626 (pull request 175's
   squash merge, whose tree equals 1ad6cb1's), as branch
   `claude/p8-23-attack-waves`; the rebased head's tree was ab49c6d, equal to
-  the reviewed head's. The pull request number is recorded when it opens.
+  the reviewed head's. That branch was never pushed; the final one is
+  `claude/p8-23-waves`, pull request 178 (below).
 - **The final base** (2026-11-03). Main moved past 4076626, so after the
   Architect's addendum below the branch was rebased again, as
   `claude/p8-23-waves`, onto `origin/claude/p8-55-team-integration` at
@@ -991,7 +995,8 @@ The checksum move is the mechanism working: old replays, saves and mixed-build L
      resume effects, section 8's credit test and `mission03`, section 6's team
      base, and section 11's order precedence.
   6. ADR-079's four forward pointers; D7 and D33 read at this head; the pending
-     cells of P8-24, P8-25, P8-26, P8-27, P8-29 and P8-31; row P8-87.
+     cells of P8-24, P8-25, P8-26, P8-27 and P8-29 (P8-31's pending cell was
+     superseded by its DONE result when it landed first); row P8-87.
   7. D32 decided by the orchestrator: enacted through P8-82 as a reported,
      non-binding end-of-window half of `aiairgate` that binds in P8-26, with
      F3's aftermath clause reopened meanwhile; `aiairgate` is unchanged.

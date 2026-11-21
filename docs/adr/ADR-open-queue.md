@@ -365,9 +365,8 @@ the same commit.
   enacts it); rows P8-80 to P8-82 filed. Old replays and saves are refused by
   the checksum; Q024 stands for a later logic-only change. Proposed
   2026-10-14. Signed off with nine conditions by the Architect on 2026-10-27
-  (the ADR's section "Architect sign-off", its date confirmed), in the pull
-  request from branch claude/p8-23-attack-waves into main (pull request
-  number recorded when it opens). Conditions 1 to 9 are met in it: the
+  (the ADR's section "Architect sign-off", its date confirmed), in pull
+  request 178 from branch claude/p8-23-waves into main. Conditions 1 to 9 are met in it: the
   `airetreat` and `aiwalls` goldens, appended after `aispend`, put the Hard
   retreat and the Turtle's walls under the cross-platform gate; aituninggate
   stage 2g bites the stood-threshold launch and the wall's apron and field
