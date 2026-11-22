@@ -3,7 +3,7 @@
 - Owner: Luke (with game-designer)
 - Raised: 2026-07-25, by the C8 design pass
 - Decide by: before wave C8 is built; nothing else is blocked on it
-- Status: OPEN
+- Status: CLOSED 2026-11-22 (D35 in docs/tickets/P8-formidable-tracker.md)
 
 ## The question
 
@@ -77,3 +77,5 @@ Cache" is already spent on a different concept.
 (unanswered; reopened 2026-10-04)
 
 **2026-10-04.** The owner proposed a direction in his own words: "mining different metals around the map is the resource gathering and different metals are for different things." docs/design/32-metal-economy.md is the recommended way to build it, written as a proposal. This question closes, and decision D35 is recorded, only when the owner confirms that document's Decision 1 (its reading of his words). Until then nothing in the economy changes, and ADR-024 stays Proposed.
+
+**2026-11-22, closed.** The owner asked for a recommendation on doc 32's Decision 1 and, given the document's own, replied "Continue". The reading is taken under the standing instruction as decision D35 in docs/tickets/P8-formidable-tracker.md. Metals are added beside Ferrite, which stays truck-harvested and still pays for everything, and they are mined by a Pithead that an engineer founds on a lode, on metals maps only. That is option 3's separate currency in a narrow form: every shipped map is unchanged, and Ferrite remains the price of everything that carries no metal. Building waits until after P9's second playtest round (docs/design/33-next-iteration-goal.md, E13). ADR-024 stays Proposed until doc 32's ADR supersedes it. Reverses if the owner meant trucks hauling metal, or metals replacing Ferrite.
